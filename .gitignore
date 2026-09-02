@@ -1,0 +1,9 @@
+# Runtime configuration holds the bot token and the provider credential.
+config.json
+config.local.json
+
+# Per-session state written by the daemon and mounted into sandboxes.
+state/
+
+# Built output.
+dist/

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/denoland/deno/refs/heads/main/cli/schemas/config-file.v1.json",
+  "name": "@qaidvoid/errand",
+  "version": "0.1.0",
+  "exports": "./src/main.ts",
+  "license": "MIT OR Apache-2.0",
+  "tasks": {
+    "start": "deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/main.ts",
+    "fmt": "deno fmt",
+    "lint": "deno lint",
+    "typecheck": "deno check .",
+    "test": "deno test --allow-read --allow-write --allow-env src/ scripts/",
+    "ascii": "deno run --allow-read --allow-run scripts/check_ascii.ts",
+    "check": "deno fmt --check && deno lint && deno check . && deno task test && deno task ascii"
+  },
+  "fmt": {
+    "lineWidth": 100,
+    "indentWidth": 2,
+    "useTabs": false,
+    "singleQuote": false,
+    "semiColons": true,
+    "proseWrap": "preserve"
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"],
+      "include": ["no-console", "eqeqeq", "explicit-module-boundary-types"]
+    }
+  },
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@^1.0.19",
+    "@std/fs": "jsr:@std/fs@^1.0.24",
+    "@std/path": "jsr:@std/path@^1.1.6",
+    "discord.js": "npm:discord.js@^14.27.0"
+  }
+}
