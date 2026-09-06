@@ -149,12 +149,23 @@ export class Scheduler {
     return `the session limit of ${this.limits.maxLiveSessions} is reached, so this message did not start one`;
   }
 
+  /**
+   * Takes a slot if one is free now, and does not queue when none is.
+   *
+   * For work that is worth doing only immediately: a delegated subtask waiting
+   * behind a queue would stall the turn it was meant to make cheaper, so it is
+   * given up on instead.
+   */
+  tryAdmit(sessionId: string): Ticket | null {
+    if (!this.canAdmitNow()) return null;
+    this.inFlight += 1;
+    return new Ticket(sessionId);
+  }
+
   /** Submits a prompt, admitting it now or queueing it behind the cap. */
   submit(entry: QueueEntry): SubmitOutcome {
-    if (this.canAdmitNow()) {
-      this.inFlight += 1;
-      return { status: "admitted", ticket: new Ticket(entry.sessionId) };
-    }
+    const ticket = this.tryAdmit(entry.sessionId);
+    if (ticket !== null) return { status: "admitted", ticket };
 
     if (this.queue.length >= this.limits.maxQueueLength) {
       return {

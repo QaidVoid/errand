@@ -195,3 +195,26 @@ Deno.test("shutdown stops the timers so the daemon can exit", () => {
   assertEquals(scheduler.queueLength, 0);
   assertEquals(seen.includes("expired:c"), false);
 });
+
+Deno.test("a slot can be taken without queueing, or refused outright", () => {
+  const scheduler = new Scheduler(LIMITS, testClock());
+
+  assertEquals(scheduler.tryAdmit("a") !== null, true);
+  const second = scheduler.tryAdmit("a");
+  assertEquals(second !== null, true);
+  assertEquals(scheduler.tryAdmit("a"), null, "the cap is reached, so nothing is queued");
+
+  if (second !== null) scheduler.release(second);
+  assertEquals(scheduler.tryAdmit("a") !== null, true);
+});
+
+Deno.test("no slot is given out while the provider is being backed off", () => {
+  const clock = testClock();
+  const scheduler = new Scheduler(LIMITS, clock, 5_000);
+
+  scheduler.noteRateLimit();
+  assertEquals(scheduler.tryAdmit("a"), null);
+
+  clock.advance(5_001);
+  assertEquals(scheduler.tryAdmit("a") !== null, true);
+});
