@@ -184,3 +184,34 @@ Deno.test("a shutdown list that is not a list of accounts is refused", () => {
     "shutdown.allowedUserIds must be a list of account ids",
   );
 });
+
+Deno.test("a daemon with no interface configured serves none", () => {
+  assertEquals(validateConfig(valid()).web, undefined);
+});
+
+Deno.test("an interface takes its address, port and role", () => {
+  const web = validateConfig(valid({
+    web: { host: "100.64.0.2", port: 9000, observer: true, publicUrl: "https://errand.example" },
+  })).web;
+
+  assertEquals(web?.host, "100.64.0.2");
+  assertEquals(web?.port, 9000);
+  assertEquals(web?.observer, true);
+  assertEquals(web?.publicUrl, "https://errand.example");
+});
+
+Deno.test("an interface that says only that it exists gets the defaults", () => {
+  const web = validateConfig(valid({ web: {} })).web;
+
+  assertEquals(web?.host, DEFAULTS.web.host);
+  assertEquals(web?.port, DEFAULTS.web.port);
+  assertEquals(web?.observer, false);
+  assertEquals(web?.publicUrl, undefined);
+});
+
+Deno.test("an interface port that is not a port is refused", () => {
+  assertStringIncludes(
+    problemsOf(valid({ web: { port: "8080" } })).join("\n"),
+    "web.port must be a number greater than zero",
+  );
+});

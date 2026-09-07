@@ -148,6 +148,32 @@ export interface OutputConfig {
   postDiffs: boolean;
 }
 
+/**
+ * The local web interface.
+ *
+ * Absent means no listener at all, which is how the daemon behaves without
+ * one. There is no login: the address it binds to is the access control, and
+ * that address is checked rather than trusted.
+ */
+export interface WebConfig {
+  /** Address to bind to. Must be loopback, private, or a tailnet address. */
+  host: string;
+  port: number;
+  /**
+   * When true the interface may watch and read but not start, prompt, or
+   * control anything.
+   */
+  observer: boolean;
+  /**
+   * Where the interface is reachable from outside, such as behind a tunnel.
+   *
+   * Used to link a session from somewhere that is not the chat service, so a
+   * pull request can name the conversation that asked for it. Absent when the
+   * interface is not published, in which case no such link is offered.
+   */
+  publicUrl: string | undefined;
+}
+
 /** Bounds on how much work exists at once. */
 export interface LimitsConfig {
   /** Sessions that may have a model turn in flight simultaneously. */
@@ -190,6 +216,8 @@ export interface Config {
   output: OutputConfig;
   /** Who may power off the host. Empty means nobody, which is the default. */
   shutdown: ShutdownConfig;
+  /** The web interface, or undefined when none is served. */
+  web: WebConfig | undefined;
   limits: LimitsConfig;
   timeouts: TimeoutsConfig;
 }
@@ -232,6 +260,11 @@ export const DEFAULTS = {
     maxLiveSessions: 4,
     maxQueueLength: 32,
     maxQueueWaitMs: 900_000,
+  },
+  web: {
+    host: "127.0.0.1",
+    port: 8787,
+    observer: false,
   },
   timeouts: {
     idleMs: 1_800_000,

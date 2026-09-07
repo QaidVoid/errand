@@ -23,6 +23,7 @@ import {
   type SandboxConfig,
   type ShutdownConfig,
   type TimeoutsConfig,
+  type WebConfig,
 } from "./schema.ts";
 
 const BACKENDS: SandboxBackend[] = ["podman", "bailey"];
@@ -38,6 +39,7 @@ const KNOWN = {
     "sandbox",
     "output",
     "shutdown",
+    "web",
     "limits",
     "timeouts",
   ],
@@ -46,6 +48,7 @@ const KNOWN = {
   github: ["token", "userName", "userEmail"],
   sandbox: Object.keys(DEFAULTS.sandbox),
   shutdown: ["allowedUserIds"],
+  web: ["host", "port", "observer", "publicUrl"],
   output: Object.keys(DEFAULTS.output),
   limits: Object.keys(DEFAULTS.limits),
   timeouts: Object.keys(DEFAULTS.timeouts),
@@ -339,6 +342,27 @@ function validateShutdown(raw: Record<string, unknown>, problems: Problems): Shu
   return { allowedUserIds: idList(source, "allowedUserIds", "shutdown", problems) };
 }
 
+/**
+ * Reads the interface's settings, when one is configured at all.
+ *
+ * The address is not checked here. Whether it is one worth serving over is the
+ * interface's own rule, and it is applied where the listener is opened so that
+ * a refusal names the listener.
+ */
+function validateWeb(raw: Record<string, unknown>, problems: Problems): WebConfig | undefined {
+  if (raw.web === undefined) return undefined;
+  const source = section(raw, "web");
+  rejectUnknown(source, KNOWN.web, "web", problems);
+  const defaults = DEFAULTS.web;
+
+  return {
+    host: optionalString(source, "host", "web", problems) ?? defaults.host,
+    port: positive(source, "port", defaults.port, "web", problems),
+    observer: flag(source, "observer", defaults.observer, "web", problems),
+    publicUrl: optionalString(source, "publicUrl", "web", problems),
+  };
+}
+
 function validateLimits(raw: Record<string, unknown>, problems: Problems): LimitsConfig {
   const source = section(raw, "limits");
   rejectUnknown(source, KNOWN.limits, "limits", problems);
@@ -400,6 +424,7 @@ export function validateConfig(parsed: unknown): Config {
     sandbox: validateSandbox(raw, problems),
     output: validateOutput(raw, problems),
     shutdown: validateShutdown(raw, problems),
+    web: validateWeb(raw, problems),
     limits: validateLimits(raw, problems),
     timeouts: validateTimeouts(raw, problems),
   };
