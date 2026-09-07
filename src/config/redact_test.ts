@@ -5,6 +5,7 @@ import { SECRET_PATHS } from "./schema.ts";
 
 const TOKEN = "chat-token-2f8a41cc";
 const CREDENTIAL = "sk-live-9f3c7a11d4e6";
+const GITHUB_TOKEN = "ghp-4b1d90ff7ac2";
 
 const config = loadConfig(
   "/anywhere",
@@ -12,6 +13,7 @@ const config = loadConfig(
     JSON.stringify({
       chat: { token: TOKEN, channelId: "c", allowedUserIds: ["u"] },
       agent: { provider: "anthropic", credentialName: "ANTHROPIC_API_KEY", credential: CREDENTIAL },
+      github: { token: GITHUB_TOKEN, userName: "errand-bot", userEmail: "bot@example.com" },
       projectRoot: "/tmp/errand/projects",
       stateDir: "/tmp/errand/state",
     }),
@@ -22,6 +24,7 @@ Deno.test("the configuration can be logged with every secret field blanked", () 
 
   assertEquals(shown.includes(TOKEN), false);
   assertEquals(shown.includes(CREDENTIAL), false);
+  assertEquals(shown.includes(GITHUB_TOKEN), false);
   assertEquals((shown.match(/\[redacted\]/g) ?? []).length, SECRET_PATHS.length);
 });
 
@@ -33,7 +36,15 @@ Deno.test("redacting for the log does not disturb the configuration", () => {
 });
 
 Deno.test("what a running session must scrub is every secret it holds", () => {
-  assertEquals(secretValues(config).sort(), [TOKEN, CREDENTIAL].sort());
+  assertEquals(secretValues(config).sort(), [TOKEN, CREDENTIAL, GITHUB_TOKEN].sort());
+});
+
+/** A section that is not configured has no secret, and gains no field. */
+Deno.test("a secret in a section that was omitted is simply not there", () => {
+  const withoutGithub = { ...config, github: undefined };
+
+  assertEquals(secretValues(withoutGithub), [TOKEN, CREDENTIAL]);
+  assertEquals(redactConfig(withoutGithub).github, undefined);
 });
 
 Deno.test("a secret is scrubbed wherever it appears in free text", () => {
@@ -53,7 +64,10 @@ Deno.test("a secret is scrubbed wherever it appears in free text", () => {
  */
 Deno.test("a value too short to be a credential is not scrubbed from prose", () => {
   assertEquals(redactText("the cat sat on the mat", ["cat"]), "the cat sat on the mat");
-  assertEquals(secretValues({ ...config, chat: { ...config.chat, token: "short" } }), [CREDENTIAL]);
+  assertEquals(secretValues({ ...config, chat: { ...config.chat, token: "short" } }), [
+    CREDENTIAL,
+    GITHUB_TOKEN,
+  ]);
 });
 
 Deno.test("text holding no secret is returned as it was", () => {

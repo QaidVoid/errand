@@ -15,6 +15,7 @@ import {
   type Config,
   ConfigError,
   DEFAULTS,
+  type GithubConfig,
   type LimitsConfig,
   type NetworkMode,
   type SandboxBackend,
@@ -26,9 +27,19 @@ const BACKENDS: SandboxBackend[] = ["podman", "bailey"];
 const NETWORKS: NetworkMode[] = ["restricted", "none"];
 
 const KNOWN = {
-  root: ["chat", "agent", "projectRoot", "stateDir", "sandbox", "limits", "timeouts"],
+  root: [
+    "chat",
+    "agent",
+    "github",
+    "projectRoot",
+    "stateDir",
+    "sandbox",
+    "limits",
+    "timeouts",
+  ],
   chat: ["token", "channelId", "allowedUserIds", "blockedUserIds", "operatorUserIds"],
   agent: ["provider", "model", "credentialName", "credential"],
+  github: ["token", "userName", "userEmail"],
   sandbox: Object.keys(DEFAULTS.sandbox),
   limits: Object.keys(DEFAULTS.limits),
   timeouts: Object.keys(DEFAULTS.timeouts),
@@ -213,6 +224,27 @@ function validateAgent(raw: Record<string, unknown>, problems: Problems): AgentC
   };
 }
 
+/**
+ * Reads the GitHub identity, which the whole section may omit.
+ *
+ * Present but incomplete is a problem rather than a partial identity: a
+ * session that pushes as half of somebody is worse than one that cannot push.
+ */
+function validateGithub(
+  raw: Record<string, unknown>,
+  problems: Problems,
+): GithubConfig | undefined {
+  if (raw.github === undefined) return undefined;
+  const source = section(raw, "github");
+  rejectUnknown(source, KNOWN.github, "github", problems);
+
+  return {
+    token: requiredString(source, "token", "github", problems),
+    userName: requiredString(source, "userName", "github", problems),
+    userEmail: requiredString(source, "userEmail", "github", problems),
+  };
+}
+
 function validateSandbox(raw: Record<string, unknown>, problems: Problems): SandboxConfig {
   const source = section(raw, "sandbox");
   rejectUnknown(source, KNOWN.sandbox, "sandbox", problems);
@@ -305,6 +337,7 @@ export function validateConfig(parsed: unknown): Config {
   const config: Config = {
     chat: validateChat(raw, problems),
     agent: validateAgent(raw, problems),
+    github: validateGithub(raw, problems),
     projectRoot: directory(raw, "projectRoot", problems),
     stateDir: directory(raw, "stateDir", problems),
     sandbox: validateSandbox(raw, problems),

@@ -107,3 +107,38 @@ Deno.test("the container image defaults, and is refused when it is not a name", 
     "sandbox.image must be a non-empty string",
   );
 });
+
+Deno.test("a daemon with no GitHub identity is configured, not broken", () => {
+  assertEquals(validateConfig(valid()).github, undefined);
+});
+
+Deno.test("a GitHub identity is taken whole", () => {
+  const github = validateConfig(valid({
+    github: { token: "ghp-value", userName: "errand-bot", userEmail: "bot@example.com" },
+  })).github;
+
+  assertEquals(github?.userName, "errand-bot");
+  assertEquals(github?.token, "ghp-value");
+});
+
+/** Pushing as half an identity is worse than not being able to push. */
+Deno.test("a GitHub section missing a field is refused, not half-filled", () => {
+  const problems = problemsOf(valid({ github: { token: "ghp-value" } })).join("\n");
+
+  assertStringIncludes(problems, "github.userName is required");
+  assertStringIncludes(problems, "github.userEmail is required");
+});
+
+Deno.test("a misspelled GitHub setting is refused like any other", () => {
+  assertStringIncludes(
+    problemsOf(valid({
+      github: {
+        token: "t",
+        userName: "n",
+        userEmail: "e",
+        userNmae: "typo",
+      },
+    })).join("\n"),
+    "github.userNmae is not a setting",
+  );
+});

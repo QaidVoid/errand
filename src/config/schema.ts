@@ -52,6 +52,24 @@ export interface AgentConfig {
   credential: string;
 }
 
+/**
+ * The GitHub identity a session works with, when one is configured.
+ *
+ * Optional: a session with no GitHub configuration still runs, and simply has
+ * no credential to reach a repository with.
+ */
+export interface GithubConfig {
+  /** Token the agent authenticates with. Secret, and reachable by the agent. */
+  token: string;
+  /**
+   * Name commits are authored with. Free text: where a fork lands is read back
+   * from the API, so this does not have to be the bot's login.
+   */
+  userName: string;
+  /** Email commits are authored with. */
+  userEmail: string;
+}
+
 /** What a session may consume, and what the backend enforces. */
 export interface SandboxConfig {
   /** Which backend confines sessions. */
@@ -114,6 +132,8 @@ export interface TimeoutsConfig {
 export interface Config {
   chat: ChatConfig;
   agent: AgentConfig;
+  /** How a session reaches GitHub, or undefined when none is configured. */
+  github: GithubConfig | undefined;
   /**
    * Absolute path under which every session's project directory lives.
    *
@@ -136,7 +156,7 @@ export interface Config {
 export const ALLOW_EVERY_USER = "*";
 
 /** Field paths whose values must never be logged, posted, or reported. */
-export const SECRET_PATHS = ["chat.token", "agent.credential"] as const;
+export const SECRET_PATHS = ["chat.token", "agent.credential", "github.token"] as const;
 
 /** Values used for any optional field the configuration file omits. */
 export const DEFAULTS = {
