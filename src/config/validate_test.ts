@@ -142,3 +142,29 @@ Deno.test("a misspelled GitHub setting is refused like any other", () => {
     "github.userNmae is not a setting",
   );
 });
+
+Deno.test("what reaches a thread has documented defaults", () => {
+  const output = validateConfig(valid()).output;
+
+  assertEquals(output, DEFAULTS.output);
+});
+
+Deno.test("what reaches a thread can be turned up or down", () => {
+  const output = validateConfig(valid({
+    output: { forwardToolOutput: true, postDiffs: false, maxToolOutputChars: 4_000 },
+  })).output;
+
+  assertEquals(output.forwardToolOutput, true);
+  assertEquals(output.postDiffs, false);
+  assertEquals(output.maxToolOutputChars, 4_000);
+  assertEquals(output.maxAttachmentsPerMessage, DEFAULTS.output.maxAttachmentsPerMessage);
+});
+
+Deno.test("an output limit that is not a number is refused", () => {
+  const problems = problemsOf(valid({
+    output: { maxAttachmentBytes: "5mb", postDiffs: "yes" },
+  })).join("\n");
+
+  assertStringIncludes(problems, "output.maxAttachmentBytes must be a number");
+  assertStringIncludes(problems, "output.postDiffs must be true or false");
+});

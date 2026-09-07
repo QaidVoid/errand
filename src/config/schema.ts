@@ -104,6 +104,30 @@ export interface SandboxConfig {
   gracePeriodMs: number;
 }
 
+/** How much of the agent's activity reaches the thread. */
+export interface OutputConfig {
+  /** Whether tool output bodies are posted, not just that a tool ran. */
+  forwardToolOutput: boolean;
+  /** Longest tool output posted before it is truncated and marked as such. */
+  maxToolOutputChars: number;
+  /**
+   * Largest attached file taken into a session, in bytes.
+   *
+   * Well under what the chat service itself allows, on purpose: the limit is
+   * what is sensible to hand an agent, not what can be uploaded.
+   */
+  maxAttachmentBytes: number;
+  /** Most attached files taken from one message. The rest are refused. */
+  maxAttachmentsPerMessage: number;
+  /**
+   * Post a diff after the agent changes a file.
+   *
+   * A diff shows intent rather than contents, which is both smaller and less
+   * likely to put something private in a channel than uploading whole files.
+   */
+  postDiffs: boolean;
+}
+
 /** Bounds on how much work exists at once. */
 export interface LimitsConfig {
   /** Sessions that may have a model turn in flight simultaneously. */
@@ -143,6 +167,7 @@ export interface Config {
   /** Where per-session state directories are created on the host. */
   stateDir: string;
   sandbox: SandboxConfig;
+  output: OutputConfig;
   limits: LimitsConfig;
   timeouts: TimeoutsConfig;
 }
@@ -172,6 +197,13 @@ export const DEFAULTS = {
     disk: "5g",
     diskCheckMs: 30_000,
     gracePeriodMs: 10_000,
+  },
+  output: {
+    forwardToolOutput: false,
+    maxToolOutputChars: 1_500,
+    maxAttachmentBytes: 5 * 1024 * 1024,
+    maxAttachmentsPerMessage: 4,
+    postDiffs: true,
   },
   limits: {
     maxConcurrentTurns: 2,

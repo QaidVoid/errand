@@ -18,6 +18,7 @@ import {
   type GithubConfig,
   type LimitsConfig,
   type NetworkMode,
+  type OutputConfig,
   type SandboxBackend,
   type SandboxConfig,
   type TimeoutsConfig,
@@ -34,6 +35,7 @@ const KNOWN = {
     "projectRoot",
     "stateDir",
     "sandbox",
+    "output",
     "limits",
     "timeouts",
   ],
@@ -41,6 +43,7 @@ const KNOWN = {
   agent: ["provider", "model", "credentialName", "credential"],
   github: ["token", "userName", "userEmail"],
   sandbox: Object.keys(DEFAULTS.sandbox),
+  output: Object.keys(DEFAULTS.output),
   limits: Object.keys(DEFAULTS.limits),
   timeouts: Object.keys(DEFAULTS.timeouts),
 } as const;
@@ -282,6 +285,44 @@ function validateSandbox(raw: Record<string, unknown>, problems: Problems): Sand
   };
 }
 
+function validateOutput(raw: Record<string, unknown>, problems: Problems): OutputConfig {
+  const source = section(raw, "output");
+  rejectUnknown(source, KNOWN.output, "output", problems);
+  const defaults = DEFAULTS.output;
+
+  return {
+    forwardToolOutput: flag(
+      source,
+      "forwardToolOutput",
+      defaults.forwardToolOutput,
+      "output",
+      problems,
+    ),
+    maxToolOutputChars: positive(
+      source,
+      "maxToolOutputChars",
+      defaults.maxToolOutputChars,
+      "output",
+      problems,
+    ),
+    maxAttachmentBytes: positive(
+      source,
+      "maxAttachmentBytes",
+      defaults.maxAttachmentBytes,
+      "output",
+      problems,
+    ),
+    maxAttachmentsPerMessage: positive(
+      source,
+      "maxAttachmentsPerMessage",
+      defaults.maxAttachmentsPerMessage,
+      "output",
+      problems,
+    ),
+    postDiffs: flag(source, "postDiffs", defaults.postDiffs, "output", problems),
+  };
+}
+
 function validateLimits(raw: Record<string, unknown>, problems: Problems): LimitsConfig {
   const source = section(raw, "limits");
   rejectUnknown(source, KNOWN.limits, "limits", problems);
@@ -341,6 +382,7 @@ export function validateConfig(parsed: unknown): Config {
     projectRoot: directory(raw, "projectRoot", problems),
     stateDir: directory(raw, "stateDir", problems),
     sandbox: validateSandbox(raw, problems),
+    output: validateOutput(raw, problems),
     limits: validateLimits(raw, problems),
     timeouts: validateTimeouts(raw, problems),
   };
