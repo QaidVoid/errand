@@ -24,3 +24,29 @@ export function within(root: string, wanted: string): string | undefined {
   if (target === base) return target;
   return target.startsWith(base + SEPARATOR) ? target : undefined;
 }
+
+/**
+ * Translates a path as the agent sees it into a path on the host.
+ *
+ * A leading separator does not mean the host's root. An absolute path that is
+ * not already inside the workspace is read as project-relative, so
+ * `/etc/passwd` resolves to a file of that name inside the project rather than
+ * to the host's. That keeps one rule whether the agent sees host paths or a
+ * mount point.
+ *
+ * @returns the host path, or undefined when it would leave the project.
+ */
+export function hostPathUnder(
+  workspace: string,
+  projectPath: string,
+  requested: string,
+): string | undefined {
+  const trimmed = requested.trim();
+  if (trimmed.length === 0) return undefined;
+
+  const relative = trimmed.startsWith(workspace)
+    ? trimmed.slice(workspace.length).replace(/^\/+/, "")
+    : trimmed.replace(/^\/+/, "");
+
+  return within(projectPath, relative.length === 0 ? "." : relative);
+}

@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { within } from "./paths.ts";
+import { hostPathUnder, within } from "./paths.ts";
 
 const ROOT = "/projects/demo";
 
@@ -30,4 +30,21 @@ Deno.test("deep traversal is refused however it is spelled", () => {
   for (const path of ["../..", "a/b/../../../out", "./../out", "a/./../../out"]) {
     assertEquals(within(ROOT, path), undefined, path);
   }
+});
+
+Deno.test("a path the agent sees becomes a path on the host", () => {
+  assertEquals(hostPathUnder("/workspace", ROOT, "/workspace/src/a.ts"), "/projects/demo/src/a.ts");
+  assertEquals(hostPathUnder("/workspace", ROOT, "src/a.ts"), "/projects/demo/src/a.ts");
+  assertEquals(hostPathUnder("/workspace", ROOT, "/workspace"), ROOT);
+});
+
+/** A leading separator is not the host's root, or a tool call could read it. */
+Deno.test("an absolute path outside the workspace is read as project-relative", () => {
+  assertEquals(hostPathUnder("/workspace", ROOT, "/etc/passwd"), "/projects/demo/etc/passwd");
+});
+
+Deno.test("a path that climbs out of the project has no host path", () => {
+  assertEquals(hostPathUnder("/workspace", ROOT, "/workspace/../../secrets"), undefined);
+  assertEquals(hostPathUnder("/workspace", ROOT, "../secrets"), undefined);
+  assertEquals(hostPathUnder("/workspace", ROOT, "   "), undefined);
 });
