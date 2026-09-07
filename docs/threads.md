@@ -12,7 +12,8 @@ a message that names the bot starts anything:
 
 The mention summons it and is not part of what you asked, so it is taken out
 before the agent sees it. Inside a thread nothing has to be named: the session
-is the conversation.
+is the conversation. Nor does a command: `!help` and `!usage` are addressed to
+the bot already, and are answered in the channel whatever the setting says.
 
 ## What a message means
 

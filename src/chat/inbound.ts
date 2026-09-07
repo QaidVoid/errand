@@ -7,6 +7,7 @@
  */
 
 import { ALLOW_EVERY_USER, type ChatConfig } from "../config/schema.ts";
+import { isAddressedToBot } from "../session/commands.ts";
 
 /** A file attached to a message, as the service describes it. */
 export interface RawAttachment {
@@ -124,7 +125,13 @@ export function classify(
 
   // Only for starting something. Inside a thread the session is already the
   // conversation, so making every message name the bot would be tiresome.
-  if (config.startOnMention) {
+  //
+  // A message beginning with `!` is already addressed to a bot, so it is let
+  // through whatever the setting says: `!usage` and `!help` are answered
+  // without a session, and asking somebody to name the bot as well only makes
+  // them vanish. It cannot start a session either way, since the daemon starts
+  // nothing for a message addressed to a bot.
+  if (config.startOnMention && !isAddressedToBot(message.content)) {
     if (botId === undefined) {
       return { kind: "ignore", reason: "the bot does not know its own name yet" };
     }

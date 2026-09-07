@@ -183,3 +183,30 @@ Deno.test("the mention that summoned it is not part of what was asked", () => {
   );
   assertEquals(withoutBotMention("nothing to remove", "bot-1"), "nothing to remove");
 });
+
+/**
+ * A message beginning with `!` is already addressed to a bot. Asking for a
+ * mention as well makes `!usage` and `!help` vanish in the channel, which is
+ * where they are most useful.
+ */
+Deno.test("a command reaches the daemon without naming the bot", () => {
+  const config = { ...CONFIG, startOnMention: true };
+
+  for (const content of ["!help", "!usage", "!shutdown", "  !status"]) {
+    assertEquals(classify(message({ content }), config, "bot-1").kind, "start", content);
+  }
+});
+
+/** Including one this daemon does not answer, which it then leaves alone. */
+Deno.test("somebody else's command is let through and ignored later", () => {
+  const config = { ...CONFIG, startOnMention: true };
+
+  assertEquals(classify(message({ content: "!somebodyelses" }), config, "bot-1").kind, "start");
+});
+
+/** An aside in the channel is people talking, and starts nothing either way. */
+Deno.test("an aside is let through and starts nothing", () => {
+  const config = { ...CONFIG, startOnMention: true };
+
+  assertEquals(classify(message({ content: "!!! anyone around?" }), config, "bot-1").kind, "start");
+});
