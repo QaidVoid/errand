@@ -154,6 +154,13 @@ export interface DaemonOptions {
   powerOff?: (() => Promise<string | undefined>) | undefined;
   /** Where the interface is published, when it is. */
   publicUrl?: string | undefined;
+  /**
+   * Who may control any session.
+   *
+   * Separate from the configured list so a surface can be included without
+   * being written into anyone's configuration file.
+   */
+  operatorIds?: readonly string[] | undefined;
   /** Injected so session deadlines can be driven in tests. */
   timers?: Timers | undefined;
 }
@@ -180,6 +187,7 @@ export class Daemon {
       log: options.log,
       memory: options.memory,
       publicUrl: options.publicUrl,
+      ...(options.operatorIds === undefined ? {} : { operatorIds: options.operatorIds }),
       unavailable: options.unavailable,
       ...(options.timers === undefined ? {} : { timers: options.timers }),
       ...(options.describeImages === undefined ? {} : { describeImages: options.describeImages }),
