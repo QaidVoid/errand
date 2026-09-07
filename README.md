@@ -21,8 +21,9 @@ errand threads   # list, inspect, and remove what past sessions left on disk
 errand help
 ```
 
-The configuration file is read from `ERRAND_CONFIG`, or `./config.json` when
-that is unset. A minimal one:
+The configuration file is read from `~/.config/errand/config.json`, then
+`/etc/errand/config.json`, then `config.json` in the working directory.
+`ERRAND_CONFIG` names one outright and skips the search. A minimal one:
 
 ```json
 {
@@ -61,13 +62,20 @@ Set `"observer": true` to serve one that can watch and read but change nothing.
 
 ## In a thread
 
-`!help` lists what can be typed. The same commands are registered as slash
+`!help` lists what can be typed, and `!usage` says how much of the provider's
+usage window is left and when it resets. The same commands are registered as slash
 commands, so they can be picked rather than remembered. A message starting
 `!!!` is an aside: the people in the thread see it and the agent is never told.
 
+## Running it as a service
+
+Definitions for OpenRC and systemd are in [packaging](packaging), along with
+what to prepare and what its exit codes mean.
+
 ## Status
 
-Early. The daemon runs; the web interface and packaging are still to come.
+Early, but complete enough to run: chat, sandboxed sessions, the interface, and
+service definitions for both init systems.
 
 ## Development
 

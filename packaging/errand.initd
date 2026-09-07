@@ -1,0 +1,106 @@
+#!/sbin/openrc-run
+# OpenRC service for errand.
+#
+# Copy this to /etc/init.d/errand and the matching conf.d file to
+# /etc/conf.d/errand. Resource limits are declared there, not here.
+#
+# The daemon runs as the account that owns the configuration file rather than
+# as root: the file holds the bot token and is mode 600, and the agent is
+# started as that account too, so files it writes in a project belong to the
+# person whose project it is.
+
+description="Run a coding agent from a chat channel, in a sandbox"
+
+: "${errand_user:=errand}"
+: "${errand_group:=${errand_user}}"
+: "${errand_home:=/var/lib/${RC_SVCNAME}}"
+: "${errand_directory:=/opt/errand}"
+: "${errand_deno:=/usr/bin/deno}"
+: "${errand_state:=${errand_home}/state}"
+
+# What the daemon is allowed to do, spelled out where an operator reads it
+# rather than hidden behind a task name. It needs to reach the chat service and
+# the model provider, read and write its projects and state, and start the
+# sandboxes it confines agents in.
+errand_permissions="--allow-net --allow-env --allow-read --allow-write --allow-run"
+
+supervisor="supervise-daemon"
+command="${errand_deno}"
+command_args="run ${errand_permissions} src/main.ts run"
+command_user="${errand_user}:${errand_group}"
+directory="${errand_directory}"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}/daemon.log"
+error_log="/var/log/${RC_SVCNAME}/daemon.log"
+
+# supervise-daemon does not set HOME for the account it switches to, and the
+# daemon looks for its configuration under it.
+export HOME="${errand_home}"
+[ -n "${errand_config}" ] && export ERRAND_CONFIG="${errand_config}"
+# Named here rather than assumed: the sandbox applies per-session limits only
+# when it has a cgroup it may create children in.
+[ -n "${errand_cgroup}" ] && export BAILEY_CGROUP_ROOT="${errand_cgroup}"
+
+# Startup refuses on bad configuration (2), an isolation guarantee it cannot
+# enforce (3), or another daemon already holding the state directory (4).
+# OpenRC cannot key a restart on the exit status the way the systemd unit does,
+# so respawning is bounded instead: a refusal gives up quickly rather than
+# looping forever. The window is wide because nothing here waits for the
+# network: at boot the daemon can start before the link is up, and those
+# attempts should not use up the budget meant for catching a genuine refusal.
+respawn_delay=10
+respawn_max=5
+respawn_period=300
+
+depend() {
+	# Soft, not "need net": a host whose connectivity comes straight from a
+	# link daemon such as iwd has no service providing "net" at all, and a hard
+	# dependency there refuses to start rather than waiting.
+	use net
+	after net
+}
+
+start_pre() {
+	checkpath --directory --owner "${errand_user}:${errand_group}" --mode 0750 \
+		"/var/log/${RC_SVCNAME}" || return 1
+
+	if [ ! -d "${errand_directory}" ]; then
+		eerror "no checkout at ${errand_directory}"
+		eerror "set errand_directory in /etc/conf.d/${RC_SVCNAME}"
+		return 1
+	fi
+
+	if [ ! -x "${errand_deno}" ]; then
+		eerror "no runnable deno at ${errand_deno}"
+		eerror "set errand_deno in /etc/conf.d/${RC_SVCNAME}"
+		return 1
+	fi
+
+	# The daemon refuses to be the second one on a bot token, and OpenRC cannot
+	# key a restart on an exit status the way the systemd unit does. Without
+	# this the refusal is retried until the respawn budget runs out, logging
+	# the same error once per attempt. A lock left by a dead process is
+	# ignored, because the daemon itself treats that as stale and takes it
+	# over.
+	lock="${errand_state}/daemon.lock"
+	if [ -f "${lock}" ]; then
+		held="$(cat "${lock}" 2>/dev/null)"
+		if [ -n "${held}" ] && kill -0 "${held}" 2>/dev/null; then
+			eerror "an errand daemon is already running as process ${held}"
+			eerror "stop it first; two daemons on one bot token both act on every message"
+			return 1
+		fi
+	fi
+}
+
+start_post() {
+	# OpenRC skips a setting whose file does not exist rather than failing, so
+	# a limit that never applied looks exactly like one that did.
+	cgroup="/sys/fs/cgroup/openrc.${RC_SVCNAME}"
+	[ -n "${rc_cgroup_settings}" ] || return 0
+	echo "${rc_cgroup_settings}" | while read -r key value; do
+		[ -z "${key}" ] && continue
+		[ -f "${cgroup}/${key}" ] ||
+			ewarn "${key} was ignored: no such control file in ${cgroup}"
+	done
+}

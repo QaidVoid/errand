@@ -1,0 +1,58 @@
+# Configuration for the errand OpenRC service.
+# Copy this to /etc/conf.d/errand and edit it to match the host.
+
+# The account the daemon runs as, and so does every agent it starts. Files an
+# agent writes in a project belong to this account, so it should be the one
+# whose projects they are rather than root.
+errand_user="errand"
+errand_group="errand"
+
+# Its home. The daemon reads ~/.config/errand/config.json unless
+# ERRAND_CONFIG names another file, and a service starts with no shell profile
+# run, so this is set here rather than inherited.
+errand_home="/var/lib/errand"
+
+# The checkout to run from.
+errand_directory="/opt/errand"
+
+# deno by absolute path. A service starts before any shell profile has run, so
+# a version manager's PATH does not exist yet.
+errand_deno="/usr/bin/deno"
+
+# The configuration file, when it is not the one under errand_home.
+#errand_config="/etc/errand/config.json"
+
+# Where the daemon keeps its state, which is where its single-instance lock
+# lives. Set this if stateDir in the configuration file is not the default.
+errand_state="/var/lib/errand/state"
+
+# Resource limits, applied by OpenRC to the service's own cgroup. Nothing has
+# to be enabled first: under cgroups v2, which OpenRC uses by default, the
+# controllers are already delegated to every service cgroup.
+#
+# memory.high throttles and reclaims, memory.max kills. Both are set so the
+# daemon is pushed back before it is killed outright. cpu.max is quota and
+# period in microseconds, so 200000 per 100000 is two cores.
+rc_cgroup_settings="
+	memory.high 3G
+	memory.max 4G
+	pids.max 512
+	cpu.max 200000 100000
+"
+
+# Kill the whole process tree when the service stops, so no session outlives
+# the daemon that started it. Set here rather than in /etc/rc.conf, because
+# enabling it globally can terminate processes other services expect to keep.
+rc_cgroup_cleanup="yes"
+
+# These limits cover the daemon and all of its sessions as one tree, so one
+# busy session can consume the whole budget. Limiting each session separately
+# needs a cgroup the sandbox may create children in: OpenRC puts the daemon
+# directly in the service cgroup, and a cgroup cannot both hold processes and
+# hand its controllers to children, so there is nowhere to put one. The daemon
+# reports that as a gap at startup.
+#
+# A cgroup made and delegated by hand can be named here, and the daemon passes
+# it through to the sandbox. It has to have the memory, pids, and cpu
+# controllers enabled and be writable by errand_user.
+#errand_cgroup="/sys/fs/cgroup/errand.sessions"

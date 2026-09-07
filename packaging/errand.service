@@ -1,0 +1,74 @@
+# systemd service for errand.
+#
+# Copy this to /etc/systemd/system/errand.service and edit User, Group, and
+# WorkingDirectory to match the host. The daemon runs as the account that owns
+# the configuration file rather than as root: the file holds the bot token, and
+# the agent is started as that account too, so files it writes in a project
+# belong to the person whose project it is.
+
+[Unit]
+Description=errand, a coding agent run from a chat channel
+Documentation=https://github.com/qaidvoid/errand
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=errand
+Group=errand
+WorkingDirectory=/opt/errand
+
+# What the daemon is allowed to do, spelled out where an operator reads it
+# rather than hidden behind a task name. It needs to reach the chat service and
+# the model provider, read and write its projects and state, and start the
+# sandboxes it confines agents in.
+ExecStart=/usr/bin/deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/main.ts run
+
+# The daemon looks for ~/.config/errand/config.json unless this names another.
+Environment=HOME=/var/lib/errand
+#Environment=ERRAND_CONFIG=/etc/errand/config.json
+
+Restart=on-failure
+RestartSec=5
+
+# Startup refuses on bad configuration (exit 2), an unenforceable isolation
+# guarantee (exit 3), or another daemon already running (exit 4). Restarting
+# would only repeat the refusal, and in the last case would fight the daemon
+# that is already serving.
+RestartPreventExitStatus=2 3 4
+
+# The daemon holds the bot token and must be able to start sandboxes, so it is
+# not confined further here. The isolation that matters is applied per session
+# to the agent, which is the untrusted party.
+NoNewPrivileges=true
+PrivateTmp=false
+
+# Its own cgroup subtree. The sandbox applies a memory, cpu, and process limit
+# to each session only when it has a cgroup it may create children in, and it
+# is told about one through BAILEY_CGROUP_ROOT below. Without both, the limits
+# further down still hold, but they hold over the daemon and every session
+# together, and the daemon says so as a gap at startup.
+#
+# DelegateSubgroup puts the daemon's own processes in a subgroup, which is what
+# leaves the service cgroup free to have children. It needs systemd 252 or
+# later; on anything older, drop it and expect the gap.
+Delegate=yes
+DelegateSubgroup=supervisor
+#Environment=BAILEY_CGROUP_ROOT=/sys/fs/cgroup/system.slice/errand.service
+
+# Cover the daemon and everything it starts. A session is limited separately as
+# well, inside this.
+MemoryHigh=3G
+MemoryMax=4G
+TasksMax=512
+CPUQuota=200%
+
+# Ending the service ends every session with it, so none outlives the daemon
+# that started it.
+KillMode=control-group
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
