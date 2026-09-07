@@ -11,7 +11,8 @@
     "typecheck": "deno check .",
     "test": "deno test --allow-read --allow-write --allow-env src/ scripts/",
     "ascii": "deno run --allow-read --allow-run scripts/check_ascii.ts",
-    "check": "deno fmt --check && deno lint && deno check . && deno task test && deno task ascii"
+    "check": "deno fmt --check && deno lint && deno check . && deno task test && deno task ascii",
+    "errand": "deno run --allow-env --allow-read --allow-write src/main.ts"
   },
   "fmt": {
     "lineWidth": 100,
@@ -23,8 +24,14 @@
   },
   "lint": {
     "rules": {
-      "tags": ["recommended"],
-      "include": ["no-console", "eqeqeq", "explicit-module-boundary-types"]
+      "tags": [
+        "recommended"
+      ],
+      "include": [
+        "no-console",
+        "eqeqeq",
+        "explicit-module-boundary-types"
+      ]
     }
   },
   "compilerOptions": {
