@@ -4,7 +4,7 @@ import { createLogger } from "../log.ts";
 import { type SandboxLaunch, SandboxUnavailableError } from "./backend.ts";
 import { baileyArgs, BaileySandbox, parseDoctor, type Run, sessionEnvironment } from "./bailey.ts";
 
-const CONFIG: SandboxConfig = { ...DEFAULTS.sandbox };
+const CONFIG: SandboxConfig = { ...DEFAULTS.sandbox, policyExtra: undefined };
 
 function launch(overrides: Partial<SandboxLaunch> = {}): SandboxLaunch {
   return {
@@ -175,4 +175,27 @@ Deno.test("the cgroup the tool may use is passed through", () => {
 
   assertEquals(env.BAILEY_CGROUP_ROOT, "/sys/fs/cgroup/system.slice/errand.service");
   assertEquals(env.CHAT_TOKEN, undefined);
+});
+
+/** The report must never describe a tighter boundary than the one applied. */
+Deno.test("extra grants are named in what the backend reports", async () => {
+  const root = await Deno.makeTempDir();
+  const { run } = fakeRun();
+  const sandbox = new BaileySandbox(
+    {
+      ...CONFIG,
+      policyExtra: { read: ["/opt/toolchains"], write: ["/srv/output"], execute: [] },
+    },
+    createLogger({}, () => {}),
+    root,
+    run,
+  );
+
+  const report = await sandbox.probe();
+  const said = report.notes.join("\n");
+
+  assertStringIncludes(said, "grants 2 path(s) beyond the generated policy");
+  assertStringIncludes(said, "1 of them writable");
+  assertStringIncludes(said, "/srv/output");
+  await Deno.remove(root, { recursive: true });
 });

@@ -8,7 +8,7 @@
  */
 
 import { join } from "@std/path";
-import type { NetworkMode } from "../config/schema.ts";
+import type { NetworkMode, PolicyExtraConfig } from "../config/schema.ts";
 import {
   AGENT_BIN,
   AGENT_HOME,
@@ -118,8 +118,17 @@ export function policyContents(options: {
   runtime: AgentRuntime;
   fileMax: string;
   resolvConf: string;
+  /**
+   * Paths the operator granted on top of these.
+   *
+   * Appended, never substituted: what is generated above is the floor, and
+   * this can only widen it. A session that needs a shared toolchain or a
+   * package cache is the case this exists for.
+   */
+  extra?: PolicyExtraConfig | undefined;
 }): string {
   const { launch, network, runtime, fileMax, resolvConf } = options;
+  const extra = options.extra ?? { read: [], write: [], execute: [] };
 
   // The project and the session state are placed at fixed paths, so the agent
   // sees the same two under any backend and never a host path.
@@ -136,6 +145,7 @@ export function policyContents(options: {
     // The agent's own program stays where it is installed. An interpreter
     // resolves its modules relative to itself, so moving it breaks it.
     ...runtime.readPaths.map(quoted),
+    ...extra.read.map(quoted),
   ];
 
   // Ahead of everything, so a wrapper stands in for the program it names.
@@ -148,10 +158,14 @@ export function policyContents(options: {
     // session can reach rather than an addition to a wider floor.
     "reset = true",
     `read = [${read.join(", ")}]`,
-    `write = [${placed(launch.projectPath, WORKSPACE_PATH)}, ${
-      placed(launch.stateDir, STATE_PATH)
+    `write = [${
+      [
+        placed(launch.projectPath, WORKSPACE_PATH),
+        placed(launch.stateDir, STATE_PATH),
+        ...extra.write.map(quoted),
+      ].join(", ")
     }]`,
-    `execute = [${[...SYSTEM_EXECUTE, AGENT_BIN].map(quoted).join(", ")}]`,
+    `execute = [${[...SYSTEM_EXECUTE, AGENT_BIN, ...extra.execute].map(quoted).join(", ")}]`,
     "",
     "[env]",
     // The environment is built rather than inherited, so a variable not named

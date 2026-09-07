@@ -134,3 +134,71 @@ Deno.test("the policy lives in the state directory, never in the project", () =>
   assertStringIncludes(written, "/home/operator/.local/state/errand/s-1/");
   assertEquals(written.startsWith("/home/operator/code/demo"), false);
 });
+
+const EXTRA = {
+  read: ["/opt/toolchains", "/var/cache/shared"],
+  write: ["/srv/output"],
+  execute: ["/opt/toolchains/bin"],
+};
+
+Deno.test("paths granted by configuration reach the policy", () => {
+  const policy = policyContents({
+    launch: launch(),
+    network: "restricted",
+    runtime: RUNTIME,
+    fileMax: "1g",
+    resolvConf: "/state/resolv.conf",
+    extra: EXTRA,
+  });
+
+  assertStringIncludes(policy, '"/opt/toolchains"');
+  assertStringIncludes(policy, '"/var/cache/shared"');
+  assertStringIncludes(policy, '"/srv/output"');
+  assertStringIncludes(policy, '"/opt/toolchains/bin"');
+});
+
+/** Additive only: what the daemon grants is the floor, not a suggestion. */
+Deno.test("an extra grant takes nothing away", () => {
+  const plain = policyContents({
+    launch: launch(),
+    network: "restricted",
+    runtime: RUNTIME,
+    fileMax: "1g",
+    resolvConf: "/state/resolv.conf",
+  });
+  const widened = policyContents({
+    launch: launch(),
+    network: "restricted",
+    runtime: RUNTIME,
+    fileMax: "1g",
+    resolvConf: "/state/resolv.conf",
+    extra: EXTRA,
+  });
+
+  // Every path the generated policy names is still named in the widened one.
+  for (const quoted of plain.match(/"[^"]+"/g) ?? []) {
+    assertStringIncludes(widened, quoted);
+  }
+  assertStringIncludes(widened, "reset = true");
+});
+
+/** A grant that names nothing must not silently widen anything. */
+Deno.test("granting nothing changes nothing", () => {
+  const plain = policyContents({
+    launch: launch(),
+    network: "restricted",
+    runtime: RUNTIME,
+    fileMax: "1g",
+    resolvConf: "/state/resolv.conf",
+  });
+  const empty = policyContents({
+    launch: launch(),
+    network: "restricted",
+    runtime: RUNTIME,
+    fileMax: "1g",
+    resolvConf: "/state/resolv.conf",
+    extra: { read: [], write: [], execute: [] },
+  });
+
+  assertEquals(empty, plain);
+});

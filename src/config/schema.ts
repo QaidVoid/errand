@@ -110,6 +110,27 @@ export interface GithubConfig {
   userEmail: string;
 }
 
+/**
+ * Paths granted to a session on top of what the daemon already grants.
+ *
+ * Additive only. The generated policy still places the project and the state
+ * directory, still bounds the environment, and still clears the backend's own
+ * profile first; this names more that a session may reach, and can take
+ * nothing away. Every path is absolute, since a relative one in a policy means
+ * nothing.
+ *
+ * What is granted here is reported at startup, so the enforcement report never
+ * describes a tighter boundary than the one actually applied.
+ */
+export interface PolicyExtraConfig {
+  /** Directories or files a session may read. */
+  read: string[];
+  /** Directories or files a session may write. Widens what it can change. */
+  write: string[];
+  /** Directories a session may execute from. */
+  execute: string[];
+}
+
 /** What a session may consume, and what the backend enforces. */
 export interface SandboxConfig {
   /** Which backend confines sessions. */
@@ -142,6 +163,8 @@ export interface SandboxConfig {
   diskCheckMs: number;
   /** How long a sandbox may take to stop before it is killed. */
   gracePeriodMs: number;
+  /** Paths granted on top of the generated policy, or undefined for none. */
+  policyExtra: PolicyExtraConfig | undefined;
 }
 
 /**

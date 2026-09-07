@@ -91,6 +91,16 @@ What a session may consume, and what the backend enforces.
 | `diskCheckMs` | `number` | `30000` | How often a session's disk use is measured, in milliseconds. |
 | `gracePeriodMs` | `number` | `10000` | How long a sandbox may take to stop before it is killed. |
 
+## sandbox.policyExtra
+
+Paths granted to a session on top of what the daemon already grants. Additive only. The generated policy still places the project and the state directory, still bounds the environment, and still clears the backend's own profile first; this names more that a session may reach, and can take nothing away. Every path is absolute, since a relative one in a policy means nothing. What is granted here is reported at startup, so the enforcement report never describes a tighter boundary than the one actually applied.
+
+| field | type | default | what it does |
+| --- | --- | --- | --- |
+| `read` | `string[]` | none | Directories or files a session may read. |
+| `write` | `string[]` | none | Directories or files a session may write. Widens what it can change. |
+| `execute` | `string[]` | none | Directories a session may execute from. |
+
 ## output
 
 How much of the agent's activity reaches the thread.

@@ -20,6 +20,7 @@ import {
   type LimitsConfig,
   type NetworkMode,
   type OutputConfig,
+  type PolicyExtraConfig,
   type SandboxBackend,
   type SandboxConfig,
   type ShutdownConfig,
@@ -58,7 +59,8 @@ const KNOWN = {
   agent: ["provider", "model", "visionModel", "credentialName", "credential", "delegate"],
   delegate: ["model", "perTurn", "deadlineMs", "baseUrl"],
   github: ["token", "userName", "userEmail"],
-  sandbox: Object.keys(DEFAULTS.sandbox),
+  sandbox: [...Object.keys(DEFAULTS.sandbox), "policyExtra"],
+  policyExtra: ["read", "write", "execute"],
   shutdown: ["allowedUserIds"],
   web: ["host", "port", "observer", "publicUrl"],
   output: Object.keys(DEFAULTS.output),
@@ -298,6 +300,61 @@ function validateDelegate(
   };
 }
 
+/**
+ * Reads a list of absolute paths.
+ *
+ * A relative path in a policy is meaningless: there is no working directory to
+ * resolve it against once the session has pivoted, so it is refused rather
+ * than resolved against whatever the daemon happened to be started from.
+ */
+function pathList(
+  source: Record<string, unknown>,
+  key: string,
+  where: string,
+  problems: Problems,
+): string[] {
+  const value = source[key];
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    problems.add(`${where}.${key} must be a list of absolute paths`);
+    return [];
+  }
+
+  const paths: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      problems.add(`${where}.${key} contains an entry that is not a path`);
+      continue;
+    }
+    const path = entry.trim();
+    if (!isAbsolute(path)) {
+      problems.add(`${where}.${key} entry ${path} must be an absolute path`);
+      continue;
+    }
+    paths.push(resolve(path));
+  }
+  return paths;
+}
+
+/** Reads the paths granted on top of the generated policy, if any. */
+function validatePolicyExtra(
+  source: Record<string, unknown>,
+  problems: Problems,
+): PolicyExtraConfig | undefined {
+  if (source.policyExtra === undefined) return undefined;
+  const extra = section(source, "policyExtra");
+  rejectUnknown(extra, KNOWN.policyExtra, "sandbox.policyExtra", problems);
+
+  const read = pathList(extra, "read", "sandbox.policyExtra", problems);
+  const write = pathList(extra, "write", "sandbox.policyExtra", problems);
+  const execute = pathList(extra, "execute", "sandbox.policyExtra", problems);
+
+  if (read.length === 0 && write.length === 0 && execute.length === 0) {
+    problems.add("sandbox.policyExtra is set but grants nothing; remove it, or name a path");
+  }
+  return { read, write, execute };
+}
+
 function validateSandbox(raw: Record<string, unknown>, problems: Problems): SandboxConfig {
   const source = section(raw, "sandbox");
   rejectUnknown(source, KNOWN.sandbox, "sandbox", problems);
@@ -332,6 +389,7 @@ function validateSandbox(raw: Record<string, unknown>, problems: Problems): Sand
     disk: size(source, "disk", defaults.disk, "sandbox", problems),
     diskCheckMs: positive(source, "diskCheckMs", defaults.diskCheckMs, "sandbox", problems),
     gracePeriodMs: positive(source, "gracePeriodMs", defaults.gracePeriodMs, "sandbox", problems),
+    policyExtra: validatePolicyExtra(source, problems),
   };
 }
 

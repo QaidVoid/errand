@@ -199,6 +199,39 @@
         "gracePeriodMs": {
           "description": "How long a sandbox may take to stop before it is killed.",
           "type": "number"
+        },
+        "policyExtra": {
+          "description": "Paths granted to a session on top of what the daemon already grants. Additive only. The generated policy still places the project and the state directory, still bounds the environment, and still clears the backend's own profile first; this names more that a session may reach, and can take nothing away. Every path is absolute, since a relative one in a policy means nothing. What is granted here is reported at startup, so the enforcement report never describes a tighter boundary than the one actually applied.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "read": {
+              "description": "Directories or files a session may read.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "write": {
+              "description": "Directories or files a session may write. Widens what it can change.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "execute": {
+              "description": "Directories a session may execute from.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "read",
+            "write",
+            "execute"
+          ]
         }
       }
     },

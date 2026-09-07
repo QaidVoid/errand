@@ -160,6 +160,7 @@ const KEYS: [string, string][] = [
   ["Delegate", "agent.delegate"],
   ["Github", "github"],
   ["Sandbox", "sandbox"],
+  ["PolicyExtra", "sandbox.policyExtra"],
   ["Output", "output"],
   ["Web", "web"],
   ["Shutdown", "shutdown"],

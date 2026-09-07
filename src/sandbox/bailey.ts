@@ -202,6 +202,24 @@ export class BaileySandbox implements Sandbox {
         : "sessions reach the model provider over TCP 443, and outbound access is not restricted by destination",
     ];
 
+    // Said out loud, so the report never describes a tighter boundary than the
+    // one actually applied. Write is named separately: it is the grant that
+    // lets a session change something outside its own project.
+    const extra = this.config.policyExtra;
+    if (extra !== undefined) {
+      const granted = extra.read.length + extra.write.length + extra.execute.length;
+      notes.push(
+        `sandbox.policyExtra grants ${granted} path(s) beyond the generated policy`,
+      );
+      if (extra.write.length > 0) {
+        notes.push(
+          `  ${extra.write.length} of them writable, so a session can change what is outside its project: ${
+            extra.write.join(", ")
+          }`,
+        );
+      }
+    }
+
     return { backend: "bailey", gaps, notes };
   }
 
@@ -224,6 +242,7 @@ export class BaileySandbox implements Sandbox {
         runtime,
         fileMax: this.config.fileMax,
         resolvConf: resolv,
+        extra: this.config.policyExtra,
       }),
     );
 

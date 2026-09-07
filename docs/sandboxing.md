@@ -48,6 +48,41 @@ gap above.
 
 The [service definitions](/service) show how to provide one.
 
+## Granting more than the default
+
+The policy is generated per session and written to `<stateDir>/<session>/policy.toml`,
+outside the project so the agent cannot rewrite it. You can read it to see
+exactly what a session was given.
+
+To let sessions reach something else, name it:
+
+```json
+{
+  "sandbox": {
+    "policyExtra": {
+      "read": ["/opt/toolchains", "/var/cache/shared"],
+      "execute": ["/opt/toolchains/bin"],
+      "write": []
+    }
+  }
+}
+```
+
+Additive only. What the daemon grants is the floor: the project and the state
+directory are still placed, the environment is still built rather than
+inherited, and the backend's own profile is still cleared first. Paths must be
+absolute, because after the pivot there is no working directory to resolve a
+relative one against.
+
+Anything granted here is named in the startup report, and a writable grant is
+called out separately, since that is the one that lets a session change
+something outside its own project. A report that did not say so would describe
+a tighter boundary than the one in force.
+
+There is deliberately no way to supply a whole policy file. That would let the
+report claim guarantees the file does not make; editing `src/sandbox/policy.ts`
+is the honest way to change the floor itself.
+
 ## What is not confined
 
 - **The daemon itself.** It holds the chat token and starts sandboxes.

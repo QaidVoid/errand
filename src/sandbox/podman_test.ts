@@ -11,7 +11,11 @@ import {
   type Run,
 } from "./podman.ts";
 
-const CONFIG: SandboxConfig = { ...DEFAULTS.sandbox, backend: "podman" };
+const CONFIG: SandboxConfig = {
+  ...DEFAULTS.sandbox,
+  backend: "podman",
+  policyExtra: undefined,
+};
 
 function launch(overrides: Partial<SandboxLaunch> = {}): SandboxLaunch {
   return {

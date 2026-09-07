@@ -215,3 +215,47 @@ Deno.test("an interface port that is not a port is refused", () => {
     "web.port must be a number greater than zero",
   );
 });
+
+Deno.test("no extra grant is the same as no policyExtra section", () => {
+  assertEquals(validateConfig(valid()).sandbox.policyExtra, undefined);
+});
+
+Deno.test("extra grants are taken as absolute paths", () => {
+  const extra = validateConfig(valid({
+    sandbox: {
+      policyExtra: {
+        read: ["/opt/toolchains"],
+        write: ["/srv/output"],
+        execute: ["/opt/toolchains/bin"],
+      },
+    },
+  })).sandbox.policyExtra;
+
+  assertEquals(extra?.read, ["/opt/toolchains"]);
+  assertEquals(extra?.write, ["/srv/output"]);
+  assertEquals(extra?.execute, ["/opt/toolchains/bin"]);
+});
+
+/** There is no working directory to resolve one against after the pivot. */
+Deno.test("a relative path in a grant is refused, not resolved", () => {
+  const problems = problemsOf(valid({
+    sandbox: { policyExtra: { read: ["./shared", "/fine"] } },
+  })).join("\n");
+
+  assertStringIncludes(problems, "must be an absolute path");
+});
+
+/** A section that grants nothing is a mistake worth naming. */
+Deno.test("an empty grant is refused rather than silently doing nothing", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { policyExtra: {} } })).join("\n"),
+    "grants nothing",
+  );
+});
+
+Deno.test("a misspelled grant list is refused like any other setting", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { policyExtra: { reed: ["/opt"] } } })).join("\n"),
+    "sandbox.policyExtra.reed is not a setting",
+  );
+});
