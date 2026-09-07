@@ -3,6 +3,17 @@
 A message in the served channel opens a thread and starts a session. Everything
 after that happens in the thread.
 
+If the channel is also somewhere people talk, set `chat.startOnMention` and only
+a message that names the bot starts anything:
+
+```
+@errand demo: fix the failing test
+```
+
+The mention summons it and is not part of what you asked, so it is taken out
+before the agent sees it. Inside a thread nothing has to be named: the session
+is the conversation.
+
 ## What a message means
 
 A reply is a prompt. If a turn is already running, what you say **redirects
@@ -43,10 +54,10 @@ rather than as a history of transitions.
 
 ## Attachments
 
-Files you attach are saved into the session's project, under `attachments/`,
-and the agent is told where they went. A name that aims outside the project
-cannot get there: it is reduced to one path segment and then resolved by the
-same rule that confines the agent.
+Files you attach are saved into the session's project, under `attachments/`, and
+the agent is told where they went. A name that aims outside the project cannot
+get there: it is reduced to one path segment and then resolved by the same rule
+that confines the agent.
 
 An image is handed to the model as well as saved. If the session's model cannot
 see images, a cheaper one that can is asked to describe it first, and the agent
@@ -61,3 +72,8 @@ the thread picks the conversation back up where it stopped.
 Only `!stop` finishes with a thread, and only then is it archived. A thread that
 drops out of the sidebar because a session idled out is one its author then has
 to go hunting for.
+
+An idle timeout, or a daemon restart, is not announced at all. The next message
+picks the session up and the resumed session says so, which leaves a notice
+nothing to add. A failure is announced, because it stopped part way through
+something and you should know why.

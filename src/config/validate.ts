@@ -47,7 +47,14 @@ const KNOWN = {
     "limits",
     "timeouts",
   ],
-  chat: ["token", "channelId", "allowedUserIds", "blockedUserIds", "operatorUserIds"],
+  chat: [
+    "token",
+    "channelId",
+    "allowedUserIds",
+    "blockedUserIds",
+    "operatorUserIds",
+    "startOnMention",
+  ],
   agent: ["provider", "model", "visionModel", "credentialName", "credential", "delegate"],
   delegate: ["model", "perTurn", "deadlineMs", "baseUrl"],
   github: ["token", "userName", "userEmail"],
@@ -223,6 +230,13 @@ function validateChat(raw: Record<string, unknown>, problems: Problems): ChatCon
     allowedUserIds: allowed,
     blockedUserIds: idList(source, "blockedUserIds", "chat", problems),
     operatorUserIds: idList(source, "operatorUserIds", "chat", problems),
+    startOnMention: flag(
+      source,
+      "startOnMention",
+      DEFAULTS.chat.startOnMention,
+      "chat",
+      problems,
+    ),
   };
 }
 

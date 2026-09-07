@@ -38,6 +38,15 @@ export interface ChatConfig {
   blockedUserIds: string[];
   /** Accounts that may control any session, not only their own. */
   operatorUserIds: string[];
+  /**
+   * Require a message to mention the bot before it starts a session.
+   *
+   * Off by default, so every top-level message in the served channel starts
+   * one. Turn it on where the channel is also used for talking: people can
+   * then hold an ordinary conversation in it, and only a message addressed to
+   * the bot opens a thread and a sandbox.
+   */
+  startOnMention: boolean;
 }
 
 /**
@@ -259,6 +268,9 @@ export const SECRET_PATHS = ["chat.token", "agent.credential", "github.token"] a
 
 /** Values used for any optional field the configuration file omits. */
 export const DEFAULTS = {
+  chat: {
+    startOnMention: false,
+  },
   sandbox: {
     backend: "bailey" as SandboxBackend,
     requireFullEnforcement: true,

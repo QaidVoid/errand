@@ -19,7 +19,13 @@ import {
 import type { ChatConfig } from "../config/schema.ts";
 import type { Logger } from "../log.ts";
 import { acknowledge, translate, type TranslatedCommand } from "./commands.ts";
-import { classify, type InboundDecision, isPermitted, type RawMessage } from "./inbound.ts";
+import {
+  classify,
+  type InboundDecision,
+  isPermitted,
+  type RawMessage,
+  withoutBotMention,
+} from "./inbound.ts";
 
 /** Reconnection schedule: growing delay, then give up rather than hang on. */
 export interface ReconnectPolicy {
@@ -131,12 +137,21 @@ export class Gateway {
       const raw = toRaw(message);
       if (raw === null) return;
 
-      const decision = classify(raw, this.config);
+      const own = client.user?.id;
+      const decision = classify(raw, this.config, own);
       if (decision.kind === "ignore") {
         this.log.info("ignored a message", { reason: decision.reason });
         return;
       }
-      void this.handlers.onMessage(raw, decision).catch((error: unknown) => {
+
+      // The mention summoned the bot; it is not part of what was asked. Taken
+      // out here, where the bot's own name is known, so nothing downstream has
+      // to know it has one.
+      const asked = decision.kind === "start" && this.config.startOnMention && own !== undefined
+        ? { ...raw, content: withoutBotMention(raw.content, own) }
+        : raw;
+
+      void this.handlers.onMessage(asked, decision).catch((error: unknown) => {
         this.log.error("handling a message failed", { detail: String(error) });
       });
     });

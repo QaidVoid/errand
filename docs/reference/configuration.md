@@ -38,6 +38,7 @@ Chat connection and who may drive the bot.
 | `allowedUserIds` | `string[]` | required | Accounts permitted to drive sessions. Must not be empty. The single entry `ALLOW_EVERY_USER` opens it to everyone who can post in the served channel. That is a deliberate, visible choice: an empty list is still a refusal to start, so nobody arrives at open access by leaving a field blank. |
 | `blockedUserIds` | `string[]` | none | Accounts refused before anything else is considered. Ahead of the allowlist and of any session role, so excluding somebody is one decision rather than an audit of every list they appear on. |
 | `operatorUserIds` | `string[]` | none | Accounts that may control any session, not only their own. |
+| `startOnMention` | `boolean` | `false` | Require a message to mention the bot before it starts a session. Off by default, so every top-level message in the served channel starts one. Turn it on where the channel is also used for talking: people can then hold an ordinary conversation in it, and only a message addressed to the bot opens a thread and a sandbox. |
 
 ## agent
 

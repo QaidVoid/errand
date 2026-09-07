@@ -1,6 +1,6 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 import type { ChatConfig } from "../config/schema.ts";
-import { classify, isBlocked, isPermitted, type RawMessage } from "./inbound.ts";
+import { classify, isBlocked, isPermitted, type RawMessage, withoutBotMention } from "./inbound.ts";
 
 const CHANNEL = "served-channel";
 
@@ -10,6 +10,7 @@ const CONFIG: ChatConfig = {
   allowedUserIds: ["u-1", "u-2"],
   blockedUserIds: [],
   operatorUserIds: [],
+  startOnMention: false,
 };
 
 function message(overrides: Partial<RawMessage> = {}): RawMessage {
@@ -114,4 +115,71 @@ Deno.test("an attachment with no words is still a message", () => {
 
   assertEquals(classify(attached, CONFIG).kind, "start");
   assertEquals(classify(message({ content: "  " }), CONFIG).kind, "ignore");
+});
+
+/**
+ * A channel is often also somewhere people talk. Requiring the bot to be
+ * named lets them, and only a message addressed to it opens a sandbox.
+ */
+Deno.test("with the setting on, only a message naming the bot starts one", () => {
+  const config = { ...CONFIG, startOnMention: true };
+
+  assertEquals(
+    classify(message({ content: "what did you all think?" }), config, "bot-1").kind,
+    "ignore",
+  );
+  assertEquals(
+    classify(message({ content: "<@bot-1> demo: fix the parser" }), config, "bot-1").kind,
+    "start",
+  );
+  assertEquals(
+    classify(message({ content: "look at this <@!bot-1>" }), config, "bot-1").kind,
+    "start",
+  );
+});
+
+/** Naming a different bot in the channel is not naming this one. */
+Deno.test("somebody else's bot is not this one", () => {
+  const config = { ...CONFIG, startOnMention: true };
+
+  assertEquals(
+    classify(message({ content: "<@other> do a thing" }), config, "bot-1").kind,
+    "ignore",
+  );
+});
+
+/** Inside a thread the session is the conversation, so nothing is required. */
+Deno.test("a thread reply never has to name the bot", () => {
+  const config = { ...CONFIG, startOnMention: true };
+  const reply = message({
+    content: "carry on",
+    channelId: "thread-1",
+    parentChannelId: CHANNEL,
+  });
+
+  assertEquals(classify(reply, config, "bot-1").kind, "thread");
+});
+
+Deno.test("with the setting off, any message starts one as before", () => {
+  assertEquals(classify(message({ content: "demo: go" }), CONFIG, "bot-1").kind, "start");
+  assertEquals(classify(message({ content: "demo: go" }), CONFIG).kind, "start");
+});
+
+/** Refusing everything is better than starting work nobody addressed. */
+Deno.test("a bot that does not know its own name starts nothing", () => {
+  const config = { ...CONFIG, startOnMention: true };
+
+  const decision = classify(message({ content: "<@bot-1> go" }), config);
+
+  assertEquals(decision.kind, "ignore");
+  assertStringIncludes(decision.kind === "ignore" ? decision.reason : "", "its own name");
+});
+
+Deno.test("the mention that summoned it is not part of what was asked", () => {
+  assertEquals(withoutBotMention("<@bot-1> demo: fix the parser", "bot-1"), "demo: fix the parser");
+  assertEquals(
+    withoutBotMention("hey <@!bot-1> look at <@bot-1> this", "bot-1"),
+    "hey look at this",
+  );
+  assertEquals(withoutBotMention("nothing to remove", "bot-1"), "nothing to remove");
 });

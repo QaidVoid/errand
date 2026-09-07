@@ -39,6 +39,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "startOnMention": {
+          "description": "Require a message to mention the bot before it starts a session. Off by default, so every top-level message in the served channel starts one. Turn it on where the channel is also used for talking: people can then hold an ordinary conversation in it, and only a message addressed to the bot opens a thread and a sandbox.",
+          "type": "boolean"
         }
       },
       "required": [

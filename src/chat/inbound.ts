@@ -36,6 +36,29 @@ export interface RawMessage {
   attachments: RawAttachment[];
 }
 
+/**
+ * Whether a message addresses the bot by name.
+ *
+ * Both spellings, because a client sends one and somebody typing by hand may
+ * produce the other. The mention has to be there; where it is does not matter,
+ * since people write "@errand look at this" and "look at this @errand" in
+ * equal measure.
+ */
+export function mentionsBot(content: string, botId: string): boolean {
+  return new RegExp(`<@!?${botId}>`).test(content);
+}
+
+/**
+ * The message without the mention that summoned the bot.
+ *
+ * Every mention of it, not only the first: what is left is the prompt, and a
+ * prompt that still says `<@1523363748427993218>` reads as noise to a model
+ * and can be mistaken for a project name when it leads the line.
+ */
+export function withoutBotMention(content: string, botId: string): string {
+  return content.replace(new RegExp(`<@!?${botId}>`, "g"), " ").replace(/\s+/g, " ").trim();
+}
+
 /** What should be done with an inbound message. */
 export type InboundDecision =
   /** Do nothing at all, and send no reply. */
@@ -73,7 +96,11 @@ export function isPermitted(config: ChatConfig, userId: string): boolean {
  * an unauthorised sender why they were ignored describes the allowlist to
  * exactly the person it exists to exclude.
  */
-export function classify(message: RawMessage, config: ChatConfig): InboundDecision {
+export function classify(
+  message: RawMessage,
+  config: ChatConfig,
+  botId?: string,
+): InboundDecision {
   if (message.authorIsBot) return { kind: "ignore", reason: "authored by a bot" };
 
   const inServedChannel = message.channelId === config.channelId;
@@ -93,5 +120,18 @@ export function classify(message: RawMessage, config: ChatConfig): InboundDecisi
     return { kind: "ignore", reason: "nothing was said and nothing was attached" };
   }
 
-  return inServedThread ? { kind: "thread", threadId: message.channelId } : { kind: "start" };
+  if (inServedThread) return { kind: "thread", threadId: message.channelId };
+
+  // Only for starting something. Inside a thread the session is already the
+  // conversation, so making every message name the bot would be tiresome.
+  if (config.startOnMention) {
+    if (botId === undefined) {
+      return { kind: "ignore", reason: "the bot does not know its own name yet" };
+    }
+    if (!mentionsBot(message.content, botId)) {
+      return { kind: "ignore", reason: "the channel message did not mention the bot" };
+    }
+  }
+
+  return { kind: "start" };
 }

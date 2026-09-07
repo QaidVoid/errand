@@ -7,7 +7,8 @@
       "PUT THE ACCOUNT IDS THAT MAY DRIVE SESSIONS HERE"
     ],
     "blockedUserIds": [],
-    "operatorUserIds": []
+    "operatorUserIds": [],
+    "startOnMention": false
   },
   "agent": {
     "provider": "zai-coding-cn",
