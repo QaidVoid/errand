@@ -13,10 +13,48 @@ to the same thread.
   of messages cannot get an account rate limited.
 - The chat token never enters a sandbox.
 
+## Running it
+
+```sh
+errand run       # run the daemon until it is told to stop
+errand threads   # list, inspect, and remove what past sessions left on disk
+errand help
+```
+
+The configuration file is read from `ERRAND_CONFIG`, or `./config.json` when
+that is unset. A minimal one:
+
+```json
+{
+  "chat": {
+    "token": "the bot token",
+    "channelId": "the one channel to serve",
+    "allowedUserIds": ["accounts that may drive sessions"]
+  },
+  "agent": {
+    "provider": "anthropic",
+    "credentialName": "ANTHROPIC_API_KEY",
+    "credential": "the provider key"
+  },
+  "projectRoot": "/srv/errand/projects",
+  "stateDir": "/var/lib/errand"
+}
+```
+
+Everything else has a documented default. The daemon refuses to start rather
+than run with a guarantee it cannot keep: if the backend cannot enforce
+everything configured on this host, it says which and stops, unless
+`sandbox.requireFullEnforcement` is set to `false`.
+
+## In a thread
+
+`!help` lists what can be typed. The same commands are registered as slash
+commands, so they can be picked rather than remembered. A message starting
+`!!!` is an aside: the people in the thread see it and the agent is never told.
+
 ## Status
 
-Early. The daemon is being built module by module, and this README grows with
-it.
+Early. The daemon runs; the web interface and packaging are still to come.
 
 ## Development
 
