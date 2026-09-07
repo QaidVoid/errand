@@ -746,12 +746,22 @@
     background: var(--accent);
   }
 
+  /*
+   * Wraps rather than squeezes. A narrow drawer, or a larger default font,
+   * used to shrink whatever sat at the end until its text broke mid-word and
+   * was clipped by the edge.
+   */
   header {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 14px 14px 10px;
     border-bottom: 1px solid var(--line-soft);
+  }
+
+  header > :global(*) {
+    flex-shrink: 0;
   }
 
   header h1 {
@@ -894,6 +904,7 @@
   }
 
   .badge {
+    white-space: nowrap;
     font-size: 11px;
     color: var(--text-faint);
     border: 1px solid var(--line);
@@ -1213,8 +1224,17 @@
       display: inline-block;
     }
 
+    /*
+     * The name is what the bar is for, so it keeps a readable width and the
+     * rest gives way. It used to be squeezed to a single letter and an
+     * ellipsis while a turn counter beside it kept its own.
+     */
     .bar .named {
-      min-width: 0;
+      min-width: 9ch;
+    }
+
+    .bar .where {
+      display: none;
     }
 
     .composer {
@@ -1237,6 +1257,17 @@
    * narrow they give way rather than wrapping the line they sit on.
    */
   @media (max-width: 560px) {
+    /* Wrapping beats squeezing: the name stays legible on its own line. */
+    .bar {
+      flex-wrap: wrap;
+      gap: 6px 10px;
+    }
+
+    .bar .named {
+      flex-basis: 100%;
+      order: -1;
+    }
+
     .facts {
       gap: 2px 12px;
     }
