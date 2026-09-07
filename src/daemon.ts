@@ -152,6 +152,14 @@ export interface DaemonOptions {
    * machine off, and so the daemon does not decide how it is done.
    */
   powerOff?: (() => Promise<string | undefined>) | undefined;
+  /**
+   * What is left of the provider's usage window, in words.
+   *
+   * Answered by the daemon rather than by a session: it is about the account
+   * the whole host shares, and asking should not need a session running.
+   * Absent when the provider does not meter one.
+   */
+  describeUsage?: (() => Promise<string>) | undefined;
   /** Where the interface is published, when it is. */
   publicUrl?: string | undefined;
   /**
@@ -256,6 +264,24 @@ export class Daemon {
     return (await this.options.powerOff()) ?? "powering off now";
   }
 
+  /**
+   * Says what is left of the provider's usage window.
+   *
+   * @returns what to say, or undefined when the message was not this command.
+   */
+  private async describeUsage(content: string): Promise<string | undefined> {
+    if (firstWord(content) !== "!usage") return undefined;
+    if (this.options.describeUsage === undefined) {
+      return "this provider does not report a usage window";
+    }
+    return await this.options.describeUsage();
+  }
+
+  /** Whatever the daemon answers itself, wherever it was typed. */
+  private async answerAsDaemon(content: string, authorId: string): Promise<string | undefined> {
+    return (await this.powerOffHost(content, authorId)) ?? (await this.describeUsage(content));
+  }
+
   /** Acts on a message the gateway has already filtered. */
   async handle(raw: RawMessage, decision: InboundDecision): Promise<void> {
     if (!this.accepting) {
@@ -271,11 +297,11 @@ export class Daemon {
       attachments: raw.attachments,
     };
 
-    // Before anything is routed. It is not a session command, and being in a
-    // thread is not a reason to be allowed to run it.
-    const powered = await this.powerOffHost(message.content, message.authorId);
-    if (powered !== undefined) {
-      await this.options.replyInChannel(message, powered);
+    // Before anything is routed. These are not session commands, and being in
+    // a thread is not a reason to be allowed to run one.
+    const answered = await this.answerAsDaemon(message.content, message.authorId);
+    if (answered !== undefined) {
+      await this.options.replyInChannel(message, answered);
       return;
     }
 
@@ -318,9 +344,9 @@ export class Daemon {
     // Answered here rather than by starting a session: a command that only
     // describes the system needs nothing running, and opening a thread and a
     // sandbox to print a list is not an answer.
-    const answered = answerWithoutSession(message.content);
-    if (answered !== undefined) {
-      await this.options.replyInChannel(message, answered);
+    const listed = answerWithoutSession(message.content);
+    if (listed !== undefined) {
+      await this.options.replyInChannel(message, listed);
       return;
     }
 
@@ -343,15 +369,15 @@ export class Daemon {
   async runCommand(command: TranslatedCommand): Promise<string> {
     if (!this.accepting) return "the daemon is still starting up";
 
-    const powered = await this.powerOffHost(command.content, command.userId);
-    if (powered !== undefined) return powered;
+    const answered = await this.answerAsDaemon(command.content, command.userId);
+    if (answered !== undefined) return answered;
 
     // Some commands describe the system rather than act on a session, so they
     // answer anywhere. The answer is the acknowledgement: it goes back to the
     // person who ran it and nowhere else, which is where a help listing wants
     // to be rather than posted into a channel everyone is reading.
-    const answered = answerWithoutSession(command.content);
-    if (answered !== undefined) return answered;
+    const listed = answerWithoutSession(command.content);
+    if (listed !== undefined) return listed;
 
     if (command.threadId === undefined) {
       return "use this inside a session thread; post in the channel to start one";

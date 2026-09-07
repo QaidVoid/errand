@@ -224,7 +224,7 @@ export function tokens(count: number): string {
 }
 
 /**
- * A moment, rendered so Discord counts down to it in the reader's own zone.
+ * A moment, rendered so the client counts down to it in the reader's own zone.
  *
  * `<t:seconds:R>` is resolved by the client, so one message reads correctly for
  * everyone and keeps reading correctly as the wait shortens. Writing the time

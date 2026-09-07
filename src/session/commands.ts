@@ -93,6 +93,15 @@ export const COMMANDS: Record<string, CommandMeta> = {
   // Harmless, or scoped to the caller's own data.
   "!status": { access: "anyone", group: "you", summary: "session state and queue" },
   "!help": { access: "anyone", group: "you", summary: "list these commands" },
+  /**
+   * About the provider rather than about a session, so the daemon answers it
+   * and it works in the channel as well as in a thread.
+   */
+  "!usage": {
+    access: "anyone",
+    group: "you",
+    summary: "how much of the provider's usage window is left",
+  },
 
   /**
    * Acts on the machine, so the daemon answers it against its own list and a
@@ -201,6 +210,19 @@ export function mayRun(access: CommandAccess, standing: Standing): boolean {
  */
 export function answerWithoutSession(content: string): string | undefined {
   return firstWord(content) === "!help" ? helpText() : undefined;
+}
+
+/**
+ * Commands the daemon answers itself, wherever they are typed.
+ *
+ * They are about the machine or the provider rather than about a session, so
+ * a thread is neither needed to run one nor a reason to be allowed to.
+ */
+export const DAEMON_COMMANDS = ["!shutdown", "!usage"] as const;
+
+/** Whether the daemon answers this command rather than a session. */
+export function isDaemonCommand(content: string): boolean {
+  return (DAEMON_COMMANDS as readonly string[]).includes(firstWord(content));
 }
 
 const GROUP_TITLES: [CommandGroup, string][] = [

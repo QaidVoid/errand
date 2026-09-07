@@ -11,6 +11,7 @@ import { dirname, fromFileUrl, join } from "@std/path";
 import { ChannelType } from "discord.js";
 import { acknowledge, applicationId, registerCommands } from "./chat/commands.ts";
 import { Gateway } from "./chat/gateway.ts";
+import { whenRelative } from "./chat/render.ts";
 import { assertChannelUsable, ChatThreadFactory, plain } from "./chat/threads.ts";
 import { redactText, secretValues } from "./config/redact.ts";
 import type { Config } from "./config/schema.ts";
@@ -20,6 +21,14 @@ import type { Logger } from "./log.ts";
 import { MemoryStore } from "./memory/store.ts";
 import { agentDirectory } from "./provider/models.ts";
 import { imageDescriber } from "./provider/vision.ts";
+import {
+  isSpent,
+  metersUsage,
+  QuotaGate,
+  quotaMessage,
+  spentMessage,
+  UNKNOWN_QUOTA,
+} from "./provider/zai.ts";
 import type { IncomingMessage } from "./session/session.ts";
 import { WEB_ACTOR, WebServer } from "./web/server.ts";
 
@@ -133,6 +142,12 @@ async function run(
 
   const memory = new MemoryStore(join(config.stateDir, MEMORY_FILENAME));
 
+  // Only for a provider that meters a window. Everywhere else there is nothing
+  // to ask and nothing to refuse against.
+  const quota = metersUsage(config.agent.provider)
+    ? new QuotaGate(config.agent.credential)
+    : undefined;
+
   // Decided once: what a model accepts is the provider's business, not
   // something to work out per attachment.
   const describer = imageDescriber(config.agent, agentDirectory(Deno.env.toObject()));
@@ -159,6 +174,23 @@ async function run(
       ? [...config.chat.operatorUserIds, WEB_ACTOR]
       : config.chat.operatorUserIds,
     ...(describer === undefined ? {} : { describeImages: describer.describe }),
+    ...(quota === undefined ? {} : {
+      // Checked before a thread is opened or a sandbox started, so a spent
+      // window is answered with when to come back rather than with a turn
+      // that starts and then fails against the provider.
+      unavailable: async () => {
+        const window = await quota.current();
+        return window === undefined || !isSpent(window)
+          ? undefined
+          : spentMessage(whenRelative(window.resetsAt));
+      },
+      describeUsage: async () => {
+        const window = await quota.current();
+        return window === undefined
+          ? UNKNOWN_QUOTA
+          : quotaMessage(window, whenRelative(window.resetsAt));
+      },
+    }),
     replyInChannel: async (message: IncomingMessage, text: string) => {
       const channel = await gateway.connection.channels.fetch(config.chat.channelId);
       if (channel === null || channel.type !== ChannelType.GuildText) return;

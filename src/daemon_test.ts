@@ -168,6 +168,7 @@ async function withDaemon(
   options: {
     settings?: Record<string, unknown>;
     powerOff?: () => Promise<string | undefined>;
+    describeUsage?: () => Promise<string>;
     report?: CapabilityReport;
     start?: boolean;
   } = {},
@@ -193,6 +194,7 @@ async function withDaemon(
       return Promise.resolve();
     },
     ...(options.powerOff === undefined ? {} : { powerOff: options.powerOff }),
+    ...(options.describeUsage === undefined ? {} : { describeUsage: options.describeUsage }),
   });
 
   try {
@@ -500,4 +502,32 @@ Deno.test("the same gap is allowed when the configuration allows it", () =>
     start: false,
     settings: { sandbox: { requireFullEnforcement: false } },
     report: { backend: "bailey", gaps: ["no landlock here"], notes: [] },
+  }));
+
+/** About the account the host shares, so a session is not needed to ask. */
+Deno.test("the usage window is reported wherever it is asked about", () =>
+  withDaemon(async ({ daemon, replies, threads }) => {
+    await daemon.handle(raw("!usage"), { kind: "start" });
+
+    assertStringIncludes(replies[0] ?? "", "58% of the provider's usage window is left");
+    assertEquals(threads.created, []);
+    assertEquals(
+      await daemon.runCommand({
+        threadId: undefined,
+        userId: OWNER,
+        userName: "amelia",
+        content: "!usage",
+      }),
+      replies[0],
+    );
+  }, {
+    describeUsage: () =>
+      Promise.resolve("58% of the provider's usage window is left, and it resets in 2 hours"),
+  }));
+
+Deno.test("a provider that meters nothing says so rather than inventing a number", () =>
+  withDaemon(async ({ daemon, replies }) => {
+    await daemon.handle(raw("!usage"), { kind: "start" });
+
+    assertStringIncludes(replies[0] ?? "", "does not report a usage window");
   }));
