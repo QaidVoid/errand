@@ -1,0 +1,326 @@
+/*
+ * One small design system, hand written.
+ *
+ * A tool for reading code should look like one: a low-contrast surface so that
+ * syntax and diffs are the only saturated things on screen, one accent used
+ * sparingly, and type sized for reading rather than for filling space.
+ *
+ * Every colour used anywhere in the interface is named here, for both themes. A
+ * literal colour in a component is a bug: it is exactly how one theme ends up
+ * half applied, because it only looks wrong in the theme nobody was testing.
+ *
+ * The theme is dark unless the system asks for light, and an explicit choice on
+ * the root element wins over both.
+ */
+
+:root {
+  /*
+   * How wide a turn's contents are.
+   *
+   * One number rather than one per component: prose and tool calls sharing a
+   * measure is what gives a turn a single edge instead of a ragged one. Set in
+   * rem rather than ch, because ch resolves against each element's own font and
+   * would hand prose and code two different widths from one token.
+   */
+  --measure: 60rem;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --gap: 12px;
+
+  /*
+   * Three steps, and only three.
+   *
+   * What the agent said, what it ran, and what any of it cost are told apart
+   * by size and weight rather than by colour, because colour is spent on
+   * syntax and diffs and a fourth meaning would either dull them or shout over
+   * them.
+   *
+   * The transcript is held to these three. The diff, the file view, the tree,
+   * and the session list still carry sizes of their own, and are the next
+   * thing to bring in.
+   */
+  --type-answer: 15px;
+  --type-work: 13px;
+  --type-receipt: 11.5px;
+
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/*
+ * Dark, and the default.
+ *
+ * Written as a named block so that the light theme and an explicit dark choice
+ * can both reuse it rather than restating every value.
+ */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0f131a;
+  --bg-raised: #161b24;
+  --bg-inset: #0b0e14;
+  --line: #232c3a;
+  --line-soft: #1a212c;
+
+  --text: #dbe3ef;
+  --text-dim: #8a97ab;
+  --text-faint: #79869b;
+
+  --accent: #8ab4ff;
+  --accent-ink: #0d1220;
+  --mark: #4a3f12;
+  --ok: #7ee2b8;
+  --warn: #f5c877;
+  --bad: #ff8b8b;
+
+  --add-bg: #12301f;
+  --add-fg: #8fe0ab;
+  --del-bg: #34161a;
+  --del-fg: #ff9d9d;
+
+  --scrollbar: #232c3a;
+  --scrollbar-hover: #2f3a4c;
+  --overlay: rgb(6 9 14 / 62%);
+
+  --code-keyword: #c99bf5;
+  --code-string: #9bd6a4;
+  --code-number: #f0b98a;
+  --code-name: #8ab4ff;
+  --code-type: #6fd6c6;
+  --code-comment: #6f7c91;
+  --code-punctuation: #97a3b6;
+}
+
+/*
+ * Light.
+ *
+ * Not the dark values inverted: on a light surface the same hues read as
+ * washed out, so each is darkened enough to hold its meaning against white
+ * while staying quieter than the code it sits beside.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #fbfcfe;
+  --bg-raised: #f2f5f9;
+  --bg-inset: #eaeef4;
+  --line: #d3dae4;
+  --line-soft: #e4e9f0;
+
+  --text: #1a2230;
+  --text-dim: #55637a;
+  --text-faint: #5f6a7f;
+
+  --accent: #2f5fd0;
+  --accent-ink: #ffffff;
+  --mark: #fff3a3;
+  --ok: #157f52;
+  --warn: #8a5a00;
+  --bad: #c0392f;
+
+  --add-bg: #e2f5e9;
+  --add-fg: #12633f;
+  --del-bg: #fdeaea;
+  --del-fg: #a52f25;
+
+  --scrollbar: #cdd5e0;
+  --scrollbar-hover: #b3bece;
+  --overlay: rgb(26 34 48 / 34%);
+
+  --code-keyword: #7038a8;
+  --code-string: #146b34;
+  --code-number: #9a4a05;
+  --code-name: #23479c;
+  --code-type: #0d6b62;
+  --code-comment: #5f6a7f;
+  --code-punctuation: #4a5568;
+}
+
+/* Followed only when nothing has been chosen, which is what the attribute says. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+
+    --bg: #fbfcfe;
+    --bg-raised: #f2f5f9;
+    --bg-inset: #eaeef4;
+    --line: #d3dae4;
+    --line-soft: #e4e9f0;
+
+    --text: #1a2230;
+    --text-dim: #55637a;
+    --text-faint: #5f6a7f;
+
+    --accent: #2f5fd0;
+    --accent-ink: #ffffff;
+    --ok: #157f52;
+    --warn: #8a5a00;
+    --bad: #c0392f;
+
+    --add-bg: #e2f5e9;
+    --add-fg: #12633f;
+    --del-bg: #fdeaea;
+    --del-fg: #a52f25;
+
+    --scrollbar: #cdd5e0;
+    --scrollbar-hover: #b3bece;
+    --overlay: rgb(26 34 48 / 34%);
+
+    --code-keyword: #7038a8;
+    --code-string: #146b34;
+    --code-number: #9a4a05;
+    --code-name: #23479c;
+    --code-type: #0d6b62;
+    --code-comment: #5f6a7f;
+    --code-punctuation: #4a5568;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  /* Nothing outside a pane scrolls: the panes own their own overflow, and a
+     page that scrolls as well moves the composer off the screen. */
+  overflow: hidden;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+a {
+  color: var(--accent);
+}
+
+code,
+pre {
+  font-family: var(--mono);
+  font-size: var(--type-work);
+}
+
+/* A focus ring that is visible on every surface here. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/*
+ * The highlighter emits these classes and no colours of its own, so this is the
+ * whole palette for code. Grouped by what a token means rather than one rule per
+ * class, so a language nobody thought about still lands somewhere sensible.
+ */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-formula {
+  color: var(--code-keyword);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: var(--code-string);
+}
+
+.hljs-number,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-template-variable,
+.hljs-quote,
+.hljs-deletion {
+  color: var(--code-number);
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--code-name);
+}
+
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-built_in,
+.hljs-symbol,
+.hljs-variable,
+.hljs-variable.language_,
+.hljs-params,
+.hljs-attr,
+.hljs-property {
+  color: var(--code-type);
+}
+
+.hljs-comment,
+.hljs-meta {
+  color: var(--code-comment);
+}
+
+.hljs-punctuation,
+.hljs-operator,
+.hljs-tag {
+  color: var(--code-punctuation);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+  background-clip: content-box;
+}
+
+/*
+ * A search match, wherever it was found.
+ *
+ * Marked in the rendered text rather than around the exchange holding it, so
+ * a reader sees the word itself instead of being handed a block to scan. This
+ * is painted over a range: the document itself is never altered to show it.
+ */
+::highlight(errand-search) {
+  background-color: var(--mark);
+  color: var(--text);
+}

@@ -46,6 +46,19 @@ than run with a guarantee it cannot keep: if the backend cannot enforce
 everything configured on this host, it says which and stops, unless
 `sandbox.requireFullEnforcement` is set to `false`.
 
+## The interface
+
+An optional local web interface reads a session as it happens, browses the
+project, and starts new ones. It has no login: the address it binds to is the
+access control, and a public bind is refused rather than warned about. Build it
+once with `deno task build:web`, then add a `web` section to the configuration:
+
+```json
+{ "web": { "host": "127.0.0.1", "port": 8787 } }
+```
+
+Set `"observer": true` to serve one that can watch and read but change nothing.
+
 ## In a thread
 
 `!help` lists what can be typed. The same commands are registered as slash
@@ -59,9 +72,11 @@ Early. The daemon runs; the web interface and packaging are still to come.
 ## Development
 
 ```sh
-deno task check   # formatting, lint, types, tests, and the ASCII rule
-deno task test    # the test suite
-deno task start   # run the daemon against ./config.json
+deno task check     # formatting, lint, types, tests, the ASCII rule, the interface
+deno task test      # the test suite
+deno task start     # run the daemon against ./config.json
+deno task build:web # build the interface into dist/web
+deno task dev:web   # the interface against a running daemon
 ```
 
 The daemon runs under an explicit permission set rather than with the whole

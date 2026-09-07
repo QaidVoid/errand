@@ -7,3 +7,6 @@ state/
 
 # Built output.
 dist/
+
+# npm packages the interface build pulls in.
+node_modules/

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="errand">
+  <title>errand</title>
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3444"/>
+      <stop offset="1" stop-color="#161b24"/>
+    </linearGradient>
+  </defs>
+
+  <!-- The sandbox: a closed box the agent works inside. -->
+  <rect x="3" y="3" width="58" height="58" rx="15" fill="url(#shell)"/>
+  <rect x="3.75" y="3.75" width="56.5" height="56.5" rx="14.25" fill="none"
+        stroke="#3d4a5e" stroke-width="1.5"/>
+
+  <!-- A prompt caret: something is being asked of it. -->
+  <path d="M18 23 L28 32 L18 41" fill="none" stroke="#7ee2b8" stroke-width="5"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- The reply, still being written. -->
+  <rect x="33" y="36.5" width="15" height="5" rx="2.5" fill="#8ab4ff"/>
+</svg>
