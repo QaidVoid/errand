@@ -7,6 +7,7 @@
  * every message posted is independently well formed.
  */
 
+import type { DialogRequest } from "../agent/protocol.ts";
 import type { Entry, FileContents } from "../session/files.ts";
 import { MAX_INLINE_BYTES } from "../session/files.ts";
 import { prefixed, PREFIXES } from "./chars.ts";
@@ -258,6 +259,59 @@ export function marker(state: string): string {
 /** Every enumerated prefix glyph, for asserting output stays inside the table. */
 export function prefixGlyphs(): string[] {
   return Object.keys(PREFIXES).map((key) => prefixed(key as keyof typeof PREFIXES, "").trimEnd());
+}
+
+/**
+ * What a compaction achieved, or that it did not say.
+ *
+ * The counts are the point: a compaction that freed nothing looks exactly like
+ * one that freed half the window unless the numbers are shown.
+ */
+export function compactionLine(answer: unknown): string {
+  const record = answer as { success?: unknown; data?: unknown; error?: unknown };
+  if (record.success === false) {
+    const detail = typeof record.error === "string" ? record.error : "the agent refused";
+    return connectionLine(`compaction did not run: ${detail}`);
+  }
+
+  const data = (record.data ?? {}) as { tokensBefore?: unknown; estimatedTokensAfter?: unknown };
+  const before = typeof data.tokensBefore === "number" ? data.tokensBefore : undefined;
+  const after = typeof data.estimatedTokensAfter === "number"
+    ? data.estimatedTokensAfter
+    : undefined;
+
+  if (before === undefined || after === undefined) {
+    return connectionLine("compacted the conversation");
+  }
+  // Estimated, and said to be: the agent calls it an estimate over the rebuilt
+  // context rather than a count from the provider.
+  return connectionLine(
+    `compacted the conversation, about ${tokens(before)} tokens down to ${tokens(after)}`,
+  );
+}
+
+/**
+ * A dialog rendered for a thread, numbering options so a reply can pick one.
+ *
+ * The reply is free text from a person, so what an answer may look like is
+ * spelled out rather than assumed: a thread has no buttons to press.
+ */
+export function dialogLines(request: DialogRequest): string {
+  const lines = [request.title];
+  if (request.message !== undefined) lines.push(request.message);
+
+  if (request.method === "select" && request.options !== undefined) {
+    for (const [index, option] of request.options.entries()) {
+      lines.push(`${index + 1}. ${option}`);
+    }
+    lines.push("reply with a number or the option text");
+  } else if (request.method === "confirm") {
+    lines.push("reply yes or no");
+  } else {
+    lines.push("reply with your answer");
+  }
+
+  return lines.join("\n");
 }
 
 /**

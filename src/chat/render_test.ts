@@ -1,6 +1,8 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
   bytes,
+  compactionLine,
+  dialogLines,
   directoryListing,
   fileView,
   MAX_LISTED_ENTRIES,
@@ -240,4 +242,59 @@ Deno.test("a binary file is named and offered, not pasted", () => {
   assertEquals(view.includes("```"), false);
   assertStringIncludes(view, "40.0 kB");
   assertStringIncludes(view, "!file");
+});
+
+/** One that freed nothing looks like one that freed half the window. */
+Deno.test("a compaction says how much context it actually freed", () => {
+  const line = compactionLine({
+    success: true,
+    data: { tokensBefore: 180_000, estimatedTokensAfter: 42_000 },
+  });
+
+  assertStringIncludes(line, "180k");
+  assertStringIncludes(line, "42.0k");
+});
+
+Deno.test("a compaction that says nothing is still reported as having run", () => {
+  assertStringIncludes(compactionLine({ success: true, data: {} }), "compacted the conversation");
+});
+
+Deno.test("a compaction the agent refused says so, with its reason", () => {
+  const line = compactionLine({ success: false, error: "nothing to compact" });
+
+  assertStringIncludes(line, "did not run");
+  assertStringIncludes(line, "nothing to compact");
+});
+
+/** A thread has no buttons, so an answer has to be spelled out. */
+Deno.test("a choice is numbered so a reply can name one", () => {
+  const lines = dialogLines({
+    id: "1",
+    method: "select",
+    title: "Which branch?",
+    options: ["main", "develop"],
+  });
+
+  assertStringIncludes(lines, "1. main");
+  assertStringIncludes(lines, "2. develop");
+  assertStringIncludes(lines, "reply with a number");
+});
+
+Deno.test("a confirmation says what answers it takes", () => {
+  const lines = dialogLines({ id: "1", method: "confirm", title: "Delete it?" });
+
+  assertStringIncludes(lines, "Delete it?");
+  assertStringIncludes(lines, "reply yes or no");
+});
+
+Deno.test("a question with no options still asks for an answer", () => {
+  const lines = dialogLines({
+    id: "1",
+    method: "input",
+    title: "Name it",
+    message: "any name will do",
+  });
+
+  assertStringIncludes(lines, "any name will do");
+  assertStringIncludes(lines, "reply with your answer");
 });
