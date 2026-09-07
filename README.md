@@ -47,6 +47,28 @@ than run with a guarantee it cannot keep: if the backend cannot enforce
 everything configured on this host, it says which and stops, unless
 `sandbox.requireFullEnforcement` is set to `false`.
 
+## Two models, one session
+
+A session can ask a cheaper model of the same provider one question about one
+thing that already exists: a long log, a large file, a diff. It is shown that
+one thing and nothing else, has no way to run or read anything, and answers in
+text, so what comes back is a description to check rather than a decision to
+follow. The point is what it keeps out of the session's own context, which is
+paid for again on every later turn.
+
+```json
+{
+  "agent": {
+    "delegate": { "model": "glm-5.3-flash", "perTurn": 8, "deadlineMs": 60000 }
+  }
+}
+```
+
+Absent means no delegation at all. With it, the agent gets a `delegate` command
+and is told how to use it; `!status` reports what it cost and how much it kept
+out. To have the cheaper model do the work rather than describe it, use
+`!model` instead.
+
 ## The interface
 
 An optional local web interface reads a session as it happens, browses the
@@ -62,8 +84,10 @@ Set `"observer": true` to serve one that can watch and read but change nothing.
 
 ## In a thread
 
-`!help` lists what can be typed, and `!usage` says how much of the provider's
-usage window is left and when it resets. The same commands are registered as slash
+`!help` lists what can be typed, `!usage` says how much of the provider's usage
+window is left and when it resets, and `!model` moves the session to another
+model of the same provider, keeping the conversation. Plan on the capable one,
+switch to the cheap one to carry it out, switch back to review. The same commands are registered as slash
 commands, so they can be picked rather than remembered. A message starting
 `!!!` is an aside: the people in the thread see it and the agent is never told.
 
