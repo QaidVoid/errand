@@ -2,12 +2,10 @@
 /**
  * Rejects non-ASCII characters in tracked text files.
  *
- * Chat output is allowed emoji, but only from the one file that enumerates
- * them. Every other tracked file stays pure ASCII so that logs, diffs, and
- * commit messages never depend on terminal font coverage.
+ * No file is exempt. Chat output may carry emoji, but the table that
+ * enumerates them declares codepoints rather than glyphs, so even that file is
+ * ASCII. Everything stays greppable in a terminal with no font coverage.
  */
-
-const ALLOWED = new Set(["src/discord/chars.ts"]);
 
 const BINARY = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".woff", ".woff2"];
 
@@ -51,7 +49,6 @@ const offences: Offence[] = [];
 let checked = 0;
 
 for (const file of files) {
-  if (ALLOWED.has(file)) continue;
   if (BINARY.some((extension) => file.endsWith(extension))) continue;
   let text: string;
   try {
