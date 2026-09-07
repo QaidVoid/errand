@@ -592,14 +592,14 @@ Deno.test("stopping ends the session once and tears the sandbox down", () =>
   }));
 
 Deno.test("a session that hears nothing for long enough ends itself", () =>
-  withSession(async ({ thread, timers, ended }) => {
+  withSession(async ({ timers, ended, sandbox }) => {
     await settle();
 
     timers.advance(1_800_001);
     await settle();
 
     assertEquals(ended, ["idle"]);
-    assertStringIncludes(thread.everything(), "nothing happened for a while");
+    assertEquals(sandbox.stopped, ["s1"]);
   }));
 
 /** 137 is how a container killed for passing a limit ends. */
@@ -925,7 +925,6 @@ Deno.test("a session that ends leaves its thread where people can find it", () =
 
     assertEquals(session.isEnded, true);
     assertEquals(thread.closed, "idle");
-    assertStringIncludes(thread.notices[thread.notices.length - 1]?.text ?? "", "ended");
   }));
 
 /** An explicit stop is somebody saying they are finished with the thread. */
@@ -1024,3 +1023,57 @@ Deno.test("a model that can see is handed the image itself", () =>
 
     assertStringIncludes(agent().written.join("\n"), '"images"');
   }, { fetchAttachment: () => Promise.resolve(PNG) }));
+
+/**
+ * The next message picks the session up and the resumed session says so, which
+ * leaves nothing for a notice to add except a line in every thread.
+ */
+Deno.test("a session that idles out says nothing about it", () =>
+  withSession(async ({ thread, timers, ended }) => {
+    await settle();
+    const before = thread.notices.length;
+
+    timers.advance(1_800_001);
+    await settle();
+
+    assertEquals(ended, ["idle"]);
+    assertEquals(thread.notices.length, before);
+  }));
+
+/** Somebody asked for this one, so it is answered. */
+Deno.test("a session that was stopped says so", () =>
+  withSession(async ({ session, thread }) => {
+    await settle();
+
+    await session.handle(message("!stop", OWNER, "m2"));
+
+    assertStringIncludes(thread.notices[thread.notices.length - 1]?.text ?? "", "stopped");
+  }));
+
+/** It stopped part way through something, which is worth knowing. */
+Deno.test("a crash says what happened", () =>
+  withSession(async ({ agent, thread }) => {
+    await settle();
+
+    agent().end(1);
+    await settle();
+
+    const last = thread.notices[thread.notices.length - 1]?.text ?? "";
+    assertStringIncludes(last, "exit code 1");
+    assertEquals(last.includes("pick it up"), false);
+  }));
+
+/**
+ * Posting into a thread opens it again, which is the opposite of what whoever
+ * archived it asked for.
+ */
+Deno.test("a thread archived from outside is not posted into", () =>
+  withSession(async ({ session, thread, ended }) => {
+    await settle();
+    const before = thread.notices.length;
+
+    await session.stop("thread archived");
+
+    assertEquals(ended, ["thread archived"]);
+    assertEquals(thread.notices.length, before);
+  }));

@@ -103,6 +103,14 @@ const systemTimers: Timers = {
   clearTimeout: (handle) => clearTimeout(handle as number),
 };
 
+/**
+ * Endings a thread is not told about.
+ *
+ * None of them is a failure and none of them is final: the next message picks
+ * the session up, and that session says so when it starts.
+ */
+const QUIET_ENDINGS = new Set<EndReason>(["idle", "shutdown", "thread archived"]);
+
 /** Tools whose effect is worth showing as a diff. */
 const EDITING_TOOLS = new Set(["edit", "write", "create", "str_replace", "multi_edit"]);
 
@@ -948,7 +956,7 @@ export class Session {
     const words = this.client?.dyingWords ?? "";
     const named = this.diagnose(words);
     if (named !== undefined) {
-      await this.endBecause("resource limit", `this session ended because ${named}`);
+      await this.endBecause("resource limit", `this session stopped because ${named}`);
       return;
     }
 
@@ -969,8 +977,8 @@ export class Session {
     await this.endBecause(
       "crashed",
       said.length === 0
-        ? `the session ended unexpectedly with exit code ${code}`
-        : `the session ended unexpectedly with exit code ${code}: ${said}`,
+        ? `this session ended unexpectedly with exit code ${code}`
+        : `this session ended unexpectedly with exit code ${code}: ${said}`,
     );
   }
 
@@ -1738,7 +1746,7 @@ export class Session {
       this.log.warn("session stopped for writing past its disk budget", { written, budget });
       await this.endBecause(
         "resource limit",
-        `this session ended after writing ${bytes(written)}, past its ${bytes(budget)} budget`,
+        `this session stopped after writing ${bytes(written)}, past its ${bytes(budget)} budget`,
       );
       return;
     }
@@ -1942,13 +1950,29 @@ export class Session {
     this.lastActive = Date.now();
     if (this.idleTimer !== null) this.timers.clearTimeout(this.idleTimer);
     this.idleTimer = this.timers.setTimeout(() => {
-      void this.endBecause("idle", "this session ended because nothing happened for a while");
+      void this.endBecause("idle", "nothing happened for a while, so this session stopped");
     }, this.options.config.timeouts.idleMs);
   }
 
+  /**
+   * Ends the session, saying so only when there is something to say.
+   *
+   * A session that idles out, or that goes down with the daemon, is picked up
+   * again by the next message in its thread, and the resumed session announces
+   * itself. Announcing the pause as well would be a message in every thread
+   * that says nothing a reader has to act on.
+   *
+   * A failure is different: it stopped part way through something, and
+   * somebody should know why. And a thread archived from outside is left
+   * alone, because posting into it would open it again, which is the opposite
+   * of what whoever archived it asked for.
+   */
   private async endBecause(why: EndReason, detail: string): Promise<void> {
     if (this.ended) return;
-    await this.options.thread.postNotice(connectionLine(detail), "ended");
+
+    if (!QUIET_ENDINGS.has(why)) {
+      await this.options.thread.postNotice(connectionLine(detail), "ended");
+    }
     await this.finish(why);
   }
 
