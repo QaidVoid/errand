@@ -8,6 +8,7 @@
  */
 
 import type { DialogRequest } from "../agent/protocol.ts";
+import type { Delegated } from "../session/port.ts";
 import type { Entry, FileContents } from "../session/files.ts";
 import { MAX_INLINE_BYTES } from "../session/files.ts";
 import { prefixed, PREFIXES } from "./chars.ts";
@@ -312,6 +313,32 @@ export function dialogLines(request: DialogRequest): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * A delegation, as one line in a conversation.
+ *
+ * Says which model was asked and about what, so a reader can tell that part of
+ * a turn was answered by something other than the session's own model. What it
+ * said goes to the agent rather than here: it is working material, and a
+ * thread that showed every delegated answer in full would bury the
+ * conversation it belongs to.
+ */
+export function delegationLine(delegated: Delegated): string {
+  if (delegated.refused !== undefined) {
+    return prefixed(
+      "warning",
+      `a delegated question was not asked: ${delegated.refused}`,
+    );
+  }
+
+  const saved = delegated.keptOut === undefined || delegated.keptOut === 0
+    ? ""
+    : `, keeping ${bytes(delegated.keptOut)} out of this conversation`;
+  return prefixed(
+    "delegated",
+    `asked ${delegated.model} about ${delegated.describes}${saved}`,
+  );
 }
 
 /**

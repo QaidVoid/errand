@@ -11,6 +11,13 @@
 import { join } from "@std/path";
 import type { Scheduler, Ticket } from "../admission/scheduler.ts";
 import { AgentClient, type AgentHandlers } from "../agent/client.ts";
+import { TurnDelegations } from "../agent/delegate.ts";
+import { isRefused } from "../agent/delegation.ts";
+import {
+  DELEGATE_COMMAND,
+  delegateCommandContents,
+  delegateInstructions,
+} from "../agent/requests.ts";
 import type { AgentImage, DialogRequest, Usage } from "../agent/protocol.ts";
 import { fileDiff } from "../chat/diff.ts";
 import {
@@ -41,7 +48,7 @@ import {
 import type { Sandbox, SandboxHandle } from "../sandbox/backend.ts";
 import { STATE_PATH } from "../sandbox/backend.ts";
 import { hostPathUnder } from "../sandbox/paths.ts";
-import { isImage, receive, type Taken } from "./attachments.ts";
+import { ATTACHMENTS_DIR, isImage, receive, type Taken } from "./attachments.ts";
 import {
   ASIDE,
   asksForPullRequest,
@@ -53,6 +60,7 @@ import {
   mayRun,
   parseUserId,
 } from "./commands.ts";
+import { Delegating, type Outcome as DelegationOutcome } from "./delegating.ts";
 import { MIN_CHECK_MS, nextCheckMs, treeBytes, verdict } from "./disk.ts";
 import { readDirectory, readFileForDisplay } from "./files.ts";
 import {
@@ -103,6 +111,9 @@ const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 /** Largest file diffed. Beyond this the change is summarised, not shown. */
 const MAX_DIFFABLE_BYTES = 512 * 1024;
+
+/** Tool outputs kept so a delegation can name one, newest first. */
+const MAX_REMEMBERED_OUTPUTS = 50;
 
 /** Fetches an attachment. Replaced in tests, which have no network. */
 async function defaultFetch(url: string): Promise<Uint8Array> {
@@ -167,6 +178,20 @@ export interface SessionOptions {
   /** Where the interface is published, when it is. */
   publicUrl?: string | undefined;
   /**
+   * Models this host knows this provider serves, for switching between them.
+   *
+   * Read once at startup rather than asked of the agent, which reports what it
+   * is running rather than what it could run.
+   */
+  availableModels?: readonly string[] | undefined;
+  /**
+   * Where the provider is reached for a delegated question.
+   *
+   * Read once at startup from the agent's own model store, so the cheaper
+   * model is reached at the endpoint that already serves this provider.
+   */
+  delegateBaseUrl?: string | undefined;
+  /**
    * Why a prompt cannot run yet, or undefined when it can.
    *
    * Supplied rather than asked for directly, so a session knows nothing about
@@ -225,6 +250,18 @@ export class Session {
    */
   private readonly explained = new Set<string>();
   private readonly pendingEdits = new Map<string, string>();
+  /**
+   * What each tool call produced, so a delegation can name one by its id.
+   *
+   * Bounded: a long turn makes hundreds of calls, and a delegation asks about
+   * one it has just seen rather than one from an hour ago.
+   */
+  private readonly outputs = new Map<string, string>();
+  /** The delegations of the turn now running, if any. */
+  private turnDelegations: TurnDelegations | null = null;
+  private delegating: Delegating | null = null;
+  /** What delegation has cost and saved this session, for reporting it. */
+  private delegated = { asked: 0, answered: 0, tokens: 0, keptOut: 0 };
   private readonly guests: Set<string>;
   /** Speakers whose memory has already been given to the agent this session. */
   private readonly introduced = new Set<string>();
@@ -347,6 +384,7 @@ export class Session {
     }
 
     void this.startDiskWatch();
+    this.startDelegating();
 
     this.client = new AgentClient(
       this.sandbox.process,
@@ -570,6 +608,7 @@ export class Session {
     // Opened before the prompt is noted, so the prompt is the first thing in
     // the turn it starts rather than the last thing in the one before it.
     this.turn += 1;
+    this.turnDelegations = this.newDelegations();
     this.options.thread.beginTurn(this.turn);
 
     await this.options.thread.setReaction(message.id, "accepted");
@@ -769,6 +808,18 @@ export class Session {
       onToolEnd: (id: string, toolName: string, failed: boolean, output: string): void => {
         if (!failed && EDITING_TOOLS.has(toolName)) void this.reportEdit(toolName, id);
 
+        // Kept whole rather than truncated as the thread shows it: a
+        // delegation about a log is worth nothing if it is asked about the
+        // first page of one.
+        if (id.length > 0) {
+          this.outputs.set(id, output);
+          while (this.outputs.size > MAX_REMEMBERED_OUTPUTS) {
+            const oldest = this.outputs.keys().next();
+            if (oldest.done === true) break;
+            this.outputs.delete(oldest.value);
+          }
+        }
+
         // Reported whatever the thread is configured to forward, because a
         // surface that can fold output away has no reason to be spared it.
         this.options.thread.noteToolResult({
@@ -865,6 +916,7 @@ export class Session {
     );
 
     await this.settleTurn(this.aborting ? "interrupted" : "succeeded");
+    this.turnDelegations = null;
     this.aborting = false;
     this.resetIdleTimer();
   }
@@ -951,8 +1003,16 @@ export class Session {
    */
   private writeAgentBin(github: GithubConfig | undefined): void {
     const bin = join(this.options.stateDir, "home", "bin");
+    const delegate = this.options.config.agent.delegate;
     try {
       Deno.mkdirSync(bin, { recursive: true });
+      if (delegate !== undefined) {
+        Deno.writeTextFileSync(
+          join(bin, DELEGATE_COMMAND),
+          delegateCommandContents(delegate.deadlineMs),
+          { mode: 0o755 },
+        );
+      }
       if (github === undefined) return;
       Deno.writeTextFileSync(join(bin, GH_SHIM_FILENAME), ghShimContents(), { mode: 0o755 });
     } catch (error) {
@@ -1037,12 +1097,17 @@ export class Session {
       ? ""
       : reviewInstructions(github, this.requestedBy(), this.sessionLinks());
 
+    const delegate = this.options.config.agent.delegate;
+    const delegating = delegate === undefined
+      ? ""
+      : delegateInstructions(delegate.model, delegate.perTurn);
+
     const contents = `${about}${
       memoryInstructions(
         `${STATE_PATH}/${NOTES_FILENAME}`,
         `${STATE_PATH}/${PROJECT_NOTES_FILENAME}`,
       )
-    }${attribution}`;
+    }${attribution}${delegating}`;
 
     const path = join(this.options.stateDir, BLOCK_FILENAME);
     try {
@@ -1385,6 +1450,10 @@ export class Session {
         await this.compactConversation(message);
         return;
 
+      case "!model":
+        await this.switchModel(rest, message);
+        return;
+
       case "!help":
         await this.say(helpText());
         return;
@@ -1421,13 +1490,77 @@ export class Session {
     }
   }
 
+  /**
+   * Shows which models this session can run on, or moves it to one.
+   *
+   * The conversation is kept across a switch: what was said stays said, and
+   * the next turn is answered by the model named. That is what makes this
+   * worth having, since the expensive model can work out what to do and a
+   * cheaper one can carry out the rest of it in the same thread.
+   *
+   * Refused while a turn is running, because changing the model underneath a
+   * turn would answer half a question with one model and half with another.
+   */
+  private async switchModel(rest: string, message: IncomingMessage): Promise<void> {
+    const wanted = rest.trim();
+    const available = this.options.availableModels ?? [];
+
+    if (wanted.length === 0) {
+      const running = this.usage.model ?? this.options.config.agent.model ?? "the provider default";
+      await this.say(
+        available.length === 0
+          ? `this session runs on \`${running}\`; the host lists no others to switch to`
+          : [
+            `this session runs on \`${running}\`. Switch with \`!model <name>\`:`,
+            ...available.map((model) => `  ${model}`),
+          ].join("\n"),
+      );
+      return;
+    }
+
+    if (this.isBusy) {
+      await this.say("a turn is running; wait for it, or stop it with `!interrupt`");
+      await this.options.thread.setReaction(message.id, "failed");
+      return;
+    }
+
+    // Refused rather than passed through, so a typo becomes a message here
+    // instead of a turn that fails against the provider later.
+    if (available.length > 0 && !available.includes(wanted)) {
+      await this.say(`this host does not list a model called \`${wanted}\``);
+      await this.options.thread.setReaction(message.id, "failed");
+      return;
+    }
+
+    const sent = this.client?.setModel(this.options.config.agent.provider, wanted) ?? false;
+    if (!sent) {
+      await this.say("the agent is not accepting anything further; this session has ended");
+      await this.options.thread.setReaction(message.id, "failed");
+      return;
+    }
+
+    await this.noteCommand(message, `!model ${wanted}`);
+    await this.say(connectionLine(`this session now runs on \`${wanted}\`, keeping what was said`));
+    await this.options.thread.setReaction(message.id, "accepted");
+  }
+
   private describeStatus(): string {
-    return [
+    const lines = [
       `project: ${this.options.project.name}`,
       `state: ${this.isBusy ? "running a turn" : "idle"}`,
       `turns in flight across all sessions: ${this.options.scheduler.turnsInFlight}`,
       `prompts waiting: ${this.options.scheduler.queueLength}`,
-    ].join("\n");
+    ];
+
+    if (this.delegated.asked > 0) {
+      const { asked, answered, tokens, keptOut } = this.delegated;
+      lines.push(
+        `delegated: ${answered} of ${asked} asked, ${tokens} token(s) spent, ${
+          bytes(keptOut)
+        } kept out of this conversation`,
+      );
+    }
+    return lines.join("\n");
   }
 
   /** Aborts the running turn, force stopping if the agent will not confirm. */
@@ -1456,6 +1589,97 @@ export class Session {
         this.timers.setTimeout(check, 50);
       };
       this.timers.setTimeout(check, 50);
+    });
+  }
+
+  /**
+   * Builds the delegations one turn may make, when a model is configured.
+   *
+   * The endpoint is the provider's own, so the cheaper model is reached with
+   * the same credential over the same connection as the session's.
+   */
+  private newDelegations(): TurnDelegations | null {
+    const delegate = this.options.config.agent.delegate;
+    const baseUrl = delegate?.baseUrl ?? this.options.delegateBaseUrl;
+    if (delegate === undefined || baseUrl === undefined) return null;
+
+    return new TurnDelegations({
+      sessionId: this.options.id,
+      endpoint: {
+        baseUrl,
+        model: delegate.model,
+        credential: this.options.config.agent.credential,
+      },
+      scheduler: this.options.scheduler,
+      sources: {
+        projectRoot: this.options.project.path,
+        readFile: (path: string) => Promise.resolve(Deno.readTextFileSync(path)),
+        outputOf: (callId: string) => this.outputs.get(callId),
+        attachment: (name: string) => {
+          // Held to the same containment as everything else, so a name that
+          // climbs out of the attachments directory reads nothing.
+          const path = hostPathUnder(
+            this.options.project.path,
+            this.options.project.path,
+            `${ATTACHMENTS_DIR}/${name}`,
+          );
+          if (path === undefined) return undefined;
+          try {
+            return Deno.readTextFileSync(path);
+          } catch {
+            return undefined;
+          }
+        },
+      },
+      deadlineMs: delegate.deadlineMs,
+      perTurn: delegate.perTurn,
+    });
+  }
+
+  /** Begins answering the delegations the agent asks for. */
+  private startDelegating(): void {
+    if (this.options.config.agent.delegate === undefined) return;
+
+    this.delegating = new Delegating({
+      stateDir: this.options.stateDir,
+      delegations: () => this.turnDelegations ?? undefined,
+      report: (outcome) => this.noteDelegation(outcome),
+      log: this.log,
+      setTimeout: (handler, ms) => this.timers.setTimeout(handler, ms),
+      clearTimeout: (handle) => this.timers.clearTimeout(handle),
+    });
+    this.delegating.start();
+  }
+
+  /**
+   * Reports a delegation and keeps a running total of what it bought.
+   *
+   * The totals are what answers whether this is worth doing at all, so they
+   * are kept where somebody can ask for them rather than derived later from a
+   * log nobody keeps.
+   */
+  private noteDelegation(outcome: DelegationOutcome): void {
+    this.delegated.asked += 1;
+
+    if (isRefused(outcome)) {
+      this.options.thread.noteDelegation({
+        question: outcome.asked,
+        refused: outcome.refused,
+      });
+      return;
+    }
+
+    this.delegated.answered += 1;
+    this.delegated.tokens += outcome.tokens ?? 0;
+    this.delegated.keptOut += outcome.keptOut;
+
+    this.options.thread.noteDelegation({
+      question: outcome.asked,
+      model: outcome.model,
+      describes: outcome.describes,
+      answer: outcome.text,
+      tokens: outcome.tokens,
+      keptOut: outcome.keptOut,
     });
   }
 
@@ -1740,6 +1964,8 @@ export class Session {
     this.idleTimer = null;
     if (this.diskTimer !== null) this.timers.clearTimeout(this.diskTimer);
     this.diskTimer = null;
+    this.delegating?.stop();
+    this.delegating = null;
 
     this.client?.cancelDialogs();
     await this.settleTurn(why === "stopped" ? "interrupted" : "failed");

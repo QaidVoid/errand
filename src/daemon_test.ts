@@ -88,6 +88,7 @@ function silentPort(closed: EndReason[]): ThreadPort {
     postNotice: nothing,
     postReply: nothing,
     noteToolResult: () => {},
+    noteDelegation: () => {},
     beginTurn: () => {},
     noteThinking: () => {},
     notePrompt: nothing,

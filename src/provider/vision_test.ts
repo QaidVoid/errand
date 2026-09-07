@@ -42,6 +42,7 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
     provider: "zai-coding-cn",
     model: "glm-5.3",
     visionModel: undefined,
+    delegate: undefined,
     credentialName: "ZAI_CODING_CN_API_KEY",
     credential: "secret-key",
     ...overrides,

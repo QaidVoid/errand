@@ -16,13 +16,19 @@ import {
   type ThreadChannel,
 } from "discord.js";
 import type { Logger } from "../log.ts";
-import type { EndReason, ReactionOutcome, ThreadPort, ToolResult } from "../session/port.ts";
+import type {
+  Delegated,
+  EndReason,
+  ReactionOutcome,
+  ThreadPort,
+  ToolResult,
+} from "../session/port.ts";
 import type { ThreadFactory } from "../session/manager.ts";
 import type { IncomingMessage } from "../session/session.ts";
 import { reaction } from "./chars.ts";
 import { renderDiff } from "./diff.ts";
 import { Outbox } from "./outbox.ts";
-import { MESSAGE_LIMIT, splitMessage } from "./render.ts";
+import { delegationLine, MESSAGE_LIMIT, splitMessage } from "./render.ts";
 
 /**
  * Message options for everything this system sends.
@@ -176,6 +182,16 @@ export class ChatThread implements ThreadPort {
    * only way to show it there, and it stays off by default because it is a lot
    * of text in a conversation.
    */
+  /**
+   * Shows that a cheaper model was asked something.
+   *
+   * One line, not the answer: the answer goes to the agent, and what a reader
+   * needs is that part of this turn was not the session's own model.
+   */
+  noteDelegation(delegated: Delegated): void {
+    void this.post(delegationLine(delegated));
+  }
+
   noteToolResult(result: ToolResult): void {
     if (!this.forwardToolOutput) return;
     const body = result.output.trim();

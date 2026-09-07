@@ -107,6 +107,7 @@ function port(closed: EndReason[] = []): ThreadPort {
     postNotice: (_text: string, _level: NoticeLevel) => nothing(),
     postReply: nothing,
     noteToolResult: (_result: ToolResult) => {},
+    noteDelegation: () => {},
     beginTurn: () => {},
     noteThinking: () => {},
     notePrompt: nothing,

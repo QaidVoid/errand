@@ -20,6 +20,7 @@ function fakeView(name = "view") {
       return Promise.resolve();
     },
     noteToolResult: (result) => seen.push(`result:${result.id}:${result.failed}`),
+    noteDelegation: (delegated) => seen.push(`delegated:${delegated.model ?? delegated.refused}`),
     beginTurn: (turn) => seen.push(`turn:${turn}`),
     noteThinking: (text) => seen.push(`thinking:${text}`),
     notePrompt: (author, text) => {

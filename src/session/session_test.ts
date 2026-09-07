@@ -16,6 +16,7 @@ import type {
 } from "../sandbox/backend.ts";
 import { hostPathUnder } from "../sandbox/paths.ts";
 import type {
+  Delegated,
   EndReason,
   NoticeLevel,
   ReactionOutcome,
@@ -107,6 +108,7 @@ class FakeThread implements ThreadPort {
   readonly uploads: { name: string; size: number }[] = [];
   readonly turns: number[] = [];
   readonly results: ToolResult[] = [];
+  readonly delegations: Delegated[] = [];
   usage: SessionUsage | undefined;
   waiting: string | null = null;
   busy = false;
@@ -126,6 +128,9 @@ class FakeThread implements ThreadPort {
   }
   noteToolResult(result: ToolResult): void {
     this.results.push(result);
+  }
+  noteDelegation(delegated: Delegated): void {
+    this.delegations.push(delegated);
   }
   beginTurn(turn: number): void {
     this.turns.push(turn);

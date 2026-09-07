@@ -387,6 +387,8 @@ export class WebServer {
           at,
           ...(entry.tool === undefined ? {} : { tool: entry.tool }),
         };
+      case "delegation":
+        return { ...held, kind: "delegation", delegated: entry.delegated, at };
       case "diff":
         return {
           ...held,

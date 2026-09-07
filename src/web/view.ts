@@ -10,6 +10,7 @@
  */
 
 import type {
+  Delegated,
   EndReason,
   NoticeLevel,
   SessionUsage,
@@ -36,6 +37,7 @@ export type WireEntry =
     | { kind: "toolResult"; result: ToolResult; at: number }
     | { kind: "activity"; line: string; tool?: ToolActivity; at: number }
     | { kind: "file"; name: string; size: number; at: number }
+    | { kind: "delegation"; delegated: Delegated; at: number }
     | {
       kind: "diff";
       path: string;
@@ -179,6 +181,10 @@ export class WebView implements ThreadPort {
 
   noteToolResult(result: ToolResult): void {
     this.entry({ kind: "toolResult", result, at: Date.now() });
+  }
+
+  noteDelegation(delegated: Delegated): void {
+    this.entry({ kind: "delegation", delegated, at: Date.now() });
   }
 
   noteAside(author: string, text: string): Promise<void> {

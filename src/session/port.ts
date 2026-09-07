@@ -53,6 +53,29 @@ export interface ToolResult {
   output: string;
 }
 
+/**
+ * What came of asking a cheaper model about one artefact.
+ *
+ * Carried as its parts rather than as a rendered line, because a thread shows
+ * one line and an interface shows the question, the answer, and what it saved.
+ */
+export interface Delegated {
+  /** What the session's model wanted to know. */
+  question: string;
+  /** The model that answered, or undefined when none was asked. */
+  model?: string | undefined;
+  /** What it was shown, for attributing the answer. */
+  describes?: string | undefined;
+  /** What it said, absent when it was refused. */
+  answer?: string | undefined;
+  /** Why nothing was asked, absent when something was. */
+  refused?: string | undefined;
+  /** Tokens the delegated model was charged, when the provider said. */
+  tokens?: number | undefined;
+  /** Characters kept out of the session's own context by asking. */
+  keptOut?: number | undefined;
+}
+
 /** The four states a sender's message can end in. */
 export type ReactionOutcome = "accepted" | "succeeded" | "failed" | "interrupted";
 
@@ -87,6 +110,13 @@ export interface ThreadPort {
    * the agent having spoken.
    */
   postReply(text: string, command: string): Promise<void>;
+  /**
+   * Reports that a cheaper model was asked about something.
+   *
+   * Shown wherever the conversation is read, so a delegated answer can never
+   * be mistaken for the session model's own words.
+   */
+  noteDelegation(delegated: Delegated): void;
   /**
    * Reports what a tool produced, once it has finished.
    *

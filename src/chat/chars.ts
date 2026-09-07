@@ -70,6 +70,11 @@ export const PREFIXES = {
     name: "warning sign",
     meaning: "degraded state: shared workspace, backend gap, provider backoff",
   },
+  delegated: {
+    codepoints: ["U+1F4E4"],
+    name: "outbox tray",
+    meaning: "a question about one artefact was sent to a cheaper model",
+  },
   connection: {
     codepoints: ["U+1F50C"],
     name: "electric plug",

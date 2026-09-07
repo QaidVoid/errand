@@ -19,7 +19,7 @@ import { createSandbox, Daemon, probeSandbox } from "./daemon.ts";
 import { acquireLock } from "./lock.ts";
 import type { Logger } from "./log.ts";
 import { MemoryStore } from "./memory/store.ts";
-import { agentDirectory } from "./provider/models.ts";
+import { agentDirectory, modelById, readModels } from "./provider/models.ts";
 import { imageDescriber } from "./provider/vision.ts";
 import {
   isSpent,
@@ -150,7 +150,23 @@ async function run(
 
   // Decided once: what a model accepts is the provider's business, not
   // something to work out per attachment.
-  const describer = imageDescriber(config.agent, agentDirectory(Deno.env.toObject()));
+  const store = agentDirectory(Deno.env.toObject());
+  const models = readModels(store, config.agent.provider);
+
+  // Where a delegated question goes: the endpoint this provider is already
+  // reached at, taken from the model named for it or from the session's own.
+  const delegate = config.agent.delegate;
+  const delegateBaseUrl = delegate === undefined ? undefined : (delegate.baseUrl ??
+    modelById(models, delegate.model)?.baseUrl ??
+    modelById(models, config.agent.model)?.baseUrl);
+  if (delegate !== undefined && delegateBaseUrl === undefined) {
+    log.warn("delegation is configured but there is nowhere to send it", {
+      model: delegate.model,
+      detail: "set agent.delegate.baseUrl, or install the agent's model store on this host",
+    });
+  }
+
+  const describer = imageDescriber(config.agent, store);
   if (describer !== undefined) {
     log.info("images will be described for this model", {
       model: config.agent.model ?? "",
@@ -173,6 +189,8 @@ async function run(
     operatorIds: webOperates
       ? [...config.chat.operatorUserIds, WEB_ACTOR]
       : config.chat.operatorUserIds,
+    availableModels: models.map((model) => model.id),
+    ...(delegateBaseUrl === undefined ? {} : { delegateBaseUrl }),
     ...(describer === undefined ? {} : { describeImages: describer.describe }),
     ...(quota === undefined ? {} : {
       // Checked before a thread is opened or a sandbox started, so a spent

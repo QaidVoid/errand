@@ -14,6 +14,7 @@
 
 import type { Logger } from "../log.ts";
 import type {
+  Delegated,
   EndReason,
   NoticeLevel,
   ReactionOutcome,
@@ -33,6 +34,7 @@ export type Recorded =
   | { call: "reply"; text: string; command: string }
   | { call: "toolResult"; result: ToolResult }
   | { call: "activity"; line: string; tool?: ToolActivity }
+  | { call: "delegation"; delegated: Delegated }
   | {
     call: "diff";
     path: string;
@@ -341,6 +343,11 @@ export class ViewFanOut implements ThreadPort {
   async appendActivity(line: string, tool?: ToolActivity): Promise<void> {
     this.record(tool === undefined ? { call: "activity", line } : { call: "activity", line, tool });
     await this.each("activity", (view) => view.appendActivity(line, tool));
+  }
+
+  noteDelegation(delegated: Delegated): void {
+    this.record({ call: "delegation", delegated });
+    void this.each("delegation", (view) => view.noteDelegation(delegated));
   }
 
   async postDiff(

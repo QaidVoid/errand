@@ -30,6 +30,13 @@ export function redacting(port: ThreadPort, secrets: readonly string[]): ThreadP
     postNotice: (text, level) => port.postNotice(clean(text), level),
     postReply: (text, command) => port.postReply(clean(text), clean(command)),
     noteToolResult: (result) => port.noteToolResult({ ...result, output: clean(result.output) }),
+    noteDelegation: (delegated) =>
+      port.noteDelegation({
+        ...delegated,
+        question: clean(delegated.question),
+        ...(delegated.answer === undefined ? {} : { answer: clean(delegated.answer) }),
+        ...(delegated.refused === undefined ? {} : { refused: clean(delegated.refused) }),
+      }),
     beginTurn: (turn) => port.beginTurn(turn),
     noteThinking: (text) => port.noteThinking(clean(text)),
     notePrompt: (author, text) => port.notePrompt(author, clean(text)),
