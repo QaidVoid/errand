@@ -29,24 +29,25 @@ export async function treeBytes(root: string): Promise<number | undefined> {
 
   while (pending.length > 0) {
     const directory = pending.pop() as string;
-    let entries: AsyncIterable<Deno.DirEntry>;
     try {
-      entries = Deno.readDir(directory);
+      // The whole walk of one directory is guarded, not only the call that
+      // opens it. A session removing its own work while it is being measured
+      // is ordinary, and it must not throw out of a measurement.
+      for await (const entry of Deno.readDir(directory)) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory) {
+          pending.push(path);
+          continue;
+        }
+        try {
+          total += (await Deno.lstat(path)).size;
+        } catch {
+          // Gone between listing and measuring, which a running session does.
+        }
+      }
     } catch {
-      continue;
-    }
-
-    for await (const entry of entries) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory) {
-        pending.push(path);
-        continue;
-      }
-      try {
-        total += (await Deno.lstat(path)).size;
-      } catch {
-        // Gone between listing and measuring, which a running session does.
-      }
+      // The directory went while it was being read. What was counted before
+      // it went still counts.
     }
   }
   return total;

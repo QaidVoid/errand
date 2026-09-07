@@ -1,4 +1,5 @@
 import { assertEquals } from "@std/assert";
+import { join } from "@std/path";
 import { MIN_CHECK_MS, nextCheckMs, treeBytes, verdict } from "./disk.ts";
 
 Deno.test("everything under a directory is counted, at any depth", async () => {
@@ -70,4 +71,27 @@ Deno.test("a fast writer is measured again long before it reaches its budget", (
 
 Deno.test("the check never runs faster than its floor", () => {
   assertEquals(nextCheckMs(999, 0, 1_000, 1_000, 30_000), MIN_CHECK_MS);
+});
+
+/**
+ * A session removing its own work while it is being measured is ordinary,
+ * and once threw out of the measurement rather than being counted as gone.
+ */
+Deno.test("a directory that goes mid-walk does not fail the measurement", async () => {
+  const root = await Deno.makeTempDir({ prefix: "errand-disk-" });
+  try {
+    for (const name of ["a", "b", "c"]) {
+      Deno.mkdirSync(join(root, name));
+      Deno.writeTextFileSync(join(root, name, "file"), "x".repeat(10));
+    }
+
+    const measuring = treeBytes(root);
+    Deno.removeSync(join(root, "b"), { recursive: true });
+
+    const total = await measuring;
+    assertEquals(typeof total, "number");
+    assertEquals((total ?? 0) <= 30, true);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
 });
