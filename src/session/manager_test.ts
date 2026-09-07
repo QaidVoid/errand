@@ -141,6 +141,13 @@ function fakeThreads() {
       next += 1;
       return Promise.resolve({ id, port: port(closed) });
     },
+    open: (name) => {
+      if (refuse !== null) return Promise.reject(new Error(refuse));
+      created.push(name);
+      const id = `thread-${next}`;
+      next += 1;
+      return Promise.resolve({ id, port: port(closed) });
+    },
     portFor: (threadId) =>
       Promise.resolve(threadId.startsWith("thread-") ? port(closed) : undefined),
     release: (threadId) => released.push(threadId),
@@ -458,4 +465,49 @@ Deno.test("shutting down ends every live session", () =>
 
     assertEquals(manager.sessions, []);
     assertEquals(threads.closed, ["shutdown", "shutdown"]);
+  }));
+
+/** A session begun at a keyboard is still announced where a phone will see it. */
+Deno.test("a session started with no message still gets a thread", () =>
+  withManager(async ({ manager, threads, registry }) => {
+    const outcome = await manager.startDetached({
+      project: "demo",
+      prompt: "fix the parser",
+      ownerId: "web-interface",
+      ownerName: "the interface",
+    });
+
+    assertEquals(outcome.status, "started");
+    assertEquals(threads.created, ["demo: fix the parser"]);
+    assertEquals(registry.get("thread-1")?.ownerId, "web-interface");
+  }));
+
+Deno.test("a session started with no project named gets one of its own", () =>
+  withManager(async ({ manager }) => {
+    const outcome = await manager.startDetached({
+      project: "",
+      prompt: "have a look at this",
+      ownerId: "web-interface",
+    });
+
+    assertEquals(outcome.status === "started" ? outcome.session.project.name : "", "s1");
+  }));
+
+/** The browser knows sessions, not threads: a thread is one of the surfaces. */
+Deno.test("a session can be written to by its own identifier", () =>
+  withManager(async ({ manager }) => {
+    await manager.start(message("demo: go"));
+
+    assertEquals(await manager.deliverToSession("s1", message("more", "m2")), true);
+    assertEquals(await manager.deliverToSession("s404", message("more", "m3")), false);
+  }));
+
+/** Sending to a stopped session is asking for it back. */
+Deno.test("writing to a session that stopped picks it up again", () =>
+  withManager(async ({ manager }) => {
+    await manager.start(message("demo: go"));
+    await manager.endThread("thread-1", "idle");
+
+    assertEquals(await manager.deliverToSession("s1", message("carry on", "m2")), true);
+    assertEquals(manager.sessions.length, 1);
   }));

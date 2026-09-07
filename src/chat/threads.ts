@@ -334,6 +334,26 @@ export class ChatThreadFactory implements ThreadFactory {
   }
 
   /**
+   * Opens a thread with no message to hang it on.
+   *
+   * A thread hangs off a message, so one is posted first. That message is also
+   * what tells the channel that work has started somewhere else.
+   */
+  async open(name: string, opener: string): Promise<{ id: string; port: ThreadPort }> {
+    const channel = await this.client.channels.fetch(this.channelId);
+    if (channel === null || channel.type !== ChannelType.GuildText) {
+      throw new Error(`channel ${this.channelId} is not a text channel that can host threads`);
+    }
+
+    const starter = await channel.send(plain(opener));
+    const thread = await starter.startThread({ name, autoArchiveDuration: AUTO_ARCHIVE_MINUTES });
+
+    const port = new ChatThread(thread, this.log, this.forwardToolOutput);
+    this.live.set(thread.id, port);
+    return { id: thread.id, port };
+  }
+
+  /**
    * A port for a thread that already exists.
    *
    * A resumed thread was created by a previous run of the daemon, so it is not

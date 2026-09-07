@@ -40,6 +40,14 @@ export interface ThreadFactory {
   create(message: IncomingMessage, name: string): Promise<{ id: string; port: ThreadPort }>;
 
   /**
+   * Creates a thread with no message to hang it on, by posting one first.
+   *
+   * A session started from the interface still gets a thread, so a turn
+   * finishing still reaches a phone wherever the work began.
+   */
+  open(name: string, opener: string): Promise<{ id: string; port: ThreadPort }>;
+
+  /**
    * A port for a thread that already exists, so a session can be resumed into
    * it after a restart.
    *
@@ -207,13 +215,45 @@ export class SessionManager {
     // A named session reaches the same directory every time the name is used.
     // An unnamed one works in a directory of its own, named after the session.
     const project = selectProject(message.content, this.options.config.projectRoot, id);
-    return this.launch(id, project, message);
+    return this.launch(id, project, message, (name) => this.options.threads.create(message, name));
+  }
+
+  /**
+   * Starts a session that no message created.
+   *
+   * Used by the interface. The thread is opened rather than hung off an
+   * existing message, so a session started at a keyboard is still announced in
+   * the channel and still notifies a phone when it finishes.
+   */
+  startDetached(request: {
+    project: string;
+    prompt: string;
+    ownerId: string;
+    ownerName?: string;
+  }): Promise<StartOutcome> {
+    const id = (this.options.makeId ?? defaultId)();
+    const named = request.project.trim().length > 0 ? `${request.project.trim()}: ` : "";
+    const message: IncomingMessage = {
+      id: `web-${id}`,
+      authorId: request.ownerId,
+      ...(request.ownerName === undefined ? {} : { authorName: request.ownerName }),
+      content: request.prompt,
+    };
+
+    const project = selectProject(`${named}${request.prompt}`, this.options.config.projectRoot, id);
+    return this.launch(
+      id,
+      project,
+      message,
+      (name) => this.options.threads.open(name, `Session started from the interface: ${name}`),
+    );
   }
 
   private async launch(
     id: string,
     project: ProjectSelection,
     message: IncomingMessage,
+    createThread: (name: string) => Promise<{ id: string; port: ThreadPort }>,
   ): Promise<StartOutcome> {
     // Before anything is reserved or created, so a window that is already
     // spent does not open a thread and start a sandbox only to fail on its
@@ -245,10 +285,7 @@ export class SessionManager {
       // directory, so it is writable under a mapped user id.
       Deno.mkdirSync(join(stateDir, "home"), { recursive: true });
       ensureProjectDirectory(project, this.options.config.projectRoot);
-      thread = await this.options.threads.create(
-        message,
-        threadName(project.name, project.prompt),
-      );
+      thread = await createThread(threadName(project.name, project.prompt));
     } catch (error) {
       // No thread means no session and, deliberately, no sandbox: starting one
       // would leave an agent running that nobody could see or stop.
@@ -461,6 +498,25 @@ export class SessionManager {
     if (session === undefined) return false;
     await session.handle(message);
     return true;
+  }
+
+  /**
+   * Delivers a message to a session by its own identifier.
+   *
+   * The interface knows sessions, not threads: a thread is one of the surfaces
+   * showing a session, and the browser never sees it. Writing to a session
+   * that has stopped resumes it, which is what sending to it is asking for.
+   */
+  async deliverToSession(sessionId: string, message: IncomingMessage): Promise<boolean> {
+    const session = this.forSession(sessionId);
+    if (session !== undefined) {
+      await session.handle(message);
+      return true;
+    }
+
+    const record = this.resumable().find((candidate) => candidate.sessionId === sessionId);
+    if (record === undefined) return false;
+    return (await this.resume(record.threadId, message)).status === "started";
   }
 
   /** Ends the session bound to a thread, if any. */

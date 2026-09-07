@@ -118,6 +118,12 @@ function fakeThreads() {
       next += 1;
       return Promise.resolve({ id, port: silentPort(closed) });
     },
+    open: (name) => {
+      created.push(name);
+      const id = `thread-${next}`;
+      next += 1;
+      return Promise.resolve({ id, port: silentPort(closed) });
+    },
     portFor: () => Promise.resolve(silentPort(closed)),
     release: () => {},
   };
