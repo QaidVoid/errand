@@ -5,27 +5,34 @@
   "exports": "./src/main.ts",
   "license": "MIT OR Apache-2.0",
   "tasks": {
-    "start": "deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/main.ts run",
-    "fmt": "deno fmt",
-    "lint": "deno lint",
-    "typecheck": "deno check src/ scripts/",
-    "test": "deno test --allow-read --allow-write --allow-env --allow-run --allow-net src/ scripts/",
     "ascii": "deno run --allow-read --allow-run scripts/check_ascii.ts",
     "build": "deno task build:web && deno task build:bin",
     "build:bin": "deno compile --allow-net --allow-env --allow-read --allow-write --allow-run --include dist/web --output dist/errand src/main.ts",
+    "build:docs": "cd docs && deno run -A --node-modules-dir npm:vitepress build .",
     "build:web": "cd web && deno run -A --node-modules-dir npm:vite build .",
-    "dev:web": "cd web && deno run -A --node-modules-dir npm:vite .",
+    "check": "deno fmt --check && deno lint && deno check src/ scripts/ && deno task test && deno task ascii && deno task docs:check && deno task check:web",
     "check:web": "cd web && deno run -A --node-modules-dir npm:svelte-check --threshold error",
-    "check": "deno fmt --check && deno lint && deno check src/ scripts/ && deno task test && deno task ascii && deno task check:web",
-    "errand": "deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/main.ts"
+    "dev:docs": "cd docs && deno run -A --node-modules-dir npm:vitepress dev .",
+    "dev:web": "cd web && deno run -A --node-modules-dir npm:vite .",
+    "docs": "deno run --allow-read --allow-write scripts/generate_docs.ts",
+    "docs:check": "deno run --allow-read scripts/generate_docs.ts --check",
+    "errand": "deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/main.ts",
+    "fmt": "deno fmt",
+    "lint": "deno lint",
+    "start": "deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/main.ts run",
+    "test": "deno test --allow-read --allow-write --allow-env --allow-run --allow-net src/ scripts/",
+    "typecheck": "deno check src/ scripts/"
   },
   "exclude": [
     "dist",
-    "node_modules"
+    "node_modules",
+    "docs/.vitepress/cache"
   ],
   "fmt": {
     "exclude": [
-      "web"
+      "web",
+      "docs/reference",
+      "config.schema.json"
     ],
     "lineWidth": 100,
     "indentWidth": 2,

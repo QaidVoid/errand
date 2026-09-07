@@ -1,0 +1,58 @@
+/*
+ * The interface's own palette, so the documentation and the thing it
+ * documents are visibly one product.
+ *
+ * Mirrors web/src/styles/app.css. Kept as its own copy rather than imported
+ * across the two builds, because that file also carries the interface's
+ * layout, which a documentation page has no use for.
+ */
+
+:root {
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --measure: 68ch;
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0f131a;
+  --bg-raised: #161b24;
+  --bg-inset: #0b0e14;
+  --line: #232c3a;
+  --line-soft: #1a212c;
+
+  --text: #dbe3ef;
+  --text-dim: #8a97ab;
+  --text-faint: #79869b;
+
+  --accent: #8ab4ff;
+  --accent-ink: #0d1220;
+  --ok: #7ee2b8;
+  --warn: #f5c877;
+  --bad: #ff8b8b;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #fbfcfe;
+  --bg-raised: #f2f5f9;
+  --bg-inset: #eaeef4;
+  --line: #d3dae4;
+  --line-soft: #e4e9f0;
+
+  --text: #1a2230;
+  --text-dim: #55637a;
+  --text-faint: #5f6a7f;
+
+  --accent: #2f5fd0;
+  --accent-ink: #ffffff;
+  --ok: #157f52;
+  --warn: #8a5a00;
+  --bad: #c0392f;
+}

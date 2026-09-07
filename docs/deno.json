@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/denoland/deno/refs/heads/main/cli/schemas/config-file.v1.json",
+  "lock": false,
+  "imports": {
+    "vitepress": "npm:vitepress@^1.6.4",
+    "vue": "npm:vue@^3.5.13",
+    "vue/server-renderer": "npm:@vue/server-renderer@^3.5.13"
+  }
+}

@@ -10,3 +10,6 @@ dist/
 
 # npm packages the interface build pulls in.
 node_modules/
+
+# What the documentation build leaves behind.
+docs/.vitepress/cache/

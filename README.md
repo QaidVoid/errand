@@ -13,6 +13,9 @@ to the same thread.
   of messages cannot get an account rate limited.
 - The chat token never enters a sandbox.
 
+Full documentation, including every configuration field, is in
+[docs](docs), built with `deno task build:docs`.
+
 ## Running it
 
 ```sh
@@ -20,6 +23,9 @@ errand run       # run the daemon until it is told to stop
 errand threads   # list, inspect, and remove what past sessions left on disk
 errand help
 ```
+
+There is a file to copy in [config.example.json](config.example.json), and a
+schema beside it that gives an editor completion and checking.
 
 The configuration file is read from `~/.config/errand/config.json`, then
 `/etc/errand/config.json`, then `config.json` in the working directory.
@@ -91,6 +97,9 @@ switch to the cheap one to carry it out, switch back to review. The same command
 commands, so they can be picked rather than remembered. A message starting
 `!!!` is an aside: the people in the thread see it and the agent is never told.
 
+Full documentation, including every configuration field, is in
+[docs](docs), built with `deno task build:docs`.
+
 ## Running it as a service
 
 Definitions for OpenRC and systemd are in [packaging](packaging), along with
@@ -108,7 +117,9 @@ deno task check     # formatting, lint, types, tests, the ASCII rule, the interf
 deno task test      # the test suite
 deno task start     # run the daemon from the checkout
 deno task build     # the interface and a single binary, into dist/
+deno task docs      # regenerate the reference pages from the code
 deno task dev:web   # the interface against a running daemon
+deno task dev:docs  # the documentation site
 ```
 
 `deno task build` produces `dist/errand`: one binary carrying the interface and
