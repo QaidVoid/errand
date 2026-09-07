@@ -63,6 +63,8 @@ export interface SandboxConfig {
   requireFullEnforcement: boolean;
   /** Network exposure granted to a session. */
   network: NetworkMode;
+  /** Container image the podman backend runs. Inert under bailey. */
+  image: string;
   /** Memory ceiling per session, in size syntax such as `4g`. */
   memory: string;
   /** CPU ceiling per session, in cores. */
@@ -142,6 +144,7 @@ export const DEFAULTS = {
     backend: "bailey" as SandboxBackend,
     requireFullEnforcement: true,
     network: "restricted" as NetworkMode,
+    image: "localhost/errand-agent:latest",
     memory: "4g",
     cpus: 2,
     pids: 512,

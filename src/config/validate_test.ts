@@ -94,3 +94,16 @@ Deno.test("anything that is not an object is refused with one clear reason", () 
   assertEquals(problemsOf([1, 2, 3]), ["the configuration file must contain a JSON object"]);
   assertEquals(problemsOf("nope"), ["the configuration file must contain a JSON object"]);
 });
+
+/** Inert under bailey, required under podman, and validated the same either way. */
+Deno.test("the container image defaults, and is refused when it is not a name", () => {
+  assertEquals(validateConfig(valid()).sandbox.image, DEFAULTS.sandbox.image);
+  assertEquals(
+    validateConfig(valid({ sandbox: { image: "localhost/mine:v2" } })).sandbox.image,
+    "localhost/mine:v2",
+  );
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { image: 7 } })).join("\n"),
+    "sandbox.image must be a non-empty string",
+  );
+});

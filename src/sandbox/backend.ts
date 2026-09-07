@@ -37,6 +37,12 @@ export const AGENT_BIN = `${AGENT_HOME}/bin`;
 /** Where the session's agent history lives, as the agent sees it. */
 export const AGENT_SESSIONS = `${STATE_PATH}/sessions`;
 
+/** Label marking every sandbox this system owns, for discovery and cleanup. */
+export const SYSTEM_LABEL = "errand.system";
+
+/** Label carrying the session a sandbox belongs to. */
+export const SESSION_LABEL = "errand.session";
+
 /** Prefix for the name given to a session's sandbox. */
 export const SANDBOX_NAME_PREFIX = "errand-";
 

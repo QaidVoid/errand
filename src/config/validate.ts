@@ -8,6 +8,7 @@
  */
 
 import { isAbsolute, resolve } from "@std/path";
+import { parseSize } from "./size.ts";
 import {
   type AgentConfig,
   type ChatConfig,
@@ -139,7 +140,7 @@ function size(
 ): string {
   const value = source[key];
   if (value === undefined) return fallback;
-  if (typeof value !== "string" || !/^\d+(\.\d+)?[kmgt]?b?$/i.test(value.trim())) {
+  if (typeof value !== "string" || parseSize(value) === undefined) {
     problems.add(`${where}.${key} must be a size such as 512m or 4g`);
     return fallback;
   }
@@ -231,6 +232,7 @@ function validateSandbox(raw: Record<string, unknown>, problems: Problems): Sand
       (BACKENDS.includes(backend as SandboxBackend) ? backend : defaults.backend) as SandboxBackend,
     network:
       (NETWORKS.includes(network as NetworkMode) ? network : defaults.network) as NetworkMode,
+    image: optionalString(source, "image", "sandbox", problems) ?? defaults.image,
     requireFullEnforcement: flag(
       source,
       "requireFullEnforcement",
