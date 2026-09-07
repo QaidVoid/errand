@@ -39,7 +39,15 @@ import { spawnAgent } from "./spawn.ts";
 const NOT_APPLYING = "not applying";
 
 /** Variables a confined process needs in order to run at all. */
-const INHERITED_VARIABLES = ["PATH", "LANG", "LC_ALL", "TERM"];
+/**
+ * What crosses from the daemon's environment into the sandbox tool's.
+ *
+ * `BAILEY_CGROUP_ROOT` names a cgroup the tool may create children in, which
+ * is the only way per-session memory, cpu, and process limits are applied at
+ * all. It is a path rather than a secret, and without it here an operator can
+ * set it on the service and watch it have no effect.
+ */
+const INHERITED_VARIABLES = ["PATH", "LANG", "LC_ALL", "TERM", "BAILEY_CGROUP_ROOT"];
 
 /** Runs the sandbox tool and collects what it said. Injected for tests. */
 export type Run = (

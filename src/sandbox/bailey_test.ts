@@ -160,3 +160,19 @@ Deno.test("the environment is rebuilt from a named list, not inherited", () => {
   assertEquals(env.CHAT_TOKEN, undefined);
   assertEquals(env.HOME, "/state/s-1/home");
 });
+
+/**
+ * Per-session limits are applied only when the tool has a cgroup it may
+ * create children in, and it is told about one through this. Without it
+ * crossing, an operator can set it on the service and watch it do nothing.
+ */
+Deno.test("the cgroup the tool may use is passed through", () => {
+  const env = sessionEnvironment(
+    {},
+    { BAILEY_CGROUP_ROOT: "/sys/fs/cgroup/system.slice/errand.service", CHAT_TOKEN: "secret" },
+    "/state/s-1/home",
+  );
+
+  assertEquals(env.BAILEY_CGROUP_ROOT, "/sys/fs/cgroup/system.slice/errand.service");
+  assertEquals(env.CHAT_TOKEN, undefined);
+});
