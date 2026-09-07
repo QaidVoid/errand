@@ -1,5 +1,9 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
+  bytes,
+  directoryListing,
+  fileView,
+  MAX_LISTED_ENTRIES,
   MESSAGE_LIMIT,
   splitMessage,
   THREAD_NAME_LIMIT,
@@ -148,4 +152,92 @@ Deno.test("context is reported as a share of what the model holds", () => {
   });
 
   assertStringIncludes(line, "50%");
+});
+
+Deno.test("a byte count is shown in the units a disk quota uses", () => {
+  assertEquals(bytes(0), "0 B");
+  assertEquals(bytes(999), "999 B");
+  assertEquals(bytes(1_500), "1.5 kB");
+  assertEquals(bytes(2_400_000), "2.4 MB");
+  assertEquals(bytes(3_000_000_000), "3.0 GB");
+  assertEquals(bytes(5e15), "5000.0 TB");
+});
+
+Deno.test("a listing puts the sizes in one column and marks directories", () => {
+  const listing = directoryListing([
+    { name: "src", path: "src", directory: true, size: 0 },
+    { name: "readme.md", path: "readme.md", directory: false, size: 1_200 },
+  ], "demo");
+
+  const rows = (listing.split("```")[1] ?? "").split("\n").filter((row) => row.length > 0);
+  assertEquals(rows[0]?.endsWith("src/"), true);
+  assertStringIncludes(rows[1] ?? "", "1.2 kB");
+  assertEquals((rows[0] ?? "").indexOf("src/"), (rows[1] ?? "").indexOf("readme.md"));
+});
+
+Deno.test("an empty directory says so rather than showing an empty block", () => {
+  const listing = directoryListing([], "demo/src");
+
+  assertEquals(listing.includes("```"), false);
+  assertStringIncludes(listing, "is empty");
+});
+
+/** A thread cannot show thousands of entries, and nobody reads them there. */
+Deno.test("a very long listing is cut and says how much it left out", () => {
+  const many = Array.from({ length: MAX_LISTED_ENTRIES + 20 }, (_unused, index) => ({
+    name: `file-${index}`,
+    path: `file-${index}`,
+    directory: false,
+    size: 1,
+  }));
+
+  const listing = directoryListing(many, "demo");
+
+  assertStringIncludes(listing, "220 entries");
+  assertStringIncludes(listing, "... 20 more");
+});
+
+Deno.test("a file is shown fenced in its own language", () => {
+  const view = fileView({
+    path: "src/main.ts",
+    size: 13,
+    binary: false,
+    truncated: false,
+    text: "const x = 1;\n",
+    language: "ts",
+  });
+
+  assertStringIncludes(view, "```ts");
+  assertStringIncludes(view, "const x = 1;");
+  assertEquals(view.includes("cut at"), false);
+});
+
+Deno.test("a file that was cut says so and says where to get the rest", () => {
+  const view = fileView({
+    path: "big.txt",
+    size: 5_000_000,
+    binary: false,
+    truncated: true,
+    text: "x",
+    language: "",
+  });
+
+  assertStringIncludes(view, "cut at");
+  assertStringIncludes(view, "5.0 MB");
+  assertStringIncludes(view, "!file");
+});
+
+Deno.test("a binary file is named and offered, not pasted", () => {
+  const view = fileView({
+    path: "logo.png",
+    size: 40_000,
+    binary: true,
+    truncated: false,
+    text: "",
+    language: "",
+  });
+
+  assertEquals(view.includes("```"), false);
+  assertStringIncludes(view, "40.0 kB");
+  assertStringIncludes(view, "!file");
 });

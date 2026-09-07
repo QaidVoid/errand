@@ -7,6 +7,8 @@
  * every message posted is independently well formed.
  */
 
+import type { Entry, FileContents } from "../session/files.ts";
+import { MAX_INLINE_BYTES } from "../session/files.ts";
 import { prefixed, PREFIXES } from "./chars.ts";
 
 /** The service's per-message character limit. */
@@ -256,4 +258,60 @@ export function marker(state: string): string {
 /** Every enumerated prefix glyph, for asserting output stays inside the table. */
 export function prefixGlyphs(): string[] {
   return Object.keys(PREFIXES).map((key) => prefixed(key as keyof typeof PREFIXES, "").trimEnd());
+}
+
+/**
+ * A byte count, in the units a person reading a thread would use.
+ *
+ * Decimal units, because that is what a disk quota and a file manager both
+ * report, and a session's budget is written the same way.
+ */
+export function bytes(count: number): string {
+  if (count < 1000) return `${count} B`;
+  const units = ["kB", "MB", "GB", "TB"];
+  let value = count / 1000;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
+
+/** Most entries listed in a thread before the rest is summarised. */
+export const MAX_LISTED_ENTRIES = 200;
+
+/**
+ * A directory as one fenced block, sizes aligned in a column.
+ *
+ * A fence is shown in a monospaced font, which is the only way the sizes line
+ * up for every reader.
+ */
+export function directoryListing(entries: Entry[], displayPath: string): string {
+  if (entries.length === 0) return `\`${displayPath}/\` is empty`;
+
+  const shown = entries.slice(0, MAX_LISTED_ENTRIES);
+  const rows = shown.map((entry) => ({
+    name: entry.directory ? `${entry.name}/` : entry.name,
+    size: entry.directory ? "" : bytes(entry.size),
+  }));
+  const width = Math.max(...rows.map((row) => row.size.length));
+  const body = rows.map((row) => `${row.size.padStart(width)}  ${row.name}`).join("\n");
+  const more = entries.length > shown.length ? `\n... ${entries.length - shown.length} more` : "";
+
+  return `\`${displayPath}/\` ${entries.length} entries\n\`\`\`\n${body}${more}\n\`\`\``;
+}
+
+/** A file as a fenced block, with a note when it was cut or is not text. */
+export function fileView(contents: FileContents): string {
+  const size = bytes(contents.size);
+  if (contents.binary) {
+    return `\`${contents.path}\` is binary, ${size}. Use \`!file\` to download it.`;
+  }
+
+  const cut = contents.truncated
+    ? `\n... cut at ${bytes(MAX_INLINE_BYTES)} of ${size}, use \`!file\` for all of it`
+    : "";
+
+  return `\`${contents.path}\` ${size}\n\`\`\`${contents.language}\n${contents.text}${cut}\n\`\`\``;
 }
