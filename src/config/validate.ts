@@ -32,6 +32,9 @@ const NETWORKS: NetworkMode[] = ["restricted", "none"];
 
 const KNOWN = {
   root: [
+    // Not a setting: it is how an editor finds the schema to check the file
+    // against, and refusing it would make the file uncheckable.
+    "$schema",
     "chat",
     "agent",
     "github",

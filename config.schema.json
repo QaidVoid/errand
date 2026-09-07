@@ -1,0 +1,330 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/QaidVoid/errand/main/config.schema.json",
+  "title": "errand configuration",
+  "type": "object",
+  "description": "The fully resolved configuration the daemon runs on.",
+  "additionalProperties": false,
+  "properties": {
+    "chat": {
+      "description": "Chat connection and who may drive the bot.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "description": "Bot token. Secret. Never enters a sandbox.",
+          "type": "string"
+        },
+        "channelId": {
+          "description": "The single channel the daemon serves. Everything else is ignored.",
+          "type": "string"
+        },
+        "allowedUserIds": {
+          "description": "Accounts permitted to drive sessions. Must not be empty. The single entry `ALLOW_EVERY_USER` opens it to everyone who can post in the served channel. That is a deliberate, visible choice: an empty list is still a refusal to start, so nobody arrives at open access by leaving a field blank.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockedUserIds": {
+          "description": "Accounts refused before anything else is considered. Ahead of the allowlist and of any session role, so excluding somebody is one decision rather than an audit of every list they appear on.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "operatorUserIds": {
+          "description": "Accounts that may control any session, not only their own.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "token",
+        "channelId",
+        "allowedUserIds",
+        "blockedUserIds",
+        "operatorUserIds"
+      ]
+    },
+    "agent": {
+      "description": "Which model the agent talks to, and the credential it reaches it with.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "description": "Provider id, such as `anthropic` or `zai-coding-cn`.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Model pattern or id. Omit to use the provider's default.",
+          "type": "string"
+        },
+        "visionModel": {
+          "description": "Model an image is shown to when the working model cannot see one. Omit and the cheapest model of the same provider that accepts images is used. Naming one here is how that choice is made deliberately.",
+          "type": "string"
+        },
+        "credentialName": {
+          "description": "Environment variable the agent reads, such as `ANTHROPIC_API_KEY`.",
+          "type": "string"
+        },
+        "credential": {
+          "description": "The credential value. Secret.",
+          "type": "string"
+        },
+        "delegate": {
+          "description": "A cheaper model the session's model may ask about one artefact. Absent means no delegation at all: the session's own model does everything, which is what it did before this existed.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "description": "The model asked. Must be one the provider serves under the same key.",
+              "type": "string"
+            },
+            "perTurn": {
+              "description": "How many delegations one turn may make before the rest stay at home.",
+              "type": "number"
+            },
+            "deadlineMs": {
+              "description": "How long one delegation may take before it is abandoned.",
+              "type": "number"
+            },
+            "baseUrl": {
+              "description": "Where the provider is reached, when the model store does not say. Read from the agent's own model store by default, so the same endpoint that serves the session is the one asked.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "model"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "credentialName",
+        "credential"
+      ]
+    },
+    "github": {
+      "description": "The GitHub identity a session works with, when one is configured. Optional: a session with no GitHub configuration still runs, and simply has no credential to reach a repository with.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "description": "Token the agent authenticates with. Secret, and reachable by the agent.",
+          "type": "string"
+        },
+        "userName": {
+          "description": "Name commits are authored with. Free text: where a fork lands is read back from the API, so this does not have to be the bot's login.",
+          "type": "string"
+        },
+        "userEmail": {
+          "description": "Email commits are authored with.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "userName",
+        "userEmail"
+      ]
+    },
+    "projectRoot": {
+      "description": "Absolute path under which every session's project directory lives. A session works in a subdirectory of this and nowhere else.",
+      "type": "string"
+    },
+    "stateDir": {
+      "description": "Where per-session state directories are created on the host.",
+      "type": "string"
+    },
+    "sandbox": {
+      "description": "What a session may consume, and what the backend enforces.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "description": "Which backend confines sessions.",
+          "type": "string",
+          "enum": [
+            "podman",
+            "bailey"
+          ]
+        },
+        "requireFullEnforcement": {
+          "description": "Refuse to start when the backend cannot enforce every configured guarantee on this host, rather than reporting the gap and continuing.",
+          "type": "boolean"
+        },
+        "network": {
+          "description": "Network exposure granted to a session.",
+          "type": "string",
+          "enum": [
+            "restricted",
+            "none"
+          ]
+        },
+        "image": {
+          "description": "Container image the podman backend runs. Inert under bailey.",
+          "type": "string"
+        },
+        "memory": {
+          "description": "Memory ceiling per session, in size syntax such as `4g`.",
+          "type": "string"
+        },
+        "cpus": {
+          "description": "CPU ceiling per session, in cores.",
+          "type": "number"
+        },
+        "pids": {
+          "description": "Process count ceiling per session.",
+          "type": "number"
+        },
+        "fileMax": {
+          "description": "Largest single file a session may write, in size syntax.",
+          "type": "string"
+        },
+        "disk": {
+          "description": "How much a session may add to its project and state together. Measured rather than enforced, because no backend caps what a process tree writes in aggregate without root. Passing it ends the session.",
+          "type": "string"
+        },
+        "diskCheckMs": {
+          "description": "How often a session's disk use is measured, in milliseconds.",
+          "type": "number"
+        },
+        "gracePeriodMs": {
+          "description": "How long a sandbox may take to stop before it is killed.",
+          "type": "number"
+        }
+      }
+    },
+    "output": {
+      "description": "How much of the agent's activity reaches the thread.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "forwardToolOutput": {
+          "description": "Whether tool output bodies are posted, not just that a tool ran.",
+          "type": "boolean"
+        },
+        "maxToolOutputChars": {
+          "description": "Longest tool output posted before it is truncated and marked as such.",
+          "type": "number"
+        },
+        "maxAttachmentBytes": {
+          "description": "Largest attached file taken into a session, in bytes. Well under what the chat service itself allows, on purpose: the limit is what is sensible to hand an agent, not what can be uploaded.",
+          "type": "number"
+        },
+        "maxAttachmentsPerMessage": {
+          "description": "Most attached files taken from one message. The rest are refused.",
+          "type": "number"
+        },
+        "postDiffs": {
+          "description": "Post a diff after the agent changes a file. A diff shows intent rather than contents, which is both smaller and less likely to put something private in a channel than uploading whole files.",
+          "type": "boolean"
+        }
+      }
+    },
+    "shutdown": {
+      "description": "Who may power off the host from a chat message. Off unless the list has somebody in it. This is the one command that acts on the machine rather than on a session, so it is not covered by any session role: whoever starts a thread owns it, and owning a thread is no reason to be able to turn the computer off.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedUserIds": {
+          "description": "Account ids permitted to power off the host.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "allowedUserIds"
+      ]
+    },
+    "web": {
+      "description": "The local web interface. Absent means no listener at all, which is how the daemon behaves without one. There is no login: the address it binds to is the access control, and that address is checked rather than trusted.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "description": "Address to bind to. Must be loopback, private, or a tailnet address.",
+          "type": "string"
+        },
+        "port": {
+          "description": "",
+          "type": "number"
+        },
+        "observer": {
+          "description": "When true the interface may watch and read but not start, prompt, or control anything.",
+          "type": "boolean"
+        },
+        "publicUrl": {
+          "description": "Where the interface is reachable from outside, such as behind a tunnel. Used to link a session from somewhere that is not the chat service, so a pull request can name the conversation that asked for it. Absent when the interface is not published, in which case no such link is offered.",
+          "type": "string"
+        }
+      }
+    },
+    "limits": {
+      "description": "Bounds on how much work exists at once.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxConcurrentTurns": {
+          "description": "Sessions that may have a model turn in flight simultaneously.",
+          "type": "number"
+        },
+        "maxLiveSessions": {
+          "description": "Sessions that may exist at all.",
+          "type": "number"
+        },
+        "maxQueueLength": {
+          "description": "Prompts that may wait for a turn slot.",
+          "type": "number"
+        },
+        "maxQueueWaitMs": {
+          "description": "How long a queued prompt may wait before it expires unsent.",
+          "type": "number"
+        }
+      }
+    },
+    "timeouts": {
+      "description": "Deadlines that end or unblock a session.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "idleMs": {
+          "description": "No message and no agent activity for this long ends the session.",
+          "type": "number"
+        },
+        "startupMs": {
+          "description": "How long the agent has to become ready before it is abandoned.",
+          "type": "number"
+        },
+        "questionMs": {
+          "description": "How long a question posted to a thread waits for an answer.",
+          "type": "number"
+        },
+        "abortMs": {
+          "description": "How long an abort waits for the agent before it is forced.",
+          "type": "number"
+        }
+      }
+    },
+    "$schema": {
+      "type": "string",
+      "description": "Where this schema lives."
+    }
+  },
+  "required": [
+    "chat",
+    "agent",
+    "projectRoot",
+    "stateDir",
+    "sandbox",
+    "output",
+    "shutdown",
+    "limits",
+    "timeouts"
+  ]
+}

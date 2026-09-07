@@ -1,0 +1,59 @@
+{
+  "$schema": "https://raw.githubusercontent.com/QaidVoid/errand/main/config.schema.json",
+  "chat": {
+    "token": "PUT THE BOT TOKEN HERE",
+    "channelId": "PUT THE ID OF THE ONE CHANNEL TO SERVE HERE",
+    "allowedUserIds": [
+      "PUT THE ACCOUNT IDS THAT MAY DRIVE SESSIONS HERE"
+    ],
+    "blockedUserIds": [],
+    "operatorUserIds": []
+  },
+  "agent": {
+    "provider": "zai-coding-cn",
+    "model": "glm-5.3",
+    "credentialName": "ZAI_CODING_CN_API_KEY",
+    "credential": "PUT THE PROVIDER KEY HERE",
+    "delegate": {
+      "model": "glm-5.3-flash",
+      "perTurn": 8,
+      "deadlineMs": 60000
+    }
+  },
+  "github": {
+    "token": "PUT A GITHUB TOKEN HERE, OR REMOVE THIS SECTION",
+    "userName": "the name commits are authored with",
+    "userEmail": "the email commits are authored with"
+  },
+  "projectRoot": "/srv/errand/projects",
+  "stateDir": "/var/lib/errand",
+  "sandbox": {
+    "backend": "bailey",
+    "requireFullEnforcement": true,
+    "network": "restricted",
+    "memory": "4g",
+    "cpus": 2,
+    "pids": 512,
+    "disk": "5g"
+  },
+  "output": {
+    "forwardToolOutput": false,
+    "postDiffs": true
+  },
+  "shutdown": {
+    "allowedUserIds": []
+  },
+  "web": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "observer": false
+  },
+  "limits": {
+    "maxConcurrentTurns": 2,
+    "maxLiveSessions": 4
+  },
+  "timeouts": {
+    "idleMs": 1800000,
+    "startupMs": 60000
+  }
+}
