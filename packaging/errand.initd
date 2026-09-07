@@ -14,19 +14,16 @@ description="Run a coding agent from a chat channel, in a sandbox"
 : "${errand_user:=errand}"
 : "${errand_group:=${errand_user}}"
 : "${errand_home:=/var/lib/${RC_SVCNAME}}"
-: "${errand_directory:=/opt/errand}"
-: "${errand_deno:=/usr/bin/deno}"
+: "${errand_directory:=${errand_home}}"
+: "${errand_binary:=/usr/local/bin/errand}"
 : "${errand_state:=${errand_home}/state}"
 
-# What the daemon is allowed to do, spelled out where an operator reads it
-# rather than hidden behind a task name. It needs to reach the chat service and
-# the model provider, read and write its projects and state, and start the
-# sandboxes it confines agents in.
-errand_permissions="--allow-net --allow-env --allow-read --allow-write --allow-run"
-
+# What the daemon may do is compiled into the binary: reach the chat service
+# and the model provider, read and write its projects and state, and start the
+# sandboxes it confines agents in. Nothing else.
 supervisor="supervise-daemon"
-command="${errand_deno}"
-command_args="run ${errand_permissions} src/main.ts run"
+command="${errand_binary}"
+command_args="run"
 command_user="${errand_user}:${errand_group}"
 directory="${errand_directory}"
 pidfile="/run/${RC_SVCNAME}.pid"
@@ -64,15 +61,10 @@ start_pre() {
 	checkpath --directory --owner "${errand_user}:${errand_group}" --mode 0750 \
 		"/var/log/${RC_SVCNAME}" || return 1
 
-	if [ ! -d "${errand_directory}" ]; then
-		eerror "no checkout at ${errand_directory}"
-		eerror "set errand_directory in /etc/conf.d/${RC_SVCNAME}"
-		return 1
-	fi
-
-	if [ ! -x "${errand_deno}" ]; then
-		eerror "no runnable deno at ${errand_deno}"
-		eerror "set errand_deno in /etc/conf.d/${RC_SVCNAME}"
+	if [ ! -x "${errand_binary}" ]; then
+		eerror "no runnable errand at ${errand_binary}"
+		eerror "build one with \`deno task build\`, or set errand_binary in"
+		eerror "/etc/conf.d/${RC_SVCNAME}"
 		return 1
 	fi
 

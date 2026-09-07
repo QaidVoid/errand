@@ -11,6 +11,8 @@
     "typecheck": "deno check src/ scripts/",
     "test": "deno test --allow-read --allow-write --allow-env --allow-run --allow-net src/ scripts/",
     "ascii": "deno run --allow-read --allow-run scripts/check_ascii.ts",
+    "build": "deno task build:web && deno task build:bin",
+    "build:bin": "deno compile --allow-net --allow-env --allow-read --allow-write --allow-run --include dist/web --output dist/errand src/main.ts",
     "build:web": "deno run -A --node-modules-dir npm:vite build web",
     "dev:web": "deno run -A --node-modules-dir npm:vite web",
     "check:web": "deno run -A --node-modules-dir npm:svelte-check --workspace web --threshold error",

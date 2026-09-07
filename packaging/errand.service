@@ -1,14 +1,17 @@
 # systemd service for errand.
 #
-# Copy this to /etc/systemd/system/errand.service and edit User, Group, and
-# WorkingDirectory to match the host. The daemon runs as the account that owns
-# the configuration file rather than as root: the file holds the bot token, and
-# the agent is started as that account too, so files it writes in a project
-# belong to the person whose project it is.
+# Copy this to /etc/systemd/system/errand.service and edit User and Group to
+# match the host. The daemon runs as the account that owns the configuration
+# file rather than as root: the file holds the bot token, and the agent is
+# started as that account too, so files it writes in a project belong to the
+# person whose project it is.
+#
+# It runs the single binary that `deno task build` produces, which carries the
+# interface and its own runtime, so the host needs neither a checkout nor deno.
 
 [Unit]
 Description=errand, a coding agent run from a chat channel
-Documentation=https://github.com/qaidvoid/errand
+Documentation=https://github.com/QaidVoid/errand
 After=network-online.target
 Wants=network-online.target
 
@@ -16,13 +19,12 @@ Wants=network-online.target
 Type=simple
 User=errand
 Group=errand
-WorkingDirectory=/opt/errand
+WorkingDirectory=/var/lib/errand
 
-# What the daemon is allowed to do, spelled out where an operator reads it
-# rather than hidden behind a task name. It needs to reach the chat service and
-# the model provider, read and write its projects and state, and start the
-# sandboxes it confines agents in.
-ExecStart=/usr/bin/deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/main.ts run
+# What the daemon may do is compiled into the binary: reach the chat service
+# and the model provider, read and write its projects and state, and start the
+# sandboxes it confines agents in. Nothing else.
+ExecStart=/usr/local/bin/errand run
 
 # The daemon looks for ~/.config/errand/config.json unless this names another.
 Environment=HOME=/var/lib/errand

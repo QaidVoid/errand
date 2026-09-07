@@ -74,7 +74,7 @@ out. To have the cheaper model do the work rather than describe it, use
 An optional local web interface reads a session as it happens, browses the
 project, and starts new ones. It has no login: the address it binds to is the
 access control, and a public bind is refused rather than warned about. Build it
-once with `deno task build:web`, then add a `web` section to the configuration:
+once with `deno task build`, then add a `web` section to the configuration:
 
 ```json
 { "web": { "host": "127.0.0.1", "port": 8787 } }
@@ -106,12 +106,21 @@ service definitions for both init systems.
 ```sh
 deno task check     # formatting, lint, types, tests, the ASCII rule, the interface
 deno task test      # the test suite
-deno task start     # run the daemon against ./config.json
-deno task build:web # build the interface into dist/web
+deno task start     # run the daemon from the checkout
+deno task build     # the interface and a single binary, into dist/
 deno task dev:web   # the interface against a running daemon
 ```
+
+`deno task build` produces `dist/errand`: one binary carrying the interface and
+its own runtime, with what it may do compiled in, so a host that runs it needs
+neither a checkout nor deno.
 
 The daemon runs under an explicit permission set rather than with the whole
 machine available to it, which is visible in `deno task start`.
 
 Project rules are in [AGENTS.md](AGENTS.md).
+
+## License
+
+MIT OR Apache-2.0, at your option. See [LICENSE-MIT](LICENSE-MIT) and
+[LICENSE-APACHE](LICENSE-APACHE).

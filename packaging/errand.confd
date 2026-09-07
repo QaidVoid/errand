@@ -12,12 +12,13 @@ errand_group="errand"
 # run, so this is set here rather than inherited.
 errand_home="/var/lib/errand"
 
-# The checkout to run from.
-errand_directory="/opt/errand"
+# The binary `deno task build` produces. It carries the interface and its own
+# runtime, so the host needs neither a checkout nor deno.
+errand_binary="/usr/local/bin/errand"
 
-# deno by absolute path. A service starts before any shell profile has run, so
-# a version manager's PATH does not exist yet.
-errand_deno="/usr/bin/deno"
+# Where the daemon runs from. Nothing is read from here; it is simply somewhere
+# owned by the account.
+errand_directory="/var/lib/errand"
 
 # The configuration file, when it is not the one under errand_home.
 #errand_config="/etc/errand/config.json"
