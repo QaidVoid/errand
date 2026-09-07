@@ -112,6 +112,9 @@ export type AnswerOutcome =
   /** No dialog with that id is pending. */
   | "unknown";
 
+/** How much of a dying process's stderr is kept, in characters. */
+const STDERR_KEPT = 2_000;
+
 const AFFIRMATIVE = new Set(["yes", "y", "true", "ok", "confirm"]);
 const NEGATIVE = new Set(["no", "n", "false", "cancel", "deny"]);
 
@@ -175,6 +178,7 @@ export class AgentClient {
   private lifecycle: AgentState = "starting";
   private exitReported = false;
   private thinkingReported = false;
+  private lastWords = "";
   private producedText = false;
 
   private readonly dialogs = new Map<string, PendingDialog>();
@@ -197,6 +201,17 @@ export class AgentClient {
     maxRecordBytes?: number,
   ) {
     this.framer = new LineFramer(maxRecordBytes);
+  }
+
+  /**
+   * The last thing the agent said on stderr before it went.
+   *
+   * Kept because an exit code on its own explains nothing: a process killed
+   * for filling the disk and one that hit a bug both exit with 1, and only
+   * this says which. Bounded, since a crash can print a great deal.
+   */
+  get dyingWords(): string {
+    return this.lastWords;
   }
 
   /** Where the agent is in its life. */
@@ -395,7 +410,9 @@ export class AgentClient {
         if (done) break;
         if (value === undefined) continue;
         const text = decoder.decode(value, { stream: true }).trimEnd();
-        if (text.length > 0) this.log.warn("agent stderr", { detail: text });
+        if (text.length === 0) continue;
+        this.log.warn("agent stderr", { detail: text });
+        this.lastWords = `${this.lastWords}\n${text}`.slice(-STDERR_KEPT).trimStart();
       }
     } catch {
       // A closed stderr is not a session failure; stdout decides that.
