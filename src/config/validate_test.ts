@@ -168,3 +168,19 @@ Deno.test("an output limit that is not a number is refused", () => {
   assertStringIncludes(problems, "output.maxAttachmentBytes must be a number");
   assertStringIncludes(problems, "output.postDiffs must be true or false");
 });
+
+/** Silence about a command that turns the machine off means nobody. */
+Deno.test("nobody may power off the host unless somebody is named", () => {
+  assertEquals(validateConfig(valid()).shutdown.allowedUserIds, []);
+  assertEquals(
+    validateConfig(valid({ shutdown: { allowedUserIds: ["777"] } })).shutdown.allowedUserIds,
+    ["777"],
+  );
+});
+
+Deno.test("a shutdown list that is not a list of accounts is refused", () => {
+  assertStringIncludes(
+    problemsOf(valid({ shutdown: { allowedUserIds: "everyone" } })).join("\n"),
+    "shutdown.allowedUserIds must be a list of account ids",
+  );
+});

@@ -111,6 +111,19 @@ export interface SandboxConfig {
   gracePeriodMs: number;
 }
 
+/**
+ * Who may power off the host from a chat message.
+ *
+ * Off unless the list has somebody in it. This is the one command that acts on
+ * the machine rather than on a session, so it is not covered by any session
+ * role: whoever starts a thread owns it, and owning a thread is no reason to
+ * be able to turn the computer off.
+ */
+export interface ShutdownConfig {
+  /** Account ids permitted to power off the host. */
+  allowedUserIds: string[];
+}
+
 /** How much of the agent's activity reaches the thread. */
 export interface OutputConfig {
   /** Whether tool output bodies are posted, not just that a tool ran. */
@@ -175,6 +188,8 @@ export interface Config {
   stateDir: string;
   sandbox: SandboxConfig;
   output: OutputConfig;
+  /** Who may power off the host. Empty means nobody, which is the default. */
+  shutdown: ShutdownConfig;
   limits: LimitsConfig;
   timeouts: TimeoutsConfig;
 }

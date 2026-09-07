@@ -21,6 +21,7 @@ import {
   type OutputConfig,
   type SandboxBackend,
   type SandboxConfig,
+  type ShutdownConfig,
   type TimeoutsConfig,
 } from "./schema.ts";
 
@@ -36,6 +37,7 @@ const KNOWN = {
     "stateDir",
     "sandbox",
     "output",
+    "shutdown",
     "limits",
     "timeouts",
   ],
@@ -43,6 +45,7 @@ const KNOWN = {
   agent: ["provider", "model", "visionModel", "credentialName", "credential"],
   github: ["token", "userName", "userEmail"],
   sandbox: Object.keys(DEFAULTS.sandbox),
+  shutdown: ["allowedUserIds"],
   output: Object.keys(DEFAULTS.output),
   limits: Object.keys(DEFAULTS.limits),
   timeouts: Object.keys(DEFAULTS.timeouts),
@@ -324,6 +327,18 @@ function validateOutput(raw: Record<string, unknown>, problems: Problems): Outpu
   };
 }
 
+/**
+ * Reads who may power off the host.
+ *
+ * An absent section means nobody, which is the safe reading of silence for a
+ * command that acts on the machine.
+ */
+function validateShutdown(raw: Record<string, unknown>, problems: Problems): ShutdownConfig {
+  const source = section(raw, "shutdown");
+  rejectUnknown(source, KNOWN.shutdown, "shutdown", problems);
+  return { allowedUserIds: idList(source, "allowedUserIds", "shutdown", problems) };
+}
+
 function validateLimits(raw: Record<string, unknown>, problems: Problems): LimitsConfig {
   const source = section(raw, "limits");
   rejectUnknown(source, KNOWN.limits, "limits", problems);
@@ -384,6 +399,7 @@ export function validateConfig(parsed: unknown): Config {
     stateDir: directory(raw, "stateDir", problems),
     sandbox: validateSandbox(raw, problems),
     output: validateOutput(raw, problems),
+    shutdown: validateShutdown(raw, problems),
     limits: validateLimits(raw, problems),
     timeouts: validateTimeouts(raw, problems),
   };
