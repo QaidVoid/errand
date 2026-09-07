@@ -164,12 +164,13 @@ export interface ThreadPort {
   /** Uploads a file so it can be read or downloaded. */
   upload(name: string, bytes: Uint8Array, caption: string): Promise<void>;
   /**
-   * Reports that the session has ended, so nothing shows it as still live.
+   * Reports that the session has ended, and why.
    *
-   * Deliberately not "close the thread". A chat thread that is archived when
-   * its session ends drops out of the sidebar, and the people who were in it
-   * then have to go hunting for it. The thread stays open and the last notice
-   * in it says what happened.
+   * The reason decides what a chat thread does with itself. Somebody typing
+   * `!stop` is finished with it, so it is archived. Anything else, an idle
+   * timeout or a crash or a restart, leaves it open: those sessions can be
+   * resumed, and a thread archived out of the sidebar is one its own author
+   * has to go hunting for.
    */
-  close(): Promise<void>;
+  close(reason: EndReason): Promise<void>;
 }

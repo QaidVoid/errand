@@ -66,7 +66,7 @@ const CALLS: [keyof ThreadPort, unknown[]][] = [
   ["setUsage", [USAGE]],
   ["setBusy", [true]],
   ["upload", [`${SECRET}.txt`, new Uint8Array([1, 2]), `here is ${SECRET}`]],
-  ["close", []],
+  ["close", ["idle"]],
 ];
 
 Deno.test("nothing a session reports carries the credential through", async () => {

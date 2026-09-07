@@ -54,6 +54,6 @@ export function redacting(port: ThreadPort, secrets: readonly string[]): ThreadP
     setUsage: (usage) => port.setUsage(usage),
     setBusy: (busy) => port.setBusy(busy),
     upload: (name, bytes, caption) => port.upload(clean(name), bytes, clean(caption)),
-    close: () => port.close(),
+    close: (reason) => port.close(reason),
   };
 }

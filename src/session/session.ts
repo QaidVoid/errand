@@ -1727,7 +1727,7 @@ export class Session {
 
     this.options.scheduler.releaseSession();
     await this.options.thread.setWaiting(null);
-    await this.options.thread.close().catch(() => undefined);
+    await this.options.thread.close(why).catch(() => undefined);
     this.log.info("session ended", { reason: why });
     this.options.onEnded(why);
   }

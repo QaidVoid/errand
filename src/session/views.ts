@@ -14,6 +14,7 @@
 
 import type { Logger } from "../log.ts";
 import type {
+  EndReason,
   NoticeLevel,
   ReactionOutcome,
   SessionUsage,
@@ -383,9 +384,9 @@ export class ViewFanOut implements ThreadPort {
     await this.each("upload", (view) => view.upload(name, bytes, caption));
   }
 
-  async close(): Promise<void> {
+  async close(reason: EndReason): Promise<void> {
     this.ended = true;
     this.busy = false;
-    await this.each("close", (view) => view.close());
+    await this.each("close", (view) => view.close(reason));
   }
 }

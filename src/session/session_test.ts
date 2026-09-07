@@ -108,7 +108,7 @@ class FakeThread implements ThreadPort {
   usage: SessionUsage | undefined;
   waiting: string | null = null;
   busy = false;
-  closed = false;
+  closed: EndReason | undefined;
 
   post(text: string): Promise<void> {
     this.posts.push(text);
@@ -163,8 +163,8 @@ class FakeThread implements ThreadPort {
     this.uploads.push({ name, size: bytes.length });
     return Promise.resolve();
   }
-  close(): Promise<void> {
-    this.closed = true;
+  close(reason: EndReason): Promise<void> {
+    this.closed = reason;
     return Promise.resolve();
   }
 
@@ -461,7 +461,7 @@ Deno.test("an aside that reads like a command still runs nothing", () =>
     await session.handle(message("!!! !stop", OWNER, "m2"));
 
     assertEquals(thread.asides.length, 1);
-    assertEquals(thread.closed, false);
+    assertEquals(thread.closed, undefined);
   }));
 
 /** Another bot's command is not this one's to answer, or to pay a model for. */
@@ -497,7 +497,7 @@ Deno.test("a guest may prompt, and only the owner may end the session", () =>
 
     assertEquals(thread.prompts.some((line) => line.includes("have a look")), true);
     assertStringIncludes(thread.everything(), "who started this session");
-    assertEquals(thread.closed, false);
+    assertEquals(thread.closed, undefined);
   }, { guestIds: [GUEST] }));
 
 Deno.test("the owner can invite somebody and withdraw them again", () =>
@@ -570,7 +570,7 @@ Deno.test("a file can be uploaded from the project on request", () =>
     assertEquals(thread.uploads[0]?.size, 11);
   }));
 
-Deno.test("stopping ends the session once and closes the thread", () =>
+Deno.test("stopping ends the session once and tears the sandbox down", () =>
   withSession(async ({ session, thread, ended, sandbox }) => {
     await settle();
 
@@ -578,7 +578,7 @@ Deno.test("stopping ends the session once and closes the thread", () =>
     await session.stop("stopped");
 
     assertEquals(ended, ["stopped"]);
-    assertEquals(thread.closed, true);
+    assertEquals(thread.closed, "stopped");
     assertEquals(sandbox.stopped, ["s1"]);
     assertEquals(session.isEnded, true);
   }));
@@ -916,6 +916,16 @@ Deno.test("a session that ends leaves its thread where people can find it", () =
     await settle();
 
     assertEquals(session.isEnded, true);
-    assertEquals(thread.closed, true);
+    assertEquals(thread.closed, "idle");
     assertStringIncludes(thread.notices[thread.notices.length - 1]?.text ?? "", "ended");
+  }));
+
+/** An explicit stop is somebody saying they are finished with the thread. */
+Deno.test("stopping says so, so the thread can be archived", () =>
+  withSession(async ({ session, thread }) => {
+    await settle();
+
+    await session.handle(message("!stop", OWNER, "m2"));
+
+    assertEquals(thread.closed, "stopped");
   }));
