@@ -5,14 +5,14 @@
   "exports": "./src/main.ts",
   "license": "MIT OR Apache-2.0",
   "tasks": {
-    "start": "deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/main.ts",
+    "start": "deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/main.ts run",
     "fmt": "deno fmt",
     "lint": "deno lint",
     "typecheck": "deno check .",
-    "test": "deno test --allow-read --allow-write --allow-env src/ scripts/",
+    "test": "deno test --allow-read --allow-write --allow-env --allow-run src/ scripts/",
     "ascii": "deno run --allow-read --allow-run scripts/check_ascii.ts",
     "check": "deno fmt --check && deno lint && deno check . && deno task test && deno task ascii",
-    "errand": "deno run --allow-env --allow-read --allow-write src/main.ts"
+    "errand": "deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/main.ts"
   },
   "fmt": {
     "lineWidth": 100,

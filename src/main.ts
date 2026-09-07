@@ -10,13 +10,18 @@
 import { runThreads } from "./cli/threads.ts";
 import { configPath, loadConfig } from "./config/load.ts";
 import { ConfigError } from "./config/schema.ts";
+import { EnforcementGapError } from "./daemon.ts";
+import { AlreadyRunningError } from "./lock.ts";
 import { createLogger } from "./log.ts";
+import { SandboxUnavailableError } from "./sandbox/backend.ts";
+import { serve } from "./serve.ts";
 import { treeBytes } from "./session/disk.ts";
 import { ThreadRegistry } from "./session/registry.ts";
 
 const USAGE = [
   "usage: errand <command>",
   "",
+  "  run                  run the daemon until it is told to stop",
   "  threads [command]    manage remembered threads and their data",
   "  help                 this",
   "",
@@ -38,11 +43,53 @@ async function threads(args: readonly string[]): Promise<number> {
   });
 }
 
+/**
+ * Runs the daemon, turning the failures an operator can act on into an exit
+ * code and one line rather than a stack trace.
+ */
+async function run(): Promise<number> {
+  const log = createLogger();
+  try {
+    return await serve(loadConfig(configPath(Deno.env.toObject())), log);
+  } catch (error) {
+    if (error instanceof AlreadyRunningError) {
+      log.error(error.message);
+      return 4;
+    }
+    if (error instanceof EnforcementGapError) {
+      log.error(error.message);
+      return 3;
+    }
+    if (error instanceof SandboxUnavailableError) {
+      log.error(error.message);
+      return 2;
+    }
+
+    const detail = String(error);
+    if (detail.includes("TokenInvalid")) {
+      log.error(
+        "the chat service rejected the bot token; set chat.token in the configuration file",
+      );
+      return 2;
+    }
+    if (detail.includes("DisallowedIntents")) {
+      log.error(
+        "the chat service refused the gateway intents; enable the Message Content intent for this bot in its developer portal, under Bot, Privileged Gateway Intents",
+      );
+      return 2;
+    }
+    log.error("the daemon failed to start", { detail });
+    return 1;
+  }
+}
+
 async function main(args: readonly string[]): Promise<number> {
   const [command, ...rest] = args;
 
   try {
     switch (command) {
+      case "run":
+        return await run();
       case "threads":
         return await threads(rest);
       case "help":
