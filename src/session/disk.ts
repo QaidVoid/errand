@@ -51,3 +51,46 @@ export async function treeBytes(root: string): Promise<number | undefined> {
   }
   return total;
 }
+
+/** What a check of a session's disk use concluded. */
+export type Verdict = "under" | "close" | "over";
+
+/** The share of the budget at which a session is warned rather than stopped. */
+export const WARN_AT = 0.8;
+
+/** Where a session's use sits against its budget. */
+export function verdict(used: number, budget: number): Verdict {
+  if (budget <= 0) return "under";
+  if (used >= budget) return "over";
+  return used >= budget * WARN_AT ? "close" : "under";
+}
+
+/** Fastest a session's use is measured, however quickly it is growing. */
+export const MIN_CHECK_MS = 1_000;
+
+/**
+ * How long to wait before measuring again, from how fast the session is
+ * writing now.
+ *
+ * A fixed interval decides the overshoot. Measured every 30 seconds, a session
+ * writing a gigabyte a second is 20 GB past a 5 GB budget before anything
+ * notices, which is what a real session did. Aiming at half the time the
+ * current rate needs to reach the budget keeps the check ahead of the writing,
+ * while an idle session settles back to the configured interval rather than
+ * walking the tree every second for nothing.
+ */
+export function nextCheckMs(
+  written: number,
+  lastWritten: number,
+  budget: number,
+  sinceLast: number,
+  slowest: number,
+): number {
+  const grew = written - lastWritten;
+  if (grew <= 0 || sinceLast <= 0) return slowest;
+
+  const perMs = grew / sinceLast;
+  const remaining = Math.max(0, budget - written);
+  const projected = (remaining / perMs) * 0.5;
+  return Math.max(MIN_CHECK_MS, Math.min(slowest, Math.round(projected)));
+}
