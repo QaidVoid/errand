@@ -35,6 +35,23 @@ export interface Usage {
   model?: string;
 }
 
+/**
+ * What came of asking a cheaper model about one artefact.
+ *
+ * Either an answer or a refusal. A refusal is shown too: it says the session's
+ * own model did that part of the work after all.
+ */
+export interface Delegated {
+  question: string;
+  model?: string;
+  describes?: string;
+  answer?: string;
+  refused?: string;
+  tokens?: number;
+  /** Characters kept out of the session's own context by asking. */
+  keptOut?: number;
+}
+
 /** One thing a session reported, as it arrives. */
 export type Entry =
   & { turn?: number }
@@ -48,6 +65,7 @@ export type Entry =
     | { kind: "reply"; text: string; command: string; at: number }
     | { kind: "toolResult"; result: ToolResult; at: number }
     | { kind: "file"; name: string; size: number; at: number }
+  | { kind: "delegation"; delegated: Delegated; at: number }
     | {
       kind: "diff";
       path: string;

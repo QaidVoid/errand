@@ -31,7 +31,9 @@ export const LENS_HELP: Record<Lens, string> = {
 export function keeps(lens: Lens, item: Item): boolean {
   if (lens === "all") return true;
 
-  if (lens === "ran") return item.kind === "call";
+  if (lens === "ran") {
+    return item.kind === "call" || (item.kind === "entry" && item.entry.kind === "delegation");
+  }
 
   if (lens === "changed") {
     if (item.kind === "call") return item.call.changes.length > 0;

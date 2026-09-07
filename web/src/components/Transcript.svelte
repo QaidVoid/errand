@@ -67,6 +67,10 @@
       const entry = item.entry;
       if ("text" in entry) parts.push(entry.text);
       if (entry.kind === "aside") parts.push(entry.author);
+      if (entry.kind === "delegation") {
+        const { question, answer, refused, model, describes } = entry.delegated;
+        parts.push(question, answer ?? "", refused ?? "", model ?? "", describes ?? "");
+      }
       if (entry.kind === "diff") parts.push(entry.path, entry.body);
     }
     return parts.join("\n");

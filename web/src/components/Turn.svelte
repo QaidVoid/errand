@@ -10,6 +10,7 @@
   import { render } from "../lib/markdown.ts";
   import { marking } from "../lib/search.ts";
   import { callCount, type Turn } from "../lib/turns.ts";
+  import Delegation from "./Delegation.svelte";
   import Diff from "./Diff.svelte";
   import ToolCall from "./ToolCall.svelte";
 
@@ -168,6 +169,10 @@
       {:else if item.entry.kind === "message"}
         <!-- Sanitised in render(), which is what makes this safe to insert. -->
         <div class="item message">{@html render(item.entry.text)}</div>
+      {:else if item.entry.kind === "delegation"}
+        <div class="item">
+          <Delegation delegated={item.entry.delegated} />
+        </div>
       {:else if item.entry.kind === "aside"}
         <p class="item aside">
           <span class="who">{item.entry.author}</span>
