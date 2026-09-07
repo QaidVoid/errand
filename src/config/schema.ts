@@ -46,6 +46,13 @@ export interface AgentConfig {
   provider: string;
   /** Model pattern or id. Omit to use the provider's default. */
   model: string | undefined;
+  /**
+   * Model an image is shown to when the working model cannot see one.
+   *
+   * Omit and the cheapest model of the same provider that accepts images is
+   * used. Naming one here is how that choice is made deliberately.
+   */
+  visionModel: string | undefined;
   /** Environment variable the agent reads, such as `ANTHROPIC_API_KEY`. */
   credentialName: string;
   /** The credential value. Secret. */

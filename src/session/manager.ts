@@ -8,6 +8,7 @@
 
 import { join } from "@std/path";
 import type { Scheduler } from "../admission/scheduler.ts";
+import type { AgentImage } from "../agent/protocol.ts";
 import { threadName } from "../chat/render.ts";
 import { secretValues } from "../config/redact.ts";
 import type { Config } from "../config/schema.ts";
@@ -77,6 +78,13 @@ export interface ManagerOptions {
   operatorIds?: readonly string[];
   /** Memory, or undefined when it is switched off. */
   memory?: MemoryStore | undefined;
+  /**
+   * Describes an image for a session whose model cannot be shown one.
+   *
+   * Resolved once at startup from the provider's own model list, and absent
+   * when the configured model can see or the provider has nothing that can.
+   */
+  describeImages?: ((images: AgentImage[], question: string) => Promise<string>) | undefined;
   /** Where the interface is published, when it is. */
   publicUrl?: string | undefined;
   /** Injected so record timestamps are predictable in tests. */
@@ -376,6 +384,9 @@ export class SessionManager {
       guildId: this.guildId,
       publicUrl: this.options.publicUrl,
       unavailable: () => this.unavailable(),
+      ...(this.options.describeImages === undefined
+        ? {}
+        : { describeImages: this.options.describeImages }),
       openPullRequest: (request: Parameters<typeof openPullRequest>[0]) =>
         openPullRequest(request, runCommand, callApi),
       ...(this.options.timers === undefined ? {} : { timers: this.options.timers }),

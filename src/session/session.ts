@@ -183,6 +183,15 @@ export interface SessionOptions {
   memory?: MemoryStore | undefined;
   /** Fetches an attachment. Injected so tests need no network. */
   fetchAttachment?: ((url: string) => Promise<Uint8Array>) | undefined;
+  /**
+   * Describes an attached image, for a session whose model cannot see one.
+   *
+   * Injected only in that case: present means the images must not be handed
+   * over, absent means they can be. The session does not decide which, because
+   * what a model accepts is the provider's business and is read once at
+   * startup rather than per attachment.
+   */
+  describeImages?: ((images: AgentImage[], question: string) => Promise<string>) | undefined;
   /** Continue the agent conversation already stored in the state directory. */
   resume?: boolean;
   /** Called once the session is finished with, so the manager can forget it. */
@@ -483,7 +492,24 @@ export class Session {
       .filter((file) => isImage(file.contentType, file.path))
       .map((file) => imageOf(file));
 
-    return { note, images };
+    const describe = this.options.describeImages;
+    if (images.length === 0 || describe === undefined) return { note, images };
+
+    // Injected only when this session's model cannot be shown an image, so
+    // reaching here means handing them over would fail the turn.
+    try {
+      return { note: `${note}\n\n${await describe(images, message.content)}`, images: [] };
+    } catch (error) {
+      this.log.warn("could not describe an attached image", { detail: String(error) });
+      await this.say(
+        warningLine(
+          error instanceof Error
+            ? error.message
+            : "an attached image could not be described for this model",
+        ),
+      );
+      return { note, images: [] };
+    }
   }
 
   private async answerDialog(

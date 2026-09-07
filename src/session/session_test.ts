@@ -2,6 +2,7 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import { existsSync } from "@std/fs";
 import { join } from "@std/path";
 import { Scheduler } from "../admission/scheduler.ts";
+import type { AgentImage } from "../agent/protocol.ts";
 import type { AgentProcess } from "../agent/client.ts";
 import type { Config } from "../config/schema.ts";
 import { validateConfig } from "../config/validate.ts";
@@ -22,6 +23,7 @@ import type {
   ThreadPort,
   ToolResult,
 } from "./port.ts";
+import type { Request as PullRequest } from "./pr.ts";
 import { type IncomingMessage, Session, type Timers } from "./session.ts";
 
 const encoder = new TextEncoder();
@@ -299,7 +301,9 @@ async function withSession(
     first?: IncomingMessage;
     guestIds?: string[];
     memory?: MemoryStore;
-    openPullRequest?: (request: unknown) => Promise<string>;
+    describeImages?: (images: AgentImage[], question: string) => Promise<string>;
+    fetchAttachment?: (url: string) => Promise<Uint8Array>;
+    openPullRequest?: (request: PullRequest) => Promise<string>;
     unavailable?: () => Promise<string | undefined>;
     start?: boolean;
   } = {},
@@ -332,11 +336,10 @@ async function withSession(
     operatorIds: [],
     guestIds: options.guestIds ?? [],
     ...(options.memory === undefined ? {} : { memory: options.memory }),
-    ...(options.openPullRequest === undefined
-      ? {}
-      // deno-lint-ignore no-explicit-any
-      : { openPullRequest: options.openPullRequest as any }),
+    ...(options.openPullRequest === undefined ? {} : { openPullRequest: options.openPullRequest }),
     ...(options.unavailable === undefined ? {} : { unavailable: options.unavailable }),
+    ...(options.describeImages === undefined ? {} : { describeImages: options.describeImages }),
+    ...(options.fetchAttachment === undefined ? {} : { fetchAttachment: options.fetchAttachment }),
     onEnded: (reason) => ended.push(reason),
   });
 
@@ -929,3 +932,90 @@ Deno.test("stopping says so, so the thread can be archived", () =>
 
     assertEquals(thread.closed, "stopped");
   }));
+
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+
+function withImage(content: string, id = "m2"): IncomingMessage {
+  return {
+    id,
+    authorId: OWNER,
+    authorName: "amelia",
+    content,
+    attachments: [{
+      id: "a1",
+      name: "screenshot.png",
+      url: "https://files.example/screenshot.png",
+      size: PNG.length,
+      contentType: "image/png",
+    }],
+  };
+}
+
+Deno.test("an attached file is saved and the agent is told where it went", () =>
+  withSession(async ({ session, agent, root }) => {
+    await settle();
+
+    await session.handle(withImage("what does this say?"));
+
+    assertEquals(
+      Deno.readFileSync(join(root, "project", "attachments", "screenshot.png")).length,
+      PNG.length,
+    );
+    assertStringIncludes(agent().written.join("\n"), "attachments/screenshot.png");
+  }, { fetchAttachment: () => Promise.resolve(PNG) }));
+
+/** A message carrying only a file still says something: that a file arrived. */
+Deno.test("a message with no text but a file still starts a turn", () =>
+  withSession(async ({ session, thread, agent }) => {
+    await settle();
+    agent().runTurn();
+    await settle();
+
+    await session.handle(withImage(""));
+
+    assertEquals(thread.turns, [1, 2]);
+  }, { fetchAttachment: () => Promise.resolve(PNG) }));
+
+/**
+ * A model chosen for code is often text only. Handing it an image would fail
+ * the turn, so one that can see is asked to describe it instead.
+ */
+Deno.test("an image is described for a model that cannot see it", () =>
+  withSession(async ({ session, agent }) => {
+    await settle();
+
+    await session.handle(withImage("what does this error say?"));
+
+    const sent = agent().written.join("\n");
+    assertStringIncludes(sent, "it says ENOSPC");
+    // The image itself is not handed over, which is the whole point.
+    assertEquals(sent.includes('"images"'), false);
+  }, {
+    fetchAttachment: () => Promise.resolve(PNG),
+    describeImages: (_images, question) =>
+      Promise.resolve(`described: it says ENOSPC (${question})`),
+  }));
+
+/** Losing the description must not lose the message it came with. */
+Deno.test("a description that fails leaves the path and says what went wrong", () =>
+  withSession(async ({ session, agent, thread }) => {
+    await settle();
+
+    await session.handle(withImage("look at this"));
+
+    assertStringIncludes(thread.everything(), "the describing model refused");
+    assertStringIncludes(agent().written.join("\n"), "attachments/screenshot.png");
+  }, {
+    fetchAttachment: () => Promise.resolve(PNG),
+    describeImages: () => Promise.reject(new Error("the describing model refused")),
+  }));
+
+/** With no describer the images go over as they are, which is the normal case. */
+Deno.test("a model that can see is handed the image itself", () =>
+  withSession(async ({ session, agent }) => {
+    await settle();
+
+    await session.handle(withImage("what is this?"));
+
+    assertStringIncludes(agent().written.join("\n"), '"images"');
+  }, { fetchAttachment: () => Promise.resolve(PNG) }));

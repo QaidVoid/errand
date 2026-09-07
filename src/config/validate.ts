@@ -40,7 +40,7 @@ const KNOWN = {
     "timeouts",
   ],
   chat: ["token", "channelId", "allowedUserIds", "blockedUserIds", "operatorUserIds"],
-  agent: ["provider", "model", "credentialName", "credential"],
+  agent: ["provider", "model", "visionModel", "credentialName", "credential"],
   github: ["token", "userName", "userEmail"],
   sandbox: Object.keys(DEFAULTS.sandbox),
   output: Object.keys(DEFAULTS.output),
@@ -222,6 +222,7 @@ function validateAgent(raw: Record<string, unknown>, problems: Problems): AgentC
   return {
     provider: requiredString(source, "provider", "agent", problems),
     model: optionalString(source, "model", "agent", problems),
+    visionModel: optionalString(source, "visionModel", "agent", problems),
     credentialName: requiredString(source, "credentialName", "agent", problems),
     credential: requiredString(source, "credential", "agent", problems),
   };
