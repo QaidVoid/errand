@@ -38,7 +38,7 @@ function recordingPort(): { port: ThreadPort; seen: string[] } {
     setUsage: (...a) => note(...a),
     setBusy: (...a) => note(...a),
     upload: (name, bytes, caption) => (note(name, bytes.length, caption), Promise.resolve()),
-    archive: () => (note(), Promise.resolve()),
+    close: () => (note(), Promise.resolve()),
   };
   return { port, seen };
 }
@@ -66,7 +66,7 @@ const CALLS: [keyof ThreadPort, unknown[]][] = [
   ["setUsage", [USAGE]],
   ["setBusy", [true]],
   ["upload", [`${SECRET}.txt`, new Uint8Array([1, 2]), `here is ${SECRET}`]],
-  ["archive", []],
+  ["close", []],
 ];
 
 Deno.test("nothing a session reports carries the credential through", async () => {

@@ -383,9 +383,9 @@ export class ViewFanOut implements ThreadPort {
     await this.each("upload", (view) => view.upload(name, bytes, caption));
   }
 
-  async archive(): Promise<void> {
+  async close(): Promise<void> {
     this.ended = true;
     this.busy = false;
-    await this.each("archive", (view) => view.archive());
+    await this.each("close", (view) => view.close());
   }
 }

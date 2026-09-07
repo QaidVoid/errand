@@ -163,6 +163,13 @@ export interface ThreadPort {
   setBusy(busy: boolean): void;
   /** Uploads a file so it can be read or downloaded. */
   upload(name: string, bytes: Uint8Array, caption: string): Promise<void>;
-  /** Closes the thread when the session ends. */
-  archive(): Promise<void>;
+  /**
+   * Reports that the session has ended, so nothing shows it as still live.
+   *
+   * Deliberately not "close the thread". A chat thread that is archived when
+   * its session ends drops out of the sidebar, and the people who were in it
+   * then have to go hunting for it. The thread stays open and the last notice
+   * in it says what happened.
+   */
+  close(): Promise<void>;
 }

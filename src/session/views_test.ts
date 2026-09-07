@@ -49,7 +49,7 @@ function fakeView(name = "view") {
     setUsage: (usage) => seen.push(`usage:${usage.totalTokens}`),
     setBusy: (busy) => seen.push(`busy:${busy}`),
     upload: () => Promise.resolve(),
-    archive: () => Promise.resolve(),
+    close: () => Promise.resolve(),
   };
   return { name, seen, view };
 }
