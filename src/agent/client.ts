@@ -265,6 +265,17 @@ export class AgentClient {
     return this.send({ type: "follow_up", message });
   }
 
+  /**
+   * Switches the model the session runs on, from this turn onward.
+   *
+   * The conversation is kept: what was said stays said, and the next turn is
+   * answered by the model named here. That is the point of switching rather
+   * than starting again.
+   */
+  setModel(provider: string, modelId: string): boolean {
+    return this.send({ type: "set_model", provider, modelId });
+  }
+
   /** Asks the agent to stop the running turn. */
   abort(): boolean {
     return this.send({ type: "abort" });

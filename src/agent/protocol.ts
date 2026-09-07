@@ -50,12 +50,7 @@ export function usageOf(record: AgentRecord): Usage | undefined {
   };
 }
 
-/**
- * A command written to the agent.
- *
- * `set_model` is part of what the agent speaks and is typed here so that
- * switching is a decision rather than a retrofit. Nothing sends it yet.
- */
+/** A command written to the agent. */
 export type AgentCommand =
   | {
     type: "prompt";
