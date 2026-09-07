@@ -230,7 +230,7 @@ export class ViewFanOut implements ThreadPort {
           await view.postDiff(entry.path, entry.added, entry.removed, entry.body, entry.cause);
         } else if (entry.call === "attachment") {
           await view.post(`[attached ${entry.name}, ${entry.size} bytes]`);
-        }
+        } else if (entry.call === "delegation") view.noteDelegation(entry.delegated);
         // A usage entry is state, carried by `state` rather than replayed.
       }
 

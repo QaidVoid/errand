@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/denoland/deno/refs/heads/main/cli/schemas/config-file.v1.json",
+  "lock": false,
+  "imports": {
+    "@sveltejs/vite-plugin-svelte": "npm:@sveltejs/vite-plugin-svelte@^7.3.0",
+    "dompurify": "npm:dompurify@^3.4.15",
+    "highlight.js": "npm:highlight.js@^11.12.0",
+    "marked": "npm:marked@^18.0.11",
+    "svelte": "npm:svelte@^5.57.0",
+    "svelte-check": "npm:svelte-check@^4.7.6",
+    "typescript": "npm:typescript@^6.0.3",
+    "vite": "npm:vite@^8.2.2"
+  }
+}

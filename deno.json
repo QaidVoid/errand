@@ -13,9 +13,9 @@
     "ascii": "deno run --allow-read --allow-run scripts/check_ascii.ts",
     "build": "deno task build:web && deno task build:bin",
     "build:bin": "deno compile --allow-net --allow-env --allow-read --allow-write --allow-run --include dist/web --output dist/errand src/main.ts",
-    "build:web": "deno run -A --node-modules-dir npm:vite build web",
-    "dev:web": "deno run -A --node-modules-dir npm:vite web",
-    "check:web": "deno run -A --node-modules-dir npm:svelte-check --workspace web --threshold error",
+    "build:web": "cd web && deno run -A --node-modules-dir npm:vite build .",
+    "dev:web": "cd web && deno run -A --node-modules-dir npm:vite .",
+    "check:web": "cd web && deno run -A --node-modules-dir npm:svelte-check --threshold error",
     "check": "deno fmt --check && deno lint && deno check src/ scripts/ && deno task test && deno task ascii && deno task check:web",
     "errand": "deno run --allow-net --allow-env --allow-read --allow-write --allow-run src/main.ts"
   },
@@ -60,14 +60,6 @@
     "@std/assert": "jsr:@std/assert@^1.0.19",
     "@std/fs": "jsr:@std/fs@^1.0.24",
     "@std/path": "jsr:@std/path@^1.1.6",
-    "@sveltejs/vite-plugin-svelte": "npm:@sveltejs/vite-plugin-svelte@^7.3.0",
-    "discord.js": "npm:discord.js@^14.27.0",
-    "dompurify": "npm:dompurify@^3.4.15",
-    "highlight.js": "npm:highlight.js@^11.12.0",
-    "marked": "npm:marked@^18.0.11",
-    "svelte": "npm:svelte@^5.57.0",
-    "svelte-check": "npm:svelte-check@^4.7.6",
-    "typescript": "npm:typescript@^6.0.3",
-    "vite": "npm:vite@^8.2.2"
+    "discord.js": "npm:discord.js@^14.27.0"
   }
 }

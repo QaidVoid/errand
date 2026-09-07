@@ -269,3 +269,14 @@ Deno.test("restoring carries the turn numbering on", () => {
 
   assertEquals(fan.currentTurn, 3);
 });
+
+/** A resumed session must not lose the delegations it made. */
+Deno.test("a delegation is replayed to a view that attaches later", async () => {
+  const fan = fanOut();
+  fan.noteDelegation({ question: "what failed?", model: "flash", describes: "call t1" });
+
+  const late = fakeView();
+  await fan.attach(late.view);
+
+  assertEquals(late.seen, ["turn:0", "delegated:flash"]);
+});

@@ -115,6 +115,11 @@ deno task dev:web   # the interface against a running daemon
 its own runtime, with what it may do compiled in, so a host that runs it needs
 neither a checkout nor deno.
 
+The interface keeps its dependencies in `web/deno.json` rather than the root
+one. They are build tools, and sharing an import map put every one of them
+inside the daemon's binary: about a hundred megabytes of bundler that never
+runs at runtime.
+
 The daemon runs under an explicit permission set rather than with the whole
 machine available to it, which is visible in `deno task start`.
 
