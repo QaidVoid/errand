@@ -15,6 +15,7 @@ import {
   type Config,
   ConfigError,
   DEFAULTS,
+  type DelegateConfig,
   type GithubConfig,
   type LimitsConfig,
   type NetworkMode,
@@ -44,7 +45,8 @@ const KNOWN = {
     "timeouts",
   ],
   chat: ["token", "channelId", "allowedUserIds", "blockedUserIds", "operatorUserIds"],
-  agent: ["provider", "model", "visionModel", "credentialName", "credential"],
+  agent: ["provider", "model", "visionModel", "credentialName", "credential", "delegate"],
+  delegate: ["model", "perTurn", "deadlineMs", "baseUrl"],
   github: ["token", "userName", "userEmail"],
   sandbox: Object.keys(DEFAULTS.sandbox),
   shutdown: ["allowedUserIds"],
@@ -231,6 +233,7 @@ function validateAgent(raw: Record<string, unknown>, problems: Problems): AgentC
     visionModel: optionalString(source, "visionModel", "agent", problems),
     credentialName: requiredString(source, "credentialName", "agent", problems),
     credential: requiredString(source, "credential", "agent", problems),
+    delegate: validateDelegate(source, problems),
   };
 }
 
@@ -252,6 +255,29 @@ function validateGithub(
     token: requiredString(source, "token", "github", problems),
     userName: requiredString(source, "userName", "github", problems),
     userEmail: requiredString(source, "userEmail", "github", problems),
+  };
+}
+
+/**
+ * Reads the delegation settings, which the whole section may omit.
+ *
+ * Naming no model is the same as having no section: there is nothing to ask,
+ * so nothing is offered to the agent.
+ */
+function validateDelegate(
+  source: Record<string, unknown>,
+  problems: Problems,
+): DelegateConfig | undefined {
+  if (source.delegate === undefined) return undefined;
+  const section_ = section(source, "delegate");
+  rejectUnknown(section_, KNOWN.delegate, "agent.delegate", problems);
+  const defaults = DEFAULTS.delegate;
+
+  return {
+    model: requiredString(section_, "model", "agent.delegate", problems),
+    perTurn: positive(section_, "perTurn", defaults.perTurn, "agent.delegate", problems),
+    deadlineMs: positive(section_, "deadlineMs", defaults.deadlineMs, "agent.delegate", problems),
+    baseUrl: optionalString(section_, "baseUrl", "agent.delegate", problems),
   };
 }
 

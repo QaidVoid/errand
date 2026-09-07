@@ -40,6 +40,28 @@ export interface ChatConfig {
   operatorUserIds: string[];
 }
 
+/**
+ * A cheaper model the session's model may ask about one artefact.
+ *
+ * Absent means no delegation at all: the session's own model does everything,
+ * which is what it did before this existed.
+ */
+export interface DelegateConfig {
+  /** The model asked. Must be one the provider serves under the same key. */
+  model: string;
+  /** How many delegations one turn may make before the rest stay at home. */
+  perTurn: number;
+  /** How long one delegation may take before it is abandoned. */
+  deadlineMs: number;
+  /**
+   * Where the provider is reached, when the model store does not say.
+   *
+   * Read from the agent's own model store by default, so the same endpoint
+   * that serves the session is the one asked.
+   */
+  baseUrl: string | undefined;
+}
+
 /** Which model the agent talks to, and the credential it reaches it with. */
 export interface AgentConfig {
   /** Provider id, such as `anthropic` or `zai-coding-cn`. */
@@ -57,6 +79,8 @@ export interface AgentConfig {
   credentialName: string;
   /** The credential value. Secret. */
   credential: string;
+  /** A cheaper model to ask about one artefact, or undefined for none. */
+  delegate: DelegateConfig | undefined;
 }
 
 /**
@@ -260,6 +284,10 @@ export const DEFAULTS = {
     maxLiveSessions: 4,
     maxQueueLength: 32,
     maxQueueWaitMs: 900_000,
+  },
+  delegate: {
+    perTurn: 8,
+    deadlineMs: 60_000,
   },
   web: {
     host: "127.0.0.1",
