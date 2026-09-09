@@ -168,6 +168,13 @@
             "none"
           ]
         },
+        "egressPorts": {
+          "description": "Ports a session may open outbound, when the network is not `none`. The default is HTTPS alone, which is all a model provider needs. Adding a port widens what a session can reach: 80 lets it speak plaintext HTTP, so a mirror or a redirect that has not moved to TLS resolves. Enforced by the generated policy, so it holds under the bailey backend; podman bounds the network by namespace rather than by port.",
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
         "image": {
           "description": "Container image the podman backend runs. Inert under bailey.",
           "type": "string"

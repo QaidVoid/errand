@@ -15,7 +15,23 @@ Use it when you would rather the session saw a filesystem you assembled than the
 host's.
 
 Both hold a session to one project directory and one state directory, and give
-it network access only to reach the model provider.
+it network access only to reach the model provider, over HTTPS. If a session
+needs another outbound port, name it under `sandbox.egressPorts`:
+
+```json
+{
+  "sandbox": {
+    "network": "restricted",
+    "egressPorts": [80, 443]
+  }
+}
+```
+
+The default is `[443]`, which is all a provider needs. Adding 80 lets a session
+speak plaintext HTTP, for a mirror or a redirect that has not moved to TLS. The
+bailey backend enforces this in the generated policy; podman bounds the network
+by namespace rather than by port, so the list is inert there. A session with
+`network` set to `none` opens nothing, whatever ports are named.
 
 ## What it says at startup
 

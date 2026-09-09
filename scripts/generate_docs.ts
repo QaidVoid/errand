@@ -312,6 +312,7 @@ function jsonType(type: string, sections: Section[]): Record<string, unknown> {
   if (bare === "number") return { type: "number" };
   if (bare === "boolean") return { type: "boolean" };
   if (bare === "string[]") return { type: "array", items: { type: "string" } };
+  if (bare === "number[]") return { type: "array", items: { type: "number" } };
   if (bare === "Record<string, string>") {
     return { type: "object", additionalProperties: { type: "string" } };
   }

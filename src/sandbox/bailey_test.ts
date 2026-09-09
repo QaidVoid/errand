@@ -9,6 +9,7 @@ const CONFIG: SandboxConfig = {
   policyExtra: undefined,
   pathExtra: undefined,
   env: undefined,
+  egressPorts: [443],
 };
 
 function launch(overrides: Partial<SandboxLaunch> = {}): SandboxLaunch {

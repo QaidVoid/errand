@@ -128,6 +128,19 @@ Deno.test("outbound https is allowed, and no network means no egress at all", ()
   assertEquals(offline.includes("egress_allow"), false);
 });
 
+Deno.test("configured ports become the egress allowlist, in order", () => {
+  assertStringIncludes(
+    policy({ egressPorts: [80, 443] }),
+    'egress_allow = [{ host = "*", port = 80 }, { host = "*", port = 443 }]',
+  );
+});
+
+/** A session with no network opens nothing, whatever ports were named. */
+Deno.test("ports do not grant egress to a session that has no network", () => {
+  const offline = policy({ network: "none", egressPorts: [80, 443] });
+  assertEquals(offline.includes("egress_allow"), false);
+});
+
 Deno.test("the policy lives in the state directory, never in the project", () => {
   const written = policyPath(launch());
 

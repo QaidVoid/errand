@@ -82,6 +82,7 @@ What a session may consume, and what the backend enforces.
 | `backend` | `SandboxBackend` | `"bailey"` | Which backend confines sessions. |
 | `requireFullEnforcement` | `boolean` | `true` | Refuse to start when the backend cannot enforce every configured guarantee on this host, rather than reporting the gap and continuing. |
 | `network` | `NetworkMode` | `"restricted"` | Network exposure granted to a session. |
+| `egressPorts` | `number[]` | `[443]` | Ports a session may open outbound, when the network is not `none`. The default is HTTPS alone, which is all a model provider needs. Adding a port widens what a session can reach: 80 lets it speak plaintext HTTP, so a mirror or a redirect that has not moved to TLS resolves. Enforced by the generated policy, so it holds under the bailey backend; podman bounds the network by namespace rather than by port. |
 | `image` | `string` | `"localhost/errand-agent:latest"` | Container image the podman backend runs. Inert under bailey. |
 | `memory` | `string` | `"4g"` | Memory ceiling per session, in size syntax such as `4g`. |
 | `cpus` | `number` | `2` | CPU ceiling per session, in cores. |

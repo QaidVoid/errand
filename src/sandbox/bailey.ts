@@ -251,6 +251,7 @@ export class BaileySandbox implements Sandbox {
       policyContents({
         launch,
         network: this.config.network,
+        egressPorts: this.config.egressPorts,
         runtime,
         fileMax: this.config.fileMax,
         resolvConf: resolv,

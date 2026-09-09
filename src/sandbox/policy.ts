@@ -115,6 +115,8 @@ export function policyPath(launch: SandboxLaunch): string {
 export function policyContents(options: {
   launch: SandboxLaunch;
   network: NetworkMode;
+  /** Ports a session may open outbound. Empty falls back to HTTPS alone. */
+  egressPorts?: number[] | undefined;
   runtime: AgentRuntime;
   fileMax: string;
   resolvConf: string;
@@ -206,7 +208,9 @@ export function policyContents(options: {
   ];
 
   if (network !== "none") {
-    lines.push("", "[network]", 'egress_allow = [{ host = "*", port = 443 }]');
+    const openPorts = options.egressPorts?.length ? options.egressPorts : [443];
+    const allow = openPorts.map((port) => `{ host = "*", port = ${port} }`).join(", ");
+    lines.push("", "[network]", `egress_allow = [${allow}]`);
   }
   return `${lines.join("\n")}\n`;
 }

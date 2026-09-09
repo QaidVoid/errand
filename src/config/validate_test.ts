@@ -322,3 +322,28 @@ Deno.test("a relative directory on the path is refused", () => {
     "must be an absolute path",
   );
 });
+
+Deno.test("the egress ports default to https alone", () => {
+  assertEquals(validateConfig(valid()).sandbox.egressPorts, [443]);
+});
+
+Deno.test("configured egress ports are read in order", () => {
+  assertEquals(
+    validateConfig(valid({ sandbox: { egressPorts: [80, 443] } })).sandbox.egressPorts,
+    [80, 443],
+  );
+});
+
+Deno.test("a port outside the socket range is refused", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { egressPorts: [80, 70000] } })).join("\n"),
+    "not a port between 1 and 65535",
+  );
+});
+
+Deno.test("an empty egress list is refused rather than silencing the network", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { egressPorts: [] } })).join("\n"),
+    "names no port",
+  );
+});

@@ -187,6 +187,41 @@ function size(
   return value.trim();
 }
 
+/**
+ * Reads a list of outbound ports.
+ *
+ * A port is a whole number in the range a socket accepts, so anything outside
+ * it is refused rather than clamped. An empty list would leave a session that
+ * has a network unable to open anything, which is a mistake worth naming.
+ */
+function ports(
+  source: Record<string, unknown>,
+  key: string,
+  fallback: number[],
+  where: string,
+  problems: Problems,
+): number[] {
+  const value = source[key];
+  if (value === undefined) return fallback;
+  if (!Array.isArray(value)) {
+    problems.add(`${where}.${key} must be a list of port numbers`);
+    return fallback;
+  }
+  const found: number[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "number" || !Number.isInteger(entry) || entry < 1 || entry > 65535) {
+      problems.add(`${where}.${key} contains ${entry}, which is not a port between 1 and 65535`);
+      continue;
+    }
+    found.push(entry);
+  }
+  if (found.length === 0) {
+    problems.add(`${where}.${key} names no port; remove it for the default, or name one`);
+    return fallback;
+  }
+  return found;
+}
+
 function flag(
   source: Record<string, unknown>,
   key: string,
@@ -430,6 +465,7 @@ function validateSandbox(raw: Record<string, unknown>, problems: Problems): Sand
       (BACKENDS.includes(backend as SandboxBackend) ? backend : defaults.backend) as SandboxBackend,
     network:
       (NETWORKS.includes(network as NetworkMode) ? network : defaults.network) as NetworkMode,
+    egressPorts: ports(source, "egressPorts", [...defaults.egressPorts], "sandbox", problems),
     image: optionalString(source, "image", "sandbox", problems) ?? defaults.image,
     requireFullEnforcement: flag(
       source,

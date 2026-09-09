@@ -142,6 +142,16 @@ export interface SandboxConfig {
   requireFullEnforcement: boolean;
   /** Network exposure granted to a session. */
   network: NetworkMode;
+  /**
+   * Ports a session may open outbound, when the network is not `none`.
+   *
+   * The default is HTTPS alone, which is all a model provider needs. Adding a
+   * port widens what a session can reach: 80 lets it speak plaintext HTTP, so
+   * a mirror or a redirect that has not moved to TLS resolves. Enforced by the
+   * generated policy, so it holds under the bailey backend; podman bounds the
+   * network by namespace rather than by port.
+   */
+  egressPorts: number[];
   /** Container image the podman backend runs. Inert under bailey. */
   image: string;
   /** Memory ceiling per session, in size syntax such as `4g`. */
@@ -318,6 +328,7 @@ export const DEFAULTS = {
     backend: "bailey" as SandboxBackend,
     requireFullEnforcement: true,
     network: "restricted" as NetworkMode,
+    egressPorts: [443],
     image: "localhost/errand-agent:latest",
     memory: "4g",
     cpus: 2,
