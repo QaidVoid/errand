@@ -130,6 +130,14 @@ Deno.test("the agent is started with its provider, model, and session directory"
   assertEquals(args.includes("--continue"), false);
 });
 
+Deno.test("hiding the host address asks the backend for a private namespace", () => {
+  const plain = baileyArgs(CONFIG, launch(), "/p.toml");
+  assertEquals(plain.includes("--proxy-net"), false);
+
+  const hidden = baileyArgs({ ...CONFIG, hideHostAddress: true }, launch(), "/p.toml");
+  assertStringIncludes(hidden.join(" "), "--isolate --proxy-net --config");
+});
+
 Deno.test("a session with no network runs under the offline profile", () => {
   const args = baileyArgs({ ...CONFIG, network: "none" }, launch(), "/p.toml");
   assertStringIncludes(args.join(" "), "--profile untrusted");

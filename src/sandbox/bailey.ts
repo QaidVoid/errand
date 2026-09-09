@@ -131,6 +131,10 @@ export function baileyArgs(
   return [
     "run",
     "--isolate",
+    // A session shares the host network namespace under this backend, so its
+    // address and MAC are visible unless egress is routed through a private
+    // one. Named only when asked, so the default stays the plain path.
+    ...(config.hideHostAddress ? ["--proxy-net"] : []),
     "--config",
     policy,
     "--profile",

@@ -207,6 +207,10 @@
           "description": "How long a sandbox may take to stop before it is killed.",
           "type": "number"
         },
+        "hideHostAddress": {
+          "description": "Hide the host's network identity from a session, when it has a network. A session shares the host's network namespace by default, so it can read the host address, the MAC, and the ARP neighbours. With this set, the bailey backend runs egress through a private namespace instead, so a session sees a synthetic address and MAC. Egress is IPv4 only there, and the ports a session may open are unchanged. The podman backend already gives each session its own network, so this does not apply to it.",
+          "type": "boolean"
+        },
         "policyExtra": {
           "description": "Paths granted to a session on top of what the daemon already grants. Additive only. The generated policy still places the project and the state directory, still bounds the environment, and still clears the backend's own profile first; this names more that a session may reach, and can take nothing away. Every path is absolute, since a relative one in a policy means nothing. What is granted here is reported at startup, so the enforcement report never describes a tighter boundary than the one actually applied.",
           "type": "object",

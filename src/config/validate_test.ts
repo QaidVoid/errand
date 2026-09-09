@@ -347,3 +347,14 @@ Deno.test("an empty egress list is refused rather than silencing the network", (
     "names no port",
   );
 });
+
+Deno.test("the host address is shown to a session by default", () => {
+  assertEquals(validateConfig(valid()).sandbox.hideHostAddress, false);
+});
+
+Deno.test("hiding the host address is read as a flag", () => {
+  assertEquals(
+    validateConfig(valid({ sandbox: { hideHostAddress: true } })).sandbox.hideHostAddress,
+    true,
+  );
+});

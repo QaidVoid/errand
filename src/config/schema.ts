@@ -173,6 +173,17 @@ export interface SandboxConfig {
   diskCheckMs: number;
   /** How long a sandbox may take to stop before it is killed. */
   gracePeriodMs: number;
+  /**
+   * Hide the host's network identity from a session, when it has a network.
+   *
+   * A session shares the host's network namespace by default, so it can read
+   * the host address, the MAC, and the ARP neighbours. With this set, the
+   * bailey backend runs egress through a private namespace instead, so a
+   * session sees a synthetic address and MAC. Egress is IPv4 only there, and
+   * the ports a session may open are unchanged. The podman backend already
+   * gives each session its own network, so this does not apply to it.
+   */
+  hideHostAddress: boolean;
   /** Paths granted on top of the generated policy, or undefined for none. */
   policyExtra: PolicyExtraConfig | undefined;
   /**
@@ -329,6 +340,7 @@ export const DEFAULTS = {
     requireFullEnforcement: true,
     network: "restricted" as NetworkMode,
     egressPorts: [443],
+    hideHostAddress: false,
     image: "localhost/errand-agent:latest",
     memory: "4g",
     cpus: 2,

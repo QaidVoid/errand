@@ -466,6 +466,13 @@ function validateSandbox(raw: Record<string, unknown>, problems: Problems): Sand
     network:
       (NETWORKS.includes(network as NetworkMode) ? network : defaults.network) as NetworkMode,
     egressPorts: ports(source, "egressPorts", [...defaults.egressPorts], "sandbox", problems),
+    hideHostAddress: flag(
+      source,
+      "hideHostAddress",
+      defaults.hideHostAddress,
+      "sandbox",
+      problems,
+    ),
     image: optionalString(source, "image", "sandbox", problems) ?? defaults.image,
     requireFullEnforcement: flag(
       source,
