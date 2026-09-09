@@ -165,6 +165,26 @@ export interface SandboxConfig {
   gracePeriodMs: number;
   /** Paths granted on top of the generated policy, or undefined for none. */
   policyExtra: PolicyExtraConfig | undefined;
+  /**
+   * Directories added to a session's PATH, or undefined for none.
+   *
+   * Named after the agent's own wrappers and ahead of the system directories,
+   * so a program named here is the one a session finds. This adds nothing a
+   * session may reach: a directory that is not also granted under
+   * `PolicyExtraConfig` is a name on a path leading nowhere. The podman
+   * backend takes its PATH from the image and ignores this.
+   */
+  pathExtra: string[] | undefined;
+  /**
+   * Variables set in every session's environment, or undefined for none.
+   *
+   * The environment is built rather than inherited, so a toolchain that reads
+   * one has no other way to be told. `PATH` and `HOME` are refused, since the
+   * daemon sets both to paths the policy places, and so is the name carrying
+   * the provider credential. A name the daemon sets itself keeps the daemon's
+   * value. Every value reaches the agent, so nothing secret belongs here.
+   */
+  env: Record<string, string> | undefined;
 }
 
 /**

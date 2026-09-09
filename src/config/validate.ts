@@ -31,6 +31,12 @@ import {
 const BACKENDS: SandboxBackend[] = ["podman", "bailey"];
 const NETWORKS: NetworkMode[] = ["restricted", "none"];
 
+/** What a variable may be called, which is what a shell would accept. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Variables the policy sets itself, and so refuses to take from a file. */
+const SET_BY_THE_POLICY = ["PATH", "HOME"];
+
 const KNOWN = {
   root: [
     // Not a setting: it is how an editor finds the schema to check the file
@@ -59,7 +65,7 @@ const KNOWN = {
   agent: ["provider", "model", "visionModel", "credentialName", "credential", "delegate"],
   delegate: ["model", "perTurn", "deadlineMs", "baseUrl"],
   github: ["token", "userName", "userEmail"],
-  sandbox: [...Object.keys(DEFAULTS.sandbox), "policyExtra"],
+  sandbox: [...Object.keys(DEFAULTS.sandbox), "policyExtra", "pathExtra", "env"],
   policyExtra: ["read", "write", "execute"],
   shutdown: ["allowedUserIds"],
   web: ["host", "port", "observer", "publicUrl"],
@@ -355,6 +361,56 @@ function validatePolicyExtra(
   return { read, write, execute };
 }
 
+/** Reads the directories added to a session's PATH, if any. */
+function validatePathExtra(
+  source: Record<string, unknown>,
+  problems: Problems,
+): string[] | undefined {
+  if (source.pathExtra === undefined) return undefined;
+  const paths = pathList(source, "pathExtra", "sandbox", problems);
+  if (paths.length === 0 && problems.found.length === 0) {
+    problems.add("sandbox.pathExtra is set but names nothing; remove it, or name a directory");
+  }
+  return paths;
+}
+
+/**
+ * Reads the variables set in every session's environment, if any.
+ *
+ * `PATH` and `HOME` are refused rather than merged: the policy sets both to
+ * paths it places, and a session pointed at anything else would be naming
+ * paths no grant covers.
+ */
+function validateSandboxEnv(
+  source: Record<string, unknown>,
+  problems: Problems,
+): Record<string, string> | undefined {
+  if (source.env === undefined) return undefined;
+  const raw = section(source, "env");
+
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    if (!ENV_NAME.test(name)) {
+      problems.add(`sandbox.env.${name} is not a variable name`);
+      continue;
+    }
+    if (SET_BY_THE_POLICY.includes(name)) {
+      problems.add(`sandbox.env must not set ${name}, which the policy sets itself`);
+      continue;
+    }
+    if (typeof value !== "string") {
+      problems.add(`sandbox.env.${name} must be a string`);
+      continue;
+    }
+    env[name] = value;
+  }
+
+  if (Object.keys(env).length === 0 && problems.found.length === 0) {
+    problems.add("sandbox.env is set but names nothing; remove it, or name a variable");
+  }
+  return env;
+}
+
 function validateSandbox(raw: Record<string, unknown>, problems: Problems): SandboxConfig {
   const source = section(raw, "sandbox");
   rejectUnknown(source, KNOWN.sandbox, "sandbox", problems);
@@ -390,6 +446,8 @@ function validateSandbox(raw: Record<string, unknown>, problems: Problems): Sand
     diskCheckMs: positive(source, "diskCheckMs", defaults.diskCheckMs, "sandbox", problems),
     gracePeriodMs: positive(source, "gracePeriodMs", defaults.gracePeriodMs, "sandbox", problems),
     policyExtra: validatePolicyExtra(source, problems),
+    pathExtra: validatePathExtra(source, problems),
+    env: validateSandboxEnv(source, problems),
   };
 }
 
@@ -529,6 +587,14 @@ export function validateConfig(parsed: unknown): Config {
     limits: validateLimits(raw, problems),
     timeouts: validateTimeouts(raw, problems),
   };
+
+  // Asked once both sections are read, since the name is the operator's own.
+  // Shadowing it would authenticate the agent with whatever was set here.
+  if (config.sandbox.env?.[config.agent.credentialName] !== undefined) {
+    problems.add(
+      `sandbox.env must not set ${config.agent.credentialName}, which carries the provider credential`,
+    );
+  }
 
   if (config.projectRoot.length > 0 && config.projectRoot === config.stateDir) {
     problems.add("projectRoot and stateDir must be different directories");

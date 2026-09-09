@@ -312,6 +312,9 @@ function jsonType(type: string, sections: Section[]): Record<string, unknown> {
   if (bare === "number") return { type: "number" };
   if (bare === "boolean") return { type: "boolean" };
   if (bare === "string[]") return { type: "array", items: { type: "string" } };
+  if (bare === "Record<string, string>") {
+    return { type: "object", additionalProperties: { type: "string" } };
+  }
   if (bare === "SandboxBackend") return { type: "string", enum: ["podman", "bailey"] };
   if (bare === "NetworkMode") return { type: "string", enum: ["restricted", "none"] };
 

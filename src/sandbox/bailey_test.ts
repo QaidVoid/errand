@@ -4,7 +4,12 @@ import { createLogger } from "../log.ts";
 import { type SandboxLaunch, SandboxUnavailableError } from "./backend.ts";
 import { baileyArgs, BaileySandbox, parseDoctor, type Run, sessionEnvironment } from "./bailey.ts";
 
-const CONFIG: SandboxConfig = { ...DEFAULTS.sandbox, policyExtra: undefined };
+const CONFIG: SandboxConfig = {
+  ...DEFAULTS.sandbox,
+  policyExtra: undefined,
+  pathExtra: undefined,
+  env: undefined,
+};
 
 function launch(overrides: Partial<SandboxLaunch> = {}): SandboxLaunch {
   return {
@@ -197,5 +202,23 @@ Deno.test("extra grants are named in what the backend reports", async () => {
   assertStringIncludes(said, "grants 2 path(s) beyond the generated policy");
   assertStringIncludes(said, "1 of them writable");
   assertStringIncludes(said, "/srv/output");
+  await Deno.remove(root, { recursive: true });
+});
+
+/** Names only: a value is the operator's own and may be anything. */
+Deno.test("variables set by configuration are named in what the backend reports", async () => {
+  const root = await Deno.makeTempDir();
+  const { run } = fakeRun();
+  const sandbox = new BaileySandbox(
+    { ...CONFIG, env: { CARGO_HOME: "/var/cache/cargo" } },
+    createLogger({}, () => {}),
+    root,
+    run,
+  );
+
+  const said = (await sandbox.probe()).notes.join("\n");
+
+  assertStringIncludes(said, "sessions are given CARGO_HOME from configuration");
+  assertEquals(said.includes("/var/cache/cargo"), false);
   await Deno.remove(root, { recursive: true });
 });

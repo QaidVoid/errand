@@ -126,9 +126,21 @@ export function policyContents(options: {
    * package cache is the case this exists for.
    */
   extra?: PolicyExtraConfig | undefined;
+  /**
+   * Variables the operator set, for a toolchain that reads one.
+   *
+   * A name the daemon already passes is left alone: the credential and the
+   * GitHub token are plumbing rather than settings, and a policy that let a
+   * file shadow either would decide what the agent authenticates as.
+   */
+  env?: Record<string, string> | undefined;
+  /** Directories the operator added to the session's PATH. */
+  pathExtra?: string[] | undefined;
 }): string {
   const { launch, network, runtime, fileMax, resolvConf } = options;
   const extra = options.extra ?? { read: [], write: [], execute: [] };
+  const operatorEnv = Object.entries(options.env ?? {})
+    .filter(([name]) => launch.env[name] === undefined);
 
   // The project and the session state are placed at fixed paths, so the agent
   // sees the same two under any backend and never a host path.
@@ -149,7 +161,9 @@ export function policyContents(options: {
   ];
 
   // Ahead of everything, so a wrapper stands in for the program it names.
-  const path = [AGENT_BIN, ...runtime.pathEntries, ...SANDBOX_PATH];
+  // The operator's own directories sit ahead of the system ones: a toolchain
+  // named on purpose is the one a session should find, not the host's copy.
+  const path = [AGENT_BIN, ...runtime.pathEntries, ...(options.pathExtra ?? []), ...SANDBOX_PATH];
 
   const lines = [
     "# Generated per session by errand. Do not edit.",
@@ -177,7 +191,13 @@ export function policyContents(options: {
     // own world from the caller's HOME, so pointing that at a placed path makes
     // it try to create the path on the host, which fails. Set in the policy, it
     // reaches the target after the pivot, where the path exists.
-    `set = { PATH = ${quoted(path.join(":"))}, HOME = ${quoted(AGENT_HOME)} }`,
+    `set = { ${
+      [
+        `PATH = ${quoted(path.join(":"))}`,
+        `HOME = ${quoted(AGENT_HOME)}`,
+        ...operatorEnv.map(([name, value]) => `${name} = ${quoted(value)}`),
+      ].join(", ")
+    } }`,
     "",
     // An rlimit rather than a cgroup control, so it holds on a host with no
     // delegated cgroup, which is the case this backend most often runs on.

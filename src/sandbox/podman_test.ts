@@ -15,6 +15,8 @@ const CONFIG: SandboxConfig = {
   ...DEFAULTS.sandbox,
   backend: "podman",
   policyExtra: undefined,
+  pathExtra: undefined,
+  env: undefined,
 };
 
 function launch(overrides: Partial<SandboxLaunch> = {}): SandboxLaunch {
@@ -130,6 +132,26 @@ Deno.test("the credential crosses as an environment variable", () => {
   const args = podmanArgs(CONFIG, launch()).join(" ");
   assertStringIncludes(args, "--env ZAI_API_KEY=provider-secret");
   assertStringIncludes(args, "--env HOME=/state/home");
+});
+
+Deno.test("variables set by configuration cross into the container", () => {
+  const config = { ...CONFIG, env: { CARGO_HOME: "/var/cache/cargo" } };
+  assertStringIncludes(
+    podmanArgs(config, launch()).join(" "),
+    "--env CARGO_HOME=/var/cache/cargo",
+  );
+});
+
+/** The credential is plumbing, so a file cannot decide what the agent uses. */
+Deno.test("a variable the daemon sets keeps the daemon's value", () => {
+  const config = { ...CONFIG, env: { ZAI_API_KEY: "not-the-real-one" } };
+  const args = podmanArgs(config, launch());
+
+  assertEquals(
+    args.lastIndexOf("ZAI_API_KEY=provider-secret") >
+      args.lastIndexOf("ZAI_API_KEY=not-the-real-one"),
+    true,
+  );
 });
 
 Deno.test("podman that is not rootless cannot run this backend", async () => {

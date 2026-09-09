@@ -220,6 +220,18 @@ export class BaileySandbox implements Sandbox {
       }
     }
 
+    const onPath = this.config.pathExtra ?? [];
+    if (onPath.length > 0) {
+      notes.push(`sessions find programs in ${onPath.join(", ")}, ahead of the system copies`);
+    }
+
+    // Names only. A value is the operator's own and may be anything, and a
+    // report is read in places a configuration file is not.
+    const env = this.config.env;
+    if (env !== undefined && Object.keys(env).length > 0) {
+      notes.push(`sessions are given ${Object.keys(env).sort().join(", ")} from configuration`);
+    }
+
     return { backend: "bailey", gaps, notes };
   }
 
@@ -243,6 +255,8 @@ export class BaileySandbox implements Sandbox {
         fileMax: this.config.fileMax,
         resolvConf: resolv,
         extra: this.config.policyExtra,
+        env: this.config.env,
+        pathExtra: this.config.pathExtra,
       }),
     );
 

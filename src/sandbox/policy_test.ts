@@ -202,3 +202,48 @@ Deno.test("granting nothing changes nothing", () => {
 
   assertEquals(empty, plain);
 });
+
+Deno.test("variables set by configuration reach the policy", () => {
+  const policy = policyContents({
+    launch: launch(),
+    network: "restricted",
+    runtime: RUNTIME,
+    fileMax: "1g",
+    resolvConf: "/state/resolv.conf",
+    env: { CARGO_HOME: "/var/cache/cargo" },
+  });
+
+  assertStringIncludes(policy, 'CARGO_HOME = "/var/cache/cargo"');
+  assertStringIncludes(policy, 'HOME = "/state/home"');
+});
+
+/** The credential and the GitHub token are plumbing, not settings. */
+Deno.test("a variable the daemon passes cannot be shadowed by configuration", () => {
+  const policy = policyContents({
+    launch: launch(),
+    network: "restricted",
+    runtime: RUNTIME,
+    fileMax: "1g",
+    resolvConf: "/state/resolv.conf",
+    env: { ZAI_API_KEY: "not-the-real-one" },
+  });
+
+  assertEquals(policy.includes("not-the-real-one"), false);
+});
+
+/** A toolchain named on purpose is the one a session should find. */
+Deno.test("directories added by configuration lead the system path", () => {
+  const policy = policyContents({
+    launch: launch(),
+    network: "restricted",
+    runtime: RUNTIME,
+    fileMax: "1g",
+    resolvConf: "/state/resolv.conf",
+    pathExtra: ["/opt/toolchains/bin"],
+  });
+
+  const path = /PATH = "([^"]+)"/.exec(policy)?.[1]?.split(":") ?? [];
+
+  assertEquals(path.indexOf("/opt/toolchains/bin") < path.indexOf("/usr/bin"), true);
+  assertEquals(path[0], "/state/home/bin");
+});

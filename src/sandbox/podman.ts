@@ -121,6 +121,11 @@ export function podmanArgs(config: SandboxConfig, launch: SandboxLaunch): string
     `HOME=${AGENT_HOME}`,
   ];
 
+  // Ahead of the daemon's own, so a name it sets keeps the daemon's value.
+  for (const [key, value] of Object.entries(config.env ?? {})) {
+    args.push("--env", `${key}=${value}`);
+  }
+
   for (const [key, value] of Object.entries(launch.env)) {
     args.push("--env", `${key}=${value}`);
   }

@@ -83,6 +83,58 @@ There is deliberately no way to supply a whole policy file. That would let the
 report claim guarantees the file does not make; editing `src/sandbox/policy.ts`
 is the honest way to change the floor itself.
 
+## Telling a toolchain where to look
+
+A granted path is often not enough on its own, because the environment is built
+rather than inherited: a variable the daemon does not set does not exist inside
+a session. `sandbox.env` names the ones that should:
+
+```json
+{
+  "sandbox": {
+    "env": { "CARGO_HOME": "/var/cache/errand/cargo" },
+    "policyExtra": {
+      "read": ["/var/cache/errand/cargo"],
+      "write": ["/var/cache/errand/cargo"],
+      "execute": []
+    }
+  }
+}
+```
+
+That is the shape of a cache shared between sessions and kept off your own:
+sessions warm one directory that is nobody's real cache, rather than
+redownloading into a state directory that is thrown away with the session.
+Setting the variable and granting the path are two steps on purpose, since a
+variable does not widen the boundary and a grant does.
+
+A granted directory is still not on a session's PATH, so a program in it is
+found only by its full path. `sandbox.pathExtra` puts it there:
+
+```json
+{
+  "sandbox": {
+    "pathExtra": ["/opt/toolchains/bin"],
+    "policyExtra": {
+      "read": ["/opt/toolchains"],
+      "execute": ["/opt/toolchains/bin"],
+      "write": []
+    }
+  }
+}
+```
+
+Those directories sit after the agent's own wrappers and ahead of `/usr/bin`,
+so a toolchain named on purpose is the one a session finds rather than the
+host's copy. Naming one grants nothing: a directory that is not also granted is
+a name on a path leading nowhere.
+
+`PATH` and `HOME` are refused, because the policy sets both to paths it places,
+and so is the name carrying the provider credential. A name the daemon sets
+itself keeps the daemon's value, so nothing here can decide what the agent
+authenticates as. The names given are reported at startup; the values are not,
+and a value reaches the agent, so nothing secret belongs here.
+
 ## What is not confined
 
 - **The daemon itself.** It holds the chat token and starts sandboxes.

@@ -259,3 +259,66 @@ Deno.test("a misspelled grant list is refused like any other setting", () => {
     "sandbox.policyExtra.reed is not a setting",
   );
 });
+
+Deno.test("no environment section is the same as no variables", () => {
+  assertEquals(validateConfig(valid()).sandbox.env, undefined);
+});
+
+Deno.test("variables named in configuration are read", () => {
+  const env = validateConfig(valid({
+    sandbox: { env: { CARGO_HOME: "/var/cache/cargo", RUSTUP_HOME: "/opt/rustup" } },
+  })).sandbox.env;
+
+  assertEquals(env, { CARGO_HOME: "/var/cache/cargo", RUSTUP_HOME: "/opt/rustup" });
+});
+
+/** The policy sets both, to paths it places. */
+Deno.test("a variable the policy sets itself is refused", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { env: { HOME: "/somewhere" } } })).join("\n"),
+    "must not set HOME",
+  );
+});
+
+/** Shadowing it would authenticate the agent with whatever was set here. */
+Deno.test("the variable carrying the credential is refused", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { env: { ANTHROPIC_API_KEY: "not-the-real-one" } } })).join("\n"),
+    "carries the provider credential",
+  );
+});
+
+Deno.test("a name no shell would accept is refused", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { env: { "CARGO HOME": "/var/cache" } } })).join("\n"),
+    "is not a variable name",
+  );
+});
+
+Deno.test("a value that is not a string is refused", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { env: { CARGO_HOME: 7 } } })).join("\n"),
+    "must be a string",
+  );
+});
+
+Deno.test("an empty environment is refused rather than silently doing nothing", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { env: {} } })).join("\n"),
+    "names nothing",
+  );
+});
+
+Deno.test("directories added to the path are taken as absolute paths", () => {
+  assertEquals(
+    validateConfig(valid({ sandbox: { pathExtra: ["/opt/toolchains/bin"] } })).sandbox.pathExtra,
+    ["/opt/toolchains/bin"],
+  );
+});
+
+Deno.test("a relative directory on the path is refused", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { pathExtra: ["bin"] } })).join("\n"),
+    "must be an absolute path",
+  );
+});
