@@ -179,9 +179,10 @@ export interface SandboxConfig {
    * A session shares the host's network namespace by default, so it can read
    * the host address, the MAC, and the ARP neighbours. With this set, the
    * bailey backend runs egress through a private namespace instead, so a
-   * session sees a synthetic address and MAC. Egress is IPv4 only there, and
-   * the ports a session may open are unchanged. The podman backend already
-   * gives each session its own network, so this does not apply to it.
+   * session sees a synthetic address and MAC. The namespace gets IPv6 as well
+   * where the host has it, and the ports a session may open are unchanged. The
+   * podman backend already gives each session its own network, so this does
+   * not apply to it.
    */
   hideHostAddress: boolean;
   /** Paths granted on top of the generated policy, or undefined for none. */

@@ -47,10 +47,10 @@ can read the host address, the MAC, and the ARP neighbours through `ip`,
 
 Egress then runs through a private namespace, so a session sees a synthetic
 address and MAC rather than the host's. It needs `pasta` on the host; without
-it the session still starts, and says the host address stays visible. Egress is
-IPv4 only in this mode, and the ports a session may open are unchanged. The
-podman backend already gives each session its own network, so it does not need
-this.
+it the session still starts, and says the host address stays visible. The
+namespace gets a synthetic IPv6 address as well where the host has one to reach,
+and the ports a session may open are unchanged. The podman backend already gives
+each session its own network, so it does not need this.
 
 ## What it says at startup
 
