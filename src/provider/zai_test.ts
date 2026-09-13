@@ -7,6 +7,7 @@ import {
   QUOTA_URL,
   QuotaGate,
   quotaMessage,
+  quotaStatus,
   readQuota,
   spentMessage,
 } from "./zai.ts";
@@ -162,4 +163,24 @@ Deno.test("a spent window says so rather than saying zero percent is left", () =
 
 Deno.test("a refusal says when to come back", () => {
   assertStringIncludes(spentMessage("in 3 hours"), "resets in 3 hours");
+});
+
+Deno.test("the status says what is left, and says spent without a percentage", () => {
+  assertEquals(
+    quotaStatus({ percentage: 42, resetsAt: 0 }, "in 2h"),
+    "58% usage left, resets in 2h",
+  );
+  assertEquals(
+    quotaStatus({ percentage: 100, resetsAt: 0 }, "in 30m"),
+    "usage spent, back in 30m",
+  );
+});
+
+Deno.test("a percentage past the end does not become a negative remainder", () => {
+  // The provider has reported over 100 before; the status must not read
+  // "-4% usage left".
+  assertEquals(
+    quotaStatus({ percentage: 104, resetsAt: 0 }, "in 1h"),
+    "usage spent, back in 1h",
+  );
 });

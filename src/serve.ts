@@ -11,7 +11,7 @@ import { dirname, fromFileUrl, join } from "@std/path";
 import { ChannelType } from "discord.js";
 import { acknowledge, applicationId, registerCommands } from "./chat/commands.ts";
 import { Gateway } from "./chat/gateway.ts";
-import { whenRelative } from "./chat/render.ts";
+import { whenRelative, whenRelativePlain } from "./chat/render.ts";
 import { assertChannelUsable, ChatThreadFactory, plain } from "./chat/threads.ts";
 import { redactText, secretValues } from "./config/redact.ts";
 import type { Config } from "./config/schema.ts";
@@ -24,8 +24,10 @@ import { imageDescriber } from "./provider/vision.ts";
 import {
   isSpent,
   metersUsage,
+  QUOTA_TTL_MS,
   QuotaGate,
   quotaMessage,
+  quotaStatus,
   spentMessage,
   UNKNOWN_QUOTA,
 } from "./provider/zai.ts";
@@ -98,6 +100,9 @@ async function run(
   // rather than closing over bindings that are not initialised yet.
   let threads: ChatThreadFactory | null = null;
   let daemon: Daemon | null = null;
+  // A reconnect resets the presence, so the status is put back by the same
+  // call that first set it rather than only at startup.
+  let refreshStatus: () => void = () => {};
   let stop: (reason: string) => void = () => {};
   const stopped = new Promise<string>((resolve) => {
     stop = resolve;
@@ -118,6 +123,7 @@ async function run(
     },
     onConnected: () => {
       threads?.setConnected(true);
+      refreshStatus();
       log.info("connected");
     },
     onDisconnected: () => {
@@ -147,6 +153,28 @@ async function run(
   const quota = metersUsage(config.agent.provider)
     ? new QuotaGate(config.agent.credential)
     : undefined;
+
+  // What is left of the window is the thing somebody wants to know BEFORE
+  // asking for work, and the member list is where they look first. The gate
+  // holds its answer for QUOTA_TTL_MS and stops asking entirely once the
+  // window is spent, so refreshing on that same interval adds no requests the
+  // daemon was not already making. A window that cannot be read clears the
+  // status rather than leaving a stale number under the bot's name.
+  let statusTimer: ReturnType<typeof setInterval> | undefined;
+  if (quota !== undefined) {
+    refreshStatus = () => {
+      void (async () => {
+        const window = await quota.current();
+        gateway.setStatus(
+          window === undefined
+            ? undefined
+            : quotaStatus(window, whenRelativePlain(window.resetsAt)),
+        );
+      })();
+    };
+    refreshStatus();
+    statusTimer = setInterval(refreshStatus, QUOTA_TTL_MS);
+  }
 
   // Decided once: what a model accepts is the provider's business, not
   // something to work out per attachment.
@@ -274,6 +302,7 @@ async function run(
   const reason = await stopped;
 
   log.info("shutting down", { reason });
+  if (statusTimer !== undefined) clearInterval(statusTimer);
   for (const { signal, handler } of listeners) Deno.removeSignalListener(signal, handler);
   await web?.stop();
   await daemon.shutdown();

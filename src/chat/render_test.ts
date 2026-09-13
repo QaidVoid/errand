@@ -14,6 +14,7 @@ import {
   toolLine,
   truncate,
   usageSummary,
+  whenRelativePlain,
 } from "./render.ts";
 
 Deno.test("text that fits is one message, and nothing is one message of nothing", () => {
@@ -297,4 +298,21 @@ Deno.test("a question with no options still asks for an answer", () => {
 
   assertStringIncludes(lines, "any name will do");
   assertStringIncludes(lines, "reply with your answer");
+});
+
+Deno.test("a plain countdown carries minutes, then hours, and never a negative", () => {
+  const now = 1_000_000_000_000;
+  assertEquals(whenRelativePlain(now + 14 * 60_000, now), "in 14m");
+  assertEquals(whenRelativePlain(now + 60 * 60_000, now), "in 1h");
+  assertEquals(whenRelativePlain(now + 125 * 60_000, now), "in 2h 5m");
+  // A window that rolled over while the status was on screen reads as ready,
+  // not as a negative wait.
+  assertEquals(whenRelativePlain(now - 60_000, now), "now");
+  assertEquals(whenRelativePlain(now, now), "now");
+});
+
+Deno.test("a countdown rounds up, so it never claims less wait than there is", () => {
+  const now = 1_000_000_000_000;
+  assertEquals(whenRelativePlain(now + 61_000, now), "in 2m");
+  assertEquals(whenRelativePlain(now + 1, now), "in 1m");
 });

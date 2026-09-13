@@ -8,6 +8,7 @@
  */
 
 import {
+  ActivityType,
   type ChatInputCommandInteraction,
   Client,
   Events,
@@ -103,6 +104,29 @@ export class Gateway {
   get connection(): Client {
     if (this.client === null) throw new Error("the gateway is not connected");
     return this.client;
+  }
+
+  /**
+   * Sets the line under the bot's name, or clears it when given nothing.
+   *
+   * Never throws. This is decoration on a connection that may be down, and a
+   * status that failed to set is not a reason to fail the thing that asked.
+   */
+  setStatus(text: string | undefined): void {
+    const user = this.client?.user;
+    if (user === undefined || user === null) return;
+    try {
+      user.setPresence({
+        status: "online",
+        activities: text === undefined
+          ? []
+          // Custom is the only type that shows the text alone, with no verb
+          // in front of it. The name is required by the API and is not shown.
+          : [{ name: "usage", type: ActivityType.Custom, state: text }],
+      });
+    } catch (error) {
+      this.log.warn("the status could not be set", { detail: String(error) });
+    }
   }
 
   /** Connects and waits until the connection is ready. */

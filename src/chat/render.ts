@@ -235,6 +235,23 @@ export function whenRelative(epochMs: number): string {
   return `<t:${Math.floor(epochMs / 1000)}:R>`;
 }
 
+/**
+ * The same moment in plain text, for a surface that renders no markup.
+ *
+ * A bot's status is one such surface: `<t:seconds:R>` arrives there verbatim
+ * and reads as punctuation. This is coarse on purpose. A status is refreshed
+ * on an interval rather than per second, so a minute is the smallest unit that
+ * is still true by the time anybody reads it.
+ */
+export function whenRelativePlain(epochMs: number, now: number = Date.now()): string {
+  const minutes = Math.ceil((epochMs - now) / 60_000);
+  if (minutes <= 0) return "now";
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `in ${hours}h` : `in ${hours}h ${rest}m`;
+}
+
 export function warningLine(text: string): string {
   return prefixed("warning", text);
 }

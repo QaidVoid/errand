@@ -162,5 +162,22 @@ export function quotaMessage(quota: Quota, relative: string): string {
   return `${state}, and it resets ${relative}`;
 }
 
+/**
+ * The window as a bot status, which has far less room than a message.
+ *
+ * Short enough to survive Discord's status limit whole, and carrying the two
+ * things somebody glancing at the member list wants: how much is left, and
+ * when it comes back. The time is passed in already rendered, as above.
+ *
+ * When a second metered provider arrives, each renders its own line and the
+ * caller joins them. Nothing here has to change for that.
+ */
+export function quotaStatus(quota: Quota, relative: string): string {
+  const left = Math.max(0, Math.round(100 - quota.percentage));
+  return isSpent(quota)
+    ? `usage spent, back ${relative}`
+    : `${left}% usage left, resets ${relative}`;
+}
+
 /** What to say when the provider will not say, which is not an error. */
 export const UNKNOWN_QUOTA = "the model provider did not say what is left of the usage window";
