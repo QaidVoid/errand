@@ -16,6 +16,21 @@ to the same thread.
 Full documentation, including every configuration field, is in
 [docs](docs), built with `deno task build:docs`.
 
+## What you need
+
+- Linux, with either [bailey](https://github.com/QaidVoid/bailey) or rootless
+  podman on the host. The sandbox is not optional, so one of them has to be
+  there: without a backend the daemon refuses to start rather than running a
+  session unconfined. `sandbox.backend` picks which, and defaults to `bailey`.
+- A chat bot token, and one channel for it to serve.
+- A credential for a model provider.
+
+bailey confines a session as a host process, using Landlock for the filesystem
+and seccomp for the syscall surface, so sessions use the host's own tools and
+there is no image to build. podman runs the session in a container from an
+image you provide instead. [Sandboxing](docs/sandboxing.md) covers what each
+one enforces, and what the daemon does when a host cannot enforce it.
+
 ## Running it
 
 ```sh

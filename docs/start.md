@@ -4,7 +4,7 @@
 
 - A chat bot token, and one channel for it to serve.
 - A credential for a model provider.
-- Linux, with either [bailey](https://github.com/qaidvoid/bailey) or rootless
+- Linux, with either [bailey](https://github.com/QaidVoid/bailey) or rootless
   podman. The sandbox is not optional, so one of them has to be there.
 
 ## Build it
