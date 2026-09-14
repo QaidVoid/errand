@@ -62,7 +62,15 @@ const KNOWN = {
     "operatorUserIds",
     "startOnMention",
   ],
-  agent: ["provider", "model", "visionModel", "credentialName", "credential", "delegate"],
+  agent: [
+    "provider",
+    "model",
+    "visionModel",
+    "credentialName",
+    "credential",
+    "delegate",
+    "rulesPath",
+  ],
   delegate: ["model", "perTurn", "deadlineMs", "baseUrl"],
   github: ["token", "userName", "userEmail"],
   sandbox: [...Object.keys(DEFAULTS.sandbox), "policyExtra", "pathExtra", "env"],
@@ -294,7 +302,37 @@ function validateAgent(raw: Record<string, unknown>, problems: Problems): AgentC
     credentialName: requiredString(source, "credentialName", "agent", problems),
     credential: requiredString(source, "credential", "agent", problems),
     delegate: validateDelegate(source, problems),
+    rulesPath: optionalAbsolutePath(source, "rulesPath", "agent", problems),
   };
+}
+
+/**
+ * An optional path that must be absolute when it is given at all.
+ *
+ * Absolute because the daemon's working directory is not the operator's, so a
+ * relative path names a different file depending on where the daemon was
+ * started. Whether the file is actually there is checked at startup, where a
+ * refusal can say so; this stays free of the filesystem so it remains a pure
+ * reading of the configuration.
+ */
+function optionalAbsolutePath(
+  source: Record<string, unknown>,
+  key: string,
+  where: string,
+  problems: Problems,
+): string | undefined {
+  const value = source[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    problems.add(`${where}.${key} must be an absolute path`);
+    return undefined;
+  }
+  const path = value.trim();
+  if (!isAbsolute(path)) {
+    problems.add(`${where}.${key} must be an absolute path, got ${path}`);
+    return undefined;
+  }
+  return resolve(path);
 }
 
 /**

@@ -103,6 +103,10 @@
           "required": [
             "model"
           ]
+        },
+        "rulesPath": {
+          "description": "File of standing instructions given to every session, or undefined for none. A project's own `AGENTS.md` says how to work on that project and the agent reads it without help. This is what the operator wants of every session, whatever it is working on: the conventions of the house rather than of one repository. Absolute, and read on the host, so the path needs no grant and a session never sees the file itself. Re-read for each session, so editing it does not need a restart. It is paid for in the agent's context on every turn, which is the reason to keep it to the rules that actually matter.",
+          "type": "string"
         }
       },
       "required": [

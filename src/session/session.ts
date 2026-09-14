@@ -81,6 +81,7 @@ import type { EndReason, ReactionOutcome, SessionUsage, ThreadPort } from "./por
 import type { Request as PullRequest } from "./pr.ts";
 import type { ProjectSelection } from "./projects.ts";
 import { parseSize } from "../config/size.ts";
+import { rulesBlock } from "./rules.ts";
 
 /** A message as a session sees it, whatever surface it arrived from. */
 export interface IncomingMessage {
@@ -1110,7 +1111,7 @@ export class Session {
       ? ""
       : delegateInstructions(delegate.model, delegate.perTurn);
 
-    const contents = `${about}${
+    const contents = `${this.houseRules() ?? ""}${about}${
       memoryInstructions(
         `${STATE_PATH}/${NOTES_FILENAME}`,
         `${STATE_PATH}/${PROJECT_NOTES_FILENAME}`,
@@ -1134,6 +1135,26 @@ export class Session {
       }
     }
     return path;
+  }
+
+  /**
+   * The operator's standing instructions, when a file of them is configured.
+   *
+   * Read per session rather than held from startup, so editing the file
+   * reaches the next session without a restart. A file that has gone since
+   * startup is a warning and not a refusal: the session in front of somebody
+   * is worth more than the rules it would have carried, and the daemon already
+   * refused to start if the path was wrong when it was read.
+   */
+  private houseRules(): string | undefined {
+    const path = this.options.config.agent.rulesPath;
+    if (path === undefined) return undefined;
+    try {
+      return rulesBlock(Deno.readTextFileSync(path));
+    } catch (error) {
+      this.log.warn("the house rules could not be read", { path, detail: String(error) });
+      return undefined;
+    }
   }
 
   /**

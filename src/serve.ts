@@ -89,6 +89,22 @@ async function run(
   secrets: readonly string[],
   releaseLock: () => void,
 ): Promise<number> {
+  // Named but unreadable is a refusal, not a warning. An operator who config-
+  // ured house rules believes every session carries them, and a typo that only
+  // ever showed up as a line in a log would leave that belief standing while
+  // no session actually got them.
+  const rulesPath = config.agent.rulesPath;
+  if (rulesPath !== undefined) {
+    try {
+      Deno.readTextFileSync(rulesPath);
+      log.info("house rules will be given to every session", { path: rulesPath });
+    } catch (error) {
+      log.error(`agent.rulesPath cannot be read: ${rulesPath}`);
+      log.error(String(error));
+      return 2;
+    }
+  }
+
   // The sandbox is checked before the chat service is touched, so a missing
   // image or an unenforceable guarantee fails immediately rather than after a
   // login round trip.

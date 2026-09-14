@@ -51,6 +51,7 @@ Which model the agent talks to, and the credential it reaches it with.
 | `visionModel` | `string or undefined` | none | Model an image is shown to when the working model cannot see one. Omit and the cheapest model of the same provider that accepts images is used. Naming one here is how that choice is made deliberately. |
 | `credentialName` | `string` | required | Environment variable the agent reads, such as `ANTHROPIC_API_KEY`. |
 | `credential` | `string` | required | The credential value. Secret. |
+| `rulesPath` | `string or undefined` | none | File of standing instructions given to every session, or undefined for none. A project's own `AGENTS.md` says how to work on that project and the agent reads it without help. This is what the operator wants of every session, whatever it is working on: the conventions of the house rather than of one repository. Absolute, and read on the host, so the path needs no grant and a session never sees the file itself. Re-read for each session, so editing it does not need a restart. It is paid for in the agent's context on every turn, which is the reason to keep it to the rules that actually matter. |
 
 ## agent.delegate
 

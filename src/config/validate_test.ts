@@ -358,3 +358,47 @@ Deno.test("hiding the host address is read as a flag", () => {
     true,
   );
 });
+
+Deno.test("an absolute rules path is kept, and absent stays absent", () => {
+  const withRules = validateConfig(valid({
+    agent: {
+      provider: "anthropic",
+      credentialName: "ANTHROPIC_API_KEY",
+      credential: "secret-value",
+      rulesPath: "/etc/errand/AGENTS.md",
+    },
+  }));
+  assertEquals(withRules.agent.rulesPath, "/etc/errand/AGENTS.md");
+
+  assertEquals(validateConfig(valid()).agent.rulesPath, undefined);
+});
+
+Deno.test("a relative rules path is refused rather than resolved against the daemon's cwd", () => {
+  // Resolving it would make the same configuration name a different file
+  // depending on where the daemon happened to be started from.
+  assertStringIncludes(
+    problemsOf(valid({
+      agent: {
+        provider: "anthropic",
+        credentialName: "ANTHROPIC_API_KEY",
+        credential: "secret-value",
+        rulesPath: "AGENTS.md",
+      },
+    })).join("\n"),
+    "agent.rulesPath must be an absolute path, got AGENTS.md",
+  );
+});
+
+Deno.test("a rules path that is not a path at all is refused", () => {
+  assertStringIncludes(
+    problemsOf(valid({
+      agent: {
+        provider: "anthropic",
+        credentialName: "ANTHROPIC_API_KEY",
+        credential: "secret-value",
+        rulesPath: "",
+      },
+    })).join("\n"),
+    "agent.rulesPath must be an absolute path",
+  );
+});
