@@ -212,6 +212,10 @@ export class BaileySandbox implements Sandbox {
       https_proxy: url,
       HTTP_PROXY: url,
       http_proxy: url,
+      // The agent runs on Node, whose built-in fetch ignores the proxy
+      // variables unless this is set. Without it a session bypasses the broker,
+      // reaches nothing under the netns lockdown, and stalls on the provider.
+      NODE_USE_ENV_PROXY: "1",
     };
   }
 

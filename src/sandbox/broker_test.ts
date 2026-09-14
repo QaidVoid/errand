@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { Broker, hostAllowed, parseConnect } from "./broker.ts";
+import { Broker, hostAllowed, parseConnect, readRequestHead } from "./broker.ts";
 
 const quiet = { info: () => {}, warn: () => {} };
 
@@ -109,4 +109,29 @@ Deno.test("the broker refuses a non-CONNECT opener", async () => {
   } finally {
     broker.close();
   }
+});
+
+Deno.test("the head is read whole, leaving the tunnelled bytes untouched", async () => {
+  // A real client sends headers after the CONNECT line, then the blank line,
+  // then its TLS. The broker must consume up to and including the blank line
+  // and no further, or the leftover header bytes would be piped to the
+  // upstream ahead of the ClientHello and break the handshake.
+  const wire = new TextEncoder().encode(
+    "CONNECT open.example.com:443 HTTP/1.1\r\n" +
+      "Host: open.example.com:443\r\n" +
+      "Proxy-Connection: keep-alive\r\n\r\n" +
+      "TLS-CLIENT-HELLO",
+  );
+  let pos = 0;
+  const reader = {
+    read(p: Uint8Array): Promise<number | null> {
+      if (pos >= wire.length) return Promise.resolve(null);
+      p[0] = wire[pos++] as number;
+      return Promise.resolve(1);
+    },
+  };
+  const head = await readRequestHead(reader);
+  assertEquals(head?.split(/\r?\n/, 1)[0], "CONNECT open.example.com:443 HTTP/1.1");
+  // Everything after the blank line is still there for the tunnel to carry.
+  assertEquals(new TextDecoder().decode(wire.subarray(pos)), "TLS-CLIENT-HELLO");
 });

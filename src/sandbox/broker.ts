@@ -114,8 +114,9 @@ export class Broker {
   }
 
   private async handle(client: Deno.Conn): Promise<void> {
-    const line = await readRequestLine(client);
-    const target = line === undefined ? undefined : parseConnect(line);
+    const head = await readRequestHead(client);
+    const requestLine = head?.split(/\r?\n/, 1)[0];
+    const target = requestLine === undefined ? undefined : parseConnect(requestLine);
     if (target === undefined) {
       await refuse(client, 400, "the broker speaks only CONNECT");
       return;
@@ -151,18 +152,38 @@ export class Broker {
   }
 }
 
-/** Reads up to the first CRLF, which is the request line, without consuming the body. */
-async function readRequestLine(conn: Deno.Conn): Promise<string | undefined> {
+/**
+ * Reads the whole CONNECT request head, up to and including the blank line.
+ *
+ * Read one byte at a time so nothing past the head is consumed: what follows is
+ * the tunnelled bytes, and reading even one of them here would strip it from
+ * the stream the client expects to carry its TLS. Reading only the request
+ * line, and leaving the remaining headers in the socket, is worse still: those
+ * leftover header bytes would then be piped to the upstream ahead of the TLS
+ * ClientHello and corrupt the connection. The returned text keeps CRs so the
+ * caller splits on either line ending.
+ */
+export async function readRequestHead(
+  conn: { read(p: Uint8Array): Promise<number | null> },
+): Promise<string | undefined> {
   const buf = new Uint8Array(1);
   const bytes: number[] = [];
-  // A request line longer than this is not one the broker will honour.
+  // A head larger than this is not one the broker will honour.
   while (bytes.length < 8192) {
     const n = await conn.read(buf);
     if (n === null) return undefined;
     if (n === 0) continue;
-    const byte = buf[0] as number;
-    if (byte === 0x0a) break; // LF ends the line
-    if (byte !== 0x0d) bytes.push(byte); // drop CR
+    bytes.push(buf[0] as number);
+    const len = bytes.length;
+    // End of head: a blank line, as CRLFCRLF or a bare LFLF.
+    if (bytes[len - 1] === 0x0a) {
+      if (len >= 2 && bytes[len - 2] === 0x0a) break;
+      if (
+        len >= 4 && bytes[len - 2] === 0x0d && bytes[len - 3] === 0x0a && bytes[len - 4] === 0x0d
+      ) {
+        break;
+      }
+    }
   }
   return new TextDecoder().decode(new Uint8Array(bytes));
 }
