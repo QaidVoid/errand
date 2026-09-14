@@ -28,8 +28,11 @@ Deno.test("a blank variable is not a path, so the search runs", () => {
 Deno.test("it looks in the account's config directory, then the system's", () => {
   assertEquals(configCandidates({ HOME: "/home/amelia" }), [
     "/home/amelia/.config/errand/config.json",
+    "/home/amelia/.config/errand/config.jsonc",
     "/etc/errand/config.json",
+    "/etc/errand/config.jsonc",
     "config.json",
+    "config.jsonc",
   ]);
 });
 
@@ -80,6 +83,18 @@ Deno.test("a missing file says where it looked and what to do", () => {
 Deno.test("a file that is not JSON is not reported as a field problem", () => {
   const error = assertThrows(() => loadConfig("/c.json", () => "{ nope"), ConfigError);
   assertStringIncludes(String(error), "not valid JSON");
+});
+
+Deno.test("comments and trailing commas are read, so a config can be annotated", () => {
+  const jsonc = `{
+    // who drives the bot
+    "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+    "agent": { "provider": "anthropic", "credentialName": "K", "credential": "k" },
+    "projectRoot": "/tmp/errand/projects",
+    "stateDir": "/tmp/errand/state", // note the trailing comma
+  }`;
+  const config = loadConfig("/c.jsonc", () => jsonc);
+  assertEquals(config.chat.channelId, "c");
 });
 
 Deno.test("a file that parses but says something impossible lists every reason", () => {

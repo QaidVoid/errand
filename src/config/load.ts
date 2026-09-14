@@ -11,6 +11,7 @@
  */
 
 import { dirname, join, resolve } from "@std/path";
+import { parse as parseJsonc } from "@std/jsonc";
 import { type Config, ConfigError } from "./schema.ts";
 import { validateConfig } from "./validate.ts";
 
@@ -22,6 +23,12 @@ export const CONFIG_DIRECTORY = "errand";
 
 /** The filename, wherever it is found. */
 export const CONFIG_FILENAME = "config.json";
+
+/** The same file with the extension that says it may carry comments. */
+export const CONFIG_FILENAME_JSONC = "config.jsonc";
+
+/** Both accepted basenames, plain JSON first so an existing setup is unchanged. */
+const CONFIG_BASENAMES = [CONFIG_FILENAME, CONFIG_FILENAME_JSONC] as const;
 
 /** Where a system service keeps it. */
 export const SYSTEM_CONFIG_PATH = `/etc/${CONFIG_DIRECTORY}/${CONFIG_FILENAME}`;
@@ -42,11 +49,10 @@ export function configCandidates(env: Record<string, string | undefined>): strin
   const xdg = env.XDG_CONFIG_HOME?.trim();
   const root = xdg !== undefined && xdg.length > 0 ? xdg : join(home, ".config");
 
-  return [
-    join(root, CONFIG_DIRECTORY, CONFIG_FILENAME),
-    SYSTEM_CONFIG_PATH,
-    CONFIG_FILENAME,
-  ];
+  const dirs = [join(root, CONFIG_DIRECTORY), `/etc/${CONFIG_DIRECTORY}`, "."];
+  return dirs.flatMap((dir) =>
+    CONFIG_BASENAMES.map((name) => (dir === "." ? name : join(dir, name)))
+  );
 }
 
 /**
@@ -102,9 +108,14 @@ export function loadConfig(
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    // Parsed as JSONC so a file may carry comments and trailing commas, which
+    // is the difference between a config someone can annotate and one they
+    // cannot. Plain JSON is a subset, so an existing file still reads.
+    parsed = parseJsonc(text);
   } catch (error) {
-    throw new ConfigError([`the configuration file at ${path} is not valid JSON: ${error}`]);
+    throw new ConfigError([
+      `the configuration file at ${path} is not valid JSON or JSONC: ${error}`,
+    ]);
   }
 
   const config = validateConfig(parsed);
