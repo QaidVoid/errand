@@ -76,23 +76,127 @@ export function parseConnect(requestLine: string): ConnectTarget | undefined {
 export const ALLOWED_UPSTREAM_PORTS: readonly number[] = [443];
 
 /**
+ * Where the model provider really is, and what stands in for its key.
+ *
+ * A session is given `nonce` in place of the credential, so the credential
+ * itself never enters a sandbox and nothing read out of a session's
+ * environment can be replayed anywhere else. The nonce is worth only what the
+ * broker will do with it, and the broker is reachable only from the session's
+ * own namespace.
+ */
+export interface ProviderRoute {
+  /** Path a session addresses the provider at, such as `/provider`. */
+  prefix: string;
+  /** The provider's real base URL, which the prefix stands in for. */
+  upstream: string;
+  /** What a session sends as its key. */
+  nonce: string;
+  /** The real credential. Never leaves the daemon. */
+  credential: string;
+}
+
+/** Headers that describe one hop and must not be forwarded to the next. */
+const HOP_BY_HOP = [
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "host",
+];
+
+/** Compares without letting the time taken say how much of it matched. */
+function sameSecret(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let differences = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    differences |= a.charCodeAt(index) ^ b.charCodeAt(index);
+  }
+  return differences === 0;
+}
+
+/**
  * A running CONNECT proxy that admits only allowlisted hosts.
  *
  * Injected connect/accept functions keep it testable without real sockets in
  * the unit path, while the default uses Deno's TCP. One instance serves one
  * session's namespace; the allowlist is fixed for the life of that session.
+ *
+ * When a {@link ProviderRoute} is given it also answers as the provider
+ * itself, on the same port: a request that is not a CONNECT is served rather
+ * than refused, and the credential is put on at this end.
  */
 export class Broker {
   private listener: Deno.Listener | null = null;
   private closed = false;
+  private provider: Deno.HttpServer | null = null;
+  private providerPort = 0;
 
   constructor(
     private readonly allow: readonly string[],
     private readonly log: Pick<Logger, "info" | "warn">,
+    private readonly route?: ProviderRoute,
   ) {}
+
+  /**
+   * Serves the provider API, with the real credential put on here.
+   *
+   * Run on its own loopback port and reached by handing the connection over,
+   * rather than by parsing HTTP on the raw socket: a request body may be
+   * streamed and a response is often an event stream, and getting either wrong
+   * would show up as a session that hangs rather than one that fails.
+   */
+  private startProvider(route: ProviderRoute): void {
+    this.provider = Deno.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      onListen: (addr) => {
+        this.providerPort = addr.port;
+      },
+    }, async (request) => {
+      const url = new URL(request.url);
+      if (!url.pathname.startsWith(route.prefix)) {
+        return new Response("not the provider\n", { status: 404 });
+      }
+      const offered = request.headers.get("authorization") ?? "";
+      if (!sameSecret(offered, `Bearer ${route.nonce}`)) {
+        this.log.warn("a provider call arrived without this session's key");
+        return new Response("not this session\n", { status: 401 });
+      }
+
+      const rest = url.pathname.slice(route.prefix.length);
+      const target = `${route.upstream.replace(/\/$/, "")}${rest}${url.search}`;
+      const headers = new Headers();
+      for (const [name, value] of request.headers) {
+        if (!HOP_BY_HOP.includes(name.toLowerCase())) headers.set(name, value);
+      }
+      headers.set("authorization", `Bearer ${route.credential}`);
+
+      try {
+        const answered = await fetch(target, {
+          method: request.method,
+          headers,
+          ...(request.body === null ? {} : { body: request.body }),
+          redirect: "manual",
+        });
+        const back = new Headers();
+        for (const [name, value] of answered.headers) {
+          if (!HOP_BY_HOP.includes(name.toLowerCase())) back.set(name, value);
+        }
+        return new Response(answered.body, { status: answered.status, headers: back });
+      } catch (error) {
+        this.log.warn("the provider could not be reached", { detail: String(error) });
+        return new Response("the provider could not be reached\n", { status: 502 });
+      }
+    });
+  }
 
   /** Binds to a loopback port and starts admitting connections. Returns the port. */
   listen(host = "127.0.0.1"): number {
+    if (this.route !== undefined) this.startProvider(this.route);
     const listener = Deno.listen({ hostname: host, port: 0, transport: "tcp" });
     this.listener = listener;
     const addr = listener.addr as Deno.NetAddr;
@@ -118,6 +222,13 @@ export class Broker {
     const requestLine = head?.split(/\r?\n/, 1)[0];
     const target = requestLine === undefined ? undefined : parseConnect(requestLine);
     if (target === undefined) {
+      // Not a tunnel. With a provider route this is the session calling the
+      // provider, which is served rather than refused: the head already read
+      // is replayed so the server sees the request whole.
+      if (head !== undefined && this.route !== undefined) {
+        await this.serveProvider(client, head);
+        return;
+      }
       await refuse(client, 400, "the broker speaks only CONNECT");
       return;
     }
@@ -140,6 +251,26 @@ export class Broker {
     await pipe(client, upstream);
   }
 
+  /**
+   * Hands a connection to the provider server, head and all.
+   *
+   * The head was read to find out whether this was a tunnel, so it is written
+   * on before the two are joined; everything after it is still in the socket
+   * and flows through untouched, body and event stream alike.
+   */
+  private async serveProvider(client: Deno.Conn, head: string): Promise<void> {
+    let inner: Deno.Conn;
+    try {
+      inner = await Deno.connect({ hostname: "127.0.0.1", port: this.providerPort });
+    } catch (error) {
+      this.log.warn("the provider endpoint is not up", { detail: String(error) });
+      await refuse(client, 502, "the provider endpoint is not up");
+      return;
+    }
+    await inner.write(new TextEncoder().encode(head));
+    await pipe(client, inner);
+  }
+
   /** Stops accepting and closes the listener. In-flight tunnels end with it. */
   close(): void {
     if (this.closed) return;
@@ -149,6 +280,7 @@ export class Broker {
     } catch {
       // Already closed.
     }
+    void this.provider?.shutdown().catch(() => {});
   }
 }
 

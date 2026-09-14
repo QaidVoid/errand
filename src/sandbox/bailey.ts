@@ -132,6 +132,27 @@ export function parseDoctor(doctor: string): { gaps: string[]; unavailable: stri
  */
 export const EGRESS_MAP_ADDRESS = "169.254.169.1";
 
+/** Path the broker answers as the provider on, under its own address. */
+export const PROVIDER_PREFIX = "/provider";
+
+/** What a session's agent is told the provider's base URL is. */
+export function providerBrokerUrl(port: number): string {
+  return `http://${EGRESS_MAP_ADDRESS}:${port}${PROVIDER_PREFIX}`;
+}
+
+/**
+ * What the daemon holds back from a session, and what it gives instead.
+ *
+ * The credential never crosses into a sandbox: the broker puts it on at the
+ * other end, so what a session carries is a nonce that only the broker honours.
+ */
+export interface ProviderBrokering {
+  /** The variable the agent reads its key from. */
+  credentialName: string;
+  /** The value put there in place of the credential. */
+  nonce: string;
+}
+
 /** The proxy URL a brokered session's tools use, for a given broker port. */
 export function egressProxyUrl(port: number): string {
   return `http://${EGRESS_MAP_ADDRESS}:${port}`;
@@ -190,7 +211,48 @@ export class BaileySandbox implements Sandbox {
     private readonly stateRoot: string,
     private readonly run: Run = runBailey,
     private readonly egressProxyPort?: number,
+    private readonly brokering?: ProviderBrokering,
   ) {}
+
+  /**
+   * The session's environment, with the provider credential held back.
+   *
+   * What a session is given is the nonce, which is worth nothing anywhere but
+   * this daemon's broker: the credential itself stays outside the sandbox, so
+   * reading the environment, or any process's environment, yields nothing that
+   * can be replayed. Everything else crosses unchanged.
+   */
+  private brokeredEnv(env: Record<string, string>): Record<string, string> {
+    const brokering = this.brokering;
+    if (brokering === undefined || this.egressProxyPort === undefined) return env;
+    return { ...env, [brokering.credentialName]: brokering.nonce };
+  }
+
+  /**
+   * Points the agent at the broker in place of the provider.
+   *
+   * Written as a `models.json` override in the agent's own configuration
+   * directory, which names a base URL and nothing else, so every model the
+   * provider serves stays available and only where they are reached changes.
+   * The file sits in the session's state directory, which the session can
+   * write: rewriting it buys nothing, since the nonce it holds is good only
+   * against the broker and the namespace reaches nothing else.
+   */
+  private async writeProviderOverride(launch: SandboxLaunch): Promise<void> {
+    const brokering = this.brokering;
+    if (brokering === undefined || this.egressProxyPort === undefined) return;
+    const directory = join(launch.stateDir, "home", ".pi", "agent");
+    const override = {
+      providers: {
+        [launch.provider]: { baseUrl: providerBrokerUrl(this.egressProxyPort) },
+      },
+    };
+    await Deno.mkdir(directory, { recursive: true });
+    await Deno.writeTextFile(
+      join(directory, "models.json"),
+      `${JSON.stringify(override, null, 2)}\n`,
+    );
+  }
 
   /**
    * The operator env, with the proxy variables added under a brokered session.
@@ -212,6 +274,10 @@ export class BaileySandbox implements Sandbox {
       https_proxy: url,
       HTTP_PROXY: url,
       http_proxy: url,
+      // The broker answers as the provider on its own address, so that one is
+      // reached directly rather than tunnelled through itself.
+      NO_PROXY: EGRESS_MAP_ADDRESS,
+      no_proxy: EGRESS_MAP_ADDRESS,
       // The agent runs on Node, whose built-in fetch ignores the proxy
       // variables unless this is set. Without it a session bypasses the broker,
       // reaches nothing under the netns lockdown, and stalls on the provider.
@@ -301,6 +367,8 @@ export class BaileySandbox implements Sandbox {
     }
 
     await Deno.mkdir(launch.stateDir, { recursive: true });
+    await this.writeProviderOverride(launch);
+    launch = { ...launch, env: this.brokeredEnv(launch.env) };
     const resolv = await this.writeResolvConf();
     const policy = policyPath(launch);
     await Deno.writeTextFile(

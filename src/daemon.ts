@@ -17,6 +17,7 @@ import type { Logger } from "./log.ts";
 import type { MemoryStore } from "./memory/store.ts";
 import { BaileySandbox } from "./sandbox/bailey.ts";
 import type { CapabilityReport, Sandbox } from "./sandbox/backend.ts";
+import type { ProviderBrokering } from "./sandbox/bailey.ts";
 import { PodmanSandbox } from "./sandbox/podman.ts";
 import { answerWithoutSession, firstWord, isAddressedToBot, isAside } from "./session/commands.ts";
 import type { ThreadFactory } from "./session/manager.ts";
@@ -47,10 +48,18 @@ export function createSandbox(
   config: Config,
   log: Logger,
   egressProxyPort?: number,
+  brokering?: ProviderBrokering,
 ): Sandbox {
   return config.sandbox.backend === "podman"
     ? new PodmanSandbox(config.sandbox, log)
-    : new BaileySandbox(config.sandbox, log, config.stateDir, undefined, egressProxyPort);
+    : new BaileySandbox(
+      config.sandbox,
+      log,
+      config.stateDir,
+      undefined,
+      egressProxyPort,
+      brokering,
+    );
 }
 
 /**

@@ -135,3 +135,45 @@ Deno.test("the head is read whole, leaving the tunnelled bytes untouched", async
   // Everything after the blank line is still there for the tunnel to carry.
   assertEquals(new TextDecoder().decode(wire.subarray(pos)), "TLS-CLIENT-HELLO");
 });
+
+Deno.test("the credential is put on at the broker, never given to the session", async () => {
+  // A stand-in provider that reports what key it was actually handed.
+  let seen = "";
+  const upstream = Deno.serve({ hostname: "127.0.0.1", port: 0, onListen: () => {} }, (request) => {
+    seen = request.headers.get("authorization") ?? "";
+    return new Response("{}", { headers: { "content-type": "application/json" } });
+  });
+  const upstreamPort = (upstream.addr as Deno.NetAddr).port;
+
+  const broker = new Broker([], quiet, {
+    prefix: "/provider",
+    upstream: `http://127.0.0.1:${upstreamPort}/v4`,
+    nonce: "the-session-nonce",
+    credential: "the-real-key",
+  });
+  const port = broker.listen();
+  try {
+    const allowed = await fetch(`http://127.0.0.1:${port}/provider/chat/completions`, {
+      method: "POST",
+      headers: { authorization: "Bearer the-session-nonce" },
+      body: "{}",
+    });
+    await allowed.body?.cancel();
+    assertEquals(allowed.status, 200);
+    // The session never held this, and the provider still received it.
+    assertEquals(seen, "Bearer the-real-key");
+
+    // What a session could read out of its own environment is the nonce, and
+    // a nonce the broker does not know is worth nothing.
+    const refused = await fetch(`http://127.0.0.1:${port}/provider/chat/completions`, {
+      method: "POST",
+      headers: { authorization: "Bearer not-the-nonce" },
+      body: "{}",
+    });
+    await refused.body?.cancel();
+    assertEquals(refused.status, 401);
+  } finally {
+    broker.close();
+    await upstream.shutdown();
+  }
+});

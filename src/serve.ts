@@ -16,8 +16,13 @@ import { assertChannelUsable, ChatThreadFactory, plain } from "./chat/threads.ts
 import { redactText, secretValues } from "./config/redact.ts";
 import type { Config } from "./config/schema.ts";
 import { createSandbox, Daemon, probeSandbox } from "./daemon.ts";
-import { Broker } from "./sandbox/broker.ts";
-import { EGRESS_MAP_ADDRESS } from "./sandbox/bailey.ts";
+import { Broker, type ProviderRoute } from "./sandbox/broker.ts";
+import {
+  EGRESS_MAP_ADDRESS,
+  PROVIDER_PREFIX,
+  type ProviderBrokering,
+  providerBrokerUrl,
+} from "./sandbox/bailey.ts";
 import { acquireLock } from "./lock.ts";
 import type { Logger } from "./log.ts";
 import { MemoryStore } from "./memory/store.ts";
@@ -66,6 +71,20 @@ async function powerOff(): Promise<string | undefined> {
  * Serving is the steady state, so this resolves only on a signal or when the
  * connection has been lost for good.
  */
+/**
+ * A per-run stand-in for the provider credential.
+ *
+ * Drawn from the system generator rather than anything derived from the
+ * credential, so holding the nonce says nothing about the key it stands for. It
+ * lasts as long as the daemon: the broker is the only thing that honours it,
+ * and a restart brings a new one.
+ */
+function providerNonce(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 /** The lower-cased host of a base URL, for the egress allowlist. */
 function hostOf(baseUrl: string): string | undefined {
   try {
@@ -122,6 +141,8 @@ async function run(
   // provider host is read from the model store the agent would reach it at.
   let broker: Broker | undefined;
   let egressProxyPort: number | undefined;
+  let brokering: ProviderBrokering | undefined;
+  let route: ProviderRoute | undefined;
   if (config.sandbox.egress.mode === "proxy") {
     const store = agentDirectory(Deno.env.toObject());
     const providerBase = modelById(readModels(store, config.agent.provider), config.agent.model)
@@ -137,18 +158,40 @@ async function run(
       );
       return 2;
     }
-    broker = new Broker(allow, log);
+    // The credential is held back from the session and put on here instead, so
+    // what a sandbox carries is a nonce that is worth nothing anywhere else.
+    // Only where the provider's own base URL is known, since the broker has to
+    // know where to forward to.
+    if (providerBase !== undefined) {
+      brokering = { credentialName: config.agent.credentialName, nonce: providerNonce() };
+      route = {
+        prefix: PROVIDER_PREFIX,
+        upstream: providerBase,
+        nonce: brokering.nonce,
+        credential: config.agent.credential,
+      };
+    }
+    broker = new Broker(allow, log, route);
     egressProxyPort = broker.listen();
     log.info("egress is brokered", {
       via: `${EGRESS_MAP_ADDRESS}:${egressProxyPort}`,
       allow: allow.join(", "),
     });
+    if (route !== undefined) {
+      log.info("the provider credential stays outside the sandbox", {
+        via: providerBrokerUrl(egressProxyPort),
+      });
+    } else {
+      log.warn(
+        "the model store does not say where the provider is, so the credential is given to the session",
+      );
+    }
   }
 
   // The sandbox is checked before the chat service is touched, so a missing
   // image or an unenforceable guarantee fails immediately rather than after a
   // login round trip.
-  const sandbox = createSandbox(config, log, egressProxyPort);
+  const sandbox = createSandbox(config, log, egressProxyPort, brokering);
   const report = await probeSandbox(sandbox, config, log);
 
   // The connection signals readiness during connect(), before the thread
