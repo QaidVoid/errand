@@ -32,6 +32,20 @@
     "backend": "bailey",
     "requireFullEnforcement": true,
     "network": "restricted",
+    "egress": {
+      "mode": "proxy",
+      "allow": [
+        "github.com",
+        "api.github.com",
+        "*.githubusercontent.com",
+        "crates.io",
+        "static.crates.io",
+        "index.crates.io",
+        "jsr.io",
+        "deno.land",
+        "registry.npmjs.org"
+      ]
+    },
     "memory": "4g",
     "cpus": 2,
     "pids": 512,
