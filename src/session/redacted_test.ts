@@ -119,3 +119,29 @@ Deno.test("what is reported is otherwise unchanged", async () => {
 
   assertEquals(inner.seen, ['"nothing secret here"', "true"]);
 });
+
+/**
+ * The house rules reach the agent as a file it can read, so a session that
+ * reads its own prompt back must not put the operator's rules in the channel.
+ * Everything else in the same output still goes through.
+ */
+Deno.test("the operator's house rules are scrubbed out of tool output", () => {
+  const rules = "You are Talaria, the errand-runner.\n\nNever push unless asked.";
+  const { port, seen } = recordingPort();
+  const wrapped = redacting(port, [SECRET, rules]);
+
+  wrapped.noteToolResult({
+    id: "1",
+    name: "bash",
+    failed: false,
+    output: `$ cat /state/memory.md\n## House rules\n\n${rules}\n\ntotal 4 files`,
+  });
+
+  const said = seen.join("\n");
+  assertEquals(said.includes("errand-runner"), false);
+  assertEquals(said.includes("Never push unless asked"), false);
+  assertEquals(said.includes(REDACTION), true);
+  // The tool result itself still reports; only the rules went.
+  assertEquals(said.includes("total 4 files"), true);
+  assertEquals(said.includes("cat /state/memory.md"), true);
+});

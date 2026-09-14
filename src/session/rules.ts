@@ -37,3 +37,30 @@ export function rulesBlock(contents: string): string | undefined {
     "",
   ].join("\n");
 }
+
+/**
+ * The rules as written, so they can be scrubbed back out of what is reported.
+ *
+ * The block is handed to the agent as a file, because that is how a system
+ * prompt is appended, and that file necessarily sits where the agent can read
+ * it. So a session that reads its own prompt back, out of curiosity or by
+ * listing its state directory, would otherwise put the operator's rules into
+ * the channel and the transcript. They are instructions rather than secrets,
+ * but they are the operator's and not the thread's, and the same reporting
+ * path is already wrapped for scrubbing.
+ *
+ * Read fresh rather than held, so editing the file reaches the next session
+ * the same way the rules themselves do.
+ *
+ * @returns nothing when there are no rules, which is not a failure: a scrub
+ *   list with nothing in it simply scrubs nothing.
+ */
+export function houseRulesText(path: string | undefined): string | undefined {
+  if (path === undefined) return undefined;
+  try {
+    const text = Deno.readTextFileSync(path).trim();
+    return text.length === 0 ? undefined : text;
+  } catch {
+    return undefined;
+  }
+}

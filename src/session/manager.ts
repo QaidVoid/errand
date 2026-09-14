@@ -24,6 +24,7 @@ import type { ThreadRecord, ThreadRegistry } from "./registry.ts";
 import { type IncomingMessage, Session, type SessionOptions, type Timers } from "./session.ts";
 import { Transcript, TRANSCRIPT_FILENAME } from "./transcript.ts";
 import { prepareRecordDir, recordDir } from "./record.ts";
+import { houseRulesText } from "./rules.ts";
 import { ViewFanOut } from "./views.ts";
 
 /** How a request to start a session turned out. */
@@ -416,10 +417,22 @@ export class SessionManager {
     return { status: "started", session };
   }
 
+  /**
+   * What must not reach a channel, a transcript, or the interface.
+   *
+   * The configured secrets, plus the operator's house rules: those are handed
+   * to the agent as a file it can read, so a session reading its own prompt
+   * back would otherwise report them.
+   */
+  private reportedSecrets(): readonly string[] {
+    const rules = houseRulesText(this.options.config.agent.rulesPath);
+    return rules === undefined ? this.secrets : [...this.secrets, rules];
+  }
+
   /** Everything a session is given whether it is new or resumed. */
   private shared(fanOut: ViewFanOut): SharedOptions {
     return {
-      thread: redacting(fanOut, this.secrets),
+      thread: redacting(fanOut, this.reportedSecrets()),
       sandbox: this.options.sandbox,
       scheduler: this.options.scheduler,
       config: this.options.config,
