@@ -82,6 +82,26 @@ export const COMMANDS: Record<string, CommandMeta> = {
     argument: "<user>",
   },
   "!guests": { access: "guest", group: "people", summary: "who may take part in this thread" },
+  /**
+   * What is remembered, which is what the agent is told before it answers.
+   *
+   * A guest may ask, because the block about whoever is speaking is given to
+   * the agent anyway and seeing it is no more than reading back what was
+   * already said. Forgetting is the owner's: it changes what every later
+   * session is told, not just this one.
+   */
+  "!facts": {
+    access: "guest",
+    group: "people",
+    summary: "what is remembered about somebody, or this project",
+    argument: "[@somebody|project]",
+  },
+  "!forget": {
+    access: "owner",
+    group: "people",
+    summary: "drop what is remembered about somebody, or this project",
+    argument: "<@somebody|project>",
+  },
 
   // Read the project's contents. Open to invited guests, because reading the
   // code is most of what taking part in a session means.

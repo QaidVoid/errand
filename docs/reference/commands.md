@@ -27,6 +27,8 @@ aside: everyone in the thread sees it and the agent is never told.
 | `!allow <user>` | the owner and operators | let another account take part in this thread |
 | `!deny <user>` | the owner and operators | withdraw another account from this thread |
 | `!guests` | the owner and whoever they invited | who may take part in this thread |
+| `!facts [@somebody|project]` | the owner and whoever they invited | what is remembered about somebody, or this project |
+| `!forget <@somebody|project>` | the owner and operators | drop what is remembered about somebody, or this project |
 
 ## The project
 

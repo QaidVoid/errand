@@ -1077,3 +1077,62 @@ Deno.test("a thread archived from outside is not posted into", () =>
     assertEquals(ended, ["thread archived"]);
     assertEquals(thread.notices.length, before);
   }));
+
+Deno.test("!facts reads back what the agent was told about somebody", async () => {
+  const memory = new MemoryStore(":memory:");
+  memory.rememberUser(OWNER, "amelia");
+  memory.remember("user", OWNER, "prefers jj over git", "earlier");
+  memory.remember("project", "demo", "the build is deno task check", "earlier");
+
+  await withSession(async ({ session, thread }) => {
+    await settle();
+    // No argument means whoever asked, which is what "about me" means.
+    await session.handle(message("!facts", OWNER, "m2"));
+    assertStringIncludes(thread.everything(), "prefers jj over git");
+
+    await session.handle(message("!facts project", OWNER, "m3"));
+    assertStringIncludes(thread.everything(), "the build is deno task check");
+
+    // A subject nothing is held for says so rather than staying silent.
+    await session.handle(message(`!facts <@${GUEST}>`, OWNER, "m4"));
+    assertStringIncludes(thread.everything(), "nothing is remembered about");
+  }, { memory });
+  memory.close();
+});
+
+Deno.test("!forget drops what is remembered, and says how much went", async () => {
+  const memory = new MemoryStore(":memory:");
+  memory.rememberUser(OWNER, "amelia");
+  memory.remember("user", OWNER, "prefers jj over git", "earlier");
+
+  await withSession(async ({ session, thread }) => {
+    await settle();
+    await session.handle(message("!forget", OWNER, "m2"));
+    // Forgetting changes every later session, so it is never guessed at.
+    assertStringIncludes(thread.everything(), "say who");
+    assertEquals(memory.factsFor("user", OWNER).length, 1);
+
+    await session.handle(message(`!forget <@${OWNER}>`, OWNER, "m3"));
+    assertStringIncludes(thread.everything(), "forgot 1 fact about");
+    assertEquals(memory.factsFor("user", OWNER).length, 0);
+  }, { memory });
+  memory.close();
+});
+
+/** Forgetting is the owner's: it outlives this thread. */
+Deno.test("a guest may read facts but may not forget them", async () => {
+  const memory = new MemoryStore(":memory:");
+  memory.remember("user", GUEST, "works on the packaging", "earlier");
+
+  await withSession(async ({ session, thread }) => {
+    await settle();
+    await session.handle(message(`!allow <@${GUEST}>`, OWNER, "m2"));
+
+    await session.handle(message("!facts", GUEST, "m3"));
+    assertStringIncludes(thread.everything(), "works on the packaging");
+
+    await session.handle(message(`!forget <@${GUEST}>`, GUEST, "m4"));
+    assertEquals(memory.factsFor("user", GUEST).length, 1);
+  }, { memory });
+  memory.close();
+});

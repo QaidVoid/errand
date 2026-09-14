@@ -44,6 +44,7 @@ import {
   NOTES_FILENAME,
   parseNotes,
   PROJECT_NOTES_FILENAME,
+  type Scope,
 } from "../memory/store.ts";
 import type { Sandbox, SandboxHandle } from "../sandbox/backend.ts";
 import { STATE_PATH } from "../sandbox/backend.ts";
@@ -1382,6 +1383,80 @@ export class Session {
     }
   }
 
+  /**
+   * Who or what a memory command was aimed at.
+   *
+   * `project` names this session's project. Anything else is an account, given
+   * as a mention or as a bare id. An empty argument means whoever asked, which
+   * is what somebody means by "what do you know about me".
+   */
+  private memorySubject(
+    rest: string,
+    askedBy: string,
+  ): { scope: Scope; subject: string; label: string } | undefined {
+    const trimmed = rest.trim();
+    if (trimmed.length === 0) return { scope: "user", subject: askedBy, label: `<@${askedBy}>` };
+    if (trimmed.toLowerCase() === "project") {
+      return {
+        scope: "project",
+        subject: this.options.project.name,
+        label: `\`${this.options.project.name}\``,
+      };
+    }
+    const id = parseUserId(trimmed);
+    return id === undefined ? undefined : { scope: "user", subject: id, label: `<@${id}>` };
+  }
+
+  /** Reads back what the agent is told before it answers. */
+  private async reportFacts(rest: string, message: IncomingMessage): Promise<void> {
+    const memory = this.options.memory;
+    if (memory === undefined) {
+      await this.say("nothing is remembered on this host");
+      return;
+    }
+    const target = this.memorySubject(rest, message.authorId);
+    if (target === undefined) {
+      await this.refuse(message, "say who, as `!facts @somebody`, or `!facts project`");
+      return;
+    }
+
+    const facts = memory.factsFor(target.scope, target.subject);
+    if (facts.length === 0) {
+      await this.say(`nothing is remembered about ${target.label}`);
+      return;
+    }
+    // Numbered the way they are held, so what a person reads back is what the
+    // agent was given, newest first.
+    const lines = facts.map((fact) => `- ${fact.fact}`).join("\n");
+    await this.say(`remembered about ${target.label}:\n${lines}`);
+  }
+
+  /** Drops what is remembered, which changes every later session too. */
+  private async forgetFacts(rest: string, message: IncomingMessage): Promise<void> {
+    const memory = this.options.memory;
+    if (memory === undefined) {
+      await this.say("nothing is remembered on this host");
+      return;
+    }
+    if (rest.trim().length === 0) {
+      await this.refuse(message, "say who, as `!forget @somebody`, or `!forget project`");
+      return;
+    }
+    const target = this.memorySubject(rest, message.authorId);
+    if (target === undefined) {
+      await this.refuse(message, "say who, as `!forget @somebody`, or `!forget project`");
+      return;
+    }
+
+    const gone = memory.forget(target.scope, target.subject);
+    await this.options.thread.setReaction(message.id, "accepted");
+    await this.say(
+      gone === 0
+        ? `nothing was remembered about ${target.label}`
+        : `forgot ${gone} fact${gone === 1 ? "" : "s"} about ${target.label}`,
+    );
+  }
+
   private async answerCommand(
     word: string,
     rest: string,
@@ -1451,6 +1526,16 @@ export class Session {
               guests.map((id) => `<@${id}>`).join(", ")
             }`,
         );
+        return;
+      }
+
+      case "!facts": {
+        await this.reportFacts(rest, message);
+        return;
+      }
+
+      case "!forget": {
+        await this.forgetFacts(rest, message);
         return;
       }
 
