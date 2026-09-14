@@ -105,7 +105,7 @@
           ]
         },
         "rulesPath": {
-          "description": "File of standing instructions given to every session, or undefined for none. A project's own `AGENTS.md` says how to work on that project and the agent reads it without help. This is what the operator wants of every session, whatever it is working on: the conventions of the house rather than of one repository. Absolute, and read on the host, so the path needs no grant and a session never sees the file itself. Re-read for each session, so editing it does not need a restart. It is paid for in the agent's context on every turn, which is the reason to keep it to the rules that actually matter.",
+          "description": "File of standing instructions given to every session, or undefined for none. A project's own `AGENTS.md` says how to work on that project and the agent reads it without help. This is what the operator wants of every session, whatever it is working on: the conventions of the house rather than of one repository. Absolute, and read on the host, so the path needs no grant and a session never sees the file itself. Defaults to `AGENTS.md` beside the configuration file when one is there, so the common case needs no setting. Naming a path that cannot be read is a refusal to start; the default simply not being there is not, since a default nobody asked for must not be able to stop the daemon. Re-read for each session, so editing it does not need a restart. It is paid for in the agent's context on every turn, which is the reason to keep it to the rules that actually matter.",
           "type": "string"
         }
       },

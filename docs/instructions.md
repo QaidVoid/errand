@@ -33,8 +33,16 @@ every session is given, whatever it is working on:
 }
 ```
 
-The path is absolute, because the daemon's working directory is not yours and a
-relative path would name a different file depending on where it was started.
+Setting it is usually unnecessary. When no path is named, errand looks for
+`AGENTS.md` beside the configuration file it actually loaded, so a file at
+`~/.config/errand/AGENTS.md` is picked up on its own. The default follows the
+configuration in force rather than a fixed location, so somebody with a file in
+their home directory and another in `/etc` gets the one belonging to the
+configuration being used.
+
+A path you name is absolute, because the daemon's working directory is not yours
+and a relative path would name a different file depending on where it was
+started.
 
 The file is read on the host, not inside the sandbox, so it needs no grant under
 `sandbox.policyExtra` and a session never sees the file itself. Only the text
@@ -48,6 +56,10 @@ than an empty heading.
 believes every session carries them, and a mistyped path that only ever showed
 up as a line in a log would leave that belief standing while no session got
 them. The exit code is 2, the same as any other refused configuration.
+
+The default is held to a different standard. No `AGENTS.md` beside the
+configuration simply means no house rules, because a default nobody asked for
+must not be able to stop the daemon.
 
 ## When the two disagree
 

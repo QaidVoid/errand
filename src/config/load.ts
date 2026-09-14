@@ -10,7 +10,7 @@
  * always wins, so none of that has to be guessed at when it matters.
  */
 
-import { join } from "@std/path";
+import { dirname, join, resolve } from "@std/path";
 import { type Config, ConfigError } from "./schema.ts";
 import { validateConfig } from "./validate.ts";
 
@@ -81,6 +81,7 @@ export function loadConfig(
   path: string,
   read = Deno.readTextFileSync,
   env: Record<string, string | undefined> = {},
+  exists: (path: string) => boolean = fileExists,
 ): Config {
   let text: string;
   try {
@@ -106,5 +107,31 @@ export function loadConfig(
     throw new ConfigError([`the configuration file at ${path} is not valid JSON: ${error}`]);
   }
 
-  return validateConfig(parsed);
+  const config = validateConfig(parsed);
+  return config.agent.rulesPath === undefined ? withRulesBeside(config, path, exists) : config;
+}
+
+/** House rules looked for beside the configuration when none were named. */
+export const RULES_FILENAME = "AGENTS.md";
+
+/**
+ * Takes house rules from beside the configuration file, when none were named.
+ *
+ * Beside the configuration rather than at a fixed path, so the rules follow
+ * whichever of the candidates was actually loaded: an operator with a file in
+ * their home directory and another in `/etc` gets the one belonging to the
+ * configuration in force, not whichever the search happened to reach first.
+ *
+ * Only when the file is there. An absent one is not a refusal, because a
+ * default nobody asked for must not be able to stop the daemon; naming a path
+ * that is wrong still is, since that is somebody saying they want rules.
+ */
+function withRulesBeside(
+  config: Config,
+  path: string,
+  exists: (path: string) => boolean,
+): Config {
+  const candidate = resolve(dirname(path), RULES_FILENAME);
+  if (!exists(candidate)) return config;
+  return { ...config, agent: { ...config.agent, rulesPath: candidate } };
 }

@@ -100,6 +100,11 @@ export interface AgentConfig {
    * repository. Absolute, and read on the host, so the path needs no grant and
    * a session never sees the file itself.
    *
+   * Defaults to `AGENTS.md` beside the configuration file when one is there,
+   * so the common case needs no setting. Naming a path that cannot be read is
+   * a refusal to start; the default simply not being there is not, since a
+   * default nobody asked for must not be able to stop the daemon.
+   *
    * Re-read for each session, so editing it does not need a restart. It is
    * paid for in the agent's context on every turn, which is the reason to keep
    * it to the rules that actually matter.
