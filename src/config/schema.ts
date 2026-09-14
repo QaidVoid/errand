@@ -396,7 +396,7 @@ export const DEFAULTS = {
     requireFullEnforcement: true,
     network: "restricted" as NetworkMode,
     egressPorts: [443],
-    egress: { mode: "open" as EgressMode, allow: [] as string[] },
+    egress: { mode: "proxy" as EgressMode, allow: ["*"] as string[] },
     hideHostAddress: false,
     image: "localhost/errand-agent:latest",
     memory: "4g",

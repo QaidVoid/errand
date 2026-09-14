@@ -403,10 +403,15 @@ Deno.test("a rules path that is not a path at all is refused", () => {
   );
 });
 
-Deno.test("egress defaults to open, the port-only behaviour", () => {
+/**
+ * Brokered by default: it is what keeps the provider credential out of a
+ * sandbox, and a lone `*` restricts no host, so what it costs is the audit and
+ * the port, not reach.
+ */
+Deno.test("egress defaults to a brokered pass-through", () => {
   const config = validateConfig(valid());
-  assertEquals(config.sandbox.egress.mode, "open");
-  assertEquals(config.sandbox.egress.allow, []);
+  assertEquals(config.sandbox.egress.mode, "proxy");
+  assertEquals(config.sandbox.egress.allow, ["*"]);
 });
 
 Deno.test("proxy mode with a hostname allowlist is accepted and lower-cased", () => {
