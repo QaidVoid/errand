@@ -43,7 +43,22 @@
         "index.crates.io",
         "jsr.io",
         "deno.land",
-        "registry.npmjs.org"
+        "registry.npmjs.org",
+        "archlinux.org",
+        "*.archlinux.org",
+        "*.pkgbuild.com",
+        "gentoo.org",
+        "*.gentoo.org",
+        "ubuntu.com",
+        "*.ubuntu.com",
+        "launchpad.net",
+        "ppa.launchpadcontent.net",
+        "debian.org",
+        "*.debian.org",
+        "alpinelinux.org",
+        "*.alpinelinux.org",
+        "fedoraproject.org",
+        "*.fedoraproject.org"
       ]
     },
     "memory": "4g",
