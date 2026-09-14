@@ -94,9 +94,54 @@ const TOKEN_VARIABLE = "ERRAND_GH_TOKEN";
 const CREDENTIAL_HELPER =
   `!f() { echo "username=x-access-token"; echo "password=$${TOKEN_VARIABLE}"; }; f`;
 
+/**
+ * Settings a repository must not be allowed to supply.
+ *
+ * These commands run on the host, outside the sandbox, against a tree the
+ * session can write. Git treats a repository as a source of code as much as of
+ * data: a hook, a credential helper, a filesystem monitor are all commands it
+ * will run on the daemon's behalf. Naming each one on the command line beats
+ * whatever the repository says, since a `-c` is read last.
+ *
+ * This is not the whole defence. A repository can also name a helper for one
+ * URL, or rewrite a URL out from under the push, and neither can be reset from
+ * here; that is why the push itself happens somewhere else. See
+ * {@link pushWork}.
+ */
+const SAFE_CONFIG: readonly string[] = [
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.pager=cat",
+  "-c",
+  "credential.helper=",
+  "-c",
+  "http.proxy=",
+  "-c",
+  "http.sslVerify=true",
+  "-c",
+  "protocol.ext.allow=never",
+];
+
+/**
+ * The environment git is given, so the host's own configuration cannot join in.
+ *
+ * The system and global files are the caller's rather than the repository's,
+ * but neither is wanted here: this runs one known operation and should behave
+ * the same on every host. A prompt would hang a daemon nobody is watching.
+ */
+const SAFE_ENV: Readonly<Record<string, string>> = {
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_TERMINAL_PROMPT: "0",
+};
+
 function git(run: Run, cwd: string, args: string[], token?: string): Promise<Ran> {
-  const env = token === undefined ? {} : { env: { [TOKEN_VARIABLE]: token } };
-  return run(["git", ...args], { cwd, ...env });
+  const env: Record<string, string> = { ...SAFE_ENV };
+  if (token !== undefined) env[TOKEN_VARIABLE] = token;
+  return run(["git", ...SAFE_CONFIG, ...args], { cwd, env });
 }
 
 /** The branch the work is on, refusing a detached head. */
@@ -257,6 +302,63 @@ function firstLine(text: string): string {
 }
 
 /**
+ * Pushes the session's commit from a repository it never had a chance to write.
+ *
+ * The push is the one step that carries the token and opens a connection, and
+ * it is the step git hangs the most on a repository's own configuration: a
+ * `pre-push` hook, a credential helper named for a single URL, an `insteadOf`
+ * that sends the whole thing somewhere else. A session owns its working tree,
+ * so against that tree none of those can be trusted, and the last two cannot be
+ * overridden from the command line at all.
+ *
+ * So the commit is pushed from a bare repository made here, holding one ref and
+ * a pointer to the session's objects. Objects are data and are only ever read;
+ * the configuration, which is code, is left behind. The session never learns of
+ * this directory and cannot write to it.
+ */
+async function pushWork(
+  run: Run,
+  projectPath: string,
+  branch: string,
+  url: string,
+  token: string,
+): Promise<void> {
+  const staging = await Deno.makeTempDir({ prefix: "errand-push-" });
+  const repository = join(staging, "repository.git");
+  try {
+    // A clone takes the refs and leaves the configuration: the copy gets a
+    // fresh one, and hooks are never carried over. `--shared` borrows the
+    // objects rather than copying them, so a long history costs nothing here,
+    // and objects are read-only data in any case.
+    const cloned = await git(run, staging, [
+      "clone",
+      "--shared",
+      "--bare",
+      "--quiet",
+      projectPath,
+      repository,
+    ]);
+    if (cloned.code !== 0) {
+      throw new PullRequestError(`could not prepare the push: ${firstLine(cloned.stderr)}`);
+    }
+
+    const pushed = await git(run, repository, [
+      "-c",
+      `credential.helper=${CREDENTIAL_HELPER}`,
+      "push",
+      "--force-with-lease",
+      url,
+      `refs/heads/${branch}:refs/heads/${branch}`,
+    ], token);
+    if (pushed.code !== 0) {
+      throw new PullRequestError(`could not push ${branch}: ${firstLine(pushed.stderr)}`);
+    }
+  } finally {
+    await Deno.remove(staging, { recursive: true }).catch(() => {});
+  }
+}
+
+/**
  * Opens the pull request, and returns where it is.
  *
  * The fork is made first and pushed to, rather than pushing to the upstream: a
@@ -275,17 +377,13 @@ export async function openPullRequest(
   const target = await upstream(run, projectPath);
   const fork = await forkOf(api, github.token, target, sleep);
 
-  const pushed = await git(run, projectPath, [
-    "-c",
-    `credential.helper=${CREDENTIAL_HELPER}`,
-    "push",
-    "--force-with-lease",
+  await pushWork(
+    run,
+    projectPath,
+    branch,
     `https://github.com/${fork.owner}/${fork.name}.git`,
-    `HEAD:refs/heads/${branch}`,
-  ], github.token);
-  if (pushed.code !== 0) {
-    throw new PullRequestError(`could not push ${branch}: ${firstLine(pushed.stderr)}`);
-  }
+    github.token,
+  );
 
   const summary = await git(run, projectPath, ["log", "-1", "--format=%b"]);
   const created = await api(`/repos/${target.owner}/${target.name}/pulls`, {

@@ -230,7 +230,10 @@ Deno.test("the push goes to the fork GitHub actually made", () =>
       push?.args.join(" ") ?? "",
       "https://github.com/errand-bot-login/project-1.git",
     );
-    assertStringIncludes(push?.args.join(" ") ?? "", "HEAD:refs/heads/feature/thing");
+    assertStringIncludes(
+      push?.args.join(" ") ?? "",
+      "refs/heads/feature/thing:refs/heads/feature/thing",
+    );
   }));
 
 /** In `ps` for anyone on the host, and in git's own error output. */
@@ -382,5 +385,45 @@ Deno.test("a request GitHub refuses is reported with what it said", () =>
         ),
       ),
       "already exists",
+    );
+  }));
+
+/**
+ * The daemon's git runs on the host, outside the sandbox, against a tree the
+ * session can write. A repository is code as much as data, so none of what it
+ * says about commands to run may be honoured.
+ */
+Deno.test("the session's repository cannot make the daemon run anything", () =>
+  withRepo(async (project, repo) => {
+    const git = repoGit();
+    const github = workingApi();
+
+    await openPullRequest(
+      { github: GITHUB, projectPath: project, title: "t", requestedBy: "amelia", links: {} },
+      git.run,
+      github.api,
+      () => Promise.resolve(),
+    );
+
+    for (const call of git.calls) {
+      const line = call.args.join(" ");
+      // Hooks are the direct route: a pre-push in the session's own tree.
+      assertStringIncludes(line, "core.hooksPath=/dev/null");
+      // A helper is a command too, and the repository's list is reset before
+      // the daemon's own is added.
+      assertStringIncludes(line, "credential.helper=");
+      // The host's own files are not consulted either.
+      assertEquals(call.env?.GIT_CONFIG_NOSYSTEM, "1");
+      assertEquals(call.env?.GIT_CONFIG_GLOBAL, "/dev/null");
+    }
+
+    // A helper named for one URL, and an insteadOf, cannot be reset from the
+    // command line, so the push does not happen in the session's repository.
+    const push = git.calls.find((call) => call.args.includes("push"));
+    assertEquals(push === undefined, false);
+    assertEquals(push?.args.includes(repo), false);
+    assertStringIncludes(
+      git.calls.map((c) => c.args.join(" ")).join("\n"),
+      "clone --shared --bare",
     );
   }));
