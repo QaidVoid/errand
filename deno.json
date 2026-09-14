@@ -24,12 +24,29 @@
     "typecheck": "deno check src/ scripts/"
   },
   "exclude": [
-    "dist",
     "node_modules",
     "docs/.vitepress/cache"
   ],
+  "publish": {
+    "include": [
+      "src",
+      "dist/web",
+      "deno.json",
+      "deno.lock",
+      "README.md",
+      "LICENSE-MIT",
+      "LICENSE-APACHE",
+      "config.example.json",
+      "config.schema.json"
+    ],
+    "exclude": [
+      "**/*_test.ts"
+    ]
+  },
   "fmt": {
     "exclude": [
+      ".zcode",
+      "dist",
       "web",
       "docs/reference",
       "config.schema.json"
@@ -43,6 +60,7 @@
   },
   "lint": {
     "exclude": [
+      "dist",
       "web"
     ],
     "rules": {

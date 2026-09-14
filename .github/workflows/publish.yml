@@ -1,0 +1,31 @@
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish-jsr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: denoland/setup-deno@667a34cdef165d8d2b2e98dde39547c9daac7282 # v2.0.4
+        with:
+          deno-version: v2.x
+
+      - name: Verify
+        run: deno task check
+
+      - name: Build the interface
+        run: deno task build:web
+
+      # The interface bundle in dist/web is a build artifact and is gitignored,
+      # so the freshly built tree is dirty; the package ships it deliberately.
+      - name: Publish to JSR
+        run: deno publish --allow-dirty
