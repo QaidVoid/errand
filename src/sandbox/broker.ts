@@ -18,7 +18,9 @@
 /**
  * Whether `host` is permitted by an allowlist of names and `*.` wildcards.
  *
- * A bare name matches only itself. A `*.example.com` rule matches any single or
+ * A lone `*` admits any host, turning the broker into an audit pass-through: it
+ * still gates the port and logs every connection, but restricts no host. A bare
+ * name matches only itself. A `*.example.com` rule matches any single or
  * multi-label subdomain of `example.com` but not the bare `example.com`, since
  * a wildcard is written when the apex is not what a session talks to. The
  * comparison is case-folded, because a hostname is.
@@ -29,6 +31,7 @@ export function hostAllowed(host: string, allow: readonly string[]): boolean {
   const h = host.trim().toLowerCase();
   if (h.length === 0) return false;
   for (const rule of allow) {
+    if (rule === "*") return true;
     if (rule.startsWith("*.")) {
       const suffix = rule.slice(1).toLowerCase(); // ".example.com"
       if (h.length > suffix.length && h.endsWith(suffix)) return true;

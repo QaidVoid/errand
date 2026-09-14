@@ -417,6 +417,13 @@ Deno.test("proxy mode with a hostname allowlist is accepted and lower-cased", ()
   assertEquals(config.sandbox.egress.allow, ["github.com", "*.githubusercontent.com"]);
 });
 
+Deno.test("a lone * catch-all is accepted as an allowlist entry", () => {
+  const config = validateConfig(valid({
+    sandbox: { egress: { mode: "proxy", allow: ["*"] } },
+  }));
+  assertEquals(config.sandbox.egress.allow, ["*"]);
+});
+
 Deno.test("an unknown egress mode is refused", () => {
   assertStringIncludes(
     problemsOf(valid({ sandbox: { egress: { mode: "wideopen" } } })).join("\n"),

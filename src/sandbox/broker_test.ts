@@ -27,6 +27,14 @@ Deno.test("an empty allowlist admits nothing", () => {
   assertEquals(hostAllowed("", ["github.com"]), false);
 });
 
+Deno.test("a lone * admits any host but not the empty host", () => {
+  assertEquals(hostAllowed("github.com", ["*"]), true);
+  assertEquals(hostAllowed("derp1.tailscale.com", ["*"]), true);
+  assertEquals(hostAllowed("anything.example", ["a.com", "*"]), true);
+  // The catch-all still does not conjure a host out of nothing.
+  assertEquals(hostAllowed("", ["*"]), false);
+});
+
 Deno.test("a CONNECT line yields its host and port, or nothing", () => {
   assertEquals(parseConnect("CONNECT github.com:443 HTTP/1.1"), { host: "github.com", port: 443 });
   assertEquals(parseConnect("connect github.com:443 HTTP/1.1"), { host: "github.com", port: 443 });

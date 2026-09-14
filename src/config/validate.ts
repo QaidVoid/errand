@@ -576,11 +576,16 @@ function validateEgress(
       problems.add("sandbox.egress.allow must be a list of hostnames");
     } else {
       for (const entry of list) {
-        if (typeof entry !== "string" || !EGRESS_HOST.test(entry.trim())) {
+        const value = typeof entry === "string" ? entry.trim() : "";
+        if (value === "*") {
+          allow.push("*");
+          continue;
+        }
+        if (typeof entry !== "string" || !EGRESS_HOST.test(value)) {
           problems.add(`sandbox.egress.allow entry ${JSON.stringify(entry)} is not a hostname`);
           continue;
         }
-        allow.push(entry.trim().toLowerCase());
+        allow.push(value.toLowerCase());
       }
     }
   }
