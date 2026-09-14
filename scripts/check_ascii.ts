@@ -16,19 +16,34 @@ interface Offence {
   character: string;
 }
 
-async function tracked(): Promise<string[]> {
-  const listed = new Deno.Command("jj", {
-    args: ["file", "list"],
-    stdout: "piped",
-    stderr: "null",
-  });
-  const { code, stdout } = await listed.output();
-  if (code !== 0) throw new Error("could not list tracked files; is this a jj repository?");
+/**
+ * Asks one tool for the tracked files, or nothing when it is not installed.
+ *
+ * A tool that is absent is not a failure: the checkout this runs in decides
+ * which one is there, and continuous integration has only git.
+ */
+async function listedBy(program: string, args: string[]): Promise<string[] | undefined> {
+  let output;
+  try {
+    output = await new Deno.Command(program, { args, stdout: "piped", stderr: "null" }).output();
+  } catch {
+    return undefined;
+  }
+  if (!output.success) return undefined;
   return new TextDecoder()
-    .decode(stdout)
+    .decode(output.stdout)
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+}
+
+async function tracked(): Promise<string[]> {
+  const files = await listedBy("jj", ["file", "list"]) ??
+    await listedBy("git", ["ls-files"]);
+  if (files === undefined) {
+    throw new Error("could not list tracked files; neither jj nor git answered");
+  }
+  return files;
 }
 
 function scan(file: string, text: string): Offence[] {
