@@ -32,7 +32,7 @@ import {
   RESOLV_CONF,
   RESOLV_FILENAME,
 } from "./policy.ts";
-import { agentRuntime } from "./runtime.ts";
+import { agentRuntime, type Lookup } from "./runtime.ts";
 import { spawnAgent } from "./spawn.ts";
 
 /** What the tool prints when it read a policy and then ignored it. */
@@ -141,6 +141,21 @@ export function providerBrokerUrl(port: number): string {
 }
 
 /**
+ * Extras the daemon supplies, which a test has no need of.
+ *
+ * Grouped rather than trailing the constructor, so what a caller is opting
+ * into is named at the call site instead of counted out positionally.
+ */
+export interface BaileyOptions {
+  /** Host loopback port of the broker, under `egress.mode = proxy`. */
+  egressProxyPort?: number;
+  /** What stands in for the provider credential inside a session. */
+  brokering?: ProviderBrokering;
+  /** Finds the agent. Injected so a test needs no agent installed. */
+  lookup?: Lookup;
+}
+
+/**
  * What the daemon holds back from a session, and what it gives instead.
  *
  * The credential never crosses into a sandbox: the broker puts it on at the
@@ -210,8 +225,7 @@ export class BaileySandbox implements Sandbox {
     private readonly log: Logger,
     private readonly stateRoot: string,
     private readonly run: Run = runBailey,
-    private readonly egressProxyPort?: number,
-    private readonly brokering?: ProviderBrokering,
+    private readonly options: BaileyOptions = {},
   ) {}
 
   /**
@@ -223,8 +237,8 @@ export class BaileySandbox implements Sandbox {
    * can be replayed. Everything else crosses unchanged.
    */
   private brokeredEnv(env: Record<string, string>): Record<string, string> {
-    const brokering = this.brokering;
-    if (brokering === undefined || this.egressProxyPort === undefined) return env;
+    const brokering = this.options.brokering;
+    if (brokering === undefined || this.options.egressProxyPort === undefined) return env;
     return { ...env, [brokering.credentialName]: brokering.nonce };
   }
 
@@ -239,12 +253,12 @@ export class BaileySandbox implements Sandbox {
    * against the broker and the namespace reaches nothing else.
    */
   private async writeProviderOverride(launch: SandboxLaunch): Promise<void> {
-    const brokering = this.brokering;
-    if (brokering === undefined || this.egressProxyPort === undefined) return;
+    const brokering = this.options.brokering;
+    if (brokering === undefined || this.options.egressProxyPort === undefined) return;
     const directory = join(launch.stateDir, "home", ".pi", "agent");
     const override = {
       providers: {
-        [launch.provider]: { baseUrl: providerBrokerUrl(this.egressProxyPort) },
+        [launch.provider]: { baseUrl: providerBrokerUrl(this.options.egressProxyPort) },
       },
     };
     await Deno.mkdir(directory, { recursive: true });
@@ -264,10 +278,10 @@ export class BaileySandbox implements Sandbox {
    */
   private egressEnv(): Record<string, string> | undefined {
     const base = this.config.env;
-    if (this.config.egress.mode !== "proxy" || this.egressProxyPort === undefined) {
+    if (this.config.egress.mode !== "proxy" || this.options.egressProxyPort === undefined) {
       return base;
     }
-    const url = egressProxyUrl(this.egressProxyPort);
+    const url = egressProxyUrl(this.options.egressProxyPort);
     return {
       ...(base ?? {}),
       HTTPS_PROXY: url,
@@ -307,7 +321,7 @@ export class BaileySandbox implements Sandbox {
 
     // This backend runs the host's own agent rather than one baked into an
     // image, so an agent that is not installed is a reason to refuse to start.
-    if (agentRuntime() === undefined) {
+    if (agentRuntime(this.options.lookup) === undefined) {
       throw new SandboxUnavailableError("bailey", [
         "the pi agent is not on PATH, and this backend runs the host's own installation",
       ]);
@@ -359,7 +373,7 @@ export class BaileySandbox implements Sandbox {
   }
 
   async launch(launch: SandboxLaunch): Promise<SandboxHandle> {
-    const runtime = agentRuntime();
+    const runtime = agentRuntime(this.options.lookup);
     if (runtime === undefined) {
       throw new SandboxLaunchError(
         "the pi agent is not on PATH, so there is nothing for a confined session to run",
@@ -399,7 +413,7 @@ export class BaileySandbox implements Sandbox {
     // private home rather than the project it was asked to work in.
     const spawned = spawnAgent(
       "bailey",
-      baileyArgs(this.config, launch, policy, this.egressProxyPort),
+      baileyArgs(this.config, launch, policy, this.options.egressProxyPort),
       sessionEnvironment(launch.env, Deno.env.toObject(), join(launch.stateDir, "home")),
       launch.projectPath,
     );

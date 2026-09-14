@@ -199,6 +199,12 @@ Deno.test("the cgroup the tool may use is passed through", () => {
   assertEquals(env.CHAT_TOKEN, undefined);
 });
 
+/**
+ * Stands in for an installed agent, so a probe does not depend on the host.
+ * CI has no pi on PATH, and these tests are about what the report says.
+ */
+const fakeAgent = (name: string) => (name === "pi" ? "/usr/local/bin/pi" : undefined);
+
 /** The report must never describe a tighter boundary than the one applied. */
 Deno.test("extra grants are named in what the backend reports", async () => {
   const root = await Deno.makeTempDir();
@@ -211,6 +217,7 @@ Deno.test("extra grants are named in what the backend reports", async () => {
     createLogger({}, () => {}),
     root,
     run,
+    { lookup: fakeAgent },
   );
 
   const report = await sandbox.probe();
@@ -231,6 +238,7 @@ Deno.test("variables set by configuration are named in what the backend reports"
     createLogger({}, () => {}),
     root,
     run,
+    { lookup: fakeAgent },
   );
 
   const said = (await sandbox.probe()).notes.join("\n");
@@ -261,7 +269,8 @@ Deno.test("proxy egress without a running broker adds no flag", () => {
 });
 
 Deno.test("open egress never names the proxy, even given a port", () => {
-  const args = baileyArgs(CONFIG, launch(), "/p.toml", 54321);
+  const open: SandboxConfig = { ...CONFIG, egress: { mode: "open", allow: [] } };
+  const args = baileyArgs(open, launch(), "/p.toml", 54321);
   assertEquals(args.includes("--egress-proxy"), false);
 });
 

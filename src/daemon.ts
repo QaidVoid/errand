@@ -52,14 +52,10 @@ export function createSandbox(
 ): Sandbox {
   return config.sandbox.backend === "podman"
     ? new PodmanSandbox(config.sandbox, log)
-    : new BaileySandbox(
-      config.sandbox,
-      log,
-      config.stateDir,
-      undefined,
-      egressProxyPort,
-      brokering,
-    );
+    : new BaileySandbox(config.sandbox, log, config.stateDir, undefined, {
+      ...(egressProxyPort === undefined ? {} : { egressProxyPort }),
+      ...(brokering === undefined ? {} : { brokering }),
+    });
 }
 
 /**
