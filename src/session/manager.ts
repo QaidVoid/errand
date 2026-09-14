@@ -23,6 +23,7 @@ import { redacting } from "./redacted.ts";
 import type { ThreadRecord, ThreadRegistry } from "./registry.ts";
 import { type IncomingMessage, Session, type SessionOptions, type Timers } from "./session.ts";
 import { Transcript, TRANSCRIPT_FILENAME } from "./transcript.ts";
+import { prepareRecordDir, recordDir } from "./record.ts";
 import { ViewFanOut } from "./views.ts";
 
 /** How a request to start a session turned out. */
@@ -295,6 +296,7 @@ export class SessionManager {
       this.options.scheduler.releaseSession();
       try {
         Deno.removeSync(stateDir, { recursive: true });
+        Deno.removeSync(recordDir(stateDir), { recursive: true });
       } catch {
         // It may never have been created, which is the state we wanted.
       }
@@ -304,7 +306,7 @@ export class SessionManager {
     const fanOut = new ViewFanOut(
       this.options.log,
       undefined,
-      new Transcript(join(stateDir, TRANSCRIPT_FILENAME), this.options.log),
+      new Transcript(join(prepareRecordDir(stateDir), TRANSCRIPT_FILENAME), this.options.log),
     );
     await fanOut.attach(thread.port);
     this.views.set(id, fanOut);
@@ -372,7 +374,10 @@ export class SessionManager {
       return { status: "refused", reason: "this thread could not be reopened" };
     }
 
-    const transcript = new Transcript(join(record.stateDir, TRANSCRIPT_FILENAME), this.options.log);
+    const transcript = new Transcript(
+      join(prepareRecordDir(record.stateDir), TRANSCRIPT_FILENAME),
+      this.options.log,
+    );
     const stored = transcript.read();
     const fanOut = new ViewFanOut(this.options.log, undefined, transcript);
 

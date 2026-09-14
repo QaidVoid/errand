@@ -62,6 +62,7 @@ import {
 } from "./commands.ts";
 import { Delegating, type Outcome as DelegationOutcome } from "./delegating.ts";
 import { MIN_CHECK_MS, nextCheckMs, treeBytes, verdict } from "./disk.ts";
+import { prepareRecordDir, recordDir } from "./record.ts";
 import { readDirectory, readFileForDisplay } from "./files.ts";
 import {
   ASKED_FILENAME,
@@ -1055,7 +1056,7 @@ export class Session {
   private whoAsked(): { id: string; name?: string } | undefined {
     let contents: string;
     try {
-      contents = Deno.readTextFileSync(join(this.options.stateDir, ASKED_FILENAME));
+      contents = Deno.readTextFileSync(join(recordDir(this.options.stateDir), ASKED_FILENAME));
     } catch {
       return undefined;
     }
@@ -1815,7 +1816,7 @@ export class Session {
     try {
       Deno.mkdirSync(this.options.stateDir, { recursive: true });
       Deno.writeTextFileSync(
-        join(this.options.stateDir, ASKED_FILENAME),
+        join(prepareRecordDir(this.options.stateDir), ASKED_FILENAME),
         `${message.authorId}\n${message.authorName ?? ""}\n`,
       );
     } catch (error) {

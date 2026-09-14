@@ -16,6 +16,7 @@ import { createLogger } from "./log.ts";
 import { SandboxUnavailableError } from "./sandbox/backend.ts";
 import { serve } from "./serve.ts";
 import { treeBytes } from "./session/disk.ts";
+import { recordDir } from "./session/record.ts";
 import { ThreadRegistry } from "./session/registry.ts";
 
 const USAGE = [
@@ -37,7 +38,12 @@ async function threads(args: readonly string[]): Promise<number> {
   return await runThreads(args, {
     registry,
     sizeOf: (stateDir) => treeBytes(stateDir),
-    remove: (stateDir) => Deno.remove(stateDir, { recursive: true }),
+    remove: async (stateDir) => {
+      await Deno.remove(stateDir, { recursive: true });
+      // The record sits beside the state directory, so removing a thread has
+      // to take it too or the transcript outlives what it describes.
+      await Deno.remove(recordDir(stateDir), { recursive: true }).catch(() => {});
+    },
     write: (line) => console.log(line),
     now: () => Date.now(),
   });

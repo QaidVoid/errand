@@ -23,6 +23,7 @@ import type {
 } from "./port.ts";
 import { ThreadRegistry } from "./registry.ts";
 import type { IncomingMessage } from "./session.ts";
+import { recordDir } from "./record.ts";
 import { TRANSCRIPT_FILENAME } from "./transcript.ts";
 
 const encoder = new TextEncoder();
@@ -366,7 +367,7 @@ Deno.test("a resumed session carries on the turn numbering", () =>
   withManager(async ({ manager, root }) => {
     await manager.start(message("demo: go"));
     await manager.endThread("thread-1", "idle");
-    const transcript = join(root, "state", "demo-s1", TRANSCRIPT_FILENAME);
+    const transcript = join(recordDir(join(root, "state", "demo-s1")), TRANSCRIPT_FILENAME);
     const written = Deno.readTextFileSync(transcript);
     assertEquals(written.includes('"turn":1'), true);
 

@@ -16,7 +16,8 @@ import { hostPathUnder } from "../sandbox/paths.ts";
 import { readDirectory, readFileForDisplay } from "../session/files.ts";
 import type { SessionManager } from "../session/manager.ts";
 import type { SessionUsage } from "../session/port.ts";
-import { Transcript, TRANSCRIPT_FILENAME } from "../session/transcript.ts";
+import { Transcript } from "../session/transcript.ts";
+import { transcriptPath } from "../session/record.ts";
 import type { Recorded } from "../session/views.ts";
 import { checkBindAddress } from "./address.ts";
 import { type NameLookup, WebView, type WireEntry, withoutMentions } from "./view.ts";
@@ -326,7 +327,7 @@ export class WebServer {
       return json({ error: "no such session" }, 404);
     }
 
-    const stored = new Transcript(join(record.stateDir, TRANSCRIPT_FILENAME), this.log).read();
+    const stored = new Transcript(transcriptPath(record.stateDir), this.log).read();
 
     // The turn is carried on each entry rather than announced between them,
     // because a stored transcript is read in one piece rather than streamed.
@@ -410,7 +411,7 @@ export class WebServer {
     const known = this.openings.get(sessionId);
     if (known !== undefined) return known;
 
-    const found = new Transcript(join(stateDir, TRANSCRIPT_FILENAME), this.log).opening();
+    const found = new Transcript(transcriptPath(stateDir), this.log).opening();
     if (found !== undefined && found.length > 0) this.openings.set(sessionId, found);
     return found;
   }
