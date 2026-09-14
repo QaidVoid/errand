@@ -47,8 +47,18 @@ export class ProjectEscapeError extends Error {
   }
 }
 
-/** Matches a leading `name:` on the first line, before any validation. */
-const PREFIX = /^([^\s:/\\]{1,64}):\s*/;
+/**
+ * Matches a leading `name:` on the first line, before any validation.
+ *
+ * The lookahead is what keeps a URL out. `https://example.com` opens with
+ * something that is a perfectly valid project name followed by a colon, so
+ * without it a message that begins with a link selects a project called
+ * `https`, and every later message beginning with a link is refused because
+ * that project already has a live session. A colon followed immediately by two
+ * slashes is a scheme, never a name. `note: //TODO` still selects `note`,
+ * because there the slashes are not what follows the colon.
+ */
+const PREFIX = /^([^\s:/\\]{1,64}):(?!\/\/)\s*/;
 
 /**
  * Chooses the project for a session, without touching the filesystem.

@@ -84,3 +84,44 @@ Deno.test("a project that is a symlink out of the root is refused", async () => 
     await Deno.remove(elsewhere, { recursive: true });
   }
 });
+
+Deno.test("a message that opens with a link is a prompt, not a project called https", () => {
+  // Reported: the first such message made a shared `https` project with a live
+  // session, and every later link-first message was refused because that
+  // project was busy.
+  const selection = selectProject(
+    "https://github.com/QaidVoid/errand look at this",
+    "/srv/projects",
+    "s-1",
+  );
+
+  assertEquals(selection.wasExplicit, false);
+  assertEquals(selection.name, "s-1");
+  assertEquals(selection.prompt, "https://github.com/QaidVoid/errand look at this");
+});
+
+Deno.test("every scheme is left alone, not just https", () => {
+  for (const url of ["http://x.dev", "ssh://git@x.dev/r", "ftp://x.dev", "file:///tmp/x"]) {
+    const selection = selectProject(url, "/srv/projects", "fallback");
+    assertEquals(selection.wasExplicit, false, url);
+    assertEquals(selection.prompt, url);
+  }
+});
+
+Deno.test("a name is still a name when slashes are not what follows the colon", () => {
+  // The fix keys on `://`, so a prompt whose text merely begins with slashes
+  // after a space still selects its project.
+  const selection = selectProject("notes: //TODO tidy this up", "/srv/projects", "fallback");
+
+  assertEquals(selection.wasExplicit, true);
+  assertEquals(selection.name, "notes");
+  assertEquals(selection.prompt, "//TODO tidy this up");
+});
+
+Deno.test("an ordinary project prefix is unaffected", () => {
+  const selection = selectProject("errand: add a test", "/srv/projects", "fallback");
+
+  assertEquals(selection.wasExplicit, true);
+  assertEquals(selection.name, "errand");
+  assertEquals(selection.prompt, "add a test");
+});
