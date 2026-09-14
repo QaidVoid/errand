@@ -194,7 +194,7 @@ Deno.test("a session that is running is listed, with what it was asked", () =>
     const listed = await (await get("/api/sessions")).json();
 
     assertEquals(listed.length, 1);
-    assertEquals(listed[0].id, "s1");
+    assertEquals(listed[0].id, "demo-s1");
     assertEquals(listed[0].project, "demo");
     assertEquals(listed[0].live, true);
     assertEquals(listed[0].opening, "go");
@@ -211,7 +211,7 @@ Deno.test("a session whose sandbox has gone is still listed", () =>
 
     assertEquals(listed.length, 1);
     assertEquals(listed[0].live, false);
-    assertEquals(listed[0].id, "s1");
+    assertEquals(listed[0].id, "demo-s1");
   }));
 
 Deno.test("a session can be started from the interface", () =>
@@ -219,7 +219,7 @@ Deno.test("a session can be started from the interface", () =>
     const answer = await post("/api/sessions", { project: "demo", prompt: "fix the parser" });
 
     assertEquals(answer.status, 200);
-    assertEquals((await answer.json()).id, "s1");
+    assertEquals((await answer.json()).id, "demo-s1");
     assertEquals(manager.sessions.length, 1);
   }));
 
@@ -235,7 +235,7 @@ Deno.test("a message reaches the session it names", () =>
   withServer(async ({ post, manager }) => {
     await manager.start({ id: "m1", authorId: OWNER, content: "demo: go" });
 
-    const answer = await post("/api/sessions/s1/send", { text: "carry on" });
+    const answer = await post("/api/sessions/demo-s1/send", { text: "carry on" });
 
     assertEquals(answer.status, 200);
     assertEquals((await answer.json()).accepted, true);
@@ -254,7 +254,7 @@ Deno.test("an observing interface changes nothing and says why", () =>
     assertEquals((await (await get("/api/interface")).json()).observer, true);
 
     const started = await post("/api/sessions", { project: "demo", prompt: "go" });
-    const sent = await post("/api/sessions/s1/send", { text: "hello" });
+    const sent = await post("/api/sessions/demo-s1/send", { text: "hello" });
 
     assertEquals(started.status, 403);
     assertEquals(sent.status, 403);
@@ -265,7 +265,7 @@ Deno.test("a live session is streamed, starting with a reset", () =>
   withServer(async ({ get, manager }) => {
     await manager.start({ id: "m1", authorId: OWNER, content: "demo: go" });
 
-    const answer = await get("/api/sessions/s1/stream");
+    const answer = await get("/api/sessions/demo-s1/stream");
     assertEquals(answer.headers.get("content-type"), "text/event-stream");
 
     const reader = (answer.body as ReadableStream<Uint8Array>).getReader();
@@ -288,7 +288,7 @@ Deno.test("a stopped session's transcript is read from where it was written", ()
     await manager.start({ id: "m1", authorId: OWNER, authorName: "amelia", content: "demo: go" });
     await manager.endThread("thread-1", "idle");
 
-    const answer = await (await get("/api/sessions/s1/transcript")).json();
+    const answer = await (await get("/api/sessions/demo-s1/transcript")).json();
 
     assertEquals(Array.isArray(answer.entries), true);
     assertEquals(answer.grouped, true);
@@ -306,8 +306,8 @@ Deno.test("a session's project can be listed and read", () =>
     await manager.start({ id: "m1", authorId: OWNER, content: "demo: go" });
     Deno.writeTextFileSync(join(root, "projects", "demo", "readme.md"), "hello\n");
 
-    const tree = await (await get("/api/sessions/s1/tree")).json();
-    const file = await (await get("/api/sessions/s1/file?path=readme.md")).json();
+    const tree = await (await get("/api/sessions/demo-s1/tree")).json();
+    const file = await (await get("/api/sessions/demo-s1/file?path=readme.md")).json();
 
     assertEquals(tree.some((entry: { name: string }) => entry.name === "readme.md"), true);
     assertEquals(file.text, "hello\n");
@@ -319,7 +319,7 @@ Deno.test("a path outside the project is refused", () =>
   withServer(async ({ get, manager }) => {
     await manager.start({ id: "m1", authorId: OWNER, content: "demo: go" });
 
-    const answer = await get("/api/sessions/s1/file?path=../../../etc/passwd");
+    const answer = await get("/api/sessions/demo-s1/file?path=../../../etc/passwd");
 
     assertEquals(answer.status, 403);
     assertStringIncludes((await answer.json()).error, "outside this session's project");
@@ -330,7 +330,7 @@ Deno.test("a file can be downloaded as itself", () =>
     await manager.start({ id: "m1", authorId: OWNER, content: "demo: go" });
     Deno.writeTextFileSync(join(root, "projects", "demo", "notes.txt"), "some notes\n");
 
-    const answer = await get("/api/sessions/s1/download?path=notes.txt");
+    const answer = await get("/api/sessions/demo-s1/download?path=notes.txt");
 
     assertStringIncludes(answer.headers.get("content-disposition") ?? "", 'filename="notes.txt"');
     assertEquals(await answer.text(), "some notes\n");

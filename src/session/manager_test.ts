@@ -331,7 +331,7 @@ Deno.test("a session that ends lets go of its thread and can be resumed", () =>
     assertEquals(manager.isFinishedThread("thread-1"), true);
     assertEquals(threads.released, ["thread-1"]);
     // Idling out is not being finished with: the history outlives the sandbox.
-    assertEquals(registry.get("thread-1")?.sessionId, "s1");
+    assertEquals(registry.get("thread-1")?.sessionId, "demo-s1");
     assertEquals(manager.canResume("thread-1"), true);
     assertEquals(manager.resumable().length, 1);
   }));
@@ -356,9 +356,9 @@ Deno.test("resuming picks the thread up where it stopped", () =>
     const outcome = await manager.resume("thread-1", message("carry on", "m2"));
 
     assertEquals(outcome.status, "started");
-    assertEquals(outcome.status === "started" ? outcome.session.id : "", "s1");
+    assertEquals(outcome.status === "started" ? outcome.session.id : "", "demo-s1");
     assertEquals(sandbox.launched[1]?.resume, true);
-    assertEquals(sandbox.launched[1]?.stateDir, join(root, "state", "s1"));
+    assertEquals(sandbox.launched[1]?.stateDir, join(root, "state", "demo-s1"));
   }));
 
 /** A new exchange labelled with a number already used reads as the same one. */
@@ -366,7 +366,7 @@ Deno.test("a resumed session carries on the turn numbering", () =>
   withManager(async ({ manager, root }) => {
     await manager.start(message("demo: go"));
     await manager.endThread("thread-1", "idle");
-    const transcript = join(root, "state", "s1", TRANSCRIPT_FILENAME);
+    const transcript = join(root, "state", "demo-s1", TRANSCRIPT_FILENAME);
     const written = Deno.readTextFileSync(transcript);
     assertEquals(written.includes('"turn":1'), true);
 
@@ -431,7 +431,7 @@ Deno.test("a view can be attached to a live session and detached again", () =>
       return Promise.resolve();
     };
 
-    const detach = await manager.attachView("s1", watcher);
+    const detach = await manager.attachView("demo-s1", watcher);
     assertEquals(typeof detach, "function");
     assertEquals(await manager.attachView("nobody", watcher), undefined);
     detach?.();
@@ -440,11 +440,11 @@ Deno.test("a view can be attached to a live session and detached again", () =>
 Deno.test("the thread a session belongs to is known live or remembered", () =>
   withManager(async ({ manager }) => {
     await manager.start(message("demo: go"));
-    assertEquals(manager.threadIdFor("s1"), "thread-1");
+    assertEquals(manager.threadIdFor("demo-s1"), "thread-1");
 
     await manager.endThread("thread-1", "idle");
 
-    assertEquals(manager.threadIdFor("s1"), "thread-1");
+    assertEquals(manager.threadIdFor("demo-s1"), "thread-1");
     assertEquals(manager.threadIdFor("s404"), undefined);
   }));
 
@@ -499,7 +499,7 @@ Deno.test("a session can be written to by its own identifier", () =>
   withManager(async ({ manager }) => {
     await manager.start(message("demo: go"));
 
-    assertEquals(await manager.deliverToSession("s1", message("more", "m2")), true);
+    assertEquals(await manager.deliverToSession("demo-s1", message("more", "m2")), true);
     assertEquals(await manager.deliverToSession("s404", message("more", "m3")), false);
   }));
 
@@ -509,6 +509,6 @@ Deno.test("writing to a session that stopped picks it up again", () =>
     await manager.start(message("demo: go"));
     await manager.endThread("thread-1", "idle");
 
-    assertEquals(await manager.deliverToSession("s1", message("carry on", "m2")), true);
+    assertEquals(await manager.deliverToSession("demo-s1", message("carry on", "m2")), true);
     assertEquals(manager.sessions.length, 1);
   }));

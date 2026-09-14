@@ -17,6 +17,7 @@ import type { MemoryStore } from "../memory/store.ts";
 import type { Sandbox } from "../sandbox/backend.ts";
 import type { EndReason, ThreadPort } from "./port.ts";
 import { callApi, openPullRequest, runCommand } from "./pr.ts";
+import { sessionId, sessionToken } from "./ids.ts";
 import { ensureProjectDirectory, type ProjectSelection, selectProject } from "./projects.ts";
 import { redacting } from "./redacted.ts";
 import type { ThreadRecord, ThreadRegistry } from "./registry.ts";
@@ -119,13 +120,6 @@ type SharedOptions = Omit<
   | "onEnded"
 >;
 
-let counter = 0;
-
-function defaultId(): string {
-  counter += 1;
-  return `${counter.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-}
-
 /** Owns every live session and the mapping from threads to them. */
 export class SessionManager {
   private readonly byThread = new Map<string, Session>();
@@ -214,11 +208,12 @@ export class SessionManager {
    * every failure path, so a refused or failed start cannot consume a slot.
    */
   start(message: IncomingMessage): Promise<StartOutcome> {
-    const id = (this.options.makeId ?? defaultId)();
+    const token = (this.options.makeId ?? sessionToken)();
 
     // A named session reaches the same directory every time the name is used.
     // An unnamed one works in a directory of its own, named after the session.
-    const project = selectProject(message.content, this.options.config.projectRoot, id);
+    const project = selectProject(message.content, this.options.config.projectRoot, token);
+    const id = sessionId(project, token);
     return this.launch(id, project, message, (name) => this.options.threads.create(message, name));
   }
 
@@ -235,18 +230,22 @@ export class SessionManager {
     ownerId: string;
     ownerName?: string;
   }): Promise<StartOutcome> {
-    const id = (this.options.makeId ?? defaultId)();
+    const token = (this.options.makeId ?? sessionToken)();
     const named = request.project.trim().length > 0 ? `${request.project.trim()}: ` : "";
     const message: IncomingMessage = {
-      id: `web-${id}`,
+      id: `web-${token}`,
       authorId: request.ownerId,
       ...(request.ownerName === undefined ? {} : { authorName: request.ownerName }),
       content: request.prompt,
     };
 
-    const project = selectProject(`${named}${request.prompt}`, this.options.config.projectRoot, id);
+    const project = selectProject(
+      `${named}${request.prompt}`,
+      this.options.config.projectRoot,
+      token,
+    );
     return this.launch(
-      id,
+      sessionId(project, token),
       project,
       message,
       (name) => this.options.threads.open(name, `Session started from the interface: ${name}`),
