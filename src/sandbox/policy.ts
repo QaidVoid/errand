@@ -53,8 +53,12 @@ const SYSTEM_READ = [
   "/etc/ld.so.conf",
   "/etc/ld.so.conf.d",
   // Certificate authorities, or TLS fails and the provider is unreachable.
+  // Some distributions keep only symlinks under /etc/ssl, so the trees they
+  // point into are named here too.
   "/etc/ssl",
   "/etc/ca-certificates.conf",
+  "/etc/ca-certificates",
+  "/var/lib/ca-certificates",
   "/etc/pki",
   // Name resolution. The resolver itself is not from here: see RESOLV_CONF.
   "/etc/nsswitch.conf",

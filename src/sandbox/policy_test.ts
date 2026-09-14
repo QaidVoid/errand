@@ -260,3 +260,15 @@ Deno.test("directories added by configuration lead the system path", () => {
   assertEquals(path.indexOf("/opt/toolchains/bin") < path.indexOf("/usr/bin"), true);
   assertEquals(path[0], "/state/home/bin");
 });
+
+Deno.test("every family's certificate bundle is reachable, not just Debian's", () => {
+  // Measured targets of the canonical bundle path: arch /etc/ca-certificates,
+  // fedora /etc/pki, tumbleweed /var/lib/ca-certificates.
+  const written = policy();
+
+  for (
+    const path of ["/etc/ssl", "/etc/ca-certificates", "/var/lib/ca-certificates", "/etc/pki"]
+  ) {
+    assertStringIncludes(written, `"${path}"`);
+  }
+});
