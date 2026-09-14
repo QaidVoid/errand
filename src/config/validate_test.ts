@@ -402,3 +402,40 @@ Deno.test("a rules path that is not a path at all is refused", () => {
     "agent.rulesPath must be an absolute path",
   );
 });
+
+Deno.test("egress defaults to open, the port-only behaviour", () => {
+  const config = validateConfig(valid());
+  assertEquals(config.sandbox.egress.mode, "open");
+  assertEquals(config.sandbox.egress.allow, []);
+});
+
+Deno.test("proxy mode with a hostname allowlist is accepted and lower-cased", () => {
+  const config = validateConfig(valid({
+    sandbox: { egress: { mode: "proxy", allow: ["GitHub.com", "*.githubusercontent.com"] } },
+  }));
+  assertEquals(config.sandbox.egress.mode, "proxy");
+  assertEquals(config.sandbox.egress.allow, ["github.com", "*.githubusercontent.com"]);
+});
+
+Deno.test("an unknown egress mode is refused", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { egress: { mode: "wideopen" } } })).join("\n"),
+    "sandbox.egress.mode must be one of open, proxy",
+  );
+});
+
+Deno.test("a malformed allowlist entry is refused rather than handed to the broker", () => {
+  // A broker told to permit "http://x" or "x/y" either permits nothing or more
+  // than was meant, so a non-hostname is a configuration error.
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { egress: { allow: ["http://evil.com/x"] } } })).join("\n"),
+    "is not a hostname",
+  );
+});
+
+Deno.test("an unknown key under egress is refused", () => {
+  assertStringIncludes(
+    problemsOf(valid({ sandbox: { egress: { mode: "proxy", allowlist: [] } } })).join("\n"),
+    "sandbox.egress",
+  );
+});

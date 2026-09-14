@@ -96,6 +96,15 @@ What a session may consume, and what the backend enforces.
 | `pathExtra` | `string[] or undefined` | none | Directories added to a session's PATH, or undefined for none. Named after the agent's own wrappers and ahead of the system directories, so a program named here is the one a session finds. This adds nothing a session may reach: a directory that is not also granted under `PolicyExtraConfig` is a name on a path leading nowhere. The podman backend takes its PATH from the image and ignores this. |
 | `env` | `Record<string, string> or undefined` | none | Variables set in every session's environment, or undefined for none. The environment is built rather than inherited, so a toolchain that reads one has no other way to be told. `PATH` and `HOME` are refused, since the daemon sets both to paths the policy places, and so is the name carrying the provider credential. A name the daemon sets itself keeps the daemon's value. Every value reaches the agent, so nothing secret belongs here. |
 
+## sandbox.egress
+
+What a session may reach outbound, and how that is enforced.
+
+| field | type | default | what it does |
+| --- | --- | --- | --- |
+| `mode` | `EgressMode` | none | Whether egress is port-only (`open`) or forced through the broker (`proxy`). |
+| `allow` | `string[]` | none | Hosts the broker permits under `proxy` mode, on top of the provider. The model provider is always allowed, since a session cannot work without it. Everything else a session legitimately fetches is named here: a code host, a package registry, a mirror. A leading `*.` matches subdomains, so `*.githubusercontent.com` covers the hosts a clone pulls from. Ignored under `open` mode, where nothing consults an allowlist. |
+
 ## sandbox.policyExtra
 
 Paths granted to a session on top of what the daemon already grants. Additive only. The generated policy still places the project and the state directory, still bounds the environment, and still clears the backend's own profile first; this names more that a session may reach, and can take nothing away. Every path is absolute, since a relative one in a policy means nothing. What is granted here is reported at startup, so the enforcement report never describes a tighter boundary than the one actually applied.

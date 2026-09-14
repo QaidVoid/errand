@@ -16,6 +16,8 @@ import {
   ConfigError,
   DEFAULTS,
   type DelegateConfig,
+  type EgressConfig,
+  type EgressMode,
   type GithubConfig,
   type LimitsConfig,
   type NetworkMode,
@@ -74,6 +76,7 @@ const KNOWN = {
   delegate: ["model", "perTurn", "deadlineMs", "baseUrl"],
   github: ["token", "userName", "userEmail"],
   sandbox: [...Object.keys(DEFAULTS.sandbox), "policyExtra", "pathExtra", "env"],
+  egress: ["mode", "allow"],
   policyExtra: ["read", "write", "execute"],
   shutdown: ["allowedUserIds"],
   web: ["host", "port", "observer", "publicUrl"],
@@ -504,6 +507,7 @@ function validateSandbox(raw: Record<string, unknown>, problems: Problems): Sand
     network:
       (NETWORKS.includes(network as NetworkMode) ? network : defaults.network) as NetworkMode,
     egressPorts: ports(source, "egressPorts", [...defaults.egressPorts], "sandbox", problems),
+    egress: validateEgress(source, problems),
     hideHostAddress: flag(
       source,
       "hideHostAddress",
@@ -529,6 +533,61 @@ function validateSandbox(raw: Record<string, unknown>, problems: Problems): Sand
     policyExtra: validatePolicyExtra(source, problems),
     pathExtra: validatePathExtra(source, problems),
     env: validateSandboxEnv(source, problems),
+  };
+}
+
+const EGRESS_MODES: EgressMode[] = ["open", "proxy"];
+
+/** A hostname the broker may be told to permit: a name, optionally `*.`-prefixed. */
+const EGRESS_HOST =
+  /^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
+
+/**
+ * Reads the egress bounding, defaulting to the port-only behaviour.
+ *
+ * Absent means `open`, so a configuration written before this existed keeps
+ * the network it had. An allowlist entry that is not a hostname is refused
+ * rather than passed to the broker, since a broker told to permit a malformed
+ * host either permits nothing or, worse, permits more than was meant.
+ */
+function validateEgress(
+  source: Record<string, unknown>,
+  problems: Problems,
+): EgressConfig {
+  const defaults = DEFAULTS.sandbox.egress;
+  const raw = source.egress;
+  if (raw === undefined) return { mode: defaults.mode, allow: [...defaults.allow] };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    problems.add("sandbox.egress must be an object with mode and allow");
+    return { mode: defaults.mode, allow: [...defaults.allow] };
+  }
+  const egress = raw as Record<string, unknown>;
+  rejectUnknown(egress, KNOWN.egress, "sandbox.egress", problems);
+
+  const mode = egress.mode ?? defaults.mode;
+  if (!EGRESS_MODES.includes(mode as EgressMode)) {
+    problems.add(`sandbox.egress.mode must be one of ${EGRESS_MODES.join(", ")}`);
+  }
+
+  const allow: string[] = [];
+  const list = egress.allow;
+  if (list !== undefined) {
+    if (!Array.isArray(list)) {
+      problems.add("sandbox.egress.allow must be a list of hostnames");
+    } else {
+      for (const entry of list) {
+        if (typeof entry !== "string" || !EGRESS_HOST.test(entry.trim())) {
+          problems.add(`sandbox.egress.allow entry ${JSON.stringify(entry)} is not a hostname`);
+          continue;
+        }
+        allow.push(entry.trim().toLowerCase());
+      }
+    }
+  }
+
+  return {
+    mode: (EGRESS_MODES.includes(mode as EgressMode) ? mode : defaults.mode) as EgressMode,
+    allow,
   };
 }
 

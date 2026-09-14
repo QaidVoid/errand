@@ -179,6 +179,27 @@
             "type": "number"
           }
         },
+        "egress": {
+          "description": "What a session may reach outbound, and how that is enforced.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "description": "Whether egress is port-only (`open`) or forced through the broker (`proxy`)."
+            },
+            "allow": {
+              "description": "Hosts the broker permits under `proxy` mode, on top of the provider. The model provider is always allowed, since a session cannot work without it. Everything else a session legitimately fetches is named here: a code host, a package registry, a mirror. A leading `*.` matches subdomains, so `*.githubusercontent.com` covers the hosts a clone pulls from. Ignored under `open` mode, where nothing consults an allowlist.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "mode",
+            "allow"
+          ]
+        },
         "image": {
           "description": "Container image the podman backend runs. Inert under bailey.",
           "type": "string"

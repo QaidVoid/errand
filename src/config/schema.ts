@@ -14,6 +14,37 @@ export type SandboxBackend = "podman" | "bailey";
 /** How much network a session gets. `none` disables it entirely. */
 export type NetworkMode = "restricted" | "none";
 
+/**
+ * How outbound is bounded for a session that has a network.
+ *
+ * `open` is the port-only rule the bailey backend has always applied: a session
+ * may reach any host on an allowed port. It cannot tell the model provider from
+ * anywhere else on 443, so a session can dial an arbitrary service, and a
+ * userspace VPN turns that into a two-way channel.
+ *
+ * `proxy` forces every connection through a broker the daemon runs outside the
+ * sandbox. The broker permits only an allowlist of hosts, so a session reaches
+ * the provider and whatever else is named and nothing else, and it injects the
+ * provider credential itself, so the key never enters the sandbox.
+ */
+export type EgressMode = "open" | "proxy";
+
+/** What a session may reach outbound, and how that is enforced. */
+export interface EgressConfig {
+  /** Whether egress is port-only (`open`) or forced through the broker (`proxy`). */
+  mode: EgressMode;
+  /**
+   * Hosts the broker permits under `proxy` mode, on top of the provider.
+   *
+   * The model provider is always allowed, since a session cannot work without
+   * it. Everything else a session legitimately fetches is named here: a code
+   * host, a package registry, a mirror. A leading `*.` matches subdomains, so
+   * `*.githubusercontent.com` covers the hosts a clone pulls from. Ignored
+   * under `open` mode, where nothing consults an allowlist.
+   */
+  allow: string[];
+}
+
 /** Chat connection and who may drive the bot. */
 export interface ChatConfig {
   /** Bot token. Secret. Never enters a sandbox. */
@@ -172,6 +203,8 @@ export interface SandboxConfig {
    * network by namespace rather than by port.
    */
   egressPorts: number[];
+  /** What a session may reach outbound, and whether it is brokered. */
+  egress: EgressConfig;
   /** Container image the podman backend runs. Inert under bailey. */
   image: string;
   /** Memory ceiling per session, in size syntax such as `4g`. */
@@ -361,6 +394,7 @@ export const DEFAULTS = {
     requireFullEnforcement: true,
     network: "restricted" as NetworkMode,
     egressPorts: [443],
+    egress: { mode: "open" as EgressMode, allow: [] as string[] },
     hideHostAddress: false,
     image: "localhost/errand-agent:latest",
     memory: "4g",
