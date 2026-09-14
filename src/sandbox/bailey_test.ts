@@ -2,7 +2,15 @@ import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { DEFAULTS, type SandboxConfig } from "../config/schema.ts";
 import { createLogger } from "../log.ts";
 import { type SandboxLaunch, SandboxUnavailableError } from "./backend.ts";
-import { baileyArgs, BaileySandbox, parseDoctor, type Run, sessionEnvironment } from "./bailey.ts";
+import {
+  baileyArgs,
+  BaileySandbox,
+  egressProxyEndpoint,
+  egressProxyUrl,
+  parseDoctor,
+  type Run,
+  sessionEnvironment,
+} from "./bailey.ts";
 
 const CONFIG: SandboxConfig = {
   ...DEFAULTS.sandbox,
@@ -230,4 +238,34 @@ Deno.test("variables set by configuration are named in what the backend reports"
   assertStringIncludes(said, "sessions are given CARGO_HOME from configuration");
   assertEquals(said.includes("/var/cache/cargo"), false);
   await Deno.remove(root, { recursive: true });
+});
+
+Deno.test("proxy egress passes --egress-proxy and drops the plain --proxy-net", () => {
+  const config: SandboxConfig = {
+    ...CONFIG,
+    hideHostAddress: true, // would add --proxy-net on its own
+    egress: { mode: "proxy", allow: ["github.com"] },
+  };
+  const args = baileyArgs(config, launch(), "/p.toml", 54321);
+  assertStringIncludes(args.join(" "), `--egress-proxy ${egressProxyEndpoint(54321)}`);
+  // --egress-proxy implies --proxy-net, so the plain flag is not added on top.
+  assertEquals(args.includes("--proxy-net"), false);
+});
+
+Deno.test("proxy egress without a running broker adds no flag", () => {
+  // The port is undefined when no broker was started; the run stays as it was
+  // rather than naming a proxy that is not there.
+  const config: SandboxConfig = { ...CONFIG, egress: { mode: "proxy", allow: [] } };
+  const args = baileyArgs(config, launch(), "/p.toml", undefined);
+  assertEquals(args.includes("--egress-proxy"), false);
+});
+
+Deno.test("open egress never names the proxy, even given a port", () => {
+  const args = baileyArgs(CONFIG, launch(), "/p.toml", 54321);
+  assertEquals(args.includes("--egress-proxy"), false);
+});
+
+Deno.test("the proxy endpoint and url are built from the map address and port", () => {
+  assertEquals(egressProxyEndpoint(8443), "169.254.169.1:8443");
+  assertEquals(egressProxyUrl(8443), "http://169.254.169.1:8443");
 });

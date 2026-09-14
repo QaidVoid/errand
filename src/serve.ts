@@ -16,6 +16,8 @@ import { assertChannelUsable, ChatThreadFactory, plain } from "./chat/threads.ts
 import { redactText, secretValues } from "./config/redact.ts";
 import type { Config } from "./config/schema.ts";
 import { createSandbox, Daemon, probeSandbox } from "./daemon.ts";
+import { Broker } from "./sandbox/broker.ts";
+import { EGRESS_MAP_ADDRESS } from "./sandbox/bailey.ts";
 import { acquireLock } from "./lock.ts";
 import type { Logger } from "./log.ts";
 import { MemoryStore } from "./memory/store.ts";
@@ -64,6 +66,15 @@ async function powerOff(): Promise<string | undefined> {
  * Serving is the steady state, so this resolves only on a signal or when the
  * connection has been lost for good.
  */
+/** The lower-cased host of a base URL, for the egress allowlist. */
+function hostOf(baseUrl: string): string | undefined {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function serve(config: Config, log: Logger): Promise<number> {
   const secrets = secretValues(config);
 
@@ -105,10 +116,39 @@ async function run(
     }
   }
 
+  // Under `egress.mode = proxy` every session's outbound is forced through one
+  // broker the daemon runs here on the host. Its allowlist is the provider,
+  // which a session cannot work without, plus whatever the operator named. The
+  // provider host is read from the model store the agent would reach it at.
+  let broker: Broker | undefined;
+  let egressProxyPort: number | undefined;
+  if (config.sandbox.egress.mode === "proxy") {
+    const store = agentDirectory(Deno.env.toObject());
+    const providerBase = modelById(readModels(store, config.agent.provider), config.agent.model)
+      ?.baseUrl;
+    const providerHost = providerBase === undefined ? undefined : hostOf(providerBase);
+    const allow = [
+      ...(providerHost === undefined ? [] : [providerHost]),
+      ...config.sandbox.egress.allow,
+    ];
+    if (allow.length === 0) {
+      log.error(
+        "egress.mode is proxy but no host is allowed: name the provider host or set egress.allow",
+      );
+      return 2;
+    }
+    broker = new Broker(allow, log);
+    egressProxyPort = broker.listen();
+    log.info("egress is brokered", {
+      via: `${EGRESS_MAP_ADDRESS}:${egressProxyPort}`,
+      allow: allow.join(", "),
+    });
+  }
+
   // The sandbox is checked before the chat service is touched, so a missing
   // image or an unenforceable guarantee fails immediately rather than after a
   // login round trip.
-  const sandbox = createSandbox(config, log);
+  const sandbox = createSandbox(config, log, egressProxyPort);
   const report = await probeSandbox(sandbox, config, log);
 
   // The connection signals readiness during connect(), before the thread
@@ -319,6 +359,7 @@ async function run(
 
   log.info("shutting down", { reason });
   if (statusTimer !== undefined) clearInterval(statusTimer);
+  broker?.close();
   for (const { signal, handler } of listeners) Deno.removeSignalListener(signal, handler);
   await web?.stop();
   await daemon.shutdown();

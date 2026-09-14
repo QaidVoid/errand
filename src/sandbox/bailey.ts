@@ -122,19 +122,44 @@ export function parseDoctor(doctor: string): { gaps: string[]; unavailable: stri
   return { gaps, unavailable };
 }
 
+/**
+ * The address the private namespace reaches the egress broker at.
+ *
+ * Passed to bailey as the host-loopback map target, so a connection to it from
+ * inside the namespace reaches the broker on the host's loopback, and used as
+ * the proxy address a session's tools are pointed at. A link-local address that
+ * routes nowhere on its own, deliberately not the cloud metadata address.
+ */
+export const EGRESS_MAP_ADDRESS = "169.254.169.1";
+
+/** The proxy URL a brokered session's tools use, for a given broker port. */
+export function egressProxyUrl(port: number): string {
+  return `http://${EGRESS_MAP_ADDRESS}:${port}`;
+}
+
+/** The `--egress-proxy` value for a given broker port. */
+export function egressProxyEndpoint(port: number): string {
+  return `${EGRESS_MAP_ADDRESS}:${port}`;
+}
+
 /** The arguments the tool is run with for one session. */
 export function baileyArgs(
   config: SandboxConfig,
   launch: SandboxLaunch,
   policy: string,
+  egressProxyPort?: number,
 ): string[] {
+  // Proxy mode forces every connection through the broker; --egress-proxy
+  // implies --proxy-net, so the plain hide-address flag is not added on top.
+  const brokered = config.egress.mode === "proxy" && egressProxyPort !== undefined;
   return [
     "run",
     "--isolate",
     // A session shares the host network namespace under this backend, so its
     // address and MAC are visible unless egress is routed through a private
     // one. Named only when asked, so the default stays the plain path.
-    ...(config.hideHostAddress ? ["--proxy-net"] : []),
+    ...(brokered ? ["--egress-proxy", egressProxyEndpoint(egressProxyPort!)] : []),
+    ...(!brokered && config.hideHostAddress ? ["--proxy-net"] : []),
     "--config",
     policy,
     "--profile",
@@ -164,7 +189,31 @@ export class BaileySandbox implements Sandbox {
     private readonly log: Logger,
     private readonly stateRoot: string,
     private readonly run: Run = runBailey,
+    private readonly egressProxyPort?: number,
   ) {}
+
+  /**
+   * The operator env, with the proxy variables added under a brokered session.
+   *
+   * A brokered session reaches the network only through the broker, so its
+   * tools are pointed at it with the standard proxy variables, lower and upper
+   * case, since programs read one or the other. Outside proxy mode this is the
+   * operator env unchanged.
+   */
+  private egressEnv(): Record<string, string> | undefined {
+    const base = this.config.env;
+    if (this.config.egress.mode !== "proxy" || this.egressProxyPort === undefined) {
+      return base;
+    }
+    const url = egressProxyUrl(this.egressProxyPort);
+    return {
+      ...(base ?? {}),
+      HTTPS_PROXY: url,
+      https_proxy: url,
+      HTTP_PROXY: url,
+      http_proxy: url,
+    };
+  }
 
   async probe(): Promise<CapabilityReport> {
     const doctor = await this.run(["doctor"]).catch(() => null);
@@ -260,7 +309,7 @@ export class BaileySandbox implements Sandbox {
         fileMax: this.config.fileMax,
         resolvConf: resolv,
         extra: this.config.policyExtra,
-        env: this.config.env,
+        env: this.egressEnv(),
         pathExtra: this.config.pathExtra,
       }),
     );
@@ -278,7 +327,7 @@ export class BaileySandbox implements Sandbox {
     // private home rather than the project it was asked to work in.
     const spawned = spawnAgent(
       "bailey",
-      baileyArgs(this.config, launch, policy),
+      baileyArgs(this.config, launch, policy, this.egressProxyPort),
       sessionEnvironment(launch.env, Deno.env.toObject(), join(launch.stateDir, "home")),
       launch.projectPath,
     );

@@ -36,11 +36,21 @@ export class EnforcementGapError extends Error {
   }
 }
 
-/** Builds the backend named in configuration. Never falls back to the other. */
-export function createSandbox(config: Config, log: Logger): Sandbox {
+/**
+ * Builds the backend named in configuration. Never falls back to the other.
+ *
+ * `egressProxyPort`, when given, is the host loopback port of the broker every
+ * session's egress is forced through under `egress.mode = proxy`. Only the
+ * bailey backend uses it; podman bounds the network by its own namespace.
+ */
+export function createSandbox(
+  config: Config,
+  log: Logger,
+  egressProxyPort?: number,
+): Sandbox {
   return config.sandbox.backend === "podman"
     ? new PodmanSandbox(config.sandbox, log)
-    : new BaileySandbox(config.sandbox, log, config.stateDir);
+    : new BaileySandbox(config.sandbox, log, config.stateDir, undefined, egressProxyPort);
 }
 
 /**

@@ -23,6 +23,8 @@
  * a wildcard is written when the apex is not what a session talks to. The
  * comparison is case-folded, because a hostname is.
  */
+import type { Logger } from "../log.ts";
+
 export function hostAllowed(host: string, allow: readonly string[]): boolean {
   const h = host.trim().toLowerCase();
   if (h.length === 0) return false;
@@ -83,10 +85,7 @@ export class Broker {
 
   constructor(
     private readonly allow: readonly string[],
-    private readonly log: {
-      info: (m: string, d?: unknown) => void;
-      warn: (m: string, d?: unknown) => void;
-    },
+    private readonly log: Pick<Logger, "info" | "warn">,
   ) {}
 
   /** Binds to a loopback port and starts admitting connections. Returns the port. */
