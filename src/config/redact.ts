@@ -53,6 +53,17 @@ export function secretValues(config: Config): string[] {
       values.push(value);
     }
   }
+  // A defined provider carries its own credential, and there is no fixed path
+  // to name it by: the operator chooses how many providers there are and what
+  // they are called. Walked instead, so a second provider's key is scrubbed as
+  // thoroughly as the first one's.
+  for (const definition of Object.values(config.agent.providers)) {
+    if (typeof definition !== "object" || definition === null) continue;
+    const credential = (definition as Record<string, unknown>).credential;
+    if (typeof credential === "string" && credential.length >= MIN_SCRUBBABLE_LENGTH) {
+      values.push(credential);
+    }
+  }
   return values;
 }
 

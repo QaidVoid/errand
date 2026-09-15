@@ -17,12 +17,7 @@ import { redactText, secretValues } from "./config/redact.ts";
 import type { Config } from "./config/schema.ts";
 import { createSandbox, Daemon, probeSandbox } from "./daemon.ts";
 import { Broker, type ProviderRoute } from "./sandbox/broker.ts";
-import {
-  EGRESS_MAP_ADDRESS,
-  PROVIDER_PREFIX,
-  type ProviderBrokering,
-  providerBrokerUrl,
-} from "./sandbox/bailey.ts";
+import { EGRESS_MAP_ADDRESS, type ProviderBrokering, providerPrefix } from "./sandbox/bailey.ts";
 import { acquireLock } from "./lock.ts";
 import type { Logger } from "./log.ts";
 import { MemoryStore } from "./memory/store.ts";
@@ -71,6 +66,30 @@ async function powerOff(): Promise<string | undefined> {
  * Serving is the steady state, so this resolves only on a signal or when the
  * connection has been lost for good.
  */
+/**
+ * The defined providers the daemon can stand in front of.
+ *
+ * A definition is brokerable when it says where the provider is and what the
+ * key to it is: without the base URL there is nowhere to forward, and without
+ * the credential there is nothing to put on. One that says neither is left
+ * alone, and the agent reaches it however it would have.
+ */
+function brokerableProviders(
+  defined: Record<string, unknown>,
+): [string, string, string][] {
+  const found: [string, string, string][] = [];
+  for (const [name, definition] of Object.entries(defined)) {
+    if (typeof definition !== "object" || definition === null) continue;
+    const fields = definition as Record<string, unknown>;
+    const upstream = fields.baseUrl;
+    const credential = fields.credential;
+    if (typeof upstream !== "string" || upstream.trim().length === 0) continue;
+    if (typeof credential !== "string" || credential.trim().length === 0) continue;
+    found.push([name, upstream.trim(), credential]);
+  }
+  return found;
+}
+
 /**
  * A per-run stand-in for the provider credential.
  *
@@ -142,7 +161,7 @@ async function run(
   let broker: Broker | undefined;
   let egressProxyPort: number | undefined;
   let brokering: ProviderBrokering | undefined;
-  let route: ProviderRoute | undefined;
+  const routes: ProviderRoute[] = [];
   if (config.sandbox.egress.mode === "proxy") {
     const store = agentDirectory(Deno.env.toObject());
     const providerBase = modelById(readModels(store, config.agent.provider), config.agent.model)
@@ -162,24 +181,45 @@ async function run(
     // what a sandbox carries is a nonce that is worth nothing anywhere else.
     // Only where the provider's own base URL is known, since the broker has to
     // know where to forward to.
+    // One route per provider whose upstream and credential the daemon knows:
+    // the configured one, and every definition that carries a credential. Each
+    // gets a nonce of its own, so what a session holds for one provider is
+    // worth nothing for another.
+    const nonces: Record<string, string> = {};
     if (providerBase !== undefined) {
-      brokering = { credentialName: config.agent.credentialName, nonce: providerNonce() };
-      route = {
-        prefix: PROVIDER_PREFIX,
+      nonces[config.agent.provider] = providerNonce();
+      routes.push({
+        prefix: providerPrefix(config.agent.provider),
         upstream: providerBase,
-        nonce: brokering.nonce,
+        nonce: nonces[config.agent.provider] as string,
         credential: config.agent.credential,
+      });
+    }
+    for (const [name, upstream, credential] of brokerableProviders(config.agent.providers)) {
+      nonces[name] = providerNonce();
+      routes.push({
+        prefix: providerPrefix(name),
+        upstream,
+        nonce: nonces[name] as string,
+        credential,
+      });
+    }
+    if (routes.length > 0) {
+      brokering = {
+        credentialName: config.agent.credentialName,
+        provider: config.agent.provider,
+        nonces,
       };
     }
-    broker = new Broker(allow, log, route);
+    broker = new Broker(allow, log, routes);
     egressProxyPort = broker.listen();
     log.info("egress is brokered", {
       via: `${EGRESS_MAP_ADDRESS}:${egressProxyPort}`,
       allow: allow.join(", "),
     });
-    if (route !== undefined) {
-      log.info("the provider credential stays outside the sandbox", {
-        via: providerBrokerUrl(egressProxyPort),
+    if (routes.length > 0) {
+      log.info("provider credentials stay outside the sandbox", {
+        providers: routes.length,
       });
     } else {
       log.warn(

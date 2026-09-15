@@ -1,5 +1,6 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 import { loadConfig } from "./load.ts";
+import { validateConfig } from "./validate.ts";
 import { redactConfig, REDACTION, redactText, secretValues } from "./redact.ts";
 import { SECRET_PATHS } from "./schema.ts";
 
@@ -73,4 +74,24 @@ Deno.test("a value too short to be a credential is not scrubbed from prose", () 
 Deno.test("text holding no secret is returned as it was", () => {
   assertEquals(redactText("nothing to see", [CREDENTIAL]), "nothing to see");
   assertEquals(REDACTION, "[redacted]");
+});
+
+/** A second provider's key is as much a secret as the first one's. */
+Deno.test("a defined provider's credential is scrubbed too", () => {
+  const config = validateConfig({
+    chat: { token: "chat-token-value", channelId: "c", allowedUserIds: ["u"] },
+    agent: {
+      provider: "zai",
+      credentialName: "K",
+      credential: "the-default-key",
+      providers: { meta: { baseUrl: "https://api.meta.example/v1", credential: "the-meta-key" } },
+    },
+    projectRoot: "/tmp/p",
+    stateDir: "/tmp/s",
+  });
+
+  const secrets = secretValues(config);
+  assertEquals(secrets.includes("the-meta-key"), true);
+  assertEquals(secrets.includes("the-default-key"), true);
+  assertStringIncludes(redactText("key=the-meta-key here", secrets), REDACTION);
 });

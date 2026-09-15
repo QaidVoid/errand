@@ -138,7 +138,7 @@ export class Broker {
   constructor(
     private readonly allow: readonly string[],
     private readonly log: Pick<Logger, "info" | "warn">,
-    private readonly route?: ProviderRoute,
+    private readonly routes: readonly ProviderRoute[] = [],
   ) {}
 
   /**
@@ -149,7 +149,7 @@ export class Broker {
    * streamed and a response is often an event stream, and getting either wrong
    * would show up as a session that hangs rather than one that fails.
    */
-  private startProvider(route: ProviderRoute): void {
+  private startProvider(routes: readonly ProviderRoute[]): void {
     this.provider = Deno.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -158,8 +158,13 @@ export class Broker {
       },
     }, async (request) => {
       const url = new URL(request.url);
-      if (!url.pathname.startsWith(route.prefix)) {
-        return new Response("not the provider\n", { status: 404 });
+      // Longest prefix first, so a provider named under another's path is
+      // still reached rather than shadowed by it.
+      const route = [...routes]
+        .sort((a, b) => b.prefix.length - a.prefix.length)
+        .find((candidate) => url.pathname.startsWith(candidate.prefix));
+      if (route === undefined) {
+        return new Response("not a provider this broker serves\n", { status: 404 });
       }
       const offered = request.headers.get("authorization") ?? "";
       if (!sameSecret(offered, `Bearer ${route.nonce}`)) {
@@ -196,7 +201,7 @@ export class Broker {
 
   /** Binds to a loopback port and starts admitting connections. Returns the port. */
   listen(host = "127.0.0.1"): number {
-    if (this.route !== undefined) this.startProvider(this.route);
+    if (this.routes.length > 0) this.startProvider(this.routes);
     const listener = Deno.listen({ hostname: host, port: 0, transport: "tcp" });
     this.listener = listener;
     const addr = listener.addr as Deno.NetAddr;
@@ -225,7 +230,7 @@ export class Broker {
       // Not a tunnel. With a provider route this is the session calling the
       // provider, which is served rather than refused: the head already read
       // is replayed so the server sees the request whole.
-      if (head !== undefined && this.route !== undefined) {
+      if (head !== undefined && this.routes.length > 0) {
         await this.serveProvider(client, head);
         return;
       }

@@ -135,9 +135,14 @@ export const EGRESS_MAP_ADDRESS = "169.254.169.1";
 /** Path the broker answers as the provider on, under its own address. */
 export const PROVIDER_PREFIX = "/provider";
 
-/** What a session's agent is told the provider's base URL is. */
-export function providerBrokerUrl(port: number): string {
-  return `http://${EGRESS_MAP_ADDRESS}:${port}${PROVIDER_PREFIX}`;
+/** The path the broker answers one provider on. */
+export function providerPrefix(provider: string): string {
+  return `${PROVIDER_PREFIX}/${provider}`;
+}
+
+/** What a session's agent is told a provider's base URL is. */
+export function providerBrokerUrl(port: number, provider: string): string {
+  return `http://${EGRESS_MAP_ADDRESS}:${port}${providerPrefix(provider)}`;
 }
 
 /**
@@ -152,15 +157,28 @@ export function providerBrokerUrl(port: number): string {
  */
 export function providerConfig(
   defined: Record<string, unknown>,
-  provider: string,
-  brokerUrl?: string,
+  brokered: Readonly<Record<string, { baseUrl: string; nonce: string }>>,
 ): { providers: Record<string, unknown> } {
-  const providers: Record<string, unknown> = { ...defined };
-  if (brokerUrl !== undefined) {
-    const already = providers[provider];
-    providers[provider] = typeof already === "object" && already !== null && !Array.isArray(already)
-      ? { ...already as Record<string, unknown>, baseUrl: brokerUrl }
-      : { baseUrl: brokerUrl };
+  const providers: Record<string, unknown> = {};
+  for (const [name, definition] of Object.entries(defined)) {
+    const fields =
+      typeof definition === "object" && definition !== null && !Array.isArray(definition)
+        ? { ...definition as Record<string, unknown> }
+        : {};
+    // The credential is the daemon's record of how to reach the provider, not
+    // the agent's. It is taken out here and put on at the broker instead.
+    delete fields.credential;
+    providers[name] = fields;
+  }
+
+  for (const [name, through] of Object.entries(brokered)) {
+    const already = providers[name];
+    const fields = typeof already === "object" && already !== null
+      ? already as Record<string, unknown>
+      : {};
+    // The nonce stands in for the key, so what the agent holds is worth
+    // nothing anywhere but this broker.
+    providers[name] = { ...fields, baseUrl: through.baseUrl, apiKey: through.nonce };
   }
   return { providers };
 }
@@ -187,10 +205,18 @@ export interface BaileyOptions {
  * other end, so what a session carries is a nonce that only the broker honours.
  */
 export interface ProviderBrokering {
-  /** The variable the agent reads its key from. */
+  /** The variable the agent reads the default provider's key from. */
   credentialName: string;
-  /** The value put there in place of the credential. */
-  nonce: string;
+  /** The default provider, whose key that variable holds. */
+  provider: string;
+  /**
+   * What stands in for each provider's credential, by provider name.
+   *
+   * The default provider's nonce goes in the environment, because that is
+   * where the agent looks for a provider it ships with. A provider the
+   * operator defined takes its nonce as the `apiKey` of that definition.
+   */
+  nonces: Readonly<Record<string, string>>;
 }
 
 /** The proxy URL a brokered session's tools use, for a given broker port. */
@@ -264,7 +290,8 @@ export class BaileySandbox implements Sandbox {
   private brokeredEnv(env: Record<string, string>): Record<string, string> {
     const brokering = this.options.brokering;
     if (brokering === undefined || this.options.egressProxyPort === undefined) return env;
-    return { ...env, [brokering.credentialName]: brokering.nonce };
+    const nonce = brokering.nonces[brokering.provider];
+    return nonce === undefined ? env : { ...env, [brokering.credentialName]: nonce };
   }
 
   /**
@@ -278,16 +305,19 @@ export class BaileySandbox implements Sandbox {
    * against the broker and the namespace reaches nothing else.
    */
   private async writeProviderOverride(launch: SandboxLaunch): Promise<void> {
-    const brokered = this.options.brokering !== undefined &&
-      this.options.egressProxyPort !== undefined;
+    const brokering = this.options.brokering;
+    const port = this.options.egressProxyPort;
     const defined = launch.providers ?? {};
-    if (!brokered && Object.keys(defined).length === 0) return;
 
-    const providers = providerConfig(
-      defined,
-      launch.provider,
-      brokered ? providerBrokerUrl(this.options.egressProxyPort as number) : undefined,
-    );
+    const brokered: Record<string, { baseUrl: string; nonce: string }> = {};
+    if (brokering !== undefined && port !== undefined) {
+      for (const [name, nonce] of Object.entries(brokering.nonces)) {
+        brokered[name] = { baseUrl: providerBrokerUrl(port, name), nonce };
+      }
+    }
+    if (Object.keys(brokered).length === 0 && Object.keys(defined).length === 0) return;
+
+    const providers = providerConfig(defined, brokered);
 
     const directory = join(launch.stateDir, "home", ".pi", "agent");
     await Deno.mkdir(directory, { recursive: true });

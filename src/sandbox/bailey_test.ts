@@ -289,27 +289,39 @@ Deno.test("an operator's provider definition survives the broker's base url", ()
     meta: {
       baseUrl: "https://api.meta.example/v1",
       api: "openai-completions",
+      credential: "the-real-meta-key",
       models: [{ id: "muse-spark-1.3-contributor" }],
     },
   };
 
-  const merged = providerConfig(defined, "meta", "http://169.254.169.1:8443/provider");
+  const merged = providerConfig(defined, {
+    meta: { baseUrl: "http://169.254.169.1:8443/provider/meta", nonce: "n-meta" },
+  });
   const meta = merged.providers.meta as Record<string, unknown>;
 
   // Only where it is reached changes; what it is stays.
-  assertEquals(meta.baseUrl, "http://169.254.169.1:8443/provider");
+  assertEquals(meta.baseUrl, "http://169.254.169.1:8443/provider/meta");
   assertEquals(meta.api, "openai-completions");
   assertEquals((meta.models as unknown[]).length, 1);
+  // The key the agent is given is the nonce, and the real one never appears.
+  assertEquals(meta.apiKey, "n-meta");
+  assertEquals(meta.credential, undefined);
+  assertEquals(JSON.stringify(merged).includes("the-real-meta-key"), false);
 });
 
 Deno.test("a provider the operator never defined still gets its base url", () => {
-  const merged = providerConfig({}, "zai-coding-cn", "http://169.254.169.1:8443/provider");
+  const merged = providerConfig({}, {
+    "zai-coding-cn": { baseUrl: "http://169.254.169.1:8443/provider/zai-coding-cn", nonce: "n" },
+  });
   assertEquals(merged.providers["zai-coding-cn"], {
-    baseUrl: "http://169.254.169.1:8443/provider",
+    baseUrl: "http://169.254.169.1:8443/provider/zai-coding-cn",
+    apiKey: "n",
   });
 });
 
-Deno.test("without a broker the definitions are passed through untouched", () => {
-  const defined = { meta: { baseUrl: "https://api.meta.example/v1" } };
-  assertEquals(providerConfig(defined, "meta"), { providers: defined });
+Deno.test("without a broker the definitions pass through, less the credential", () => {
+  const defined = { meta: { baseUrl: "https://api.meta.example/v1", credential: "k" } };
+  assertEquals(providerConfig(defined, {}), {
+    providers: { meta: { baseUrl: "https://api.meta.example/v1" } },
+  });
 });

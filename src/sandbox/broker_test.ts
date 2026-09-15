@@ -145,12 +145,12 @@ Deno.test("the credential is put on at the broker, never given to the session", 
   });
   const upstreamPort = (upstream.addr as Deno.NetAddr).port;
 
-  const broker = new Broker([], quiet, {
+  const broker = new Broker([], quiet, [{
     prefix: "/provider",
     upstream: `http://127.0.0.1:${upstreamPort}/v4`,
     nonce: "the-session-nonce",
     credential: "the-real-key",
-  });
+  }]);
   const port = broker.listen();
   try {
     const allowed = await fetch(`http://127.0.0.1:${port}/provider/chat/completions`, {
@@ -175,5 +175,70 @@ Deno.test("the credential is put on at the broker, never given to the session", 
   } finally {
     broker.close();
     await upstream.shutdown();
+  }
+});
+
+/**
+ * A nonce is per provider, so reading one out of a session buys nothing
+ * against another provider the same broker serves.
+ */
+Deno.test("each provider has its own route, and its own nonce", async () => {
+  const seen: Record<string, string> = {};
+  const one = Deno.serve({ hostname: "127.0.0.1", port: 0, onListen: () => {} }, (r) => {
+    seen.one = r.headers.get("authorization") ?? "";
+    return new Response("{}");
+  });
+  const two = Deno.serve({ hostname: "127.0.0.1", port: 0, onListen: () => {} }, (r) => {
+    seen.two = r.headers.get("authorization") ?? "";
+    return new Response("{}");
+  });
+  const onePort = (one.addr as Deno.NetAddr).port;
+  const twoPort = (two.addr as Deno.NetAddr).port;
+
+  const broker = new Broker([], quiet, [
+    {
+      prefix: "/provider/zai",
+      upstream: `http://127.0.0.1:${onePort}/v4`,
+      nonce: "nonce-zai",
+      credential: "key-zai",
+    },
+    {
+      prefix: "/provider/meta",
+      upstream: `http://127.0.0.1:${twoPort}/v1`,
+      nonce: "nonce-meta",
+      credential: "key-meta",
+    },
+  ]);
+  const port = broker.listen();
+  try {
+    const a = await fetch(`http://127.0.0.1:${port}/provider/zai/chat`, {
+      method: "POST",
+      headers: { authorization: "Bearer nonce-zai" },
+      body: "{}",
+    });
+    await a.body?.cancel();
+    const b = await fetch(`http://127.0.0.1:${port}/provider/meta/chat`, {
+      method: "POST",
+      headers: { authorization: "Bearer nonce-meta" },
+      body: "{}",
+    });
+    await b.body?.cancel();
+
+    // Each upstream got its own key, and neither got the other's.
+    assertEquals(seen.one, "Bearer key-zai");
+    assertEquals(seen.two, "Bearer key-meta");
+
+    // One provider's nonce is refused on another's route.
+    const crossed = await fetch(`http://127.0.0.1:${port}/provider/meta/chat`, {
+      method: "POST",
+      headers: { authorization: "Bearer nonce-zai" },
+      body: "{}",
+    });
+    await crossed.body?.cancel();
+    assertEquals(crossed.status, 401);
+  } finally {
+    broker.close();
+    await one.shutdown();
+    await two.shutdown();
   }
 });
