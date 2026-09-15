@@ -82,6 +82,14 @@ export type ReactionOutcome = "accepted" | "succeeded" | "failed" | "interrupted
 /** Why a session ended, for the final message and the log. */
 export type EndReason =
   | "stopped"
+  /**
+   * Ended because the agent would not answer an interruption.
+   *
+   * Apart from a deliberate stop, because it is not one: the thread is left
+   * open and its record kept, so what was being worked on can be picked up
+   * again rather than being lost to a turn that would not let go.
+   */
+  | "unresponsive"
   | "idle"
   | "crashed"
   | "resource limit"

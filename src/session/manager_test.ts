@@ -600,3 +600,30 @@ Deno.test("a short name starts the session on the model it stands for", () =>
     providers: { meta: { baseUrl: "https://api.meta.example/v1" } },
     aliases: { muse: "meta/muse-spark-1.3-contributor" },
   }));
+
+/**
+ * A turn that would not let go is not somebody saying they are done with the
+ * thread, so what was being worked on is still there to pick up.
+ */
+Deno.test("a thread force stopped for not answering can still be resumed", () =>
+  withManager(async ({ manager, registry }) => {
+    await manager.start(message("demo: go"));
+
+    await manager.endThread("thread-1", "unresponsive");
+
+    // The record survives, unlike a deliberate stop.
+    assertEquals(registry.get("thread-1") === undefined, false);
+    const outcome = await manager.resume("thread-1", message("carry on", "m2"));
+    assertEquals(outcome.status, "started");
+  }));
+
+Deno.test("a deliberate stop still ends the thread for good", () =>
+  withManager(async ({ manager, registry }) => {
+    await manager.start(message("demo: go"));
+
+    await manager.endThread("thread-1", "stopped");
+
+    assertEquals(registry.get("thread-1"), undefined);
+    const outcome = await manager.resume("thread-1", message("carry on", "m2"));
+    assertEquals(outcome.status, "refused");
+  }));

@@ -1732,7 +1732,7 @@ export class Session {
     if (confirmed) return;
 
     await this.say("the agent did not confirm the interruption, so the session was force stopped");
-    await this.endBecause("stopped", "force stopped after an unconfirmed interruption");
+    await this.endBecause("unresponsive", "force stopped after an unconfirmed interruption");
   }
 
   private requestAbort(): Promise<boolean> {
@@ -2157,7 +2157,8 @@ export class Session {
     this.delegating = null;
 
     this.client?.cancelDialogs();
-    await this.settleTurn(why === "stopped" ? "interrupted" : "failed");
+    const interrupted = why === "stopped" || why === "unresponsive";
+    await this.settleTurn(interrupted ? "interrupted" : "failed");
     this.options.scheduler.cancelSession(this.options.id);
 
     try {
