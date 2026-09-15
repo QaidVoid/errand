@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { join } from "@std/path";
+import { MemoryStore } from "./memory/store.ts";
 import type { RawMessage } from "./chat/inbound.ts";
 import { validateConfig } from "./config/validate.ts";
 import type { Config } from "./config/schema.ts";
@@ -172,6 +173,7 @@ async function withDaemon(
     describeUsage?: () => Promise<string>;
     report?: CapabilityReport;
     start?: boolean;
+    memory?: MemoryStore;
   } = {},
 ): Promise<void> {
   const root = await Deno.makeTempDir({ prefix: "errand-daemon-" });
@@ -196,6 +198,7 @@ async function withDaemon(
     },
     ...(options.powerOff === undefined ? {} : { powerOff: options.powerOff }),
     ...(options.describeUsage === undefined ? {} : { describeUsage: options.describeUsage }),
+    ...(options.memory === undefined ? {} : { memory: options.memory }),
   });
 
   try {
@@ -532,3 +535,69 @@ Deno.test("a provider that meters nothing says so rather than inventing a number
 
     assertStringIncludes(replies[0] ?? "", "does not report a usage window");
   }));
+
+/**
+ * Memory is about a person, not a session, so asking should not need a thread.
+ */
+Deno.test("!facts is answered in the channel, with no session running", async () => {
+  const memory = new MemoryStore(":memory:");
+  memory.remember("user", OWNER, "prefers jj over git", "earlier");
+
+  await withDaemon(async ({ daemon, replies, threads }) => {
+    await daemon.handle(raw("!facts"), { kind: "start" });
+
+    assertStringIncludes(replies.join("\n"), "prefers jj over git");
+    // Answered outright: no thread was opened and no session started.
+    assertEquals(threads.created, []);
+  }, { memory });
+});
+
+Deno.test("a project is a thread's own, so the channel says to ask there", async () => {
+  const memory = new MemoryStore(":memory:");
+  await withDaemon(async ({ daemon, replies }) => {
+    await daemon.handle(raw("!facts project"), { kind: "start" });
+    assertStringIncludes(replies.join("\n"), "ask in one");
+  }, { memory });
+});
+
+/** Owner means nothing in a channel, so forgetting there is the operator's. */
+Deno.test("!forget in the channel is refused to anyone but an operator", async () => {
+  const memory = new MemoryStore(":memory:");
+  memory.remember("user", OWNER, "prefers jj over git", "earlier");
+
+  await withDaemon(async ({ daemon, replies }) => {
+    await daemon.handle(raw(`!forget <@${OWNER}>`), { kind: "start" });
+
+    assertStringIncludes(replies.join("\n"), "only an operator");
+    assertEquals(memory.factsFor("user", OWNER).length, 1);
+  }, { memory });
+});
+
+/** Inside a thread the session answers, because it knows the project. */
+Deno.test("in a thread the daemon leaves memory to the session", async () => {
+  const memory = new MemoryStore(":memory:");
+  memory.remember("user", OWNER, "prefers jj over git", "earlier");
+
+  await withDaemon(async ({ daemon, replies }) => {
+    await daemon.handle(raw("!facts"), { kind: "thread", threadId: "t1" });
+    // Not answered here, so it falls through to whatever the thread holds.
+    assertEquals(replies.join("\n").includes("prefers jj over git"), false);
+  }, { memory });
+});
+
+Deno.test("an operator may forget from the channel, and is told what went", async () => {
+  const memory = new MemoryStore(":memory:");
+  memory.remember("user", OWNER, "prefers jj over git", "earlier");
+
+  await withDaemon(async ({ daemon, replies }) => {
+    await daemon.handle(raw(`!forget <@${OWNER}>`), { kind: "start" });
+
+    assertStringIncludes(replies.join("\n"), "forgot 1 fact about");
+    assertEquals(memory.factsFor("user", OWNER).length, 0);
+  }, {
+    memory,
+    settings: {
+      chat: { token: "t", channelId: "chan", allowedUserIds: [OWNER], operatorUserIds: [OWNER] },
+    },
+  });
+});

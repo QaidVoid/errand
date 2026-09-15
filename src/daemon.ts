@@ -19,7 +19,13 @@ import { BaileySandbox } from "./sandbox/bailey.ts";
 import type { CapabilityReport, Sandbox } from "./sandbox/backend.ts";
 import type { ProviderBrokering } from "./sandbox/bailey.ts";
 import { PodmanSandbox } from "./sandbox/podman.ts";
-import { answerWithoutSession, firstWord, isAddressedToBot, isAside } from "./session/commands.ts";
+import {
+  answerWithoutSession,
+  firstWord,
+  isAddressedToBot,
+  isAside,
+  parseUserId,
+} from "./session/commands.ts";
 import type { ThreadFactory } from "./session/manager.ts";
 import { SessionManager } from "./session/manager.ts";
 import { ThreadRegistry } from "./session/registry.ts";
@@ -299,8 +305,62 @@ export class Daemon {
   }
 
   /** Whatever the daemon answers itself, wherever it was typed. */
-  private async answerAsDaemon(content: string, authorId: string): Promise<string | undefined> {
-    return (await this.powerOffHost(content, authorId)) ?? (await this.describeUsage(content));
+  private async answerAsDaemon(
+    content: string,
+    authorId: string,
+    inThread: boolean,
+  ): Promise<string | undefined> {
+    return (await this.powerOffHost(content, authorId)) ??
+      (await this.describeUsage(content)) ??
+      this.answerAboutMemory(content, authorId, inThread);
+  }
+
+  /**
+   * Answers what is remembered, for somebody who is not in a thread.
+   *
+   * Memory is about a person and a project rather than about a session, so
+   * asking should not need one. Inside a thread the session answers instead:
+   * it knows which project `!facts project` means, and it knows who was
+   * invited, neither of which is visible from here.
+   */
+  private answerAboutMemory(
+    content: string,
+    authorId: string,
+    inThread: boolean,
+  ): string | undefined {
+    const word = firstWord(content);
+    if (word !== "!facts" && word !== "!forget") return undefined;
+    if (inThread) return undefined;
+
+    const memory = this.options.memory;
+    if (memory === undefined) return "nothing is remembered on this host";
+
+    const rest = content.slice(word.length).trim();
+    if (rest.toLowerCase() === "project") {
+      return "a project is a thread's own, so ask in one";
+    }
+
+    if (word === "!forget") {
+      // "Owner" means nothing in a channel, so this is the operator's, the way
+      // anything else acting beyond one session is.
+      if (!this.options.config.chat.operatorUserIds.includes(authorId)) {
+        return "only an operator may forget what is remembered from here; ask in a thread you own";
+      }
+      if (rest.length === 0) return "say who, as `!forget @somebody`";
+      const target = parseUserId(rest);
+      if (target === undefined) return "say who, as `!forget @somebody`";
+      const gone = memory.forget("user", target);
+      return gone === 0
+        ? `nothing was remembered about <@${target}>`
+        : `forgot ${gone} fact${gone === 1 ? "" : "s"} about <@${target}>`;
+    }
+
+    const subject = rest.length === 0 ? authorId : parseUserId(rest);
+    if (subject === undefined) return "say who, as `!facts @somebody`, or ask in a thread";
+    const facts = memory.factsFor("user", subject);
+    return facts.length === 0
+      ? `nothing is remembered about <@${subject}>`
+      : `remembered about <@${subject}>:\n${facts.map((fact) => `- ${fact.fact}`).join("\n")}`;
   }
 
   /** Acts on a message the gateway has already filtered. */
@@ -320,7 +380,11 @@ export class Daemon {
 
     // Before anything is routed. These are not session commands, and being in
     // a thread is not a reason to be allowed to run one.
-    const answered = await this.answerAsDaemon(message.content, message.authorId);
+    const answered = await this.answerAsDaemon(
+      message.content,
+      message.authorId,
+      decision.kind === "thread",
+    );
     if (answered !== undefined) {
       await this.options.replyInChannel(message, answered);
       return;
@@ -390,7 +454,8 @@ export class Daemon {
   async runCommand(command: TranslatedCommand): Promise<string> {
     if (!this.accepting) return "the daemon is still starting up";
 
-    const answered = await this.answerAsDaemon(command.content, command.userId);
+    // A slash command is typed at the channel, never inside a thread.
+    const answered = await this.answerAsDaemon(command.content, command.userId, false);
     if (answered !== undefined) return answered;
 
     // Some commands describe the system rather than act on a session, so they
