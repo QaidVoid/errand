@@ -221,6 +221,11 @@ export interface SessionOptions {
   guestIds?: readonly string[];
   /** Called when the guest list changes, so it can be persisted. */
   onGuestsChanged?: (guests: string[]) => void;
+  /**
+   * Told when the session moves to another model, so a restart puts it back on
+   * the one it was working with rather than the configured one.
+   */
+  onModelChanged?: (provider: string, model: string) => void;
   /** Memory, or undefined when it is switched off. */
   memory?: MemoryStore | undefined;
   /** Fetches an attachment. Injected so tests need no network. */
@@ -280,6 +285,8 @@ export class Session {
   /** What delegation has cost and saved this session, for reporting it. */
   private delegated = { asked: 0, answered: 0, tokens: 0, keptOut: 0 };
   private readonly guests: Set<string>;
+  /** Where a `!model` moved this session, which outlives the command. */
+  private switched: { provider: string; model: string } | undefined;
   /** Speakers whose memory has already been given to the agent this session. */
   private readonly introduced = new Set<string>();
   /** Whoever spoke most recently, so a recorded fact is attributed to them. */
@@ -1466,12 +1473,13 @@ export class Session {
 
   /** The provider this session runs on: what was asked for, else configured. */
   private provider(): string {
-    return this.options.chosen?.provider ?? this.options.config.agent.provider;
+    return this.switched?.provider ?? this.options.chosen?.provider ??
+      this.options.config.agent.provider;
   }
 
   /** The model this session runs on, on that provider. */
   private model(): string | undefined {
-    return this.options.chosen?.model ?? this.options.config.agent.model;
+    return this.switched?.model ?? this.options.chosen?.model ?? this.options.config.agent.model;
   }
 
   private async answerCommand(
@@ -1670,6 +1678,9 @@ export class Session {
       await this.options.thread.setReaction(message.id, "failed");
       return;
     }
+
+    this.switched = { provider: this.provider(), model: wanted };
+    this.options.onModelChanged?.(this.switched.provider, wanted);
 
     await this.noteCommand(message, `!model ${wanted}`);
     await this.say(connectionLine(`this session now runs on \`${wanted}\`, keeping what was said`));

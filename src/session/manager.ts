@@ -333,6 +333,7 @@ export class SessionManager {
       threadId: thread.id,
       ...(chosen === undefined ? {} : { chosen }),
       onGuestsChanged: (guests) => this.rememberGuests(thread.id, guests),
+      onModelChanged: (provider, model) => this.rememberModel(thread.id, provider, model),
       onEnded: (reason) => this.forget(thread.id, id, reason),
     });
 
@@ -345,6 +346,8 @@ export class SessionManager {
       projectPath: project.path,
       ownerId: message.authorId,
       guests: [],
+      ...(chosen?.provider === undefined ? {} : { provider: chosen.provider }),
+      ...(chosen === undefined ? {} : { model: chosen.model }),
       updatedAt: (this.options.now ?? Date.now)(),
     });
 
@@ -418,6 +421,10 @@ export class SessionManager {
       ownerId: record.ownerId,
       threadId: record.threadId,
       guestIds: record.guests,
+      // Back on the model it was working with, rather than the configured one.
+      ...(record.model === undefined ? {} : {
+        chosen: { provider: record.provider, model: record.model },
+      }),
       resume: true,
       onGuestsChanged: (guests) => this.rememberGuests(threadId, guests),
       onEnded: (reason) => this.forget(threadId, record.sessionId, reason),
@@ -463,6 +470,14 @@ export class SessionManager {
         openPullRequest(request, runCommand, callApi),
       ...(this.options.timers === undefined ? {} : { timers: this.options.timers }),
     };
+  }
+
+  /** Keeps the model a session moved to, so a restart comes back on it. */
+  private rememberModel(threadId: string, provider: string, model: string): void {
+    const current = this.options.registry.get(threadId);
+    if (current !== undefined) {
+      this.options.registry.remember({ ...current, provider, model });
+    }
   }
 
   private rememberGuests(threadId: string, guests: string[]): void {

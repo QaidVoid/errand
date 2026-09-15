@@ -557,3 +557,32 @@ Deno.test("the flag is taken off the prompt the agent is given", () =>
     // Nothing of the flag survives into the work the session was asked to do.
     assertEquals(manager.sessions[0]?.project.prompt, "look at this");
   }));
+
+/**
+ * Coming back on a different model is a change nobody asked for, and a quiet
+ * one: the answers simply start reading differently.
+ */
+Deno.test("a resumed thread comes back on the model it was started with", () =>
+  withManager(async ({ manager, sandbox }) => {
+    await manager.start(
+      message("demo: --model meta/muse-spark-1.3-contributor:xhigh go"),
+    );
+    assertEquals(sandbox.launched[0]?.provider, "meta");
+    await manager.endThread("thread-1", "idle");
+
+    await manager.resume("thread-1", message("carry on", "m2"));
+
+    assertEquals(sandbox.launched[1]?.provider, "meta");
+    assertEquals(sandbox.launched[1]?.model, "muse-spark-1.3-contributor:xhigh");
+  }, { providers: { meta: { baseUrl: "https://api.meta.example/v1" } } }));
+
+Deno.test("a thread started on the configured model still resumes on it", () =>
+  withManager(async ({ manager, sandbox }) => {
+    await manager.start(message("demo: go"));
+    await manager.endThread("thread-1", "idle");
+
+    await manager.resume("thread-1", message("carry on", "m2"));
+
+    // Nothing was chosen, so nothing is restored over the configuration.
+    assertEquals(sandbox.launched[1]?.provider, "anthropic");
+  }));

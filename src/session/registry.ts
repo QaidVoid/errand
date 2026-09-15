@@ -37,11 +37,21 @@ export interface ThreadRecord {
    * which would look like the bot ignoring them.
    */
   guests: string[];
+  /**
+   * The provider and model the session was started on, when they were chosen
+   * rather than taken from the configuration.
+   *
+   * Kept so a restart puts the thread back on the model it was working with.
+   * Coming back on a different one is a change nobody asked for, and a quiet
+   * one: the answers simply start reading differently.
+   */
+  provider?: string | undefined;
+  model?: string | undefined;
   /** Milliseconds since the epoch, for evicting the least recently used. */
   updatedAt: number;
 }
 
-function isRecord(value: unknown): value is ThreadRecord {
+export function isRecord(value: unknown): value is ThreadRecord {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
   return (
@@ -53,6 +63,8 @@ function isRecord(value: unknown): value is ThreadRecord {
     typeof record.ownerId === "string" &&
     Array.isArray(record.guests) &&
     record.guests.every((guest) => typeof guest === "string") &&
+    (record.provider === undefined || typeof record.provider === "string") &&
+    (record.model === undefined || typeof record.model === "string") &&
     typeof record.updatedAt === "number"
   );
 }

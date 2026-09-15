@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { createLogger, type LogLevel } from "../log.ts";
-import { MAX_REMEMBERED, type ThreadRecord, ThreadRegistry } from "./registry.ts";
+import { isRecord, MAX_REMEMBERED, type ThreadRecord, ThreadRegistry } from "./registry.ts";
 
 function record(overrides: Partial<ThreadRecord> = {}): ThreadRecord {
   return {
@@ -147,3 +147,21 @@ Deno.test("an index that cannot be written says so at the time", () =>
     assertEquals(lines[0]?.[0], "error");
     assertStringIncludes(lines[0]?.[1] ?? "", "restart will forget threads");
   }));
+
+/** A record written before the model was remembered must still load. */
+Deno.test("a record without a model is still a record", () => {
+  const older = {
+    threadId: "t1",
+    sessionId: "s1",
+    stateDir: "/tmp/s1",
+    projectName: "demo",
+    projectPath: "/tmp/demo",
+    ownerId: "u1",
+    guests: [],
+    updatedAt: 1,
+  };
+  assertEquals(isRecord(older), true);
+  assertEquals(isRecord({ ...older, provider: "meta", model: "muse:xhigh" }), true);
+  // A model that is not a name is not a record.
+  assertEquals(isRecord({ ...older, model: 7 }), false);
+});
