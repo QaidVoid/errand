@@ -308,6 +308,8 @@ export class Session {
     turns: 0,
   };
   private aborting = false;
+  /** An interruption already asked for and not yet answered. */
+  private abortInFlight = false;
   private readonly timers: Timers;
   private readonly log: Logger;
 
@@ -1510,6 +1512,16 @@ export class Session {
           await this.say("there is nothing running to interrupt");
           return;
         }
+        // Asking twice is asking for the same thing. Each ask used to start
+        // its own wait, and the first of them to run out force stopped the
+        // session, so hurrying it along was what ended it.
+        if (this.abortInFlight) {
+          await this.options.thread.setReaction(message.id, "accepted");
+          await this.say(
+            "already interrupting; waiting for the agent to confirm. `!stop` ends the session",
+          );
+          return;
+        }
         this.aborting = true;
         await this.options.thread.setReaction(message.id, "accepted");
         await this.noteCommand(message, "!interrupt");
@@ -1710,7 +1722,14 @@ export class Session {
 
   /** Aborts the running turn, force stopping if the agent will not confirm. */
   private async abort(): Promise<void> {
-    if (await this.requestAbort()) return;
+    this.abortInFlight = true;
+    let confirmed: boolean;
+    try {
+      confirmed = await this.requestAbort();
+    } finally {
+      this.abortInFlight = false;
+    }
+    if (confirmed) return;
 
     await this.say("the agent did not confirm the interruption, so the session was force stopped");
     await this.endBecause("stopped", "force stopped after an unconfirmed interruption");
@@ -1721,14 +1740,23 @@ export class Session {
     this.client.abort();
 
     return new Promise<boolean>((resolve) => {
+      // Settled once, and the poll stops with it: without this the check kept
+      // rescheduling itself after the deadline had already given up.
+      let settled = false;
+      const finish = (confirmed: boolean): void => {
+        if (settled) return;
+        settled = true;
+        this.timers.clearTimeout(deadline);
+        resolve(confirmed);
+      };
       const deadline = this.timers.setTimeout(
-        () => resolve(false),
+        () => finish(false),
         this.options.config.timeouts.abortMs,
       );
       const check = (): void => {
+        if (settled) return;
         if (!this.isBusy || this.ended) {
-          this.timers.clearTimeout(deadline);
-          resolve(true);
+          finish(true);
           return;
         }
         this.timers.setTimeout(check, 50);

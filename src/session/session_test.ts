@@ -1136,3 +1136,59 @@ Deno.test("a guest may read facts but may not forget them", async () => {
   }, { memory });
   memory.close();
 });
+
+/**
+ * Hurrying an interruption along used to end the session: each ask started its
+ * own wait, and the first to run out force stopped it.
+ */
+Deno.test("asking to interrupt again does not start a second wait", () =>
+  withSession(async ({ session, agent, thread, timers }) => {
+    await settle();
+    // A turn that starts and does not settle, so the session stays busy.
+    agent().send({ type: "agent_start" });
+    await settle();
+
+    // The first ask waits for the agent, so it is not awaited here.
+    const first = session.handle(message("!interrupt", OWNER, "m2"));
+    await settle();
+
+    // These return at once, because one interruption is already in flight.
+    await session.handle(message("!interrupt", OWNER, "m3"));
+    await session.handle(message("!interrupt", OWNER, "m4"));
+    await settle();
+    assertStringIncludes(thread.everything(), "already interrupting");
+
+    // Past the deadline the single wait gives up and force stops once, rather
+    // than once per ask.
+    timers.advance(20_000);
+    await settle();
+    await first;
+
+    // One marker per force stop: the phrase itself appears both in what is
+    // said and in the reason the session ends with.
+    const forced = thread.everything().split("did not confirm the interruption").length - 1;
+    assertEquals(forced, 1, `gave up ${forced} times, not once`);
+  }));
+
+Deno.test("an interruption the agent confirms does not force stop", () =>
+  withSession(async ({ session, agent, thread, timers }) => {
+    await settle();
+    agent().send({ type: "agent_start" });
+    await settle();
+
+    const asked = session.handle(message("!interrupt", OWNER, "m2"));
+    await settle();
+
+    // The agent answers, so the turn settles well inside the deadline.
+    agent().send({
+      type: "turn_end",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: 0 },
+    });
+    agent().send({ type: "agent_settled" });
+    await settle();
+    timers.advance(200);
+    await settle();
+    await asked;
+
+    assertEquals(thread.everything().includes("force stopped"), false);
+  }));
