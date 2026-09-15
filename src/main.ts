@@ -15,6 +15,8 @@ import { AlreadyRunningError } from "./lock.ts";
 import { createLogger } from "./log.ts";
 import { SandboxUnavailableError } from "./sandbox/backend.ts";
 import { serve } from "./serve.ts";
+import { basename, join } from "@std/path";
+import { POLICY_FILENAME } from "./sandbox/policy.ts";
 import { treeBytes } from "./session/disk.ts";
 import { recordDir } from "./session/record.ts";
 import { ThreadRegistry } from "./session/registry.ts";
@@ -29,6 +31,28 @@ const USAGE = [
   `the configuration is read from ${configPath(Deno.env.toObject())}`,
 ].join("\n");
 
+/**
+ * The project a session worked in, read back from the policy it was run under.
+ *
+ * The policy names the project as the grant placed at the workspace, which is
+ * the one thing on disk that still says where the work was. Nothing is guessed
+ * at: a policy that does not say returns nothing, and the caller refuses.
+ */
+async function projectOf(
+  stateDir: string,
+): Promise<{ name: string; path: string } | undefined> {
+  let policy: string;
+  try {
+    policy = await Deno.readTextFile(join(stateDir, POLICY_FILENAME));
+  } catch {
+    return undefined;
+  }
+  const placed = /\{\s*path\s*=\s*"([^"]+)"\s*,\s*at\s*=\s*"\/workspace"\s*\}/.exec(policy);
+  const path = placed?.[1];
+  if (path === undefined) return undefined;
+  return { name: basename(path), path };
+}
+
 async function threads(args: readonly string[]): Promise<number> {
   const config = loadConfig(configPath(Deno.env.toObject()));
   const log = createLogger({});
@@ -37,6 +61,8 @@ async function threads(args: readonly string[]): Promise<number> {
 
   return await runThreads(args, {
     registry,
+    stateRoot: config.stateDir,
+    projectOf: (stateDir) => projectOf(stateDir),
     sizeOf: (stateDir) => treeBytes(stateDir),
     remove: async (stateDir) => {
       await Deno.remove(stateDir, { recursive: true });

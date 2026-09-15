@@ -10,7 +10,7 @@
  * the index say so.
  */
 
-import { basename } from "@std/path";
+import { basename, join } from "@std/path";
 import type { ThreadRecord, ThreadRegistry } from "../session/registry.ts";
 
 /** What the commands need, injected so a test needs no disk and no clock. */
@@ -20,6 +20,15 @@ export interface Deps {
   sizeOf(stateDir: string): Promise<number | undefined>;
   /** Deletes a thread's state directory. */
   remove(stateDir: string): Promise<void>;
+  /** Where session state directories live, so a forgotten one can be found. */
+  stateRoot: string;
+  /**
+   * The project a session worked in, read back from what it left on disk.
+   *
+   * Undefined when nothing there says, which is the difference between a
+   * session that can be put back and one that can only be guessed at.
+   */
+  projectOf(stateDir: string): Promise<{ name: string; path: string } | undefined>;
   write(line: string): void;
   now(): number;
 }
@@ -32,6 +41,7 @@ const USAGE = [
   "  forget <thread>      stop resuming it, and keep its data",
   "  remove <thread>      forget it and delete its data, needs --yes",
   "  prune                forget threads whose data is already gone",
+  "  revive <session>     put a forgotten thread back, needs --thread and --owner",
 ].join("\n");
 
 function humanSize(bytes: number): string {
@@ -210,6 +220,67 @@ async function prune(deps: Deps): Promise<number> {
   return 0;
 }
 
+/** Reads a flag written as `--name value`. */
+function flag(args: readonly string[], name: string): string | undefined {
+  const at = args.indexOf(`--${name}`);
+  if (at < 0) return undefined;
+  const value = args[at + 1];
+  return value === undefined || value.startsWith("--") ? undefined : value;
+}
+
+/**
+ * Puts a thread back that was forgotten, so its session can be resumed.
+ *
+ * Only the index is rebuilt: the session's own history and the project it
+ * worked in are still on disk, and what was lost is which thread they belong
+ * to and who owns them. Neither can be read back from the session directory,
+ * so both are given here rather than guessed at.
+ */
+async function revive(deps: Deps, session: string | undefined, args: readonly string[]) {
+  if (session === undefined) {
+    deps.write(
+      "say which session, as `errand threads revive <session> --thread <id> --owner <id>`",
+    );
+    return 2;
+  }
+  const threadId = flag(args, "thread");
+  const ownerId = flag(args, "owner");
+  if (threadId === undefined || ownerId === undefined) {
+    deps.write("both --thread and --owner are needed: neither is recorded in the session itself");
+    return 2;
+  }
+  if (deps.registry.get(threadId) !== undefined) {
+    deps.write(`thread ${threadId} is already remembered; nothing to put back`);
+    return 1;
+  }
+
+  const stateDir = join(deps.stateRoot, session);
+  const held = await deps.sizeOf(stateDir);
+  if (held === undefined) {
+    deps.write(`there is nothing on disk for ${session}, so there is nothing to resume`);
+    return 1;
+  }
+  const project = await deps.projectOf(stateDir);
+  if (project === undefined) {
+    deps.write(`${session} does not say which project it worked in, so it cannot be put back`);
+    return 1;
+  }
+
+  deps.registry.remember({
+    threadId,
+    sessionId: session,
+    stateDir,
+    projectName: project.name,
+    projectPath: project.path,
+    ownerId,
+    guests: [],
+    updatedAt: deps.now(),
+  });
+  deps.write(`put ${session} back on thread ${threadId}, in ${project.name} (${project.path})`);
+  deps.write("post in the thread to resume it");
+  return 0;
+}
+
 /**
  * Runs one thread command.
  *
@@ -231,6 +302,8 @@ export function runThreads(args: readonly string[], deps: Deps): Promise<number>
       return remove(deps, target, confirmed);
     case "prune":
       return prune(deps);
+    case "revive":
+      return revive(deps, target, args);
     case "--help":
     case "help":
       deps.write(USAGE);

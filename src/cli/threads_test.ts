@@ -20,7 +20,11 @@ function record(overrides: Partial<ThreadRecord> = {}): ThreadRecord {
 }
 
 /** A registry in a temporary file, since the commands write to it. */
-async function harness(records: ThreadRecord[] = [], sizes: Record<string, number> = {}) {
+async function harness(
+  records: ThreadRecord[] = [],
+  sizes: Record<string, number> = {},
+  projects: Record<string, { name: string; path: string } | undefined> = {},
+) {
   const root = await Deno.makeTempDir({ prefix: "errand-cli-" });
   const registry = new ThreadRegistry(`${root}/threads.json`, createLogger({}, () => {}));
   for (const entry of records) registry.remember(entry);
@@ -36,6 +40,8 @@ async function harness(records: ThreadRecord[] = [], sizes: Record<string, numbe
     },
     write: (line) => written.push(line),
     now: () => NOW,
+    stateRoot: "/state",
+    projectOf: (stateDir) => Promise.resolve(projects[stateDir]),
   };
 
   return {
@@ -192,5 +198,60 @@ Deno.test("a command that needs a thread says so instead of guessing", async () 
   assertEquals(await runThreads(["show"], h.deps), 2);
   assertEquals(await runThreads(["remove"], h.deps), 2);
   assertStringIncludes(h.out(), "say which thread");
+  await h.cleanup();
+});
+
+Deno.test("reviving puts a forgotten thread back so it can be resumed", async () => {
+  const h = await harness([], { "/state/s-9": 4096 }, {
+    "/state/s-9": { name: "demo", path: "/projects/demo" },
+  });
+
+  const code = await runThreads(
+    ["revive", "s-9", "--thread", "thread-zzzz", "--owner", "u-7"],
+    h.deps,
+  );
+
+  assertEquals(code, 0);
+  const put = h.registry.get("thread-zzzz");
+  assertEquals(put?.sessionId, "s-9");
+  assertEquals(put?.projectPath, "/projects/demo");
+  assertEquals(put?.ownerId, "u-7");
+  assertStringIncludes(h.out(), "post in the thread to resume it");
+  await h.cleanup();
+});
+
+/** Neither is written down in the session, so neither is guessed at. */
+Deno.test("reviving without a thread or an owner is refused", async () => {
+  const h = await harness([], { "/state/s-9": 10 }, {
+    "/state/s-9": { name: "demo", path: "/projects/demo" },
+  });
+
+  assertEquals(await runThreads(["revive", "s-9", "--thread", "thread-zzzz"], h.deps), 2);
+  assertStringIncludes(h.out(), "both --thread and --owner are needed");
+  await h.cleanup();
+});
+
+Deno.test("reviving a session with nothing on disk is refused", async () => {
+  const h = await harness();
+
+  const code = await runThreads(["revive", "gone", "--thread", "t", "--owner", "u"], h.deps);
+
+  assertEquals(code, 1);
+  assertStringIncludes(h.out(), "nothing on disk");
+  await h.cleanup();
+});
+
+Deno.test("reviving onto a thread that is already remembered changes nothing", async () => {
+  const h = await harness([record()], { "/state/s-9": 10 }, {
+    "/state/s-9": { name: "demo", path: "/projects/demo" },
+  });
+
+  const code = await runThreads(
+    ["revive", "s-9", "--thread", "thread-aaaa", "--owner", "u"],
+    h.deps,
+  );
+
+  assertEquals(code, 1);
+  assertStringIncludes(h.out(), "already remembered");
   await h.cleanup();
 });
