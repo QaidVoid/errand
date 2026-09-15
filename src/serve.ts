@@ -377,10 +377,38 @@ async function run(
       },
     }),
     replyInChannel: async (message: IncomingMessage, text: string) => {
-      const channel = await gateway.connection.channels.fetch(config.chat.channelId);
-      if (channel === null || channel.type !== ChannelType.GuildText) return;
-      const starter = await channel.messages.fetch(message.id).catch(() => null);
-      await starter?.reply(plain(redactText(text, secrets))).catch(() => undefined);
+      // Every step here used to fail into silence, so an answer the daemon had
+      // already worked out simply never arrived and nothing said why. A reply
+      // that cannot be delivered is worth a line: it is the difference between
+      // a command that did nothing and one that was never heard.
+      const channel = await gateway.connection.channels.fetch(config.chat.channelId)
+        .catch((error: unknown) => {
+          log.warn("the channel could not be read to reply in", { detail: String(error) });
+          return null;
+        });
+      if (channel === null) return;
+      if (channel.type !== ChannelType.GuildText) {
+        log.warn("the served channel is not a text channel, so nothing can be replied in it", {
+          type: String(channel.type),
+        });
+        return;
+      }
+      const starter = await channel.messages.fetch(message.id).catch((error: unknown) => {
+        log.warn("the message to reply to could not be read", { detail: String(error) });
+        return null;
+      });
+      const body = plain(redactText(text, secrets));
+      if (starter === null) {
+        // Said in the channel rather than dropped: the answer matters more
+        // than hanging it off the message that asked.
+        await channel.send(body).catch((error: unknown) => {
+          log.warn("the reply could not be sent", { detail: String(error) });
+        });
+        return;
+      }
+      await starter.reply(body).catch((error: unknown) => {
+        log.warn("the reply could not be sent", { detail: String(error) });
+      });
     },
   });
 
