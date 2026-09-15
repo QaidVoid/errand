@@ -110,13 +110,21 @@
         },
         "providers": {
           "description": "Providers the operator defines, beyond the ones the agent knows itself. Written into the agent's own configuration directory verbatim, in the shape that configuration uses: a `baseUrl`, which API it speaks, and the models it serves. Passed through rather than restated here, because the schema belongs to the agent and copying it would mean this refusing a field the agent had just learned. A definition is how a provider the agent has no entry for is reached at all, and how one it does know is pointed somewhere else. The key is the provider name `agent.provider` and `--model provider/id` refer to."
+        },
+        "aliases": {
+          "description": "Short names for models, so a session is started without spelling one out. The value is what the name stands for, `provider/id` or a bare id, exactly as `--model` takes it. A thinking level may be written into it as a default, and one given on the name itself wins: with `muse` standing for `meta/muse-spark-1.3-contributor:high`, `--model muse` asks for high and `--model muse:xhigh` asks for xhigh.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
         "provider",
         "credentialName",
         "credential",
-        "providers"
+        "providers",
+        "aliases"
       ]
     },
     "github": {

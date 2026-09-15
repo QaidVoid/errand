@@ -44,6 +44,7 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
     visionModel: undefined,
     delegate: undefined,
     providers: {},
+    aliases: {},
     rulesPath: undefined,
     credentialName: "ZAI_CODING_CN_API_KEY",
     credential: "secret-key",

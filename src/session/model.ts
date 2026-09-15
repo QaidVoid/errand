@@ -61,3 +61,41 @@ export function resolveModel(value: string, known: readonly string[]): ChosenMod
   }
   return { provider: undefined, model: value };
 }
+
+/**
+ * Thinking levels, which are what a colon on the end of a model introduces.
+ *
+ * Named so that a colon in a model id is not mistaken for one. Only a suffix
+ * that is actually a level is split off; anything else is part of the name.
+ */
+const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** Splits a trailing `:level` from a model, when the suffix really is one. */
+function splitLevel(value: string): { name: string; level: string } {
+  const colon = value.lastIndexOf(":");
+  if (colon <= 0) return { name: value, level: "" };
+  const suffix = value.slice(colon + 1).toLowerCase();
+  return LEVELS.includes(suffix)
+    ? { name: value.slice(0, colon), level: value.slice(colon) }
+    : { name: value, level: "" };
+}
+
+/**
+ * Puts a short name back to what it stands for.
+ *
+ * The level is taken off first, so `muse:xhigh` finds the alias `muse` rather
+ * than looking for one that includes the level. A level written into the alias
+ * is a default: one given on the name replaces it, because the person typing
+ * it is being more specific than the configuration was.
+ *
+ * A name that stands for nothing is returned unchanged, so a model spelled out
+ * in full keeps working and a mistyped alias fails against the provider with
+ * its own name rather than a substituted one.
+ */
+export function expandAlias(value: string, aliases: Readonly<Record<string, string>>): string {
+  const asked = splitLevel(value.trim());
+  const target = aliases[asked.name];
+  if (target === undefined) return value.trim();
+  if (asked.level === "") return target;
+  return `${splitLevel(target).name}${asked.level}`;
+}

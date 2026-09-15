@@ -195,6 +195,7 @@ async function withManager(
     unavailable?: () => Promise<string | undefined>;
     limits?: Record<string, number>;
     providers?: Record<string, unknown>;
+    aliases?: Record<string, string>;
   } = {},
 ): Promise<void> {
   const root = await Deno.makeTempDir({ prefix: "errand-manager-" });
@@ -202,12 +203,13 @@ async function withManager(
     projectRoot: join(root, "projects"),
     stateDir: join(root, "state"),
     ...(options.limits === undefined ? {} : { limits: options.limits }),
-    ...(options.providers === undefined ? {} : {
+    ...(options.providers === undefined && options.aliases === undefined ? {} : {
       agent: {
         provider: "anthropic",
         credentialName: "ANTHROPIC_API_KEY",
         credential: "secret",
-        providers: options.providers,
+        ...(options.providers === undefined ? {} : { providers: options.providers }),
+        ...(options.aliases === undefined ? {} : { aliases: options.aliases }),
       },
     }),
   });
@@ -585,4 +587,16 @@ Deno.test("a thread started on the configured model still resumes on it", () =>
 
     // Nothing was chosen, so nothing is restored over the configuration.
     assertEquals(sandbox.launched[1]?.provider, "anthropic");
+  }));
+
+/** Typing the whole name every time is what a short one is for. */
+Deno.test("a short name starts the session on the model it stands for", () =>
+  withManager(async ({ manager, sandbox }) => {
+    await manager.start(message("demo: --model muse:xhigh go"));
+
+    assertEquals(sandbox.launched[0]?.provider, "meta");
+    assertEquals(sandbox.launched[0]?.model, "muse-spark-1.3-contributor:xhigh");
+  }, {
+    providers: { meta: { baseUrl: "https://api.meta.example/v1" } },
+    aliases: { muse: "meta/muse-spark-1.3-contributor" },
   }));

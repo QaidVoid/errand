@@ -19,7 +19,7 @@ import type { EndReason, ThreadPort } from "./port.ts";
 import { callApi, openPullRequest, runCommand } from "./pr.ts";
 import { sessionId, sessionToken } from "./ids.ts";
 import { ensureProjectDirectory, type ProjectSelection, selectProject } from "./projects.ts";
-import { resolveModel, selectModel } from "./model.ts";
+import { expandAlias, resolveModel, selectModel } from "./model.ts";
 import { redacting } from "./redacted.ts";
 import type { ThreadRecord, ThreadRegistry } from "./registry.ts";
 import { type IncomingMessage, Session, type SessionOptions, type Timers } from "./session.ts";
@@ -290,7 +290,9 @@ export class SessionManager {
       this.options.config.agent.provider,
       ...Object.keys(this.options.config.agent.providers),
     ];
-    const chosen = asked.value === undefined ? undefined : resolveModel(asked.value, known);
+    const chosen = asked.value === undefined
+      ? undefined
+      : resolveModel(expandAlias(asked.value, this.options.config.agent.aliases), known);
     project = { ...project, prompt: asked.prompt };
 
     const stateDir = join(this.options.config.stateDir, id);

@@ -63,7 +63,7 @@ import {
 } from "./commands.ts";
 import { Delegating, type Outcome as DelegationOutcome } from "./delegating.ts";
 import { MIN_CHECK_MS, nextCheckMs, treeBytes, verdict } from "./disk.ts";
-import type { ChosenModel } from "./model.ts";
+import { type ChosenModel, expandAlias } from "./model.ts";
 import { prepareRecordDir, recordDir } from "./record.ts";
 import { readDirectory, readFileForDisplay } from "./files.ts";
 import {
@@ -1642,7 +1642,9 @@ export class Session {
    * turn would answer half a question with one model and half with another.
    */
   private async switchModel(rest: string, message: IncomingMessage): Promise<void> {
-    const wanted = rest.trim();
+    // A short name is what somebody types here too, so it stands for the same
+    // model it would have at the start of a session.
+    const wanted = expandAlias(rest.trim(), this.options.config.agent.aliases);
     const available = this.options.availableModels ?? [];
 
     if (wanted.length === 0) {

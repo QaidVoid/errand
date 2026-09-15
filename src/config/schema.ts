@@ -157,6 +157,16 @@ export interface AgentConfig {
    * provider name `agent.provider` and `--model provider/id` refer to.
    */
   providers: Record<string, unknown>;
+  /**
+   * Short names for models, so a session is started without spelling one out.
+   *
+   * The value is what the name stands for, `provider/id` or a bare id, exactly
+   * as `--model` takes it. A thinking level may be written into it as a
+   * default, and one given on the name itself wins: with `muse` standing for
+   * `meta/muse-spark-1.3-contributor:high`, `--model muse` asks for high and
+   * `--model muse:xhigh` asks for xhigh.
+   */
+  aliases: Record<string, string>;
 }
 
 /**

@@ -73,6 +73,7 @@ const KNOWN = {
     "delegate",
     "rulesPath",
     "providers",
+    "aliases",
   ],
   delegate: ["model", "perTurn", "deadlineMs", "baseUrl"],
   github: ["token", "userName", "userEmail"],
@@ -329,6 +330,40 @@ function validateProviders(
   return defined;
 }
 
+/** Reads the short names for models, which must be names standing for text. */
+function validateAliases(
+  source: Record<string, unknown>,
+  problems: Problems,
+): Record<string, string> {
+  const raw = source.aliases;
+  if (raw === undefined) return {};
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    problems.add("agent.aliases must be an object of short names to models");
+    return {};
+  }
+
+  const aliases: Record<string, string> = {};
+  for (const [name, target] of Object.entries(raw as Record<string, unknown>)) {
+    const short = name.trim();
+    if (short.length === 0) {
+      problems.add("agent.aliases has a name that is empty");
+      continue;
+    }
+    // A name with a colon in it could never be typed: the colon is where the
+    // thinking level starts, so the name would be read as ending before it.
+    if (short.includes(":")) {
+      problems.add(`agent.aliases.${name} cannot hold a colon, which starts the thinking level`);
+      continue;
+    }
+    if (typeof target !== "string" || target.trim().length === 0) {
+      problems.add(`agent.aliases.${name} must name a model`);
+      continue;
+    }
+    aliases[short] = target.trim();
+  }
+  return aliases;
+}
+
 function validateAgent(raw: Record<string, unknown>, problems: Problems): AgentConfig {
   const source = section(raw, "agent");
   rejectUnknown(source, KNOWN.agent, "agent", problems);
@@ -342,6 +377,7 @@ function validateAgent(raw: Record<string, unknown>, problems: Problems): AgentC
     delegate: validateDelegate(source, problems),
     rulesPath: optionalAbsolutePath(source, "rulesPath", "agent", problems),
     providers: validateProviders(source, problems),
+    aliases: validateAliases(source, problems),
   };
 }
 
