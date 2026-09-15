@@ -11,7 +11,7 @@
  * from. The operator's home is not granted, and neither is any parent of these.
  */
 
-import { dirname, join } from "@std/path";
+import { basename, dirname, join } from "@std/path";
 
 /** The PATH a target is given when the policy sets none. */
 export const SANDBOX_PATH = ["/usr/local/bin", "/usr/bin", "/bin"];
@@ -53,6 +53,23 @@ export function which(name: string, path = Deno.env.get("PATH") ?? ""): string |
  * The agent reads its own manifest at startup, so granting the directory the
  * bundle sits in is not enough: it loads and then misreports its own version.
  */
+/**
+ * The `node_modules` a package was installed into, if it is in one.
+ *
+ * The nearest one going up, which is where a flat installation keeps every
+ * package the agent resolves against. Nothing when the agent was installed
+ * some other way, such as a self-contained binary, which needs no such grant.
+ */
+function installRoot(directory: string): string | undefined {
+  let current = directory;
+  for (;;) {
+    if (basename(current) === "node_modules") return current;
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
 function packageRoot(file: string): string | undefined {
   let directory = dirname(file);
   for (;;) {
@@ -99,7 +116,16 @@ export function agentRuntime(lookup: Lookup = (name) => which(name)): AgentRunti
   // A launcher installed by a package manager is usually a link into the
   // package it belongs to, and the link's own directory holds none of the code.
   const real = realPath(launcher);
-  add(readPaths, packageRoot(real) ?? dirname(real));
+  const root = packageRoot(real) ?? dirname(real);
+  add(readPaths, root);
+
+  // Its dependencies are packages of their own, sitting beside it rather than
+  // inside it, and the runtime finds them by walking up to the `node_modules`
+  // they were all installed into. Granting only the agent's own package leaves
+  // an import of a sibling failing to resolve, which reads as the agent
+  // exiting at startup rather than as anything to do with the sandbox.
+  const installed = installRoot(root);
+  if (installed !== undefined) add(readPaths, installed);
 
   // The interpreter named by the launcher's `#!` line. Absent when the agent is
   // a self-contained binary, which needs nothing further granted.
