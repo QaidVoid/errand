@@ -19,6 +19,7 @@ import type { EndReason, ThreadPort } from "./port.ts";
 import { callApi, openPullRequest, runCommand } from "./pr.ts";
 import { sessionId, sessionToken } from "./ids.ts";
 import { ensureProjectDirectory, type ProjectSelection, selectProject } from "./projects.ts";
+import { resolveModel, selectModel } from "./model.ts";
 import { redacting } from "./redacted.ts";
 import type { ThreadRecord, ThreadRegistry } from "./registry.ts";
 import { type IncomingMessage, Session, type SessionOptions, type Timers } from "./session.ts";
@@ -282,6 +283,16 @@ export class SessionManager {
       return { status: "refused", reason: this.options.scheduler.sessionRefusedReason() };
     }
 
+    // The opening message may name the model, because by the time there is a
+    // thread to type `!model` in, the session has already started on another.
+    const asked = selectModel(project.prompt);
+    const known = [
+      this.options.config.agent.provider,
+      ...Object.keys(this.options.config.agent.providers),
+    ];
+    const chosen = asked.value === undefined ? undefined : resolveModel(asked.value, known);
+    project = { ...project, prompt: asked.prompt };
+
     const stateDir = join(this.options.config.stateDir, id);
 
     let thread: { id: string; port: ThreadPort };
@@ -320,6 +331,7 @@ export class SessionManager {
       ownerId: message.authorId,
       ...(message.authorName === undefined ? {} : { ownerName: message.authorName }),
       threadId: thread.id,
+      ...(chosen === undefined ? {} : { chosen }),
       onGuestsChanged: (guests) => this.rememberGuests(thread.id, guests),
       onEnded: (reason) => this.forget(thread.id, id, reason),
     });

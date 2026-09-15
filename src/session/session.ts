@@ -63,6 +63,7 @@ import {
 } from "./commands.ts";
 import { Delegating, type Outcome as DelegationOutcome } from "./delegating.ts";
 import { MIN_CHECK_MS, nextCheckMs, treeBytes, verdict } from "./disk.ts";
+import type { ChosenModel } from "./model.ts";
 import { prepareRecordDir, recordDir } from "./record.ts";
 import { readDirectory, readFileForDisplay } from "./files.ts";
 import {
@@ -161,6 +162,11 @@ function reason(error: unknown): string {
 export interface SessionOptions {
   id: string;
   project: ProjectSelection;
+  /**
+   * Provider and model this session runs on, when the opening message named
+   * them. Absent leaves the configured pair, which is the ordinary case.
+   */
+  chosen?: ChosenModel | undefined;
   stateDir: string;
   thread: ThreadPort;
   sandbox: Sandbox;
@@ -383,8 +389,8 @@ export class Session {
             ? {}
             : { [TOKEN_VARIABLE]: github.token, ...gitIdentityEnv(github) }),
         },
-        provider: this.options.config.agent.provider,
-        model: this.options.config.agent.model,
+        provider: this.provider(),
+        model: this.model(),
         providers: this.options.config.agent.providers,
         systemPromptPath,
         resume: this.options.resume === true,
@@ -1458,6 +1464,16 @@ export class Session {
     );
   }
 
+  /** The provider this session runs on: what was asked for, else configured. */
+  private provider(): string {
+    return this.options.chosen?.provider ?? this.options.config.agent.provider;
+  }
+
+  /** The model this session runs on, on that provider. */
+  private model(): string | undefined {
+    return this.options.chosen?.model ?? this.options.config.agent.model;
+  }
+
   private async answerCommand(
     word: string,
     rest: string,
@@ -1648,7 +1664,7 @@ export class Session {
       return;
     }
 
-    const sent = this.client?.setModel(this.options.config.agent.provider, wanted) ?? false;
+    const sent = this.client?.setModel(this.provider(), wanted) ?? false;
     if (!sent) {
       await this.say("the agent is not accepting anything further; this session has ended");
       await this.options.thread.setReaction(message.id, "failed");

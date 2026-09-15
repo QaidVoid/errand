@@ -191,14 +191,25 @@ interface Harness {
 
 async function withManager(
   run: (harness: Harness) => Promise<void>,
-  options: { unavailable?: () => Promise<string | undefined>; limits?: Record<string, number> } =
-    {},
+  options: {
+    unavailable?: () => Promise<string | undefined>;
+    limits?: Record<string, number>;
+    providers?: Record<string, unknown>;
+  } = {},
 ): Promise<void> {
   const root = await Deno.makeTempDir({ prefix: "errand-manager-" });
   const settings = config({
     projectRoot: join(root, "projects"),
     stateDir: join(root, "state"),
     ...(options.limits === undefined ? {} : { limits: options.limits }),
+    ...(options.providers === undefined ? {} : {
+      agent: {
+        provider: "anthropic",
+        credentialName: "ANTHROPIC_API_KEY",
+        credential: "secret",
+        providers: options.providers,
+      },
+    }),
   });
   const sandbox = new FakeSandbox();
   const threads = fakeThreads();
@@ -512,4 +523,37 @@ Deno.test("writing to a session that stopped picks it up again", () =>
 
     assertEquals(await manager.deliverToSession("demo-s1", message("carry on", "m2")), true);
     assertEquals(manager.sessions.length, 1);
+  }));
+
+/**
+ * By the time there is a thread to type `!model` in, the session has already
+ * started on whichever model the configuration named.
+ */
+Deno.test("the opening message can choose the model the session starts on", () =>
+  withManager(async ({ manager, sandbox }) => {
+    await manager.start(message("demo: --model glm-5.3-air look at this"));
+
+    const launched = sandbox.launched[0];
+    assertEquals(launched?.model, "glm-5.3-air");
+    // The provider is untouched, because the value named no known one.
+    assertEquals(launched?.provider, "anthropic");
+  }));
+
+Deno.test("a known provider in front of the model switches provider too", () =>
+  withManager(async ({ manager, sandbox }) => {
+    await manager.start(
+      message("demo: --model meta/muse-spark-1.3-contributor:max look at this"),
+    );
+
+    const launched = sandbox.launched[0];
+    assertEquals(launched?.provider, "meta");
+    // The thinking level rides along on the model, for the agent to read.
+    assertEquals(launched?.model, "muse-spark-1.3-contributor:max");
+  }, { providers: { meta: { baseUrl: "https://api.meta.example/v1" } } }));
+
+Deno.test("the flag is taken off the prompt the agent is given", () =>
+  withManager(async ({ manager }) => {
+    await manager.start(message("demo: --model glm-5.3-air look at this"));
+    // Nothing of the flag survives into the work the session was asked to do.
+    assertEquals(manager.sessions[0]?.project.prompt, "look at this");
   }));
