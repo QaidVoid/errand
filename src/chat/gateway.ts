@@ -46,6 +46,17 @@ export function reconnectDelayMs(attempt: number, policy: ReconnectPolicy): numb
   return Math.min(policy.baseDelayMs * 2 ** (attempt - 1), policy.maxDelayMs);
 }
 
+/**
+ * Whether a failure to connect is one that waiting could get past.
+ *
+ * Everything is, apart from what the service has already decided about this
+ * bot: a rejected token and a refused intent are answers, not outages, and
+ * they will be the same answer in a minute.
+ */
+export function worthRetrying(error: unknown): boolean {
+  return !/TokenInvalid|DisallowedIntents/i.test(String(error));
+}
+
 /** How long the service has to answer a login before it is a failure. */
 const READY_TIMEOUT_MS = 30_000;
 
@@ -129,8 +140,47 @@ export class Gateway {
     }
   }
 
-  /** Connects and waits until the connection is ready. */
+  /**
+   * Connects, waiting out a service that is not answering yet.
+   *
+   * A chat service that is briefly down is not a reason to exit. Exiting hands
+   * the problem to whatever supervises the daemon, which restarts it at once,
+   * and a tight restart loop is an accidental flood: far more connection
+   * attempts than one process would make, aimed at a service that is already
+   * struggling. Waiting here makes it one attempt per interval instead.
+   *
+   * Only what could succeed later is waited on. A token the service rejects,
+   * or an intent it refuses, is a configuration problem that no amount of
+   * waiting fixes, so it is raised at once and the daemon says what to change.
+   *
+   * There is no attempt limit, unlike a reconnection: nothing is running yet.
+   * A reconnection gives up because sessions left unattended are worse than
+   * none, and at startup there are no sessions to leave.
+   */
   async connect(): Promise<void> {
+    for (let attempt = 1;; attempt += 1) {
+      try {
+        await this.openConnection();
+        return;
+      } catch (error) {
+        if (this.stopping || !worthRetrying(error)) throw error;
+        await this.client?.destroy().catch(() => undefined);
+        this.client = null;
+
+        const delay = reconnectDelayMs(attempt, this.policy);
+        this.log.warn("the chat service could not be reached; waiting to try again", {
+          attempt,
+          delayMs: delay,
+          detail: String(error),
+        });
+        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+        if (this.stopping) throw error;
+      }
+    }
+  }
+
+  /** One attempt: log in and wait for the connection to be ready. */
+  private async openConnection(): Promise<void> {
     const client = new Client({
       intents: [
         GatewayIntentBits.Guilds,

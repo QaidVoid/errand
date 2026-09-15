@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { DEFAULT_RECONNECT, reconnectDelayMs, toRaw } from "./gateway.ts";
+import { DEFAULT_RECONNECT, reconnectDelayMs, toRaw, worthRetrying } from "./gateway.ts";
 import { buildCommands, translate } from "./commands.ts";
 import { COMMANDS } from "../session/commands.ts";
 
@@ -140,4 +140,34 @@ Deno.test("a command's description says who may run it", () => {
   assertEquals(definitions.get("ls")?.description.includes("owner and invited"), true);
   assertEquals(definitions.get("shutdown")?.description.includes("named accounts"), true);
   assertEquals(definitions.get("status")?.description.includes("("), false);
+});
+
+/**
+ * A service that is briefly down is waited out; a service that has already
+ * decided about this bot is not, because the answer will not change.
+ */
+Deno.test("an outage is worth waiting out, a refusal is not", () => {
+  // What an outage looks like, from the report in issue 4 and from a 500.
+  assertEquals(
+    worthRetrying(new Error("failed to connect to WebSocket: Invalid status code 400 Bad Request")),
+    true,
+  );
+  assertEquals(worthRetrying(new Error("HTTPError: Internal Server Error")), true);
+  assertEquals(worthRetrying(new Error("503 Service Unavailable")), true);
+  assertEquals(worthRetrying(new Error("the connection was not ready in 30000ms")), true);
+
+  // What configuration looks like: waiting changes neither.
+  assertEquals(worthRetrying(new Error("TokenInvalid: An invalid token was provided")), false);
+  assertEquals(worthRetrying(new Error("DisallowedIntents: privileged intent not enabled")), false);
+});
+
+/** The wait grows, so an outage costs one attempt per interval, not a flood. */
+Deno.test("waiting backs off up to the ceiling", () => {
+  const policy = { baseDelayMs: 500, maxDelayMs: 60_000, maxAttempts: 10 };
+  const waits = [1, 2, 3, 4, 8, 20].map((attempt) => reconnectDelayMs(attempt, policy));
+  assertEquals(waits[0], 500);
+  assertEquals(waits[1], 1_000);
+  // It never grows past the ceiling, however long the outage runs.
+  assertEquals(waits[waits.length - 1], 60_000);
+  assertEquals(waits.every((wait) => wait <= policy.maxDelayMs), true);
 });
