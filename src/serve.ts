@@ -10,8 +10,9 @@
 import { dirname, fromFileUrl, join } from "@std/path";
 import { ChannelType } from "discord.js";
 import { acknowledge, applicationId, registerCommands } from "./chat/commands.ts";
+import { firstWord } from "./session/commands.ts";
 import { Gateway } from "./chat/gateway.ts";
-import { whenRelative, whenRelativePlain } from "./chat/render.ts";
+import { MESSAGE_LIMIT, splitMessage, whenRelative, whenRelativePlain } from "./chat/render.ts";
 import { assertChannelUsable, ChatThreadFactory, plain } from "./chat/threads.ts";
 import { redactText, secretValues } from "./config/redact.ts";
 import type { Config } from "./config/schema.ts";
@@ -397,18 +398,40 @@ async function run(
         log.warn("the message to reply to could not be read", { detail: String(error) });
         return null;
       });
-      const body = plain(redactText(text, secrets));
+      // The service refuses a body over its limit outright, so an answer that
+      // ran long was rejected whole rather than arriving in pieces. What is
+      // remembered about somebody runs long easily.
+      const chunks = splitMessage(redactText(text, secrets), MESSAGE_LIMIT);
+      if (chunks.length === 0) return;
+
+      const said = (error: unknown) => {
+        log.warn("the reply could not be sent", { detail: String(error) });
+      };
+
       if (starter === null) {
-        // Said in the channel rather than dropped: the answer matters more
-        // than hanging it off the message that asked.
-        await channel.send(body).catch((error: unknown) => {
-          log.warn("the reply could not be sent", { detail: String(error) });
-        });
+        // Nothing to hang it off, so it is said in the channel: the answer
+        // matters more than what it is attached to.
+        for (const chunk of chunks) await channel.send(plain(chunk)).catch(said);
         return;
       }
-      await starter.reply(body).catch((error: unknown) => {
-        log.warn("the reply could not be sent", { detail: String(error) });
-      });
+
+      if (chunks.length === 1) {
+        await starter.reply(plain(chunks[0] as string)).catch(said);
+        return;
+      }
+
+      // A long answer goes in a thread of its own rather than filling the
+      // channel with it. The thread is where it was asked for, so it is still
+      // found by whoever asked, and the channel keeps one message.
+      const name = `${firstWord(message.content).replace(/^!/, "") || "answer"}`;
+      const thread = await starter.startThread({ name: name.slice(0, 90) }).catch(
+        (error: unknown) => {
+          log.warn("a thread for the reply could not be opened", { detail: String(error) });
+          return null;
+        },
+      );
+      const target = thread ?? channel;
+      for (const chunk of chunks) await target.send(plain(chunk)).catch(said);
     },
   });
 
