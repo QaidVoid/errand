@@ -43,6 +43,7 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
     model: "glm-5.3",
     visionModel: undefined,
     delegate: undefined,
+    providers: {},
     rulesPath: undefined,
     credentialName: "ZAI_CODING_CN_API_KEY",
     credential: "secret-key",

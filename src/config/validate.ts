@@ -72,6 +72,7 @@ const KNOWN = {
     "credential",
     "delegate",
     "rulesPath",
+    "providers",
   ],
   delegate: ["model", "perTurn", "deadlineMs", "baseUrl"],
   github: ["token", "userName", "userEmail"],
@@ -294,6 +295,40 @@ function validateChat(raw: Record<string, unknown>, problems: Problems): ChatCon
   };
 }
 
+/**
+ * Reads the operator's provider definitions, which are passed through as they
+ * are written.
+ *
+ * Each value is handed to the agent unread, so only the shape this depends on
+ * is checked: a name mapping to an object. Naming the fields here would mean
+ * refusing one the agent had just learned, and this is not the schema's owner.
+ */
+function validateProviders(
+  source: Record<string, unknown>,
+  problems: Problems,
+): Record<string, unknown> {
+  const raw = source.providers;
+  if (raw === undefined) return {};
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    problems.add("agent.providers must be an object of provider definitions, keyed by name");
+    return {};
+  }
+
+  const defined: Record<string, unknown> = {};
+  for (const [name, definition] of Object.entries(raw as Record<string, unknown>)) {
+    if (name.trim().length === 0) {
+      problems.add("agent.providers has a definition with no name");
+      continue;
+    }
+    if (typeof definition !== "object" || definition === null || Array.isArray(definition)) {
+      problems.add(`agent.providers.${name} must be an object describing the provider`);
+      continue;
+    }
+    defined[name.trim()] = definition;
+  }
+  return defined;
+}
+
 function validateAgent(raw: Record<string, unknown>, problems: Problems): AgentConfig {
   const source = section(raw, "agent");
   rejectUnknown(source, KNOWN.agent, "agent", problems);
@@ -306,6 +341,7 @@ function validateAgent(raw: Record<string, unknown>, problems: Problems): AgentC
     credential: requiredString(source, "credential", "agent", problems),
     delegate: validateDelegate(source, problems),
     rulesPath: optionalAbsolutePath(source, "rulesPath", "agent", problems),
+    providers: validateProviders(source, problems),
   };
 }
 

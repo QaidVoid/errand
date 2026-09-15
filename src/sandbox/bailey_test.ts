@@ -8,6 +8,7 @@ import {
   egressProxyEndpoint,
   egressProxyUrl,
   parseDoctor,
+  providerConfig,
   type Run,
   sessionEnvironment,
 } from "./bailey.ts";
@@ -277,4 +278,38 @@ Deno.test("open egress never names the proxy, even given a port", () => {
 Deno.test("the proxy endpoint and url are built from the map address and port", () => {
   assertEquals(egressProxyEndpoint(8443), "169.254.169.1:8443");
   assertEquals(egressProxyUrl(8443), "http://169.254.169.1:8443");
+});
+
+/**
+ * A provider the agent has no entry for is only reachable because the operator
+ * defined it, so the broker's base URL must not replace that definition.
+ */
+Deno.test("an operator's provider definition survives the broker's base url", () => {
+  const defined = {
+    meta: {
+      baseUrl: "https://api.meta.example/v1",
+      api: "openai-completions",
+      models: [{ id: "muse-spark-1.3-contributor" }],
+    },
+  };
+
+  const merged = providerConfig(defined, "meta", "http://169.254.169.1:8443/provider");
+  const meta = merged.providers.meta as Record<string, unknown>;
+
+  // Only where it is reached changes; what it is stays.
+  assertEquals(meta.baseUrl, "http://169.254.169.1:8443/provider");
+  assertEquals(meta.api, "openai-completions");
+  assertEquals((meta.models as unknown[]).length, 1);
+});
+
+Deno.test("a provider the operator never defined still gets its base url", () => {
+  const merged = providerConfig({}, "zai-coding-cn", "http://169.254.169.1:8443/provider");
+  assertEquals(merged.providers["zai-coding-cn"], {
+    baseUrl: "http://169.254.169.1:8443/provider",
+  });
+});
+
+Deno.test("without a broker the definitions are passed through untouched", () => {
+  const defined = { meta: { baseUrl: "https://api.meta.example/v1" } };
+  assertEquals(providerConfig(defined, "meta"), { providers: defined });
 });

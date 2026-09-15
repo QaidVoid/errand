@@ -143,6 +143,20 @@ export interface AgentConfig {
    * it to the rules that actually matter.
    */
   rulesPath: string | undefined;
+  /**
+   * Providers the operator defines, beyond the ones the agent knows itself.
+   *
+   * Written into the agent's own configuration directory verbatim, in the
+   * shape that configuration uses: a `baseUrl`, which API it speaks, and the
+   * models it serves. Passed through rather than restated here, because the
+   * schema belongs to the agent and copying it would mean this refusing a
+   * field the agent had just learned.
+   *
+   * A definition is how a provider the agent has no entry for is reached at
+   * all, and how one it does know is pointed somewhere else. The key is the
+   * provider name `agent.provider` and `--model provider/id` refer to.
+   */
+  providers: Record<string, unknown>;
 }
 
 /**

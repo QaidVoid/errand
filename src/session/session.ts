@@ -385,6 +385,7 @@ export class Session {
         },
         provider: this.options.config.agent.provider,
         model: this.options.config.agent.model,
+        providers: this.options.config.agent.providers,
         systemPromptPath,
         resume: this.options.resume === true,
       });

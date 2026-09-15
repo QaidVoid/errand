@@ -451,3 +451,40 @@ Deno.test("an unknown key under egress is refused", () => {
     "sandbox.egress",
   );
 });
+
+Deno.test("provider definitions are passed through, and their shape is checked", () => {
+  const config = validateConfig(valid({
+    agent: {
+      provider: "meta",
+      credentialName: "META_API_KEY",
+      credential: "k",
+      providers: {
+        meta: {
+          baseUrl: "https://api.meta.example/v1",
+          api: "openai-completions",
+          models: [{ id: "muse-spark-1.3-contributor", reasoning: true }],
+        },
+      },
+    },
+  }));
+  // Handed to the agent as written, so a field this does not know is kept.
+  const meta = config.agent.providers.meta as Record<string, unknown>;
+  assertEquals(meta.api, "openai-completions");
+  assertEquals((meta.models as unknown[]).length, 1);
+});
+
+Deno.test("a provider definition that is not an object is refused", () => {
+  const error = assertThrows(
+    () =>
+      validateConfig(valid({
+        agent: {
+          provider: "p",
+          credentialName: "K",
+          credential: "k",
+          providers: { meta: "https://api.meta.example/v1" },
+        },
+      })),
+    ConfigError,
+  ) as ConfigError;
+  assertStringIncludes(error.problems.join("\n"), "agent.providers.meta");
+});

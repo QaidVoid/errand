@@ -62,6 +62,13 @@ export interface SandboxLaunch {
   provider: string;
   /** Model pattern, or undefined to use the provider's default. */
   model: string | undefined;
+  /**
+   * Providers the operator defined, written into the agent's configuration.
+   *
+   * Absent where the operator defined none, which is the ordinary case: the
+   * agent then knows only the providers it ships with.
+   */
+  providers?: Record<string, unknown> | undefined;
   /** Continue the conversation already stored in the state directory. */
   resume: boolean;
 }

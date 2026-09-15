@@ -141,6 +141,31 @@ export function providerBrokerUrl(port: number): string {
 }
 
 /**
+ * The agent's provider configuration for one session.
+ *
+ * The operator's definitions first, then the broker's base URL over the one
+ * provider it stands in for. Merged rather than written over the top: a
+ * definition is how a provider with no built-in entry is reached at all, and
+ * replacing it wholesale would leave the agent with a provider it has never
+ * heard of. Only the base URL is taken from the broker, so everything else the
+ * operator said about that provider still stands.
+ */
+export function providerConfig(
+  defined: Record<string, unknown>,
+  provider: string,
+  brokerUrl?: string,
+): { providers: Record<string, unknown> } {
+  const providers: Record<string, unknown> = { ...defined };
+  if (brokerUrl !== undefined) {
+    const already = providers[provider];
+    providers[provider] = typeof already === "object" && already !== null && !Array.isArray(already)
+      ? { ...already as Record<string, unknown>, baseUrl: brokerUrl }
+      : { baseUrl: brokerUrl };
+  }
+  return { providers };
+}
+
+/**
  * Extras the daemon supplies, which a test has no need of.
  *
  * Grouped rather than trailing the constructor, so what a caller is opting
@@ -253,18 +278,22 @@ export class BaileySandbox implements Sandbox {
    * against the broker and the namespace reaches nothing else.
    */
   private async writeProviderOverride(launch: SandboxLaunch): Promise<void> {
-    const brokering = this.options.brokering;
-    if (brokering === undefined || this.options.egressProxyPort === undefined) return;
+    const brokered = this.options.brokering !== undefined &&
+      this.options.egressProxyPort !== undefined;
+    const defined = launch.providers ?? {};
+    if (!brokered && Object.keys(defined).length === 0) return;
+
+    const providers = providerConfig(
+      defined,
+      launch.provider,
+      brokered ? providerBrokerUrl(this.options.egressProxyPort as number) : undefined,
+    );
+
     const directory = join(launch.stateDir, "home", ".pi", "agent");
-    const override = {
-      providers: {
-        [launch.provider]: { baseUrl: providerBrokerUrl(this.options.egressProxyPort) },
-      },
-    };
     await Deno.mkdir(directory, { recursive: true });
     await Deno.writeTextFile(
       join(directory, "models.json"),
-      `${JSON.stringify(override, null, 2)}\n`,
+      `${JSON.stringify(providers, null, 2)}\n`,
     );
   }
 
