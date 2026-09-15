@@ -168,6 +168,10 @@ export function providerConfig(
     // The credential is the daemon's record of how to reach the provider, not
     // the agent's. It is taken out here and put on at the broker instead.
     delete fields.credential;
+    // How the daemon asks about the window is the daemon's business too, and
+    // the agent's configuration would only report it as a field it does not
+    // know.
+    delete fields.usage;
     providers[name] = fields;
   }
 

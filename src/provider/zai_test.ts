@@ -1,16 +1,13 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
+import { fetchQuota, metersUsage, QUOTA_URL, readQuota } from "./zai.ts";
 import {
-  fetchQuota,
   isSpent,
-  metersUsage,
   QUOTA_TTL_MS,
-  QUOTA_URL,
   QuotaGate,
   quotaMessage,
   quotaStatus,
-  readQuota,
   spentMessage,
-} from "./zai.ts";
+} from "./usage.ts";
 
 function answer(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
@@ -87,10 +84,11 @@ Deno.test("a provider that cannot be reached says nothing, not no", async () => 
 Deno.test("an unspent window is reused briefly, then asked about again", async () => {
   let asked = 0;
   let now = 1_000;
-  const gate = new QuotaGate("k", () => {
-    asked += 1;
-    return Promise.resolve(answer(quotaBody(20, 9_999_999)));
-  }, () => now);
+  const gate = new QuotaGate(() =>
+    fetchQuota("k", () => {
+      asked += 1;
+      return Promise.resolve(answer(quotaBody(20, 9_999_999)));
+    }), () => now);
 
   await gate.current();
   await gate.current();
@@ -105,10 +103,11 @@ Deno.test("an unspent window is reused briefly, then asked about again", async (
 Deno.test("a spent window is not asked about again until it resets", async () => {
   let asked = 0;
   let now = 1_000;
-  const gate = new QuotaGate("k", () => {
-    asked += 1;
-    return Promise.resolve(answer(quotaBody(100, 500_000)));
-  }, () => now);
+  const gate = new QuotaGate(() =>
+    fetchQuota("k", () => {
+      asked += 1;
+      return Promise.resolve(answer(quotaBody(100, 500_000)));
+    }), () => now);
 
   await gate.current();
   now += 400_000;
@@ -122,10 +121,12 @@ Deno.test("a spent window is not asked about again until it resets", async () =>
 
 Deno.test("an answer that could not be had is not held on to", async () => {
   let asked = 0;
-  const gate = new QuotaGate("k", () => {
-    asked += 1;
-    return Promise.reject(new Error("offline"));
-  });
+  const gate = new QuotaGate(() =>
+    fetchQuota("k", () => {
+      asked += 1;
+      return Promise.reject(new Error("offline"));
+    })
+  );
 
   assertEquals(await gate.current(), undefined);
   assertEquals(await gate.current(), undefined);
@@ -134,10 +135,12 @@ Deno.test("an answer that could not be had is not held on to", async () => {
 
 Deno.test("forgetting makes the next question reach the provider", async () => {
   let asked = 0;
-  const gate = new QuotaGate("k", () => {
-    asked += 1;
-    return Promise.resolve(answer(quotaBody(20, 9_999_999)));
-  });
+  const gate = new QuotaGate(() =>
+    fetchQuota("k", () => {
+      asked += 1;
+      return Promise.resolve(answer(quotaBody(20, 9_999_999)));
+    })
+  );
 
   await gate.current();
   gate.forget();
@@ -148,21 +151,21 @@ Deno.test("forgetting makes the next question reach the provider", async () => {
 
 /** The number somebody is deciding on is what is left, not what is spent. */
 Deno.test("the usage line says what is left and when it comes back", () => {
-  const line = quotaMessage({ percentage: 42.4, resetsAt: 0 }, "in 2 hours");
+  const line = quotaMessage("the provider", { percentage: 42.4, resetsAt: 0 }, "in 2 hours");
 
   assertStringIncludes(line, "58% of the provider's usage window is left");
   assertStringIncludes(line, "resets in 2 hours");
 });
 
 Deno.test("a spent window says so rather than saying zero percent is left", () => {
-  const line = quotaMessage({ percentage: 100, resetsAt: 0 }, "in 10 minutes");
+  const line = quotaMessage("the provider", { percentage: 100, resetsAt: 0 }, "in 10 minutes");
 
   assertStringIncludes(line, "is spent");
   assertStringIncludes(line, "in 10 minutes");
 });
 
 Deno.test("a refusal says when to come back", () => {
-  assertStringIncludes(spentMessage("in 3 hours"), "resets in 3 hours");
+  assertStringIncludes(spentMessage("the provider", "in 3 hours"), "resets in 3 hours");
 });
 
 Deno.test("the status says what is left, and says spent without a percentage", () => {

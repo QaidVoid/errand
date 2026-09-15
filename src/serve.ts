@@ -24,16 +24,18 @@ import type { Logger } from "./log.ts";
 import { MemoryStore } from "./memory/store.ts";
 import { agentDirectory, modelById, readModels } from "./provider/models.ts";
 import { imageDescriber } from "./provider/vision.ts";
+import { fetchQuota, metersUsage } from "./provider/zai.ts";
+import { fetchGatewayUsage, GATEWAY_USAGE } from "./provider/gateway.ts";
 import {
   isSpent,
-  metersUsage,
   QUOTA_TTL_MS,
   QuotaGate,
   quotaMessage,
   quotaStatus,
   spentMessage,
   UNKNOWN_QUOTA,
-} from "./provider/zai.ts";
+  type UsageSource,
+} from "./provider/usage.ts";
 import type { IncomingMessage } from "./session/session.ts";
 import { WEB_ACTOR, WebServer } from "./web/server.ts";
 
@@ -67,6 +69,38 @@ async function powerOff(): Promise<string | undefined> {
  * Serving is the steady state, so this resolves only on a signal or when the
  * connection has been lost for good.
  */
+/**
+ * Every provider on this host whose window can be asked about.
+ *
+ * The configured one first, because it is what a session runs on unless the
+ * opening message says otherwise, and so it is the one worth putting under the
+ * bot's name. A defined provider is asked only where it says it serves a usage
+ * endpoint: a base URL that does not is simply not asked, rather than probed.
+ */
+function usageSources(config: Config): UsageSource[] {
+  const sources: UsageSource[] = [];
+  if (metersUsage(config.agent.provider)) {
+    sources.push({
+      provider: config.agent.provider,
+      gate: new QuotaGate(() => fetchQuota(config.agent.credential)),
+    });
+  }
+
+  for (const [name, definition] of Object.entries(config.agent.providers)) {
+    if (typeof definition !== "object" || definition === null) continue;
+    const fields = definition as Record<string, unknown>;
+    if (fields.usage !== GATEWAY_USAGE) continue;
+    const baseUrl = fields.baseUrl;
+    const credential = fields.credential;
+    if (typeof baseUrl !== "string" || typeof credential !== "string") continue;
+    sources.push({
+      provider: name,
+      gate: new QuotaGate(() => fetchGatewayUsage(baseUrl, credential)),
+    });
+  }
+  return sources;
+}
+
 /**
  * The defined providers the daemon can stand in front of.
  *
@@ -290,9 +324,10 @@ async function run(
 
   // Only for a provider that meters a window. Everywhere else there is nothing
   // to ask and nothing to refuse against.
-  const quota = metersUsage(config.agent.provider)
-    ? new QuotaGate(config.agent.credential)
-    : undefined;
+  const sources = usageSources(config);
+  // The configured provider is the one under the bot's name, because it is the
+  // one a session uses unless somebody says otherwise.
+  const quota = sources[0]?.gate;
 
   // What is left of the window is the thing somebody wants to know BEFORE
   // asking for work, and the member list is where they look first. The gate
@@ -360,21 +395,28 @@ async function run(
     availableModels: models.map((model) => model.id),
     ...(delegateBaseUrl === undefined ? {} : { delegateBaseUrl }),
     ...(describer === undefined ? {} : { describeImages: describer.describe }),
-    ...(quota === undefined ? {} : {
+    ...(sources.length === 0 ? {} : {
       // Checked before a thread is opened or a sandbox started, so a spent
       // window is answered with when to come back rather than with a turn
-      // that starts and then fails against the provider.
+      // that starts and then fails against the provider. Only the provider a
+      // session would actually run on: another one being spent is not a reason
+      // to refuse work this one can do.
       unavailable: async () => {
-        const window = await quota.current();
+        const window = await quota?.current();
         return window === undefined || !isSpent(window)
           ? undefined
-          : spentMessage(whenRelative(window.resetsAt));
+          : spentMessage(config.agent.provider, whenRelative(window.resetsAt));
       },
+      // Every provider this host can ask about, because somebody deciding what
+      // to start wants to know which one has room.
       describeUsage: async () => {
-        const window = await quota.current();
-        return window === undefined
-          ? UNKNOWN_QUOTA
-          : quotaMessage(window, whenRelative(window.resetsAt));
+        const lines = await Promise.all(sources.map(async (source) => {
+          const window = await source.gate.current();
+          return window === undefined
+            ? `${source.provider}: ${UNKNOWN_QUOTA}`
+            : quotaMessage(source.provider, window, whenRelative(window.resetsAt));
+        }));
+        return lines.join("\n");
       },
     }),
     replyInChannel: async (message: IncomingMessage, text: string) => {

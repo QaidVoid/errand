@@ -290,6 +290,7 @@ Deno.test("an operator's provider definition survives the broker's base url", ()
       baseUrl: "https://api.meta.example/v1",
       api: "openai-completions",
       credential: "the-real-meta-key",
+      usage: "gateway",
       models: [{ id: "muse-spark-1.3-contributor" }],
     },
   };
@@ -306,6 +307,8 @@ Deno.test("an operator's provider definition survives the broker's base url", ()
   // The key the agent is given is the nonce, and the real one never appears.
   assertEquals(meta.apiKey, "n-meta");
   assertEquals(meta.credential, undefined);
+  // How the daemon asks about the window is not the agent's to read either.
+  assertEquals(meta.usage, undefined);
   assertEquals(JSON.stringify(merged).includes("the-real-meta-key"), false);
 });
 
