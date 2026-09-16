@@ -35,6 +35,12 @@ function fakeGit(answers: Record<string, Ran> = {}) {
   }[] = [];
   const run: Run = (command, options) => {
     calls.push({ args: command, env: options.env, cwd: options.cwd });
+    // The git dir a real repository resolves to is inside it. A test that is
+    // proving a redirect out of the tree answers this itself.
+    if (command.includes("--absolute-git-dir") && !("--absolute-git-dir" in answers)) {
+      return Promise.resolve(ok(`${options.cwd ?? ""}/.git
+`));
+    }
     const subcommand = command.find((word) => word in answers || KNOWN_GIT.includes(word)) ?? "";
     return Promise.resolve(answers[subcommand] ?? ok());
   };
@@ -145,12 +151,17 @@ Deno.test("a session holding no repository says so plainly", () =>
   }));
 
 /** A clone made as a worktree has `.git` as a file, not a directory. */
-Deno.test("a worktree whose .git is a file still counts as one", () =>
+/**
+ * A `.git` file names a repository elsewhere, which is how a session makes the
+ * daemon operate on a tree outside its own. Only a real `.git` directory, which
+ * is what a clone makes, is a repository the daemon will open.
+ */
+Deno.test("a directory whose .git is a redirect file is not a repository", () =>
   withRepo((project) => {
     Deno.mkdirSync(join(project, "linked"));
     Deno.writeTextFileSync(join(project, "linked", ".git"), "gitdir: /elsewhere\n");
 
-    assertEquals(findRepository(project, "linked"), join(project, "linked"));
+    assertThrows(() => findRepository(project, "linked"), PullRequestError);
     return Promise.resolve();
   }));
 
@@ -466,4 +477,55 @@ Deno.test("the commit is never read in the tree the session can write", () =>
     for (const call of git.calls) {
       assertStringIncludes(call.args.join(" "), "log.showSignature=false");
     }
+  }));
+
+/**
+ * A `.git` that points out of the tree is how a session makes the daemon read
+ * and push a repository elsewhere on the host. Only a real `.git` directory is
+ * a repository the daemon will open.
+ */
+Deno.test("a project whose git directory is a redirect file is not opened", async () => {
+  const root = await Deno.makeTempDir({ prefix: "errand-redirect-" });
+  try {
+    const project = join(root, "project");
+    Deno.mkdirSync(project, { recursive: true });
+    // The attacker's redirect: `.git` is a file naming a repo outside the tree.
+    Deno.writeTextFileSync(join(project, ".git"), "gitdir: /home/someone/private/.git\n");
+
+    const github = workingApi();
+    const error = await openPullRequest(
+      { github: GITHUB, projectPath: project, title: "t", requestedBy: "amelia", links: {} },
+      fakeGit().run,
+      github.api,
+      () => Promise.resolve(),
+    ).then(() => undefined, (caught) => caught);
+
+    assertEquals(error instanceof PullRequestError, true);
+    // The daemon never forked or pushed anything.
+    assertEquals(github.paths.some((path) => path.includes("forks")), false);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+/** The backstop, for a git directory git itself would follow out of the tree. */
+Deno.test("a git directory resolved outside the repository is refused", () =>
+  withRepo(async (project, repo) => {
+    const github = workingApi();
+    // git reports an absolute git dir that is not inside the repository.
+    const git = fakeGit({
+      "--absolute-git-dir": ok("/etc/somewhere-else/.git\n"),
+      remote: ok("https://github.com/upstream/project.git\n"),
+    });
+
+    const error = await openPullRequest(
+      { github: GITHUB, projectPath: project, title: "t", requestedBy: "amelia", links: {} },
+      git.run,
+      github.api,
+      () => Promise.resolve(),
+    ).then(() => undefined, (caught) => caught);
+
+    assertEquals(error instanceof PullRequestError, true);
+    assertStringIncludes(String(error), "outside it");
+    void repo;
   }));

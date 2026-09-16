@@ -1,5 +1,12 @@
 import { assertEquals } from "@std/assert";
-import { Broker, hostAllowed, parseConnect, readRequestHead } from "./broker.ts";
+import {
+  Broker,
+  hostAllowed,
+  isPrivateAddress,
+  parseConnect,
+  publicAddress,
+  readRequestHead,
+} from "./broker.ts";
 
 const quiet = { info: () => {}, warn: () => {} };
 
@@ -61,35 +68,21 @@ async function tryConnect(port: number, authority: string): Promise<string> {
   return reply.split("\r\n")[0] ?? "";
 }
 
-Deno.test("the broker tunnels an allowlisted host and refuses everything else", async () => {
-  // A stand-in "upstream" the broker is allowed to reach: a loopback TCP
-  // server. The allowlist names 127.0.0.1, so a CONNECT to it is admitted and
-  // anything else is refused with 403, the way a tailnet relay would be.
-  const upstream = Deno.listen({ hostname: "127.0.0.1", port: 0 });
-  const upstreamPort = (upstream.addr as Deno.NetAddr).port;
-  (async () => {
-    for await (const c of upstream) {
-      c.close();
-    }
-  })();
-
+Deno.test("the broker refuses what is not allowed, by name, port, and address", async () => {
+  // Loopback is allowlisted here on purpose: even so, it is refused, because
+  // the allowlist decides which names, and the address filter decides that the
+  // host's own network is never one of them.
   const broker = new Broker(["127.0.0.1"], quiet);
   const port = broker.listen();
   try {
-    const allowed = await tryConnect(port, `127.0.0.1:443`);
-    // 443 is the only upstream port the broker opens, so the host is admitted
-    // but the connect to a closed 443 fails upstream: either way it is not 403.
-    assertEquals(allowed.includes("403"), false);
-
-    const denied = await tryConnect(port, `derp1.tailscale.com:443`);
-    assertEquals(denied.includes("403"), true);
-
-    // An allowlisted host on a port the broker will not open is still refused.
-    const oddPort = await tryConnect(port, `127.0.0.1:${upstreamPort}`);
-    assertEquals(oddPort.includes("403"), true);
+    // Allowed by name, but an internal address, so refused all the same.
+    assertEquals((await tryConnect(port, "127.0.0.1:443")).includes("403"), true);
+    // Not on the allowlist.
+    assertEquals((await tryConnect(port, "derp1.tailscale.com:443")).includes("403"), true);
+    // A port the broker will not open, refused before the address is weighed.
+    assertEquals((await tryConnect(port, "127.0.0.1:5432")).includes("403"), true);
   } finally {
     broker.close();
-    upstream.close();
   }
 });
 
@@ -240,5 +233,47 @@ Deno.test("each provider has its own route, and its own nonce", async () => {
     broker.close();
     await one.shutdown();
     await two.shutdown();
+  }
+});
+
+Deno.test("host-internal addresses are refused, whatever the allowlist says", () => {
+  for (const address of ["127.0.0.1", "10.0.0.1", "192.168.0.1", "169.254.169.254", "100.64.0.1"]) {
+    assertEquals(isPrivateAddress(address), true);
+  }
+  for (const address of ["8.8.8.8", "1.1.1.1", "203.0.113.9", "2606:4700:4700::1111"]) {
+    assertEquals(isPrivateAddress(address), false);
+  }
+  // Loopback and link-local in v6, and a v4 loopback wearing a v6 coat.
+  for (const address of ["::1", "fe80::1", "fd00::1", "::ffff:127.0.0.1"]) {
+    assertEquals(isPrivateAddress(address), true);
+  }
+});
+
+/** A name on the allowlist that points at the host is still refused. */
+Deno.test("a name is judged by where it resolves, not by its spelling", async () => {
+  // Resolves to loopback: nothing to dial.
+  assertEquals(await publicAddress("rebind.test", () => Promise.resolve(["127.0.0.1"])), undefined);
+  // Mixed: the public one is what gets dialled, and it is an address, so what
+  // was judged is what is used rather than the name resolved a second time.
+  assertEquals(
+    await publicAddress("mixed.test", () => Promise.resolve(["10.0.0.1", "9.9.9.9"])),
+    "9.9.9.9",
+  );
+  // A literal internal target does not even reach the resolver.
+  assertEquals(
+    await publicAddress("169.254.169.254", () => Promise.reject(new Error("x"))),
+    undefined,
+  );
+});
+
+/** The broker refuses to tunnel to the host's own loopback. */
+Deno.test("a tunnel to loopback is refused even under a lone *", async () => {
+  const broker = new Broker(["*"], quiet);
+  const port = broker.listen();
+  try {
+    const reply = await tryConnect(port, "127.0.0.1:443");
+    assertEquals(reply.includes("403"), true);
+  } finally {
+    broker.close();
   }
 });

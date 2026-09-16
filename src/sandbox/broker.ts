@@ -119,6 +119,86 @@ function sameSecret(a: string, b: string): boolean {
 }
 
 /**
+ * Whether an IPv4 address is one the broker must not connect to.
+ *
+ * The broker runs on the host, so a connection it makes reaches the host's own
+ * network from the host's position. Loopback, the private ranges, link-local,
+ * and the carrier range are the host and its neighbours, not the internet a
+ * session is allowed out to. Reaching them through the broker would be a way
+ * back into the host that the network namespace was built to close.
+ */
+export function isPrivateV4(address: string): boolean {
+  const parts = address.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    // Not a dotted quad. Treated as private, because an address the broker
+    // cannot read is not one it should dial.
+    return true;
+  }
+  const [a, b] = parts as [number, number, number, number];
+  if (a === 0 || a === 127 || a === 10 || a === 255) return true; // this host, loopback, private, broadcast
+  if (a === 169 && b === 254) return true; // link-local, which is the metadata address
+  if (a === 172 && b >= 16 && b <= 31) return true; // private
+  if (a === 192 && b === 168) return true; // private
+  if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
+  if (a >= 224) return true; // multicast and reserved
+  return false;
+}
+
+/** Whether an IPv6 address is one the broker must not connect to. */
+export function isPrivateV6(address: string): boolean {
+  const lower = address.toLowerCase().split("%")[0] as string;
+  if (lower === "::1" || lower === "::") return true; // loopback, unspecified
+  if (
+    lower.startsWith("fe80") || lower.startsWith("fe9") || lower.startsWith("fea") ||
+    lower.startsWith("feb")
+  ) {
+    return true; // link-local
+  }
+  if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // unique local
+  // A v4 address wearing a v6 coat reaches the same v4 host, so it is judged
+  // as the v4 it carries.
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
+  if (mapped) return isPrivateV4(mapped[1] as string);
+  return false;
+}
+
+/** Whether a literal IP address is a host-internal one. */
+export function isPrivateAddress(address: string): boolean {
+  return address.includes(":") ? isPrivateV6(address) : isPrivateV4(address);
+}
+
+/**
+ * Resolves a target to an address the broker may dial, or nothing.
+ *
+ * A literal address is judged as it stands. A name is resolved here and the
+ * result is judged, so a name on the allowlist that resolves to the host's own
+ * network, whether by mistake or to slip past the allowlist, is still refused;
+ * the connection is then made to the address that was judged, not to the name
+ * resolved a second time, so what was checked is what is dialled.
+ */
+export async function publicAddress(
+  host: string,
+  resolve: (name: string) => Promise<string[]> = defaultResolve,
+): Promise<string | undefined> {
+  const literal = /^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(":");
+  if (literal) return isPrivateAddress(host) ? undefined : host;
+  const addresses = await resolve(host).catch(() => []);
+  return addresses.find((address) => !isPrivateAddress(address));
+}
+
+async function defaultResolve(name: string): Promise<string[]> {
+  const found: string[] = [];
+  for (const kind of ["A", "AAAA"] as const) {
+    try {
+      found.push(...await Deno.resolveDns(name, kind));
+    } catch {
+      // No records of this kind; the other kind may still answer.
+    }
+  }
+  return found;
+}
+
+/**
  * A running CONNECT proxy that admits only allowlisted hosts.
  *
  * Injected connect/accept functions keep it testable without real sockets in
@@ -243,9 +323,19 @@ export class Broker {
       return;
     }
 
+    // Where the name actually points is checked, not just whether it is
+    // allowed: the broker runs on the host, so dialling the host's own network
+    // through it is a way back in that the namespace was built to close.
+    const address = await publicAddress(target.host);
+    if (address === undefined) {
+      this.log.warn("egress refused a host-internal target", { host: target.host });
+      await refuse(client, 403, "not a public host");
+      return;
+    }
+
     let upstream: Deno.Conn;
     try {
-      upstream = await Deno.connect({ hostname: target.host, port: target.port });
+      upstream = await Deno.connect({ hostname: address, port: target.port });
     } catch (error) {
       await refuse(client, 502, "upstream unreachable");
       this.log.warn("upstream connect failed", { host: target.host, detail: String(error) });

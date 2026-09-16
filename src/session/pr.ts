@@ -153,6 +153,30 @@ function git(run: Run, cwd: string, args: string[], token?: string): Promise<Ran
   return run(["git", ...SAFE_CONFIG, ...args], { cwd, env });
 }
 
+/**
+ * Refuses a repository whose git directory is not inside it.
+ *
+ * git will follow a `gitdir:` pointer, a symlink, or an alternate out of the
+ * tree, and the daemon then reads and pushes whatever is at the other end. So
+ * git is asked where it would actually look, and an answer outside the
+ * repository is refused rather than operated on. `--absolute-git-dir` resolves
+ * a path and runs nothing the repository could name.
+ */
+async function assertContained(run: Run, repo: string): Promise<void> {
+  const dir = await git(run, repo, ["rev-parse", "--absolute-git-dir"]);
+  if (dir.code !== 0) {
+    throw new PullRequestError(`there is no git repository at ${repo}`);
+  }
+  const gitDir = dir.stdout.trim();
+  const inside = gitDir === join(repo, ".git") || gitDir.startsWith(join(repo, ".git") + "/") ||
+    gitDir === repo || gitDir.startsWith(repo + "/");
+  if (!inside) {
+    throw new PullRequestError(
+      "this project's git directory is outside it, so it is not one the daemon will open",
+    );
+  }
+}
+
 /** The branch the work is on, refusing a detached head. */
 export async function currentBranch(run: Run, projectPath: string): Promise<string> {
   const head = await git(run, projectPath, ["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -178,15 +202,18 @@ export async function upstream(run: Run, projectPath: string): Promise<Repo> {
 }
 
 /**
- * Whether a directory is a working tree.
+ * Whether a directory is a working tree the daemon will operate on.
  *
- * Tested by existence rather than by type, because a clone made as a worktree
- * or a submodule has `.git` as a file pointing elsewhere.
+ * A real `.git` directory, and nothing else. A `.git` that is a file holds a
+ * `gitdir:` line pointing elsewhere, and one that is a symlink points elsewhere
+ * too; both are how a session makes the daemon read and push a repository
+ * outside its own tree, which is somewhere on the host the session cannot
+ * otherwise reach. A checkout errand made is an ordinary clone, whose `.git`
+ * is a directory, so nothing legitimate is turned away.
  */
 function isWorkTree(path: string): boolean {
   try {
-    Deno.lstatSync(join(path, ".git"));
-    return true;
+    return Deno.lstatSync(join(path, ".git")).isDirectory;
   } catch {
     return false;
   }
@@ -389,6 +416,7 @@ export async function openPullRequest(
 ): Promise<string> {
   const { github } = request;
   const projectPath = findRepository(request.projectPath, request.repository);
+  await assertContained(run, projectPath);
   const branch = await currentBranch(run, projectPath);
   const target = await upstream(run, projectPath);
   const fork = await forkOf(api, github.token, target, sleep);
