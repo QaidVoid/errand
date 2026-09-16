@@ -103,10 +103,12 @@ const CREDENTIAL_HELPER =
  * will run on the daemon's behalf. Naming each one on the command line beats
  * whatever the repository says, since a `-c` is read last.
  *
- * This is not the whole defence. A repository can also name a helper for one
- * URL, or rewrite a URL out from under the push, and neither can be reset from
- * here; that is why the push itself happens somewhere else. See
- * {@link pushWork}.
+ * Overriding named settings is a denylist, and a denylist against git is a
+ * losing game: signature verification runs `gpg.program`, a textconv filter
+ * runs its command, and the list grows with git. So this is only the first
+ * layer. The push happens in a clone the session never wrote, and anything
+ * that reads a commit reads it there too, where the repository's configuration
+ * is gone rather than merely overridden. See {@link pushWork}.
  */
 const SAFE_CONFIG: readonly string[] = [
   "-c",
@@ -123,6 +125,13 @@ const SAFE_CONFIG: readonly string[] = [
   "http.sslVerify=true",
   "-c",
   "protocol.ext.allow=never",
+  // A signed commit is verified by running the configured "gpg", so a
+  // repository that says what that program is runs it. Nothing here needs a
+  // signature checked, so none is.
+  "-c",
+  "log.showSignature=false",
+  "-c",
+  "merge.verifySignatures=false",
 ];
 
 /**
@@ -322,7 +331,7 @@ async function pushWork(
   branch: string,
   url: string,
   token: string,
-): Promise<void> {
+): Promise<string> {
   const staging = await Deno.makeTempDir({ prefix: "errand-push-" });
   const repository = join(staging, "repository.git");
   try {
@@ -353,6 +362,13 @@ async function pushWork(
     if (pushed.code !== 0) {
       throw new PullRequestError(`could not push ${branch}: ${firstLine(pushed.stderr)}`);
     }
+
+    // Read here, where the configuration is the clone's own rather than the
+    // session's. Reading it in the session's tree is what let a crafted commit
+    // and a `gpg.program` in its config run on the host: `git log` verifies a
+    // signature by running that program. The clone carries neither.
+    const summary = await git(run, repository, ["log", "-1", "--format=%b"]);
+    return summary.stdout;
   } finally {
     await Deno.remove(staging, { recursive: true }).catch(() => {});
   }
@@ -377,7 +393,7 @@ export async function openPullRequest(
   const target = await upstream(run, projectPath);
   const fork = await forkOf(api, github.token, target, sleep);
 
-  await pushWork(
+  const summary = await pushWork(
     run,
     projectPath,
     branch,
@@ -385,7 +401,6 @@ export async function openPullRequest(
     github.token,
   );
 
-  const summary = await git(run, projectPath, ["log", "-1", "--format=%b"]);
   const created = await api(`/repos/${target.owner}/${target.name}/pulls`, {
     method: "POST",
     token: github.token,
@@ -393,7 +408,7 @@ export async function openPullRequest(
       title: request.title,
       head: `${fork.owner}:${branch}`,
       base: await defaultBranch(api, github.token, target),
-      body: pullRequestBody(summary.stdout, request.requestedBy, request.links),
+      body: pullRequestBody(summary, request.requestedBy, request.links),
       maintainer_can_modify: true,
     },
   });

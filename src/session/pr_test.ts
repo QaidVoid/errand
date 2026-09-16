@@ -28,9 +28,13 @@ const KNOWN_GIT = ["rev-parse", "remote", "push", "log"];
 
 /** A git that answers by subcommand, and records everything it was asked. */
 function fakeGit(answers: Record<string, Ran> = {}) {
-  const calls: { args: string[]; env: Record<string, string> | undefined }[] = [];
+  const calls: {
+    args: string[];
+    env: Record<string, string> | undefined;
+    cwd: string | undefined;
+  }[] = [];
   const run: Run = (command, options) => {
-    calls.push({ args: command, env: options.env });
+    calls.push({ args: command, env: options.env, cwd: options.cwd });
     const subcommand = command.find((word) => word in answers || KNOWN_GIT.includes(word)) ?? "";
     return Promise.resolve(answers[subcommand] ?? ok());
   };
@@ -426,4 +430,40 @@ Deno.test("the session's repository cannot make the daemon run anything", () =>
       git.calls.map((c) => c.args.join(" ")).join("\n"),
       "clone --shared --bare",
     );
+  }));
+
+/**
+ * A crafted commit and a `gpg.program` in a repository's own config ran on the
+ * host when git verified the commit's signature. The commit is read from the
+ * clone instead, whose configuration is git's own rather than the session's.
+ */
+Deno.test("the commit is never read in the tree the session can write", () =>
+  withRepo(async (project, repo) => {
+    const git = repoGit();
+    const github = workingApi();
+
+    await openPullRequest(
+      { github: GITHUB, projectPath: project, title: "t", requestedBy: "amelia", links: {} },
+      git.run,
+      github.api,
+      () => Promise.resolve(),
+    );
+
+    // The clone happens in a temp dir, and the commit body is read there.
+    const clone = git.calls.find((call) => call.args.includes("clone"));
+    const stagingRoot = clone?.cwd;
+    assertEquals(stagingRoot === undefined, false);
+
+    const log = git.calls.find((call) => call.args.includes("log"));
+    assertEquals(log !== undefined, true);
+    // Read under the staging root, and specifically not in the session's repo.
+    assertEquals(log?.cwd?.startsWith(stagingRoot as string), true);
+    assertEquals(log?.cwd === repo, false);
+    assertEquals(log?.cwd === project, false);
+
+    // And every host-side git call refuses to verify a signature, which is
+    // what invoked the program a repository could name.
+    for (const call of git.calls) {
+      assertStringIncludes(call.args.join(" "), "log.showSignature=false");
+    }
   }));
