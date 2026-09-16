@@ -430,16 +430,21 @@ impl Scheduler {
     }
 
     fn can_admit_now(&self) -> bool {
+        // One lock: the backoff check reads the same state the cap reads.
         let state = self.state.lock().expect("the scheduler lock");
         state.in_flight < self.limits.max_concurrent_turns as usize
-            && self.paused_because().is_none()
+            && self.clock.now() >= state.backoff_until
     }
 
     fn pump(self: &Arc<Self>) {
         loop {
             let next = {
                 let mut state = self.state.lock().expect("the scheduler lock");
-                if state.queue.is_empty() || !self.can_admit_now() {
+                let backoff_over = self.clock.now() >= state.backoff_until;
+                if state.queue.is_empty()
+                    || state.in_flight >= self.limits.max_concurrent_turns as usize
+                    || !backoff_over
+                {
                     break;
                 }
                 let next = state.queue.remove(0);

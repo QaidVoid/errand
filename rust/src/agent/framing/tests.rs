@@ -10,7 +10,10 @@ fn records(framer: &mut LineFramer, text: &str) -> Vec<String> {
 fn a_record_split_across_reads_is_reassembled() {
     let mut framer = LineFramer::default();
 
-    assert_eq!(records(&mut framer, "{\"type\":\"pro"), Vec::<String>::new());
+    assert_eq!(
+        records(&mut framer, "{\"type\":\"pro"),
+        Vec::<String>::new()
+    );
     assert_eq!(
         records(&mut framer, "mpt\"}\n"),
         vec!["{\"type\":\"prompt\"}".to_owned()]
@@ -35,7 +38,11 @@ fn chunking_does_not_change_what_comes_out() {
         let mut framer = LineFramer::default();
         let mut collected = Vec::new();
         for at in (0..whole.len()).step_by(size) {
-            collected.extend(framer.push(&whole.as_bytes()[at..(at + size).min(whole.len())]).expect("records"));
+            collected.extend(
+                framer
+                    .push(&whole.as_bytes()[at..(at + size).min(whole.len())])
+                    .expect("records"),
+            );
         }
         assert_eq!(collected, expected, "chunked by {size}");
     }
@@ -81,9 +88,7 @@ fn a_multi_byte_character_split_across_chunks_survives() {
 fn an_unterminated_record_past_the_ceiling_is_refused_not_buffered() {
     let mut framer = LineFramer::new(16);
 
-    let error = framer
-        .push("x".repeat(17).as_bytes())
-        .expect_err("refused");
+    let error = framer.push("x".repeat(17).as_bytes()).expect_err("refused");
     let RecordTooLargeError { limit } = error;
     assert_eq!(limit, 16);
 }
