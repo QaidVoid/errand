@@ -80,7 +80,7 @@ export interface ManagerOptions {
    * Held here rather than by a session so one answer serves every session, and
    * so a refusal happens before a thread is opened.
    */
-  unavailable?: (() => Promise<string | undefined>) | undefined;
+  unavailable?: ((provider: string) => Promise<string | undefined>) | undefined;
   /**
    * Who may control any session.
    *
@@ -157,9 +157,9 @@ export class SessionManager {
     this.guildId = guildId;
   }
 
-  /** Why nothing can run yet, or undefined when it can. */
-  unavailable(): Promise<string | undefined> {
-    return this.options.unavailable?.() ?? Promise.resolve(undefined);
+  /** Why a prompt on `provider` cannot run yet, or undefined when it can. */
+  unavailable(provider: string): Promise<string | undefined> {
+    return this.options.unavailable?.(provider) ?? Promise.resolve(undefined);
   }
 
   /** Everyone who may control any session, configured or built in. */
@@ -261,10 +261,25 @@ export class SessionManager {
     message: IncomingMessage,
     createThread: (name: string) => Promise<{ id: string; port: ThreadPort }>,
   ): Promise<StartOutcome> {
+    // The opening message may name the model, because by the time there is a
+    // thread to type `!model` in, the session has already started on another.
+    // Read before the window is checked: which provider this runs on decides
+    // whose window matters, and another provider's being spent is not a reason
+    // to refuse work this one can do.
+    const asked = selectModel(project.prompt);
+    const known = [
+      this.options.config.agent.provider,
+      ...Object.keys(this.options.config.agent.providers),
+    ];
+    const chosen = asked.value === undefined
+      ? undefined
+      : resolveModel(expandAlias(asked.value, this.options.config.agent.aliases), known);
+    project = { ...project, prompt: asked.prompt };
+
     // Before anything is reserved or created, so a window that is already
     // spent does not open a thread and start a sandbox only to fail on its
     // first turn.
-    const spent = await this.unavailable();
+    const spent = await this.unavailable(chosen?.provider ?? this.options.config.agent.provider);
     if (spent !== undefined) return { status: "refused", reason: spent };
 
     // Refused before anything is reserved or created, so a project only ever
@@ -282,18 +297,6 @@ export class SessionManager {
     if (this.options.scheduler.reserveSession() === null) {
       return { status: "refused", reason: this.options.scheduler.sessionRefusedReason() };
     }
-
-    // The opening message may name the model, because by the time there is a
-    // thread to type `!model` in, the session has already started on another.
-    const asked = selectModel(project.prompt);
-    const known = [
-      this.options.config.agent.provider,
-      ...Object.keys(this.options.config.agent.providers),
-    ];
-    const chosen = asked.value === undefined
-      ? undefined
-      : resolveModel(expandAlias(asked.value, this.options.config.agent.aliases), known);
-    project = { ...project, prompt: asked.prompt };
 
     const stateDir = join(this.options.config.stateDir, id);
 
@@ -468,7 +471,7 @@ export class SessionManager {
       publicUrl: this.options.publicUrl,
       availableModels: this.options.availableModels,
       delegateBaseUrl: this.options.delegateBaseUrl,
-      unavailable: () => this.unavailable(),
+      unavailable: (provider: string) => this.unavailable(provider),
       ...(this.options.describeImages === undefined
         ? {}
         : { describeImages: this.options.describeImages }),

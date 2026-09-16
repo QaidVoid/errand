@@ -214,7 +214,7 @@ export interface SessionOptions {
    * Supplied rather than asked for directly, so a session knows nothing about
    * which provider is in use or how it reports a spent window.
    */
-  unavailable?: (() => Promise<string | undefined>) | undefined;
+  unavailable?: ((provider: string) => Promise<string | undefined>) | undefined;
   /** Accounts that may control any session, not only their own. */
   operatorIds: readonly string[];
   /** Accounts the owner has invited to take part in this thread. */
@@ -617,7 +617,7 @@ export class Session {
     // Checked before the turn is queued or the running one redirected, so a
     // spent window is answered with when to come back rather than with a turn
     // that starts and then fails against the provider.
-    const spent = await this.options.unavailable?.();
+    const spent = await this.options.unavailable?.(this.provider());
     if (spent !== undefined) {
       await this.say(spent);
       await this.options.thread.setReaction(message.id, "failed");
@@ -692,7 +692,7 @@ export class Session {
     message: IncomingMessage,
     images: AgentImage[] = [],
   ): Promise<void> {
-    const spent = await this.options.unavailable?.();
+    const spent = await this.options.unavailable?.(this.provider());
     if (spent === undefined) {
       await this.sendPrompt(ticket, content, message, images);
       return;

@@ -192,7 +192,7 @@ interface Harness {
 async function withManager(
   run: (harness: Harness) => Promise<void>,
   options: {
-    unavailable?: () => Promise<string | undefined>;
+    unavailable?: (provider: string) => Promise<string | undefined>;
     limits?: Record<string, number>;
     providers?: Record<string, unknown>;
     aliases?: Record<string, string>;
@@ -654,3 +654,39 @@ Deno.test("a model switch inside a resumed thread is remembered too", () =>
     await manager.resume("thread-1", message("again", "m3"));
     assertEquals(sandbox.launched[2]?.model, "two");
   }, { providers: { meta: { baseUrl: "https://api.meta.example/v1" } } }));
+
+/**
+ * Hitting the limit on the configured provider must not take the others with
+ * it. The window that matters is the one the prompt would actually be charged
+ * to, which the opening message may name with `-m`.
+ */
+Deno.test("a spent default provider does not refuse another provider", () =>
+  withManager(async ({ manager, sandbox }) => {
+    // Only the configured provider is out of window.
+    const started = await manager.start(message("demo: -m meta/muse explain yourself"));
+    assertEquals(started.status, "started");
+    assertEquals(sandbox.launched[0]?.provider, "meta");
+  }, {
+    providers: { meta: { baseUrl: "https://api.meta.example/v1" } },
+    unavailable: (provider: string) =>
+      Promise.resolve(
+        provider === "anthropic" ? "anthropic's usage window is spent" : undefined,
+      ),
+  }));
+
+/** And the configured one is still refused when it is the one being used. */
+Deno.test("a spent provider still refuses a prompt that would use it", () =>
+  withManager(async ({ manager }) => {
+    const refused = await manager.start(message("demo: just go"));
+    assertEquals(refused.status, "refused");
+    assertStringIncludes(
+      refused.status === "refused" ? refused.reason : "",
+      "usage window is spent",
+    );
+  }, {
+    providers: { meta: { baseUrl: "https://api.meta.example/v1" } },
+    unavailable: (provider: string) =>
+      Promise.resolve(
+        provider === "anthropic" ? "anthropic's usage window is spent" : undefined,
+      ),
+  }));

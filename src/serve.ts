@@ -330,9 +330,6 @@ async function run(
   // Only for a provider that meters a window. Everywhere else there is nothing
   // to ask and nothing to refuse against.
   const sources = usageSources(config);
-  // The configured provider is the one under the bot's name, because it is the
-  // one a session uses unless somebody says otherwise.
-  const quota = sources[0]?.gate;
 
   // What is left of the window is the thing somebody wants to know BEFORE
   // asking for work, and the member list is where they look first. The gate
@@ -411,11 +408,16 @@ async function run(
       // that starts and then fails against the provider. Only the provider a
       // session would actually run on: another one being spent is not a reason
       // to refuse work this one can do.
-      unavailable: async () => {
-        const window = await quota?.current();
+      unavailable: async (provider: string) => {
+        // The window of the provider this prompt would run on, not the
+        // configured one. A session started with `-m` on another provider is
+        // not refused because the default's window is spent.
+        const source = sources.find((candidate) => candidate.provider === provider);
+        if (source === undefined) return undefined;
+        const window = await source.gate.current();
         return window === undefined || !isSpent(window)
           ? undefined
-          : spentMessage(config.agent.provider, when(window.resetsAt, whenRelative));
+          : spentMessage(provider, when(window.resetsAt, whenRelative));
       },
       // Every provider this host can ask about, because somebody deciding what
       // to start wants to know which one has room.

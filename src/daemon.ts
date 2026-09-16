@@ -167,7 +167,7 @@ export interface DaemonOptions {
    * Injected so the daemon knows nothing about which provider is in use or how
    * it reports a spent window.
    */
-  unavailable?: (() => Promise<string | undefined>) | undefined;
+  unavailable?: ((provider: string) => Promise<string | undefined>) | undefined;
   /**
    * Powers off the host. Injected so that nothing under test can turn a
    * machine off, and so the daemon does not decide how it is done.
