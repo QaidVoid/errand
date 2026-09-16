@@ -6,8 +6,8 @@ import {
   QUOTA_TTL_MS,
   QuotaGate,
   quotaMessage,
-  quotaStatus,
   spentMessage,
+  usageStatus,
 } from "./usage.ts";
 
 function answer(body: unknown, status = 200): Response {
@@ -171,11 +171,11 @@ Deno.test("a refusal says when to come back", () => {
 
 Deno.test("the status says what is left, and says spent without a percentage", () => {
   assertEquals(
-    quotaStatus({ percentage: 42, resetsAt: 0 }, "in 2h"),
+    usageStatus([{ provider: "zai", quota: { percentage: 42, resetsAt: 0 }, relative: "in 2h" }]),
     "58% usage left, resets in 2h",
   );
   assertEquals(
-    quotaStatus({ percentage: 100, resetsAt: 0 }, "in 30m"),
+    usageStatus([{ provider: "zai", quota: { percentage: 100, resetsAt: 0 }, relative: "in 30m" }]),
     "usage spent, back in 30m",
   );
 });
@@ -184,7 +184,7 @@ Deno.test("a percentage past the end does not become a negative remainder", () =
   // The provider has reported over 100 before; the status must not read
   // "-4% usage left".
   assertEquals(
-    quotaStatus({ percentage: 104, resetsAt: 0 }, "in 1h"),
+    usageStatus([{ provider: "zai", quota: { percentage: 104, resetsAt: 0 }, relative: "in 1h" }]),
     "usage spent, back in 1h",
   );
 });
@@ -207,7 +207,7 @@ Deno.test("an untouched window is an answer, reset time or not", () => {
   assertEquals(quota?.percentage, 0);
   assertEquals(quota?.resetsAt, undefined);
   // And it still reads as a window with room, rather than as nothing at all.
-  assertEquals(quotaStatus(quota as Quota, undefined), "100% usage left");
+  assertEquals(usageStatus([{ provider: "zai", quota: quota as Quota }]), "100% usage left");
 });
 
 Deno.test("a reset time that is there is still used", () => {
@@ -215,5 +215,8 @@ Deno.test("a reset time that is there is still used", () => {
     data: { limits: [{ type: "TOKENS_LIMIT", percentage: 40, nextResetTime: 1_700_000_000_000 }] },
   });
   assertEquals(quota?.resetsAt, 1_700_000_000_000);
-  assertEquals(quotaStatus(quota as Quota, "in 2 hours"), "60% usage left, resets in 2 hours");
+  assertEquals(
+    usageStatus([{ provider: "zai", quota: quota as Quota, relative: "in 2 hours" }]),
+    "60% usage left, resets in 2 hours",
+  );
 });

@@ -31,10 +31,10 @@ import {
   QUOTA_TTL_MS,
   QuotaGate,
   quotaMessage,
-  quotaStatus,
   spentMessage,
   UNKNOWN_QUOTA,
   type UsageSource,
+  usageStatus,
 } from "./provider/usage.ts";
 import type { IncomingMessage } from "./session/session.ts";
 import { WEB_ACTOR, WebServer } from "./web/server.ts";
@@ -341,15 +341,20 @@ async function run(
   // daemon was not already making. A window that cannot be read clears the
   // status rather than leaving a stale number under the bot's name.
   let statusTimer: ReturnType<typeof setInterval> | undefined;
-  if (quota !== undefined) {
+  if (sources.length > 0) {
     refreshStatus = () => {
       void (async () => {
-        const window = await quota.current();
-        gateway.setStatus(
-          window === undefined
-            ? undefined
-            : quotaStatus(window, when(window.resetsAt, whenRelativePlain)),
-        );
+        // Every provider that answers, so a host asking two of them does not
+        // lose the answer it has because the other did not come.
+        const windows = await Promise.all(sources.map(async (source) => {
+          const quota = await source.gate.current();
+          return quota === undefined ? undefined : {
+            provider: source.provider,
+            quota,
+            relative: when(quota.resetsAt, whenRelativePlain),
+          };
+        }));
+        gateway.setStatus(usageStatus(windows.filter((window) => window !== undefined)));
       })();
     };
     refreshStatus();

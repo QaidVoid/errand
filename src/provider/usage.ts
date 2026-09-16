@@ -124,19 +124,65 @@ export function quotaMessage(
 }
 
 /**
- * The window as a bot status, which has far less room than a message.
+ * Longest a status may be before the service refuses it.
  *
- * Short enough to survive Discord's status limit whole, and carrying the two
- * things somebody glancing at the member list wants: how much is left, and
- * when it comes back. The time is passed in already rendered, as above.
- *
- * Each metered provider renders its own line and the caller joins them, so a
- * host with more than one says so without this knowing how many there are.
+ * The status is one line under the bot's name, and a refusal is silent: the
+ * name simply carries nothing. So it is trimmed here rather than sent and
+ * hoped for.
  */
-export function quotaStatus(quota: Quota, relative: string | undefined): string {
-  const left = Math.max(0, Math.round(100 - quota.percentage));
-  if (isSpent(quota)) {
-    return relative === undefined ? "usage spent" : `usage spent, back ${relative}`;
+export const STATUS_LIMIT = 128;
+
+/** One provider's window, ready to render. */
+export interface Window {
+  provider: string;
+  quota: Quota;
+  /** When it resets, already rendered, or undefined where that is not known. */
+  relative?: string | undefined;
+}
+
+/**
+ * The windows as a bot status, which has far less room than a message.
+ *
+ * One provider reads as a sentence, because there is room for one and naming
+ * it says nothing a glance at the configuration would not. Several are named,
+ * because then which one has room is the whole question, and they are cut down
+ * to the percentage each has left. A spent one says when it is back, since
+ * that is the only thing left to know about it.
+ *
+ * Providers that could not be read are simply absent: a host asking two of
+ * them should not lose the answer it has because the other did not come. When
+ * none can be read there is nothing to say, and the caller clears the status
+ * rather than leaving a stale number under the bot's name.
+ *
+ * @returns undefined when there is nothing worth showing.
+ */
+export function usageStatus(windows: readonly Window[]): string | undefined {
+  if (windows.length === 0) return undefined;
+
+  const first = windows[0] as Window;
+  if (windows.length === 1) {
+    const left = Math.max(0, Math.round(100 - first.quota.percentage));
+    if (isSpent(first.quota)) {
+      return first.relative === undefined ? "usage spent" : `usage spent, back ${first.relative}`;
+    }
+    return first.relative === undefined
+      ? `${left}% usage left`
+      : `${left}% usage left, resets ${first.relative}`;
   }
-  return relative === undefined ? `${left}% usage left` : `${left}% usage left, resets ${relative}`;
+
+  const parts: string[] = [];
+  for (const window of windows) {
+    const left = Math.max(0, Math.round(100 - window.quota.percentage));
+    const segment = isSpent(window.quota)
+      ? window.relative === undefined
+        ? `${window.provider} spent`
+        : `${window.provider} spent, back ${window.relative}`
+      : `${window.provider} ${left}%`;
+    // Dropped rather than truncated: half a provider's name reads as a
+    // different provider.
+    const candidate = [...parts, segment].join(" | ");
+    if (candidate.length > STATUS_LIMIT) break;
+    parts.push(segment);
+  }
+  return parts.length === 0 ? undefined : parts.join(" | ");
 }
