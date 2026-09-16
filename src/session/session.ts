@@ -820,8 +820,8 @@ export class Session {
         this.resetIdleTimer();
         void this.say(text);
       },
-      onTurnSettled: (producedText: boolean): void => {
-        void this.onSettled(producedText);
+      onTurnSettled: (producedText: boolean, failure?: string | undefined): void => {
+        void this.onSettled(producedText, failure);
       },
       onToolStart: (id: string, toolName: string, target: string | undefined): void => {
         this.resetIdleTimer();
@@ -920,7 +920,7 @@ export class Session {
     };
   }
 
-  private async onSettled(producedText: boolean): Promise<void> {
+  private async onSettled(producedText: boolean, failure?: string | undefined): Promise<void> {
     this.options.scheduler.noteSuccess();
     this.harvestMemory();
     await this.openRequestedPullRequest();
@@ -935,11 +935,19 @@ export class Session {
     const mention = `<@${who}> `;
     const spent = this.usage.turns > 0 ? ` ${usageSummary(this.usage)}` : "";
 
+    // A turn that failed is not a turn that had nothing to say. Saying so is
+    // the difference between "the model was brief" and "the request never
+    // reached it", which otherwise look identical from the thread.
+    const ending = producedText
+      ? `${marker("done")}${spent}`
+      : failure === undefined
+      ? `${marker("done")} the turn finished without producing any output${spent}`
+      : `${marker("failed")} the turn failed: ${failure}${spent}`;
+    // A warning rather than a done: the session is still alive and the prompt
+    // can be sent again, which is not what "done" invites.
     await this.options.thread.postNotice(
-      producedText
-        ? `${mention}${marker("done")}${spent}`
-        : `${mention}${marker("done")} the turn finished without producing any output${spent}`,
-      "done",
+      `${mention}${ending}`,
+      failure === undefined ? "done" : "warning",
     );
 
     await this.settleTurn(this.aborting ? "interrupted" : "succeeded");

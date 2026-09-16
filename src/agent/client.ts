@@ -68,8 +68,10 @@ export interface AgentHandlers {
    * A turn settled, with no retry or queued continuation pending.
    *
    * @param producedText whether the assistant said anything during the turn.
+   * @param failure why the turn produced nothing, when the agent said it ended
+   *   in an error rather than in silence.
    */
-  onTurnSettled?: (producedText: boolean) => void;
+  onTurnSettled?: (producedText: boolean, failure?: string | undefined) => void;
   /** The agent began a tool call. */
   onToolStart?: (id: string, toolName: string, target: string | undefined) => void;
   /** A tool call finished, with whether it failed. */
@@ -164,6 +166,28 @@ function buildResponse(request: DialogRequest, reply: string): DialogResponse | 
   return { type: "extension_ui_response", id: request.id, value: trimmed };
 }
 
+/**
+ * Why an assistant message carries no words, when the agent says it failed.
+ *
+ * The agent records a stop reason on the message and an error beside it. A
+ * turn that never reached the provider has neither text nor usage, which on
+ * its own looks the same as a turn that had nothing to add.
+ *
+ * @returns undefined when the message ended normally.
+ */
+function messageFailure(message: unknown): string | undefined {
+  if (typeof message !== "object" || message === null) return undefined;
+  const fields = message as { stopReason?: unknown; error?: unknown };
+  if (fields.stopReason !== "error") return undefined;
+  const error = fields.error;
+  if (typeof error === "string" && error.trim().length > 0) return error.trim();
+  if (typeof error === "object" && error !== null) {
+    const detail = (error as { message?: unknown }).message;
+    if (typeof detail === "string" && detail.trim().length > 0) return detail.trim();
+  }
+  return "the model provider did not answer";
+}
+
 function detailOf(record: AgentRecord): string {
   for (const candidate of [record.error, record.message, record.reason]) {
     if (typeof candidate === "string" && candidate.length > 0) return candidate;
@@ -180,6 +204,7 @@ export class AgentClient {
   private thinkingReported = false;
   private lastWords = "";
   private producedText = false;
+  private turnFailure: string | undefined;
 
   private readonly dialogs = new Map<string, PendingDialog>();
   private readonly requests = new Map<string, PendingRequest>();
@@ -504,6 +529,7 @@ export class AgentClient {
         this.lifecycle = "working";
         this.thinkingReported = false;
         this.producedText = false;
+        this.turnFailure = undefined;
         this.handlers.onTurnStart?.();
         return;
 
@@ -515,8 +541,9 @@ export class AgentClient {
 
       case "agent_settled":
         if (this.lifecycle === "working") this.lifecycle = "ready";
-        this.handlers.onTurnSettled?.(this.producedText);
+        this.handlers.onTurnSettled?.(this.producedText, this.turnFailure);
         this.producedText = false;
+        this.turnFailure = undefined;
         return;
 
       case "message_update": {
@@ -536,6 +563,11 @@ export class AgentClient {
         // the user's message, and collecting that would echo the prompt back
         // into the thread it came from.
         if (messageRole(record.message) !== "assistant") return;
+        // Read before the empty check below drops the message: a turn that
+        // ended in an error arrives with nothing in it, and is otherwise
+        // indistinguishable from a model that chose to say nothing.
+        const failure = messageFailure(record.message);
+        if (failure !== undefined) this.turnFailure = failure;
         const text = messageText(record.message).trim();
         if (text.length === 0) return;
         // Reported now rather than accumulated: an agent that speaks, runs a

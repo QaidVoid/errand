@@ -405,3 +405,60 @@ Deno.test("a record that never terminates ends the session loudly", async () => 
   fake.close();
   await running;
 });
+
+/**
+ * A turn that fails arrives as an assistant message with nothing in it, which
+ * on its own looks exactly like a model that had nothing to add. This is the
+ * shape a real failure took: empty content, a stop reason of error, and usage
+ * that counted nothing because the request never reached the provider.
+ */
+Deno.test("a turn that ended in an error is reported as a failure", async () => {
+  const settled: Array<[boolean, string | undefined]> = [];
+  const { fake, running } = client({
+    onTurnSettled: (producedText: boolean, failure?: string | undefined) => {
+      settled.push([producedText, failure]);
+    },
+  });
+
+  fake.send({ type: "agent_start" });
+  fake.send({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      usage: { input: 0, output: 0, totalTokens: 0 },
+    },
+  });
+  fake.send({ type: "agent_settled" });
+  await settle();
+
+  assertEquals(settled.length, 1);
+  assertEquals(settled[0]?.[0], false, "nothing was said");
+  assertEquals(
+    settled[0]?.[1],
+    "the model provider did not answer",
+    "and the reason is carried out rather than dropped",
+  );
+  fake.close();
+  await running;
+});
+
+/** A turn that simply had nothing to add is still not a failure. */
+Deno.test("an empty turn with no error is not called a failure", async () => {
+  const settled: Array<[boolean, string | undefined]> = [];
+  const { fake, running } = client({
+    onTurnSettled: (producedText: boolean, failure?: string | undefined) => {
+      settled.push([producedText, failure]);
+    },
+  });
+
+  fake.send({ type: "agent_start" });
+  fake.send({ type: "message_end", message: { role: "assistant", content: [] } });
+  fake.send({ type: "agent_settled" });
+  await settle();
+
+  assertEquals(settled[0], [false, undefined]);
+  fake.close();
+  await running;
+});
