@@ -1,0 +1,491 @@
+//! Tests for the egress broker, ported from `broker_test.ts`.
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+
+use super::server::{Broker, read_request_head};
+use super::{
+    ProviderRoute, Resolve, host_allowed, is_private_address, parse_connect, public_address,
+};
+use crate::log::Logger;
+
+fn silent() -> Logger {
+    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+}
+
+fn resolver(addresses: Vec<&str>) -> Resolve {
+    let addresses: Vec<String> = addresses
+        .iter()
+        .map(|address| address.to_owned().to_owned())
+        .collect();
+    Arc::new(move |_name| {
+        let addresses = addresses.clone();
+        Box::pin(async move { addresses.clone() })
+    })
+}
+
+#[test]
+fn a_bare_allow_rule_matches_only_itself() {
+    let allow = vec!["github.com".to_owned()];
+    assert!(host_allowed("github.com", &allow));
+    assert!(host_allowed("GitHub.com", &allow));
+    assert!(!host_allowed("evil.com", &allow));
+    // A suffix that is not a subdomain must not match a bare rule.
+    assert!(!host_allowed("notgithub.com", &allow));
+    assert!(!host_allowed("github.com.evil.com", &allow));
+}
+
+#[test]
+fn a_wildcard_rule_matches_subdomains_but_not_the_apex() {
+    let allow = vec!["*.githubusercontent.com".to_owned()];
+    assert!(host_allowed("codeload.githubusercontent.com", &allow));
+    assert!(host_allowed("a.b.githubusercontent.com", &allow));
+    // The apex is not a subdomain of itself; a wildcard is written when the
+    // apex is not what is talked to.
+    assert!(!host_allowed("githubusercontent.com", &allow));
+    // A lookalike that merely ends in the string but is not a subdomain.
+    assert!(!host_allowed("evilgithubusercontent.com", &allow));
+}
+
+#[test]
+fn an_empty_allowlist_admits_nothing() {
+    assert!(!host_allowed("github.com", &[]));
+    assert!(!host_allowed("", &["github.com".to_owned()]));
+}
+
+#[test]
+fn a_lone_star_admits_any_host_but_not_the_empty_host() {
+    let allow = vec!["*".to_owned()];
+    assert!(host_allowed("github.com", &allow));
+    assert!(host_allowed("derp1.tailscale.com", &allow));
+    assert!(host_allowed(
+        "anything.example",
+        &["a.com".to_owned(), "*".to_owned()]
+    ));
+    // The catch-all still does not conjure a host out of nothing.
+    assert!(!host_allowed("", &allow));
+}
+
+#[test]
+fn a_connect_line_yields_its_host_and_port_or_nothing() {
+    assert_eq!(
+        parse_connect("CONNECT github.com:443 HTTP/1.1"),
+        Some(super::ConnectTarget {
+            host: "github.com".to_owned(),
+            port: 443
+        })
+    );
+    assert_eq!(
+        parse_connect("connect github.com:443 HTTP/1.1"),
+        Some(super::ConnectTarget {
+            host: "github.com".to_owned(),
+            port: 443
+        })
+    );
+    // Not CONNECT, no port, junk port, out of range, and a smuggled path.
+    assert_eq!(parse_connect("GET / HTTP/1.1"), None);
+    assert_eq!(parse_connect("CONNECT github.com HTTP/1.1"), None);
+    assert_eq!(parse_connect("CONNECT github.com:https HTTP/1.1"), None);
+    assert_eq!(parse_connect("CONNECT github.com:99999 HTTP/1.1"), None);
+    assert_eq!(parse_connect("CONNECT evil.com/path:443 HTTP/1.1"), None);
+}
+
+/// Connects to the broker as an HTTPS_PROXY client would, sends one CONNECT.
+async fn try_connect(port: u16, authority: &str) -> String {
+    let mut conn = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("the broker");
+    conn.write_all(format!("CONNECT {authority} HTTP/1.1\r\n\r\n").as_bytes())
+        .await
+        .expect("written");
+    let mut buf = vec![0_u8; 128];
+    let read = conn.read(&mut buf).await.unwrap_or(0);
+    String::from_utf8_lossy(&buf[..read])
+        .split("\r\n")
+        .next()
+        .unwrap_or("")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn the_broker_refuses_what_is_not_allowed_by_name_port_and_address() {
+    // Loopback is allowlisted here on purpose: even so, it is refused, because
+    // the allowlist decides which names, and the address filter decides that
+    // the host's own network is never one of them.
+    let mut broker = Broker::new(vec!["127.0.0.1".to_owned()], silent(), Vec::new(), false);
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+    // Allowed by name, but an internal address, so refused all the same.
+    assert!(try_connect(port, "127.0.0.1:443").await.contains("403"));
+    // Not on the allowlist.
+    assert!(
+        try_connect(port, "derp1.tailscale.com:443")
+            .await
+            .contains("403")
+    );
+    // A port the broker will not open, refused before the address is weighed.
+    assert!(try_connect(port, "127.0.0.1:5432").await.contains("403"));
+    broker.close();
+}
+
+#[tokio::test]
+async fn the_broker_refuses_a_non_connect_opener() {
+    let mut broker = Broker::new(vec!["github.com".to_owned()], silent(), Vec::new(), false);
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+
+    let mut conn = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("the broker");
+    conn.write_all(b"GET / HTTP/1.1\r\n\r\n")
+        .await
+        .expect("written");
+    let mut buf = vec![0_u8; 64];
+    let read = conn.read(&mut buf).await.unwrap_or(0);
+    let line = String::from_utf8_lossy(&buf[..read]);
+    assert!(line.contains("400"));
+    broker.close();
+}
+
+#[tokio::test]
+async fn the_head_is_read_whole_leaving_the_tunnelled_bytes_untouched() {
+    // A real client sends headers after the CONNECT line, then the blank line,
+    // then its TLS. The broker must consume up to and including the blank line
+    // and no further, or the leftover header bytes would be piped to the
+    // upstream ahead of the ClientHello and break the handshake.
+    let wire = b"CONNECT open.example.com:443 HTTP/1.1\r\n\
+Host: open.example.com:443\r\n\
+Proxy-Connection: keep-alive\r\n\r\n\
+TLS-CLIENT-HELLO";
+    let mut reader: &[u8] = wire;
+    let head = read_request_head(&mut reader).await.expect("a head");
+    assert_eq!(
+        head.split('\n').next().unwrap_or("").trim_end_matches('\r'),
+        "CONNECT open.example.com:443 HTTP/1.1"
+    );
+    // Everything after the blank line is still there for the tunnel to carry.
+    assert_eq!(String::from_utf8_lossy(reader), "TLS-CLIENT-HELLO");
+}
+
+/// A stand-in provider that reports what key it was actually handed.
+async fn start_upstream(seen: Arc<Mutex<BTreeMap<String, String>>>, key: &'static str) -> u16 {
+    let app = axum::Router::new().fallback(move |headers: axum::http::HeaderMap| {
+        let seen = Arc::clone(&seen);
+        async move {
+            let authorization = headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_owned();
+            seen.lock().unwrap().insert(key.to_owned(), authorization);
+            (
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                "{}",
+            )
+        }
+    });
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bound");
+    let port = listener.local_addr().expect("an address").port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serves");
+    });
+    port
+}
+
+#[tokio::test]
+async fn the_credential_is_put_on_at_the_broker_never_given_to_the_session() {
+    let seen: Arc<Mutex<BTreeMap<String, String>>> = Arc::new(Mutex::new(BTreeMap::new()));
+    let upstream_port = start_upstream(Arc::clone(&seen), "one").await;
+
+    let mut broker = Broker::new(
+        Vec::new(),
+        silent(),
+        vec![ProviderRoute {
+            prefix: "/provider".to_owned(),
+            upstream: format!("http://127.0.0.1:{upstream_port}/v4"),
+            nonce: "the-session-nonce".to_owned(),
+            credential: "the-real-key".to_owned(),
+        }],
+        true,
+    );
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+
+    let client = reqwest::Client::new();
+    let allowed = client
+        .post(format!("http://127.0.0.1:{port}/provider/chat/completions"))
+        .header("authorization", "Bearer the-session-nonce")
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(allowed.status().as_u16(), 200);
+    // The session never held this, and the provider still received it.
+    assert_eq!(
+        seen.lock().unwrap().get("one").map(String::as_str),
+        Some("Bearer the-real-key")
+    );
+
+    // What a session could read out of its own environment is the nonce, and
+    // a nonce the broker does not know is worth nothing.
+    let refused = client
+        .post(format!("http://127.0.0.1:{port}/provider/chat/completions"))
+        .header("authorization", "Bearer not-the-nonce")
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(refused.status().as_u16(), 401);
+    broker.close();
+}
+
+/// A nonce is per provider, so reading one out of a session buys nothing
+/// against another provider the same broker serves.
+#[tokio::test]
+async fn each_provider_has_its_own_route_and_its_own_nonce() {
+    let seen: Arc<Mutex<BTreeMap<String, String>>> = Arc::new(Mutex::new(BTreeMap::new()));
+    let one_port = start_upstream(Arc::clone(&seen), "one").await;
+    let two_port = start_upstream(Arc::clone(&seen), "two").await;
+
+    let mut broker = Broker::new(
+        Vec::new(),
+        silent(),
+        vec![
+            ProviderRoute {
+                prefix: "/provider/zai".to_owned(),
+                upstream: format!("http://127.0.0.1:{one_port}/v4"),
+                nonce: "nonce-zai".to_owned(),
+                credential: "key-zai".to_owned(),
+            },
+            ProviderRoute {
+                prefix: "/provider/meta".to_owned(),
+                upstream: format!("http://127.0.0.1:{two_port}/v1"),
+                nonce: "nonce-meta".to_owned(),
+                credential: "key-meta".to_owned(),
+            },
+        ],
+        true,
+    );
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+
+    let client = reqwest::Client::new();
+    let a = client
+        .post(format!("http://127.0.0.1:{port}/provider/zai/chat"))
+        .header("authorization", "Bearer nonce-zai")
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+    let b = client
+        .post(format!("http://127.0.0.1:{port}/provider/meta/chat"))
+        .header("authorization", "Bearer nonce-meta")
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(a.status().as_u16(), 200);
+    assert_eq!(b.status().as_u16(), 200);
+
+    // Each upstream got its own key, and neither got the other's.
+    assert_eq!(
+        seen.lock().unwrap().get("one").map(String::as_str),
+        Some("Bearer key-zai")
+    );
+    assert_eq!(
+        seen.lock().unwrap().get("two").map(String::as_str),
+        Some("Bearer key-meta")
+    );
+
+    // One provider's nonce is refused on another's route.
+    let crossed = client
+        .post(format!("http://127.0.0.1:{port}/provider/meta/chat"))
+        .header("authorization", "Bearer nonce-zai")
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(crossed.status().as_u16(), 401);
+    broker.close();
+}
+
+#[test]
+fn host_internal_addresses_are_refused_whatever_the_allowlist_says() {
+    for address in [
+        "127.0.0.1",
+        "10.0.0.1",
+        "192.168.0.1",
+        "169.254.169.254",
+        "100.64.0.1",
+    ] {
+        assert!(is_private_address(address), "{address}");
+    }
+    for address in ["8.8.8.8", "1.1.1.1", "203.0.113.9", "2606:4700:4700::1111"] {
+        assert!(!is_private_address(address), "{address}");
+    }
+    // Loopback and link-local in v6, and a v4 loopback wearing a v6 coat.
+    for address in ["::1", "fe80::1", "fd00::1", "::ffff:127.0.0.1"] {
+        assert!(is_private_address(address), "{address}");
+    }
+}
+
+/// A name on the allowlist that points at the host is still refused.
+#[tokio::test]
+async fn a_name_is_judged_by_where_it_resolves_not_by_its_spelling() {
+    // Resolves to loopback: nothing to dial.
+    assert_eq!(
+        public_address("rebind.test", false, Some(&resolver(vec!["127.0.0.1"]))).await,
+        None
+    );
+    // Mixed: the public one is what gets dialled, and it is an address, so
+    // what was judged is what is used rather than the name resolved a second
+    // time.
+    assert_eq!(
+        public_address(
+            "mixed.test",
+            false,
+            Some(&resolver(vec!["10.0.0.1", "9.9.9.9"]))
+        )
+        .await,
+        Some("9.9.9.9".to_owned())
+    );
+    // A literal internal target does not even reach the resolver.
+    assert_eq!(public_address("169.254.169.254", false, None).await, None);
+}
+
+/// The broker refuses to tunnel to the host's own loopback.
+#[tokio::test]
+async fn a_tunnel_to_loopback_is_refused_even_under_a_lone_star() {
+    let mut broker = Broker::new(vec!["*".to_owned()], silent(), Vec::new(), false);
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+    let reply = try_connect(port, "127.0.0.1:443").await;
+    assert!(reply.contains("403"));
+    broker.close();
+}
+
+/// An operator who names an internal address outright has said which machine
+/// they mean. A name pointing there has not, because what it points at is not
+/// theirs to decide, so it stays refused even with the flag on.
+#[tokio::test]
+async fn allow_internal_admits_a_literal_address_never_a_name() {
+    assert_eq!(
+        public_address("10.0.0.5", true, None).await,
+        Some("10.0.0.5".to_owned())
+    );
+    assert_eq!(
+        public_address("127.0.0.1", true, None).await,
+        Some("127.0.0.1".to_owned())
+    );
+    assert_eq!(public_address("10.0.0.5", false, None).await, None);
+
+    // A name that resolves internally is refused whether the flag is on or off.
+    let mirror = resolver(vec!["10.0.0.5"]);
+    assert_eq!(
+        public_address("mirror.internal", true, Some(&mirror)).await,
+        None
+    );
+    assert_eq!(
+        public_address("mirror.internal", false, Some(&mirror)).await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn an_allowlisted_internal_address_is_dialled_only_when_allowed_on_purpose() {
+    let mut off = Broker::new(vec!["127.0.0.1".to_owned()], silent(), Vec::new(), false);
+    let off_port = off.listen("127.0.0.1").await.expect("bound");
+    assert!(try_connect(off_port, "127.0.0.1:443").await.contains("403"));
+    off.close();
+
+    let mut on = Broker::new(vec!["127.0.0.1".to_owned()], silent(), Vec::new(), true);
+    let on_port = on.listen("127.0.0.1").await.expect("bound");
+    // Admitted now, so it gets as far as dialling: nothing listens on 443, so
+    // it fails upstream rather than being refused at the gate.
+    assert!(!try_connect(on_port, "127.0.0.1:443").await.contains("403"));
+    on.close();
+}
+
+/// A provider pointed at this machine is a setting, not a quiet exception.
+#[tokio::test]
+async fn a_provider_at_an_internal_address_is_refused_unless_allowed_on_purpose() {
+    let seen: Arc<Mutex<BTreeMap<String, String>>> = Arc::new(Mutex::new(BTreeMap::new()));
+    let upstream_port = start_upstream(Arc::clone(&seen), "unused").await;
+
+    let mut broker = Broker::new(
+        Vec::new(),
+        silent(),
+        vec![ProviderRoute {
+            prefix: "/provider".to_owned(),
+            upstream: format!("http://127.0.0.1:{upstream_port}/v1"),
+            nonce: "n".to_owned(),
+            credential: "k".to_owned(),
+        }],
+        false,
+    );
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+
+    let client = reqwest::Client::new();
+    let refused = client
+        .post(format!("http://127.0.0.1:{port}/provider/chat"))
+        .header("authorization", "Bearer n")
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(refused.status().as_u16(), 502);
+    broker.close();
+}
+
+/// The same address has many spellings. Matching the text let the spelling
+/// decide: `::ffff:7f00:1` is loopback written in hex, and it was dialled as
+/// 127.0.0.1 while reading as public.
+#[test]
+fn a_v4_address_in_a_v6_coat_is_judged_as_the_v4_it_carries() {
+    for address in [
+        "::ffff:7f00:1",         // 127.0.0.1 in hex
+        "::ffff:127.0.0.1",      // the same, dotted
+        "::FFFF:7F00:1",         // the same, upper case
+        "0:0:0:0:0:ffff:7f00:1", // the same, unabbreviated
+        "::ffff:a9fe:a9fe",      // 169.254.169.254, the metadata address
+        "::ffff:0a00:1",         // 10.0.0.1
+        "::ffff:c0a8:1",         // 192.168.0.1
+        "::ffff:ac10:1",         // 172.16.0.1
+        "::7f00:1",              // v4-compatible loopback
+        "64:ff9b::7f00:1",       // NAT64 of loopback
+    ] {
+        assert!(is_private_address(address), "{address} must be refused");
+    }
+
+    // A public v4 in a v6 coat is still public, in either spelling.
+    assert!(!is_private_address("::ffff:0808:0808"));
+    assert!(!is_private_address("::ffff:8.8.8.8"));
+}
+
+#[test]
+fn v6_forms_that_are_internal_in_their_own_right() {
+    for address in [
+        "::1",
+        "::",
+        "fe80::1",
+        "febf::1",
+        "fc00::1",
+        "fd12:3456::1",
+        "ff02::1",
+    ] {
+        assert!(is_private_address(address), "{address} must be refused");
+    }
+    for address in ["2606:4700:4700::1111", "2001:4860:4860::8888"] {
+        assert!(!is_private_address(address), "{address} must be allowed");
+    }
+    // Something that is not an address at all is not one to dial.
+    assert!(is_private_address("::ffff:zzzz:1"));
+    assert!(is_private_address("1:2:3:4:5:6:7:8:9"));
+}
+
+/// The provider route is what the JSON definitions compile into.
+#[allow(dead_code)]
+fn _route_shape(route: ProviderRoute) -> serde_json::Value {
+    json!({ "prefix": route.prefix })
+}

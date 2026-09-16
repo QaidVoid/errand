@@ -10,6 +10,7 @@ use crate::log::Logger;
 
 pub mod backend;
 pub mod bailey;
+pub mod broker;
 pub mod paths;
 pub mod podman;
 pub mod policy;
