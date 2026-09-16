@@ -2,6 +2,7 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import { fetchQuota, metersUsage, QUOTA_URL, readQuota } from "./zai.ts";
 import {
   isSpent,
+  type Quota,
   QUOTA_TTL_MS,
   QuotaGate,
   quotaMessage,
@@ -186,4 +187,33 @@ Deno.test("a percentage past the end does not become a negative remainder", () =
     quotaStatus({ percentage: 104, resetsAt: 0 }, "in 1h"),
     "usage spent, back in 1h",
   );
+});
+
+/**
+ * A window nothing has been charged to has nothing scheduled to reset, and
+ * z.ai sends null for it. Reading that as no answer cleared the status exactly
+ * when the window was emptiest.
+ */
+Deno.test("an untouched window is an answer, reset time or not", () => {
+  const body = {
+    data: {
+      limits: [
+        { type: "TIME_LIMIT", percentage: 3, nextResetTime: 1_790_080_917_984 },
+        { type: "TOKENS_LIMIT", percentage: 0, nextResetTime: null },
+      ],
+    },
+  };
+  const quota = readQuota(body);
+  assertEquals(quota?.percentage, 0);
+  assertEquals(quota?.resetsAt, undefined);
+  // And it still reads as a window with room, rather than as nothing at all.
+  assertEquals(quotaStatus(quota as Quota, undefined), "100% usage left");
+});
+
+Deno.test("a reset time that is there is still used", () => {
+  const quota = readQuota({
+    data: { limits: [{ type: "TOKENS_LIMIT", percentage: 40, nextResetTime: 1_700_000_000_000 }] },
+  });
+  assertEquals(quota?.resetsAt, 1_700_000_000_000);
+  assertEquals(quotaStatus(quota as Quota, "in 2 hours"), "60% usage left, resets in 2 hours");
 });

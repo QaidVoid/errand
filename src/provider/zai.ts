@@ -37,10 +37,13 @@ export function readQuota(body: unknown): Quota | undefined {
     if (typeof limit !== "object" || limit === null) continue;
     const entry = limit as { type?: unknown; percentage?: unknown; nextResetTime?: unknown };
     if (entry.type !== TOKENS_LIMIT) continue;
-    if (typeof entry.percentage !== "number" || typeof entry.nextResetTime !== "number") {
-      return undefined;
-    }
-    return { percentage: entry.percentage, resetsAt: entry.nextResetTime };
+    if (typeof entry.percentage !== "number") return undefined;
+    // A window nothing has been charged to has nothing scheduled to reset, and
+    // z.ai sends null for it. That is an answer: the window is empty, which is
+    // the most useful thing it could say.
+    return typeof entry.nextResetTime === "number"
+      ? { percentage: entry.percentage, resetsAt: entry.nextResetTime }
+      : { percentage: entry.percentage };
   }
   return undefined;
 }

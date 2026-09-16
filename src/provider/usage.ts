@@ -15,8 +15,15 @@
 export interface Quota {
   /** How much of the window is spent, 0 to 100. */
   percentage: number;
-  /** When the window rolls over, in epoch milliseconds. */
-  resetsAt: number;
+  /**
+   * When the window rolls over, in epoch milliseconds, where that is known.
+   *
+   * A window nothing has been charged to yet has nothing scheduled to reset,
+   * and a provider that says so is answering rather than failing. Treating the
+   * missing time as no answer would clear the status exactly when the window
+   * is emptiest.
+   */
+  resetsAt?: number | undefined;
 }
 
 /** True when the window is spent and a prompt would be refused. */
@@ -61,7 +68,10 @@ export class QuotaGate {
   async current(): Promise<Quota | undefined> {
     const at = this.now();
     if (this.held !== undefined) {
-      if (isSpent(this.held) && at < this.held.resetsAt) return this.held;
+      // A spent window cannot change before it rolls over, so it is held
+      // until then. Without a time to wait for, it is held like any other.
+      const until = this.held.resetsAt;
+      if (isSpent(this.held) && until !== undefined && at < until) return this.held;
       if (!isSpent(this.held) && at - this.heldAt < QUOTA_TTL_MS) return this.held;
     }
 
@@ -87,8 +97,9 @@ export interface UsageSource {
 }
 
 /** What a thread is told when a window is spent. */
-export function spentMessage(provider: string, relative: string): string {
-  return `${provider}'s usage window is spent, so this cannot run yet; it resets ${relative}`;
+export function spentMessage(provider: string, relative: string | undefined): string {
+  const back = relative === undefined ? "" : `; it resets ${relative}`;
+  return `${provider}'s usage window is spent, so this cannot run yet${back}`;
 }
 
 /** What is said when a provider was asked and did not answer usefully. */
@@ -100,12 +111,16 @@ export const UNKNOWN_QUOTA = "the model provider did not say what is left of the
  * Says what is left rather than what is spent. "58% left" is the number
  * somebody is deciding on, where "42% used" has to be subtracted first.
  */
-export function quotaMessage(provider: string, quota: Quota, relative: string): string {
+export function quotaMessage(
+  provider: string,
+  quota: Quota,
+  relative: string | undefined,
+): string {
   const left = Math.max(0, Math.round(100 - quota.percentage));
   const state = isSpent(quota)
     ? `${provider}'s usage window is spent`
     : `${left}% of ${provider}'s usage window is left`;
-  return `${state}, and it resets ${relative}`;
+  return relative === undefined ? state : `${state}, and it resets ${relative}`;
 }
 
 /**
@@ -118,9 +133,10 @@ export function quotaMessage(provider: string, quota: Quota, relative: string): 
  * Each metered provider renders its own line and the caller joins them, so a
  * host with more than one says so without this knowing how many there are.
  */
-export function quotaStatus(quota: Quota, relative: string): string {
+export function quotaStatus(quota: Quota, relative: string | undefined): string {
   const left = Math.max(0, Math.round(100 - quota.percentage));
-  return isSpent(quota)
-    ? `usage spent, back ${relative}`
-    : `${left}% usage left, resets ${relative}`;
+  if (isSpent(quota)) {
+    return relative === undefined ? "usage spent" : `usage spent, back ${relative}`;
+  }
+  return relative === undefined ? `${left}% usage left` : `${left}% usage left, resets ${relative}`;
 }

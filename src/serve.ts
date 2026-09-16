@@ -69,6 +69,11 @@ async function powerOff(): Promise<string | undefined> {
  * Serving is the steady state, so this resolves only on a signal or when the
  * connection has been lost for good.
  */
+/** Renders a reset time, or nothing where the provider did not give one. */
+function when(at: number | undefined, render: (at: number) => string): string | undefined {
+  return at === undefined ? undefined : render(at);
+}
+
 /**
  * Every provider on this host whose window can be asked about.
  *
@@ -343,7 +348,7 @@ async function run(
         gateway.setStatus(
           window === undefined
             ? undefined
-            : quotaStatus(window, whenRelativePlain(window.resetsAt)),
+            : quotaStatus(window, when(window.resetsAt, whenRelativePlain)),
         );
       })();
     };
@@ -405,7 +410,7 @@ async function run(
         const window = await quota?.current();
         return window === undefined || !isSpent(window)
           ? undefined
-          : spentMessage(config.agent.provider, whenRelative(window.resetsAt));
+          : spentMessage(config.agent.provider, when(window.resetsAt, whenRelative));
       },
       // Every provider this host can ask about, because somebody deciding what
       // to start wants to know which one has room.
@@ -414,7 +419,7 @@ async function run(
           const window = await source.gate.current();
           return window === undefined
             ? `${source.provider}: ${UNKNOWN_QUOTA}`
-            : quotaMessage(source.provider, window, whenRelative(window.resetsAt));
+            : quotaMessage(source.provider, window, when(window.resetsAt, whenRelative));
         }));
         return lines.join("\n");
       },
