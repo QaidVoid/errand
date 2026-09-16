@@ -22,9 +22,10 @@ export interface ModelSelection {
  * taken as an instruction, and a session started with "explain --model to me"
  * is a likelier message than one that means to select a model halfway through
  * a sentence. Both `--model x` and `--model=x` are accepted, since a person
- * writing a flag will write whichever they are used to.
+ * writing a flag will write whichever they are used to, and `-m` with them,
+ * because naming the model is the one thing typed often enough to shorten.
  */
-const MODEL_FLAG = /^--model(?:=|\s+)(\S+)\s*/;
+const MODEL_FLAG = /^(?:--model|-m)(?:=|\s+)(\S+)\s*/;
 
 /** Reads a leading `--model` off the prompt, leaving the rest of it alone. */
 export function selectModel(prompt: string): ModelSelection {

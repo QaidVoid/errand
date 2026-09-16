@@ -66,3 +66,21 @@ Deno.test("only a real level is split off the end", () => {
   assertEquals(expandAlias("weird", aliases), "provider/model:batch");
   assertEquals(expandAlias("weird:max", aliases), "provider/model:batch:max");
 });
+
+/** Naming the model is typed often enough to be worth a short form. */
+Deno.test("-m is the same flag as --model", () => {
+  assertEquals(selectModel("-m musecringe:xhigh build it"), {
+    value: "musecringe:xhigh",
+    prompt: "build it",
+  });
+  assertEquals(selectModel("-m=glm go"), { value: "glm", prompt: "go" });
+
+  // Still only at the very start, and still a whole word: a prompt about a
+  // flag, and a word that merely begins with it, are left alone.
+  assertEquals(selectModel("run it with -m glm"), {
+    value: undefined,
+    prompt: "run it with -m glm",
+  });
+  assertEquals(selectModel("-make the thing"), { value: undefined, prompt: "-make the thing" });
+  assertEquals(selectModel("-m"), { value: undefined, prompt: "-m" });
+});
