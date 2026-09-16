@@ -627,3 +627,30 @@ Deno.test("a deliberate stop still ends the thread for good", () =>
     const outcome = await manager.resume("thread-1", message("carry on", "m2"));
     assertEquals(outcome.status, "refused");
   }));
+
+/**
+ * A thread that has been resumed can still be moved to another model, and that
+ * has to be kept the same way a first run's is, or the move lasts only until
+ * the next restart.
+ */
+Deno.test("a model switch inside a resumed thread is remembered too", () =>
+  withManager(async ({ manager, registry, sandbox }) => {
+    await manager.start(message("demo: --model meta/one go"));
+    await manager.endThread("thread-1", "idle");
+
+    const resumed = await manager.resume("thread-1", message("carry on", "m2"));
+    assertEquals(resumed.status, "started");
+    assertEquals(sandbox.launched[1]?.model, "one");
+
+    // Moved while resumed, the way `!model` does it.
+    const session = resumed.status === "started" ? resumed.session : undefined;
+    (session as unknown as { options: { onModelChanged?: (p: string, m: string) => void } })
+      .options.onModelChanged?.("meta", "two");
+
+    assertEquals(registry.get("thread-1")?.model, "two");
+    await manager.endThread("thread-1", "idle");
+
+    // And the next resume comes back on it, not on what it started with.
+    await manager.resume("thread-1", message("again", "m3"));
+    assertEquals(sandbox.launched[2]?.model, "two");
+  }, { providers: { meta: { baseUrl: "https://api.meta.example/v1" } } }));

@@ -429,6 +429,10 @@ export class SessionManager {
       }),
       resume: true,
       onGuestsChanged: (guests) => this.rememberGuests(threadId, guests),
+      // A thread that has been resumed can still be moved to another model,
+      // and that has to be kept the same way a first run's is, or the move
+      // lasts only until the next restart.
+      onModelChanged: (provider, model) => this.rememberModel(threadId, provider, model),
       onEnded: (reason) => this.forget(threadId, record.sessionId, reason),
     });
 
