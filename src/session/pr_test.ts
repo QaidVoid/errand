@@ -412,6 +412,8 @@ Deno.test("the session's repository cannot make the daemon run anything", () =>
       // A helper is a command too, and the repository's list is reset before
       // the daemon's own is added.
       assertStringIncludes(line, "credential.helper=");
+      // A signature check runs gpg, and the repository names the program.
+      assertStringIncludes(line, "log.showSignature=false");
       // The host's own files are not consulted either.
       assertEquals(call.env?.GIT_CONFIG_NOSYSTEM, "1");
       assertEquals(call.env?.GIT_CONFIG_GLOBAL, "/dev/null");

@@ -100,8 +100,9 @@ const CREDENTIAL_HELPER =
  * These commands run on the host, outside the sandbox, against a tree the
  * session can write. Git treats a repository as a source of code as much as of
  * data: a hook, a credential helper, a filesystem monitor are all commands it
- * will run on the daemon's behalf. Naming each one on the command line beats
- * whatever the repository says, since a `-c` is read last.
+ * will run on the daemon's behalf. A signature check runs `gpg`, whose path
+ * the repository names too. Naming each one on the command line beats whatever
+ * the repository says, since a `-c` is read last.
  *
  * This is not the whole defence. A repository can also name a helper for one
  * URL, or rewrite a URL out from under the push, and neither can be reset from
@@ -115,6 +116,8 @@ const SAFE_CONFIG: readonly string[] = [
   "core.fsmonitor=false",
   "-c",
   "core.pager=cat",
+  "-c",
+  "log.showSignature=false",
   "-c",
   "credential.helper=",
   "-c",
