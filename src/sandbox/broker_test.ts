@@ -346,3 +346,43 @@ Deno.test("a provider at an internal address is refused unless allowed on purpos
     await upstream.shutdown();
   }
 });
+
+/**
+ * The same address has many spellings. Matching the text let the spelling
+ * decide: `::ffff:7f00:1` is loopback written in hex, and it was dialled as
+ * 127.0.0.1 while reading as public.
+ */
+Deno.test("a v4 address in a v6 coat is judged as the v4 it carries", () => {
+  for (
+    const address of [
+      "::ffff:7f00:1", // 127.0.0.1 in hex
+      "::ffff:127.0.0.1", // the same, dotted
+      "::FFFF:7F00:1", // the same, upper case
+      "0:0:0:0:0:ffff:7f00:1", // the same, unabbreviated
+      "::ffff:a9fe:a9fe", // 169.254.169.254, the metadata address
+      "::ffff:0a00:1", // 10.0.0.1
+      "::ffff:c0a8:1", // 192.168.0.1
+      "::ffff:ac10:1", // 172.16.0.1
+      "::7f00:1", // v4-compatible loopback
+      "64:ff9b::7f00:1", // NAT64 of loopback
+    ]
+  ) {
+    assertEquals(isPrivateAddress(address), true, `${address} must be refused`);
+  }
+
+  // A public v4 in a v6 coat is still public, in either spelling.
+  assertEquals(isPrivateAddress("::ffff:0808:0808"), false);
+  assertEquals(isPrivateAddress("::ffff:8.8.8.8"), false);
+});
+
+Deno.test("v6 forms that are internal in their own right", () => {
+  for (const address of ["::1", "::", "fe80::1", "febf::1", "fc00::1", "fd12:3456::1", "ff02::1"]) {
+    assertEquals(isPrivateAddress(address), true, `${address} must be refused`);
+  }
+  for (const address of ["2606:4700:4700::1111", "2001:4860:4860::8888"]) {
+    assertEquals(isPrivateAddress(address), false, `${address} must be allowed`);
+  }
+  // Something that is not an address at all is not one to dial.
+  assertEquals(isPrivateAddress("::ffff:zzzz:1"), true);
+  assertEquals(isPrivateAddress("1:2:3:4:5:6:7:8:9"), true);
+});

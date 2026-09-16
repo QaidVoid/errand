@@ -144,21 +144,85 @@ export function isPrivateV4(address: string): boolean {
   return false;
 }
 
+/**
+ * The eight groups of an IPv6 address, or nothing when it is not one.
+ *
+ * Parsed rather than matched. The same address has many spellings, and
+ * `::ffff:7f00:1`, `::ffff:127.0.0.1` and `0:0:0:0:0:ffff:7f00:1` are all
+ * loopback: judging the text instead of the value lets the spelling decide
+ * whether a host is internal.
+ */
+export function v6Groups(address: string): number[] | undefined {
+  const bare = (address.toLowerCase().split("%")[0] ?? "").trim();
+  if (bare.length === 0) return undefined;
+
+  // A trailing dotted quad carries the low 32 bits, as in `::ffff:127.0.0.1`.
+  let text = bare;
+  const dotted = /^(.*:)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(bare);
+  if (dotted) {
+    const octets = (dotted[2] as string).split(".").map(Number);
+    if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return undefined;
+    const high = ((octets[0] as number) << 8) | (octets[1] as number);
+    const low = ((octets[2] as number) << 8) | (octets[3] as number);
+    text = `${dotted[1]}${high.toString(16)}:${low.toString(16)}`;
+  }
+
+  const halves = text.split("::");
+  if (halves.length > 2) return undefined;
+  const read = (part: string): number[] | undefined => {
+    if (part.length === 0) return [];
+    const groups: number[] = [];
+    for (const piece of part.split(":")) {
+      if (!/^[0-9a-f]{1,4}$/.test(piece)) return undefined;
+      groups.push(Number.parseInt(piece, 16));
+    }
+    return groups;
+  };
+
+  const head = read(halves[0] as string);
+  if (head === undefined) return undefined;
+  if (halves.length === 1) return head.length === 8 ? head : undefined;
+
+  const tail = read(halves[1] as string);
+  if (tail === undefined) return undefined;
+  const gap = 8 - head.length - tail.length;
+  if (gap < 1) return undefined;
+  return [...head, ...Array(gap).fill(0), ...tail];
+}
+
 /** Whether an IPv6 address is one the broker must not connect to. */
 export function isPrivateV6(address: string): boolean {
-  const lower = address.toLowerCase().split("%")[0] as string;
-  if (lower === "::1" || lower === "::") return true; // loopback, unspecified
-  if (
-    lower.startsWith("fe80") || lower.startsWith("fe9") || lower.startsWith("fea") ||
-    lower.startsWith("feb")
-  ) {
-    return true; // link-local
-  }
-  if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // unique local
+  const groups = v6Groups(address);
+  // Not an address this can read, so not one it should dial.
+  if (groups === undefined) return true;
+
+  const [a, b, c, d, e, f, g, h] = groups as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const leading = a | b | c | d | e;
+
   // A v4 address wearing a v6 coat reaches the same v4 host, so it is judged
-  // as the v4 it carries.
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
-  if (mapped) return isPrivateV4(mapped[1] as string);
+  // as the v4 it carries: `::ffff:a.b.c.d` mapped, `::a.b.c.d` compatible, and
+  // the NAT64 prefix, which is a translation of one too.
+  const carriesV4 = (leading === 0 && f === 0xffff) ||
+    (leading === 0 && f === 0 && !(g === 0 && (h === 0 || h === 1))) ||
+    (a === 0x0064 && b === 0xff9b);
+  if (carriesV4) {
+    const v4 = [g >> 8, g & 0xff, h >> 8, h & 0xff].join(".");
+    return isPrivateV4(v4);
+  }
+
+  if (leading === 0 && f === 0 && g === 0 && (h === 0 || h === 1)) return true; // :: and ::1
+  if ((a & 0xffc0) === 0xfe80) return true; // link-local
+  if ((a & 0xfe00) === 0xfc00) return true; // unique local
+  if ((a & 0xff00) === 0xff00) return true; // multicast
   return false;
 }
 
