@@ -143,7 +143,7 @@ Deno.test("the credential is put on at the broker, never given to the session", 
     upstream: `http://127.0.0.1:${upstreamPort}/v4`,
     nonce: "the-session-nonce",
     credential: "the-real-key",
-  }]);
+  }], true);
   const port = broker.listen();
   try {
     const allowed = await fetch(`http://127.0.0.1:${port}/provider/chat/completions`, {
@@ -201,7 +201,7 @@ Deno.test("each provider has its own route, and its own nonce", async () => {
       nonce: "nonce-meta",
       credential: "key-meta",
     },
-  ]);
+  ], true);
   const port = broker.listen();
   try {
     const a = await fetch(`http://127.0.0.1:${port}/provider/zai/chat`, {
@@ -252,16 +252,19 @@ Deno.test("host-internal addresses are refused, whatever the allowlist says", ()
 /** A name on the allowlist that points at the host is still refused. */
 Deno.test("a name is judged by where it resolves, not by its spelling", async () => {
   // Resolves to loopback: nothing to dial.
-  assertEquals(await publicAddress("rebind.test", () => Promise.resolve(["127.0.0.1"])), undefined);
+  assertEquals(
+    await publicAddress("rebind.test", false, () => Promise.resolve(["127.0.0.1"])),
+    undefined,
+  );
   // Mixed: the public one is what gets dialled, and it is an address, so what
   // was judged is what is used rather than the name resolved a second time.
   assertEquals(
-    await publicAddress("mixed.test", () => Promise.resolve(["10.0.0.1", "9.9.9.9"])),
+    await publicAddress("mixed.test", false, () => Promise.resolve(["10.0.0.1", "9.9.9.9"])),
     "9.9.9.9",
   );
   // A literal internal target does not even reach the resolver.
   assertEquals(
-    await publicAddress("169.254.169.254", () => Promise.reject(new Error("x"))),
+    await publicAddress("169.254.169.254", false, () => Promise.reject(new Error("x"))),
     undefined,
   );
 });
@@ -275,5 +278,71 @@ Deno.test("a tunnel to loopback is refused even under a lone *", async () => {
     assertEquals(reply.includes("403"), true);
   } finally {
     broker.close();
+  }
+});
+
+/**
+ * An operator who names an internal address outright has said which machine
+ * they mean. A name pointing there has not, because what it points at is not
+ * theirs to decide, so it stays refused even with the flag on.
+ */
+Deno.test("allowInternal admits a literal address, never a name", async () => {
+  assertEquals(await publicAddress("10.0.0.5", true), "10.0.0.5");
+  assertEquals(await publicAddress("127.0.0.1", true), "127.0.0.1");
+  assertEquals(await publicAddress("10.0.0.5", false), undefined);
+
+  // A name that resolves internally is refused whether the flag is on or off.
+  const resolver = () => Promise.resolve(["10.0.0.5"]);
+  assertEquals(await publicAddress("mirror.internal", true, resolver), undefined);
+  assertEquals(await publicAddress("mirror.internal", false, resolver), undefined);
+});
+
+Deno.test("an allowlisted internal address is dialled only when allowed on purpose", async () => {
+  const off = new Broker(["127.0.0.1"], quiet, [], false);
+  const offPort = off.listen();
+  try {
+    assertEquals((await tryConnect(offPort, "127.0.0.1:443")).includes("403"), true);
+  } finally {
+    off.close();
+  }
+
+  const on = new Broker(["127.0.0.1"], quiet, [], true);
+  const onPort = on.listen();
+  try {
+    // Admitted now, so it gets as far as dialling: nothing listens on 443, so
+    // it fails upstream rather than being refused at the gate.
+    assertEquals((await tryConnect(onPort, "127.0.0.1:443")).includes("403"), false);
+  } finally {
+    on.close();
+  }
+});
+
+/** A provider pointed at this machine is a setting, not a quiet exception. */
+Deno.test("a provider at an internal address is refused unless allowed on purpose", async () => {
+  const upstream = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+    () => new Response("{}"),
+  );
+  const upstreamPort = (upstream.addr as Deno.NetAddr).port;
+  const route = {
+    prefix: "/provider",
+    upstream: `http://127.0.0.1:${upstreamPort}/v1`,
+    nonce: "n",
+    credential: "k",
+  };
+
+  const broker = new Broker([], quiet, [route], false);
+  const port = broker.listen();
+  try {
+    const refused = await fetch(`http://127.0.0.1:${port}/provider/chat`, {
+      method: "POST",
+      headers: { authorization: "Bearer n" },
+      body: "{}",
+    });
+    await refused.body?.cancel();
+    assertEquals(refused.status, 502);
+  } finally {
+    broker.close();
+    await upstream.shutdown();
   }
 });

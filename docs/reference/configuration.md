@@ -106,6 +106,7 @@ What a session may reach outbound, and how that is enforced.
 | --- | --- | --- | --- |
 | `mode` | `EgressMode` | none | Whether egress is port-only (`open`) or forced through the broker (`proxy`). |
 | `allow` | `string[]` | none | Hosts the broker permits under `proxy` mode, on top of the provider. The model provider is always allowed, since a session cannot work without it. Everything else a session legitimately fetches is named here: a code host, a package registry, a mirror. A leading `*.` matches subdomains, so `*.githubusercontent.com` covers the hosts a clone pulls from. A lone `*` admits any host, keeping the broker as an audit pass-through that still gates the port and logs every connection but restricts no host. Ignored under `open` mode, where nothing consults an allowlist. |
+| `allowInternal` | `boolean` | none | Whether the broker may dial an address on the host's own network. Off by default: the broker runs on the host, so reaching loopback or a private range through it is a way back in that the network namespace was built to close, and a name resolving there is how an allowlisted wildcard becomes one. Turned on, an allowlist entry written as an IP literal may name an internal address on purpose, which is how an internal mirror or a provider running on this machine is reached. A name is still judged by where it resolves even then, because what a name points at is not the operator's to decide. |
 
 ## sandbox.policyExtra
 

@@ -416,7 +416,13 @@ Deno.test("egress defaults to a brokered pass-through", () => {
 
 Deno.test("proxy mode with a hostname allowlist is accepted and lower-cased", () => {
   const config = validateConfig(valid({
-    sandbox: { egress: { mode: "proxy", allow: ["GitHub.com", "*.githubusercontent.com"] } },
+    sandbox: {
+      egress: {
+        mode: "proxy",
+        allow: ["GitHub.com", "*.githubusercontent.com"],
+        allowInternal: false,
+      },
+    },
   }));
   assertEquals(config.sandbox.egress.mode, "proxy");
   assertEquals(config.sandbox.egress.allow, ["github.com", "*.githubusercontent.com"]);
@@ -424,7 +430,7 @@ Deno.test("proxy mode with a hostname allowlist is accepted and lower-cased", ()
 
 Deno.test("a lone * catch-all is accepted as an allowlist entry", () => {
   const config = validateConfig(valid({
-    sandbox: { egress: { mode: "proxy", allow: ["*"] } },
+    sandbox: { egress: { mode: "proxy", allow: ["*"], allowInternal: false } },
   }));
   assertEquals(config.sandbox.egress.allow, ["*"]);
 });

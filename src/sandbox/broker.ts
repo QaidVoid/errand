@@ -170,18 +170,27 @@ export function isPrivateAddress(address: string): boolean {
 /**
  * Resolves a target to an address the broker may dial, or nothing.
  *
- * A literal address is judged as it stands. A name is resolved here and the
- * result is judged, so a name on the allowlist that resolves to the host's own
- * network, whether by mistake or to slip past the allowlist, is still refused;
- * the connection is then made to the address that was judged, not to the name
- * resolved a second time, so what was checked is what is dialled.
+ * A name is resolved here and the result is judged, so a name on the allowlist
+ * that points at the host's own network, whether by mistake or to slip past the
+ * allowlist, is refused. The connection is then made to the address that was
+ * judged rather than to the name resolved a second time, so what was checked is
+ * what is dialled.
+ *
+ * `allowInternal` relaxes this for a literal address only. An operator naming
+ * `10.0.0.5` has said which machine they mean, and no one else can change what
+ * that points at. A name resolving somewhere internal stays refused even then,
+ * because what a name points at is not the operator's to decide.
  */
 export async function publicAddress(
   host: string,
+  allowInternal = false,
   resolve: (name: string) => Promise<string[]> = defaultResolve,
 ): Promise<string | undefined> {
   const literal = /^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(":");
-  if (literal) return isPrivateAddress(host) ? undefined : host;
+  if (literal) {
+    if (!isPrivateAddress(host)) return host;
+    return allowInternal ? host : undefined;
+  }
   const addresses = await resolve(host).catch(() => []);
   return addresses.find((address) => !isPrivateAddress(address));
 }
@@ -219,6 +228,7 @@ export class Broker {
     private readonly allow: readonly string[],
     private readonly log: Pick<Logger, "info" | "warn">,
     private readonly routes: readonly ProviderRoute[] = [],
+    private readonly allowInternal = false,
   ) {}
 
   /**
@@ -254,6 +264,16 @@ export class Broker {
 
       const rest = url.pathname.slice(route.prefix.length);
       const target = `${route.upstream.replace(/\/$/, "")}${rest}${url.search}`;
+      // The provider is the operator's to name, so this is not a session
+      // reaching somewhere it chose. It is still judged by the same rule, so
+      // that a provider pointed at this machine is a deliberate setting rather
+      // than a quiet exception to where the broker will go.
+      if (await publicAddress(new URL(target).hostname, this.allowInternal) === undefined) {
+        this.log.warn("a provider is configured at a host-internal address", {
+          provider: route.prefix,
+        });
+        return new Response("the provider is not at a reachable address\n", { status: 502 });
+      }
       const headers = new Headers();
       for (const [name, value] of request.headers) {
         if (!HOP_BY_HOP.includes(name.toLowerCase())) headers.set(name, value);
@@ -326,7 +346,7 @@ export class Broker {
     // Where the name actually points is checked, not just whether it is
     // allowed: the broker runs on the host, so dialling the host's own network
     // through it is a way back in that the namespace was built to close.
-    const address = await publicAddress(target.host);
+    const address = await publicAddress(target.host, this.allowInternal);
     if (address === undefined) {
       this.log.warn("egress refused a host-internal target", { host: target.host });
       await refuse(client, 403, "not a public host");

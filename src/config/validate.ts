@@ -78,7 +78,7 @@ const KNOWN = {
   delegate: ["model", "perTurn", "deadlineMs", "baseUrl"],
   github: ["token", "userName", "userEmail"],
   sandbox: [...Object.keys(DEFAULTS.sandbox), "policyExtra", "pathExtra", "env"],
-  egress: ["mode", "allow"],
+  egress: ["mode", "allow", "allowInternal"],
   policyExtra: ["read", "write", "execute"],
   shutdown: ["allowedUserIds"],
   web: ["host", "port", "observer", "publicUrl"],
@@ -628,10 +628,20 @@ function validateEgress(
 ): EgressConfig {
   const defaults = DEFAULTS.sandbox.egress;
   const raw = source.egress;
-  if (raw === undefined) return { mode: defaults.mode, allow: [...defaults.allow] };
+  if (raw === undefined) {
+    return {
+      mode: defaults.mode,
+      allow: [...defaults.allow],
+      allowInternal: defaults.allowInternal,
+    };
+  }
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     problems.add("sandbox.egress must be an object with mode and allow");
-    return { mode: defaults.mode, allow: [...defaults.allow] };
+    return {
+      mode: defaults.mode,
+      allow: [...defaults.allow],
+      allowInternal: defaults.allowInternal,
+    };
   }
   const egress = raw as Record<string, unknown>;
   rejectUnknown(egress, KNOWN.egress, "sandbox.egress", problems);
@@ -662,9 +672,15 @@ function validateEgress(
     }
   }
 
+  const internal = egress.allowInternal;
+  if (internal !== undefined && typeof internal !== "boolean") {
+    problems.add("sandbox.egress.allowInternal must be true or false");
+  }
+
   return {
     mode: (EGRESS_MODES.includes(mode as EgressMode) ? mode : defaults.mode) as EgressMode,
     allow,
+    allowInternal: typeof internal === "boolean" ? internal : defaults.allowInternal,
   };
 }
 

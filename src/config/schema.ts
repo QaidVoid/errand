@@ -45,6 +45,19 @@ export interface EgressConfig {
    * under `open` mode, where nothing consults an allowlist.
    */
   allow: string[];
+  /**
+   * Whether the broker may dial an address on the host's own network.
+   *
+   * Off by default: the broker runs on the host, so reaching loopback or a
+   * private range through it is a way back in that the network namespace was
+   * built to close, and a name resolving there is how an allowlisted wildcard
+   * becomes one. Turned on, an allowlist entry written as an IP literal may
+   * name an internal address on purpose, which is how an internal mirror or a
+   * provider running on this machine is reached. A name is still judged by
+   * where it resolves even then, because what a name points at is not the
+   * operator's to decide.
+   */
+  allowInternal: boolean;
 }
 
 /** Chat connection and who may drive the bot. */
@@ -420,7 +433,7 @@ export const DEFAULTS = {
     requireFullEnforcement: true,
     network: "restricted" as NetworkMode,
     egressPorts: [443],
-    egress: { mode: "proxy" as EgressMode, allow: ["*"] as string[] },
+    egress: { mode: "proxy" as EgressMode, allow: ["*"] as string[], allowInternal: false },
     hideHostAddress: false,
     image: "localhost/errand-agent:latest",
     memory: "4g",

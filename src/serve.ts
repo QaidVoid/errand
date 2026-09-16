@@ -251,7 +251,7 @@ async function run(
         nonces,
       };
     }
-    broker = new Broker(allow, log, routes);
+    broker = new Broker(allow, log, routes, config.sandbox.egress.allowInternal);
     egressProxyPort = broker.listen();
     log.info("egress is brokered", {
       via: `${EGRESS_MAP_ADDRESS}:${egressProxyPort}`,

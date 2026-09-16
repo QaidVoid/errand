@@ -253,7 +253,7 @@ Deno.test("proxy egress passes --egress-proxy and drops the plain --proxy-net", 
   const config: SandboxConfig = {
     ...CONFIG,
     hideHostAddress: true, // would add --proxy-net on its own
-    egress: { mode: "proxy", allow: ["github.com"] },
+    egress: { mode: "proxy", allow: ["github.com"], allowInternal: false },
   };
   const args = baileyArgs(config, launch(), "/p.toml", 54321);
   assertStringIncludes(args.join(" "), `--egress-proxy ${egressProxyEndpoint(54321)}`);
@@ -264,13 +264,19 @@ Deno.test("proxy egress passes --egress-proxy and drops the plain --proxy-net", 
 Deno.test("proxy egress without a running broker adds no flag", () => {
   // The port is undefined when no broker was started; the run stays as it was
   // rather than naming a proxy that is not there.
-  const config: SandboxConfig = { ...CONFIG, egress: { mode: "proxy", allow: [] } };
+  const config: SandboxConfig = {
+    ...CONFIG,
+    egress: { mode: "proxy", allow: [], allowInternal: false },
+  };
   const args = baileyArgs(config, launch(), "/p.toml", undefined);
   assertEquals(args.includes("--egress-proxy"), false);
 });
 
 Deno.test("open egress never names the proxy, even given a port", () => {
-  const open: SandboxConfig = { ...CONFIG, egress: { mode: "open", allow: [] } };
+  const open: SandboxConfig = {
+    ...CONFIG,
+    egress: { mode: "open", allow: [], allowInternal: false },
+  };
   const args = baileyArgs(open, launch(), "/p.toml", 54321);
   assertEquals(args.includes("--egress-proxy"), false);
 });
