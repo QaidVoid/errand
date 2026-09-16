@@ -102,10 +102,23 @@ export function classify(
   config: ChatConfig,
   botId?: string,
 ): InboundDecision {
-  if (message.authorIsBot) return { kind: "ignore", reason: "authored by a bot" };
-
   const inServedChannel = message.channelId === config.channelId;
   const inServedThread = message.parentChannelId === config.channelId;
+
+  if (message.authorIsBot) {
+    // Never its own, whatever else is true: a daemon that answered itself
+    // would keep answering.
+    if (botId !== undefined && message.authorId === botId) {
+      return { kind: "ignore", reason: "its own message" };
+    }
+    // Elsewhere a bot is ignored, so nothing automated can start a session or
+    // talk in the channel. Inside a thread it is let through, because a thread
+    // has an owner who decides who takes part: the session refuses anyone they
+    // have not invited with `!allow`, and a bot is not a special case of that.
+    if (!inServedThread) {
+      return { kind: "ignore", reason: "authored by a bot" };
+    }
+  }
   if (!inServedChannel && !inServedThread) {
     return { kind: "ignore", reason: "outside the served channel" };
   }

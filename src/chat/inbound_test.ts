@@ -210,3 +210,48 @@ Deno.test("an aside is let through and starts nothing", () => {
 
   assertEquals(classify(message({ content: "!!! anyone around?" }), config, "bot-1").kind, "start");
 });
+
+/**
+ * A thread has an owner who decides who takes part, and the session refuses
+ * anyone they have not invited. A bot is not a special case of that, so being
+ * automated is no longer a reason to drop a message the owner allowed.
+ */
+Deno.test("a bot is let into a thread and left out of the channel", () => {
+  // On the operator's allowlist, as any participant must be: `!allow` is the
+  // owner's grant on top of that, not a way around it.
+  const bot = { authorIsBot: true, authorId: "u-2" };
+
+  // In a thread: routed, and the session decides with its guest list.
+  assertEquals(
+    classify(message({ ...bot, channelId: "thread-1", parentChannelId: CHANNEL }), CONFIG, "me"),
+    { kind: "thread", threadId: "thread-1" },
+  );
+
+  // In the channel: still ignored, so nothing automated starts a session.
+  assertEquals(classify(message({ ...bot, channelId: CHANNEL }), CONFIG, "me").kind, "ignore");
+
+  // And never its own, wherever it is said.
+  assertEquals(
+    classify(
+      message({ ...bot, authorId: "me", channelId: "thread-1", parentChannelId: CHANNEL }),
+      CONFIG,
+      "me",
+    ),
+    { kind: "ignore", reason: "its own message" },
+  );
+
+  // A bot nobody allowed is still refused, the same as a person.
+  assertEquals(
+    classify(
+      message({
+        authorIsBot: true,
+        authorId: "stranger",
+        channelId: "t",
+        parentChannelId: CHANNEL,
+      }),
+      CONFIG,
+      "me",
+    ).kind,
+    "ignore",
+  );
+});
