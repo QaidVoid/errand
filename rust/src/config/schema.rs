@@ -21,6 +21,15 @@ pub enum SandboxBackend {
     Bailey,
 }
 
+impl std::fmt::Display for SandboxBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SandboxBackend::Podman => write!(f, "podman"),
+            SandboxBackend::Bailey => write!(f, "bailey"),
+        }
+    }
+}
+
 /// How much network a session gets. `none` disables it entirely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

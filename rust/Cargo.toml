@@ -7,11 +7,12 @@ edition = "2024"
 getrandom = "0.4.3"
 jiff = "0.2.37"
 jsonc-parser = { version = "0.33.2", features = ["serde"] }
+nix = { version = "0.31.3", features = ["signal", "process"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util", "net"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util", "net", "fs"] }
 
 [lints.rust]
 unsafe_code = "forbid"

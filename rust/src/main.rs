@@ -23,6 +23,8 @@ mod memory;
 #[allow(dead_code)]
 mod provider;
 #[allow(dead_code)]
+mod sandbox;
+#[allow(dead_code)]
 mod session;
 
 #[cfg(test)]
