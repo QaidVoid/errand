@@ -272,3 +272,24 @@ Deno.test("every family's certificate bundle is reachable, not just Debian's", (
     assertStringIncludes(written, `"${path}"`);
   }
 });
+
+/**
+ * A read grant used to carry execute with it, and bailey separated the two.
+ * The runtime's directories hold the agent and the interpreter that runs it,
+ * so without execute on them the agent's own `execve` is refused and the
+ * session dies before it starts.
+ */
+Deno.test("the runtime's directories are granted execute, not only read", () => {
+  const text = policy({
+    runtime: {
+      readPaths: ["/opt/agent/node_modules", "/opt/agent/pkg"],
+      pathEntries: ["/opt/agent/bin", "/opt/node/bin"],
+    },
+  });
+  const execute = text.split("\n").find((line) => line.startsWith("execute =")) ?? "";
+  for (const path of ["/opt/agent/bin", "/opt/node/bin", "/opt/agent/node_modules"]) {
+    assertStringIncludes(execute, path);
+  }
+  // The rest of the read list is not widened by this.
+  assertEquals(execute.includes("/etc/ssl"), false);
+});

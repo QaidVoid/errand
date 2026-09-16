@@ -185,7 +185,22 @@ export function policyContents(options: {
         ...extra.write.map(quoted),
       ].join(", ")
     }]`,
-    `execute = [${[...SYSTEM_EXECUTE, AGENT_BIN, ...extra.execute].map(quoted).join(", ")}]`,
+    // The runtime's own directories are granted execute as well as read. They
+    // hold the agent and the interpreter that runs it, which is the whole
+    // reason they are granted at all, and a read grant no longer carries
+    // execute with it: bailey separated the two, and without this the agent's
+    // own `execve` is refused. Nothing else in the read list is widened.
+    `execute = [${
+      [
+        ...new Set([
+          ...SYSTEM_EXECUTE,
+          AGENT_BIN,
+          ...runtime.pathEntries,
+          ...runtime.readPaths,
+          ...extra.execute,
+        ]),
+      ].map(quoted).join(", ")
+    }]`,
     "",
     "[env]",
     // The environment is built rather than inherited, so a variable not named
