@@ -27,8 +27,8 @@ import type {
 /** One thing a session reported, kept so a late view can be shown it. */
 export type Recorded =
   | { call: "post"; text: string }
-  | { call: "prompt"; author: string; text: string }
-  | { call: "aside"; author: string; text: string }
+  | { call: "prompt"; author: string; text: string; id?: string; withdrawn?: true }
+  | { call: "aside"; author: string; text: string; id?: string; withdrawn?: true }
   | { call: "notice"; text: string; level: NoticeLevel }
   | { call: "thinking"; text: string }
   | { call: "reply"; text: string; command: string }
@@ -330,13 +330,15 @@ export class ViewFanOut implements ThreadPort {
     });
   }
 
-  async notePrompt(author: string, text: string): Promise<void> {
-    this.record({ call: "prompt", author, text });
+  async notePrompt(author: string, text: string, id?: string): Promise<void> {
+    // Recorded with the id it was said under. A deletion carries only that id,
+    // so an entry without one can never be found again to withdraw.
+    this.record({ call: "prompt", author, text, ...(id === undefined ? {} : { id }) });
     await this.each("prompt", (view) => view.notePrompt(author, text));
   }
 
-  async noteAside(author: string, text: string): Promise<void> {
-    this.record({ call: "aside", author, text });
+  async noteAside(author: string, text: string, id?: string): Promise<void> {
+    this.record({ call: "aside", author, text, ...(id === undefined ? {} : { id }) });
     await this.each("aside", (view) => view.noteAside(author, text));
   }
 

@@ -153,7 +153,7 @@ export interface ThreadPort {
    * nothing with this. Every other surface has no such copy, and without it
    * would show the agent talking to itself.
    */
-  notePrompt(author: string, text: string): Promise<void>;
+  notePrompt(author: string, text: string, id?: string): Promise<void>;
   /**
    * Notes something said to the people in the thread, not to the agent.
    *
@@ -161,7 +161,7 @@ export interface ThreadPort {
    * agent having been told. Anywhere else it has to be marked, or reading a
    * session back would show the agent being told something it never heard.
    */
-  noteAside(author: string, text: string): Promise<void>;
+  noteAside(author: string, text: string, id?: string): Promise<void>;
   /**
    * Adds a line of tool activity, extending the current block when there is
    * one.

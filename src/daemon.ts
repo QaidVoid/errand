@@ -498,6 +498,18 @@ export class Daemon {
     await this.sessions.endThread(threadId, "thread archived");
   }
 
+  /**
+   * Reconciles a message that was deleted in the chat.
+   *
+   * A deletion in the channel names no thread, but a thread started from a
+   * message carries that message's own id, so the id is tried as one. Nothing
+   * is started to do this: a session that has ended still has its record
+   * reconciled, and that happens without bringing it back.
+   */
+  async withdraw(messageId: string, threadId: string | undefined): Promise<void> {
+    await this.sessions.withdraw(messageId, threadId ?? messageId);
+  }
+
   /** Stops accepting, ends every session, and stops every timer. */
   async shutdown(): Promise<void> {
     this.accepting = false;

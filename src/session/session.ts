@@ -64,7 +64,12 @@ import {
 import { Delegating, type Outcome as DelegationOutcome } from "./delegating.ts";
 import { MIN_CHECK_MS, nextCheckMs, treeBytes, verdict } from "./disk.ts";
 import { type ChosenModel, expandAlias } from "./model.ts";
-import { prepareRecordDir, recordDir } from "./record.ts";
+import {
+  prepareRecordDir,
+  recordDir,
+  withdrawFromAgentSession,
+  withdrawFromRecord,
+} from "./record.ts";
 import { readDirectory, readFileForDisplay } from "./files.ts";
 import {
   ASKED_FILENAME,
@@ -250,6 +255,7 @@ export class Session {
   private sandbox: SandboxHandle | null = null;
   private client: AgentClient | null = null;
   private ticket: Ticket | null = null;
+  private pendingWithdrawals: string[] = [];
   private currentMessageId: string | null = null;
   private currentAuthorId: string | null = null;
   private idleTimer: unknown = null;
@@ -586,7 +592,11 @@ export class Session {
     if (outcome === "accepted") {
       // Recorded like any other prompt. It is what the agent was waiting for,
       // and a transcript without it shows a question that answered itself.
-      await this.options.thread.notePrompt(message.authorName ?? message.authorId, content);
+      await this.options.thread.notePrompt(
+        message.authorName ?? message.authorId,
+        content,
+        message.id,
+      );
       await this.options.thread.setReaction(message.id, "accepted");
       return;
     }
@@ -639,7 +649,7 @@ export class Session {
     this.options.thread.beginTurn(this.turn);
 
     await this.options.thread.setReaction(message.id, "accepted");
-    await this.options.thread.notePrompt(message.authorName ?? message.authorId, said);
+    await this.options.thread.notePrompt(message.authorName ?? message.authorId, said, message.id);
 
     const withContext = this.introduce({ ...message, content: said });
     this.lastSpeakerId = message.authorId;
@@ -737,7 +747,7 @@ export class Session {
    */
   private async noteAside(content: string, message: IncomingMessage): Promise<void> {
     const said = content.trimStart().slice(ASIDE.length).trim();
-    await this.options.thread.noteAside(message.authorName ?? message.authorId, said);
+    await this.options.thread.noteAside(message.authorName ?? message.authorId, said, message.id);
     await this.options.thread.setReaction(message.id, "succeeded");
   }
 
@@ -757,7 +767,11 @@ export class Session {
     this.lastSpeakerId = message.authorId;
 
     await this.options.thread.setReaction(message.id, "accepted");
-    await this.options.thread.notePrompt(message.authorName ?? message.authorId, content);
+    await this.options.thread.notePrompt(
+      message.authorName ?? message.authorId,
+      content,
+      message.id,
+    );
 
     const sent = this.client?.steer(this.introduce({ ...message, content }), images) ?? false;
     if (!sent) {
@@ -772,10 +786,59 @@ export class Session {
    * Every path that ends a turn goes through here, so the slot is released
    * exactly once and the scheduler's view never drifts from reality.
    */
+  /**
+   * Reconciles a message the person who sent it took back.
+   *
+   * Three copies outlive the deletion: what this session recorded, what the
+   * running agent holds in mind, and what its stored conversation will send on
+   * a later resume. The first and third are reconciled here; the agent can only
+   * be told, because the protocol has no way to correct it.
+   *
+   * Held until the turn settles when one is running, so nothing writes to the
+   * agent's conversation while the agent is appending to it.
+   *
+   * @returns whether anything here held a copy.
+   */
+  async withdraw(messageId: string): Promise<boolean> {
+    if (this.ticket !== null) {
+      this.pendingWithdrawals.push(messageId);
+      return true;
+    }
+    return await this.applyWithdrawal(messageId);
+  }
+
+  private async applyWithdrawal(messageId: string): Promise<boolean> {
+    const said = await withdrawFromRecord(this.options.stateDir, messageId);
+    if (said === undefined) return false;
+    const fromAgent = await withdrawFromAgentSession(this.options.stateDir, said);
+    void fromAgent;
+
+    // Told, not corrected: `steer` is the one command that reaches a running
+    // agent without asking it for another turn, and being answered about a
+    // withdrawal is the opposite of taking something back.
+    {
+      this.client?.steer(
+        "A message you were sent has been withdrawn by the person who sent it. " +
+          "Disregard it; do not act on it further and do not reply about it.",
+      );
+    }
+    return true;
+  }
+
+  /** Applies what a running turn held back. */
+  private async drainWithdrawals(): Promise<void> {
+    const pending = this.pendingWithdrawals;
+    this.pendingWithdrawals = [];
+    for (const messageId of pending) await this.applyWithdrawal(messageId);
+  }
+
   private async settleTurn(outcome: ReactionOutcome): Promise<void> {
     const ticket = this.ticket;
     this.ticket = null;
     this.options.thread.setBusy(false);
+    // Now that the agent is not writing to its own conversation, anything a
+    // running turn held back can be applied to it.
+    await this.drainWithdrawals();
 
     if (ticket !== null && !this.options.scheduler.release(ticket)) {
       this.log.warn("a turn slot was already released", { outcome });

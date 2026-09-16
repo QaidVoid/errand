@@ -24,7 +24,7 @@ import { redacting } from "./redacted.ts";
 import type { ThreadRecord, ThreadRegistry } from "./registry.ts";
 import { type IncomingMessage, Session, type SessionOptions, type Timers } from "./session.ts";
 import { Transcript, TRANSCRIPT_FILENAME } from "./transcript.ts";
-import { prepareRecordDir, recordDir } from "./record.ts";
+import { prepareRecordDir, recordDir, withdrawFromRecord } from "./record.ts";
 import { houseRulesText } from "./rules.ts";
 import { ViewFanOut } from "./views.ts";
 
@@ -549,6 +549,23 @@ export class SessionManager {
       if (session.id === sessionId) return threadId;
     }
     return this.options.registry.all().find((record) => record.sessionId === sessionId)?.threadId;
+  }
+
+  /**
+   * Reconciles a withdrawn message, live session or not.
+   *
+   * A live session is told, so the agent stops acting on what was taken back.
+   * One that has ended is not restarted for it: its record is reconciled where
+   * it lies, which is the whole of what is left to do.
+   *
+   * @returns whether anything held a copy of that message.
+   */
+  async withdraw(messageId: string, threadId: string): Promise<boolean> {
+    const live = this.byThread.get(threadId);
+    if (live !== undefined) return await live.withdraw(messageId);
+    const record = this.options.registry.get(threadId);
+    if (record === undefined) return false;
+    return (await withdrawFromRecord(record.stateDir, messageId)) !== undefined;
   }
 
   /** Delivers a message to the session bound to its thread. */

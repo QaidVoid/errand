@@ -39,8 +39,8 @@ export function redacting(port: ThreadPort, secrets: readonly string[]): ThreadP
       }),
     beginTurn: (turn) => port.beginTurn(turn),
     noteThinking: (text) => port.noteThinking(clean(text)),
-    notePrompt: (author, text) => port.notePrompt(author, clean(text)),
-    noteAside: (author, text) => port.noteAside(author, clean(text)),
+    notePrompt: (author, text, id) => port.notePrompt(author, clean(text), id),
+    noteAside: (author, text, id) => port.noteAside(author, clean(text), id),
     appendActivity: (line, tool) =>
       port.appendActivity(
         clean(line),

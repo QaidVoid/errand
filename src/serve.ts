@@ -300,6 +300,17 @@ async function run(
     onThreadClosed: async (threadId) => {
       await daemon?.threadClosed(threadId);
     },
+    onWithdrawn: (messageId, threadId) => {
+      void daemon?.withdraw(messageId, threadId).catch((error: unknown) => {
+        // Said rather than swallowed: a withdrawal that did not take is the
+        // one thing a person cannot check from the chat, because the message
+        // is already gone from their side.
+        log.warn("a withdrawn message could not be reconciled", {
+          messageId,
+          detail: String(error),
+        });
+      });
+    },
     onConnected: () => {
       threads?.setConnected(true);
       refreshStatus();
