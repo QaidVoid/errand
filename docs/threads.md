@@ -64,6 +64,24 @@ An image is handed to the model as well as saved. If the session's model cannot
 see images, a cheaper one that can is asked to describe it first, and the agent
 is told plainly that it is reading a description. See [two models](/models).
 
+## Deleting a message
+
+Deleting a message in Discord withdraws it here too. Its text is taken out of
+the session's transcript and the web view, which show that a message was
+withdrawn rather than closing the gap silently, and out of the agent's own
+stored conversation, so a session resumed later never sends it to a model
+again. A session still running is told to disregard it.
+
+Two things it does not do. A message already sent to a model may already have
+been read and acted on, and nothing here unsends it: the agent's earlier
+replies stand, because rewriting them would be inventing a past. And work the
+message caused is not undone, so a file it asked for stays written.
+
+One gap worth knowing: a deletion that happens while the daemon is disconnected
+from Discord is never delivered, and Discord does not replay it. That message
+stays. If it mattered, say so in the thread once the bot is back, or stop the
+session and start another.
+
 ## When a session ends
 
 Idling out, crashing, or a daemon restart all leave the thread open and the

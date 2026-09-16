@@ -80,6 +80,20 @@ export interface Recorder {
 }
 
 /** How much of a session's output is kept for a view that attaches later. */
+/** What stands in for a withdrawn turn, so a reader is not left guessing. */
+export const WITHDRAWN_NOTE = "[withdrawn by the person who sent it]";
+
+/**
+ * What to show for a replayed entry.
+ *
+ * A withdrawn entry keeps its place and loses its words. Showing the empty
+ * text would read as somebody having said nothing, which is a different and
+ * untrue thing.
+ */
+export function shownText(entry: { text: string; withdrawn?: true }): string {
+  return entry.withdrawn === true ? WITHDRAWN_NOTE : entry.text;
+}
+
 export const DEFAULT_TRANSCRIPT_LIMIT = 400;
 
 /** The state a view needs in order to look right the moment it attaches. */
@@ -219,8 +233,9 @@ export class ViewFanOut implements ThreadPort {
         }
 
         if (entry.call === "post") await view.post(entry.text);
-        else if (entry.call === "prompt") await view.notePrompt(entry.author, entry.text);
-        else if (entry.call === "aside") await view.noteAside(entry.author, entry.text);
+        else if (entry.call === "prompt") {
+          await view.notePrompt(entry.author, shownText(entry));
+        } else if (entry.call === "aside") await view.noteAside(entry.author, shownText(entry));
         else if (entry.call === "notice") await view.postNotice(entry.text, entry.level);
         else if (entry.call === "thinking") view.noteThinking(entry.text);
         else if (entry.call === "reply") await view.postReply(entry.text, entry.command);

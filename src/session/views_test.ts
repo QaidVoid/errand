@@ -1,7 +1,7 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { createLogger } from "../log.ts";
 import type { SessionUsage, ThreadPort } from "./port.ts";
-import { type Recorded, ViewFanOut } from "./views.ts";
+import { type Recorded, shownText, ViewFanOut, WITHDRAWN_NOTE } from "./views.ts";
 
 /** A view that writes down everything it was told, in order. */
 function fakeView(name = "view") {
@@ -279,4 +279,17 @@ Deno.test("a delegation is replayed to a view that attaches later", async () => 
   await fan.attach(late.view);
 
   assertEquals(late.seen, ["turn:0", "delegated:flash"]);
+});
+
+/**
+ * A withdrawn turn keeps its place and loses its words. Showing the empty text
+ * would read as somebody having said nothing, which is untrue and makes the
+ * replies around it stop following.
+ */
+Deno.test("a withdrawn entry is shown as a marker, not as silence", () => {
+  assertEquals(shownText({ text: "hello" }), "hello");
+  assertEquals(shownText({ text: "", withdrawn: true }), WITHDRAWN_NOTE);
+  // The text is gone from the entry, so the marker is the only thing standing
+  // between a reader and an apparently empty turn.
+  assertEquals(shownText({ text: "", withdrawn: true }).length > 0, true);
 });
