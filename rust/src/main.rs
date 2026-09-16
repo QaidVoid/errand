@@ -9,7 +9,21 @@
 // The port lands each module with its tests before anything calls it, so the
 // tree holds unusable exports until the daemon is wired (group 10).
 #[allow(dead_code)]
+mod admission;
+#[allow(dead_code)]
+mod agent;
+#[allow(dead_code)]
+mod chat;
+#[allow(dead_code)]
 mod config;
+#[allow(dead_code)]
+mod log;
+#[allow(dead_code)]
+mod memory;
+#[allow(dead_code)]
+mod provider;
+#[allow(dead_code)]
+mod session;
 
 #[cfg(test)]
 mod test_util;
