@@ -91,6 +91,49 @@ export function isPermitted(config: ChatConfig, userId: string): boolean {
 }
 
 /**
+ * A deletion, which carries far less than the message did.
+ *
+ * Discord reports a deletion by id. When the message is older than the cache,
+ * that is nearly all it reports: no author, no text, and nothing to decide an
+ * allowlist on. Where it was said is still known, which is enough to tell a
+ * deletion in the served channel from one anywhere else.
+ */
+export interface RawDeletion {
+  id: string;
+  channelId: string;
+  parentChannelId: string | undefined;
+}
+
+/** What to do about a deletion. */
+export type DeletionDecision =
+  | { kind: "ignore"; reason: string }
+  | { kind: "withdraw"; messageId: string; threadId: string | undefined };
+
+/**
+ * Decides whether a deletion is one of ours.
+ *
+ * Deliberately not `classify`: that refuses a message it cannot attribute, and
+ * a deletion usually cannot be attributed. Whoever was allowed to say it was
+ * already judged when they said it, and a withdrawal only ever removes what is
+ * already there, so there is nothing here an allowlist would protect.
+ */
+export function classifyDeletion(
+  deletion: RawDeletion,
+  config: ChatConfig,
+): DeletionDecision {
+  const inServedChannel = deletion.channelId === config.channelId;
+  const inServedThread = deletion.parentChannelId === config.channelId;
+  if (!inServedChannel && !inServedThread) {
+    return { kind: "ignore", reason: "outside the served channel" };
+  }
+  return {
+    kind: "withdraw",
+    messageId: deletion.id,
+    threadId: inServedThread ? deletion.channelId : undefined,
+  };
+}
+
+/**
  * Decides what to do with a message.
  *
  * Every rejection is silent, and no reason names an account or a list. Telling

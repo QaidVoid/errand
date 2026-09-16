@@ -1,6 +1,13 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import type { ChatConfig } from "../config/schema.ts";
-import { classify, isBlocked, isPermitted, type RawMessage, withoutBotMention } from "./inbound.ts";
+import {
+  classify,
+  classifyDeletion,
+  isBlocked,
+  isPermitted,
+  type RawMessage,
+  withoutBotMention,
+} from "./inbound.ts";
 
 const CHANNEL = "served-channel";
 
@@ -252,6 +259,35 @@ Deno.test("a bot is let into a thread and left out of the channel", () => {
       CONFIG,
       "me",
     ).kind,
+    "ignore",
+  );
+});
+
+/**
+ * A deletion older than the cache arrives with no author and no text. Routing
+ * has to work from where it was said, or this feature would only ever cover
+ * messages recent enough to still be cached.
+ */
+Deno.test("a deletion is routed without an author or any text", () => {
+  // In a served thread.
+  assertEquals(
+    classifyDeletion({ id: "m-9", channelId: "thread-1", parentChannelId: CHANNEL }, CONFIG),
+    { kind: "withdraw", messageId: "m-9", threadId: "thread-1" },
+  );
+
+  // In the served channel itself, which belongs to no thread.
+  assertEquals(
+    classifyDeletion({ id: "m-9", channelId: CHANNEL, parentChannelId: undefined }, CONFIG),
+    { kind: "withdraw", messageId: "m-9", threadId: undefined },
+  );
+
+  // Anywhere else is not ours, the same as for a message.
+  assertEquals(
+    classifyDeletion({ id: "m-9", channelId: "other", parentChannelId: undefined }, CONFIG).kind,
+    "ignore",
+  );
+  assertEquals(
+    classifyDeletion({ id: "m-9", channelId: "t", parentChannelId: "other" }, CONFIG).kind,
     "ignore",
   );
 });

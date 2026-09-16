@@ -22,6 +22,7 @@ import type { Logger } from "../log.ts";
 import { acknowledge, translate, type TranslatedCommand } from "./commands.ts";
 import {
   classify,
+  classifyDeletion,
   type InboundDecision,
   isPermitted,
   type RawMessage,
@@ -67,6 +68,14 @@ export interface GatewayHandlers {
   onCommand(command: TranslatedCommand, interaction: ChatInputCommandInteraction): Promise<void>;
   /** A thread bound to a session was archived or deleted from outside. */
   onThreadClosed(threadId: string): Promise<void>;
+  /**
+   * A message in the served channel or one of its threads was deleted.
+   *
+   * `threadId` is the thread it was said in, or undefined for the channel
+   * itself. Optional so a surface that keeps no record of what was said has
+   * nothing to reconcile.
+   */
+  onWithdrawn?(messageId: string, threadId: string | undefined): void;
   onConnected(): void;
   onDisconnected(): void;
   /** Reconnection has failed for good; running sessions must be shut down. */
@@ -244,6 +253,25 @@ export class Gateway {
       void this.handlers.onCommand(translate(interaction), interaction).catch((error: unknown) => {
         this.log.error("handling a slash command failed", { detail: String(error) });
       });
+    });
+
+    // A deletion arrives by id, and for anything older than the cache that is
+    // nearly all it carries. `toRaw` is no use here: it refuses a message it
+    // cannot attribute, which is exactly the case this has to handle.
+    client.on(Events.MessageDelete, (message) => {
+      const channel = message.channel;
+      const decision = classifyDeletion({
+        id: message.id,
+        channelId: message.channelId,
+        parentChannelId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
+      }, this.config);
+      if (decision.kind === "ignore") return;
+      this.log.info("a message was withdrawn", {
+        messageId: decision.messageId,
+        ...(decision.threadId === undefined ? {} : { threadId: decision.threadId }),
+        cached: message.author !== null,
+      });
+      this.handlers.onWithdrawn?.(decision.messageId, decision.threadId);
     });
 
     client.on(Events.ThreadUpdate, (_old, updated) => {
