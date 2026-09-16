@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use crate::agent::protocol::DialogRequest;
 use crate::chat::chars::{PrefixKey, prefixed};
+use crate::session::event::Delegated;
 use crate::session::files::{FileContents, MAX_INLINE_BYTES};
-use crate::session::port::Delegated;
 
 /// The service's per-message character limit.
 pub const MESSAGE_LIMIT: usize = 2000;

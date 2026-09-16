@@ -34,12 +34,11 @@ fn repo_root() -> PathBuf {
                 return dir;
             }
         }
-        if !dir.pop() {
-            panic!(
-                "could not find the repository root from {}",
-                env!("CARGO_MANIFEST_DIR")
-            );
-        }
+        assert!(
+            dir.pop(),
+            "could not find the repository root from {}",
+            env!("CARGO_MANIFEST_DIR")
+        );
     }
 }
 
@@ -103,9 +102,8 @@ fn tracked_tree_is_ascii() {
         if BINARY.iter().any(|extension| file.ends_with(extension)) {
             continue;
         }
-        let bytes = match std::fs::read(root.join(&file)) {
-            Ok(bytes) => bytes,
-            Err(_) => continue,
+        let Ok(bytes) = std::fs::read(root.join(&file)) else {
+            continue;
         };
         // A file that is not UTF-8 is skipped, as the text read it replaces
         // refused to decode it rather than checking half of it.

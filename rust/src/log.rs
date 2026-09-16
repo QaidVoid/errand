@@ -211,7 +211,8 @@ impl Logger {
     }
 }
 
-fn now_ms() -> i64 {
+/// The current time, in milliseconds since the epoch.
+pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| {

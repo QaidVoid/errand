@@ -507,11 +507,8 @@ impl AgentClient {
             .and_then(Value::as_str)
             .unwrap_or("command")
             .to_owned();
-        let outcome = tokio::time::timeout(
-            std::time::Duration::from_millis(timeout_ms),
-            receiver,
-        )
-        .await;
+        let outcome =
+            tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), receiver).await;
         if let Ok(Ok(record)) = outcome {
             return Ok(record);
         }
