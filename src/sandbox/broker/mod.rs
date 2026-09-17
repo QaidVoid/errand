@@ -37,9 +37,8 @@ pub fn host_allowed(host: &str, allow: &[String]) -> bool {
         if rule == "*" {
             return true;
         }
-        if let Some(suffix) = rule.strip_prefix('*') {
-            // ".example.com"
-            let suffix = suffix.to_lowercase();
+        if let Some(apex) = rule.strip_prefix("*.") {
+            let suffix = format!(".{}", apex.to_lowercase());
             if candidate.len() > suffix.len() && candidate.ends_with(&suffix) {
                 return true;
             }

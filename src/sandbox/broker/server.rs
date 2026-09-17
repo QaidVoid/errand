@@ -21,7 +21,7 @@ pub struct Broker {
     log: Logger,
     routes: Vec<ProviderRoute>,
     allow_internal: bool,
-    listener: Option<TcpListener>,
+    accept_shutdown: Option<oneshot::Sender<()>>,
     provider_shutdown: Option<oneshot::Sender<()>>,
     closed: bool,
 }
@@ -40,7 +40,7 @@ impl Broker {
             log,
             routes,
             allow_internal,
-            listener: None,
+            accept_shutdown: None,
             provider_shutdown: None,
             closed: false,
         }
@@ -68,13 +68,19 @@ impl Broker {
             provider_port,
             client: reqwest::Client::new(),
         });
+        let (shutdown_sender, mut shutdown_receiver) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            while let Ok((stream, _peer)) = listener.accept().await {
+            loop {
+                let accepted = tokio::select! {
+                    accepted = listener.accept() => accepted,
+                    _ = &mut shutdown_receiver => break,
+                };
+                let Ok((stream, _peer)) = accepted else { break };
                 let state = Arc::clone(&state);
                 tokio::spawn(handle(stream, state));
             }
         });
-        self.listener = None;
+        self.accept_shutdown = Some(shutdown_sender);
         Ok(port)
     }
 
@@ -112,13 +118,16 @@ impl Broker {
         port
     }
 
-    /// Stops accepting and closes the listener. In-flight tunnels end with it.
+    /// Stops accepting and closes the listener. A tunnel already running is
+    /// left to finish, as it is under the listener this replaces.
     pub fn close(&mut self) {
         if self.closed {
             return;
         }
         self.closed = true;
-        drop(self.listener.take());
+        if let Some(shutdown) = self.accept_shutdown.take() {
+            let _ = shutdown.send(());
+        }
         if let Some(shutdown) = self.provider_shutdown.take() {
             let _ = shutdown.send(());
         }

@@ -93,6 +93,19 @@ pub fn spawn_agent(
     }
     let mut child = child.spawn()?;
 
+    // Read before anything else can reap the child. Without a pid there is no
+    // group to signal, and defaulting to 0 would make `kill` signal the
+    // daemon's own group, so the spawn fails instead.
+    let pid = match child.id().and_then(|id| i32::try_from(id).ok()) {
+        Some(pid) if pid > 0 => pid,
+        _ => {
+            let _ = child.start_kill();
+            return Err(std::io::Error::other(
+                "the sandbox launcher started without a process id",
+            ));
+        }
+    };
+
     let (stdin_sender, mut stdin_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
     let mut stdin = child.stdin.take().expect("stdin is piped");
     tokio::spawn(async move {
@@ -107,7 +120,6 @@ pub fn spawn_agent(
 
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");
-    let pid = i32::try_from(child.id().unwrap_or(0)).unwrap_or(0);
     let (exit_sender, exit_receiver) = watch::channel(None);
     let mut waiting = child;
     tokio::spawn(async move {

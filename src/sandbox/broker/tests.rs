@@ -52,6 +52,17 @@ fn a_wildcard_rule_matches_subdomains_but_not_the_apex() {
 }
 
 #[test]
+fn a_star_without_its_dot_is_a_literal_rule_and_matches_nothing() {
+    // Validation refuses such a rule, so reaching here means one was written
+    // straight into an allowlist. It is compared literally rather than read as
+    // a wildcard somebody did not write.
+    let allow = vec!["*githubusercontent.com".to_owned()];
+    assert!(!host_allowed("codeload.githubusercontent.com", &allow));
+    assert!(!host_allowed("githubusercontent.com", &allow));
+    assert!(!host_allowed("evilgithubusercontent.com", &allow));
+}
+
+#[test]
 fn an_empty_allowlist_admits_nothing() {
     assert!(!host_allowed("github.com", &[]));
     assert!(!host_allowed("", &["github.com".to_owned()]));
@@ -488,4 +499,23 @@ fn v6_forms_that_are_internal_in_their_own_right() {
 #[allow(dead_code)]
 fn _route_shape(route: ProviderRoute) -> serde_json::Value {
     json!({ "prefix": route.prefix })
+}
+
+#[tokio::test]
+async fn closing_the_broker_stops_it_accepting() {
+    let mut broker = Broker::new(vec!["github.com".to_owned()], silent(), Vec::new(), false);
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+    assert!(TcpStream::connect(("127.0.0.1", port)).await.is_ok());
+
+    broker.close();
+
+    // The accept loop learns of the close on the runtime, so the port is
+    // allowed a moment to go rather than being read the instant after.
+    for _ in 0..100 {
+        if TcpStream::connect(("127.0.0.1", port)).await.is_err() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the broker kept accepting after it was closed");
 }
