@@ -1,0 +1,7 @@
+# Pinned so a stable release cannot break the build on its own. The crate
+# denies clippy's pedantic group, whose contents move between releases, so the
+# version that lints is named rather than floating.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
