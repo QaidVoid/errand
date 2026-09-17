@@ -13,11 +13,13 @@ use crate::session::commands::is_addressed_to_bot;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawAttachment {
+    /// The service's own id for the file.
     pub id: String,
     /// The name the sender's file had. Never used as a path without checking.
     pub name: String,
     /// Where to fetch it from, which the service signs and expires.
     pub url: String,
+    /// How large the service says it is, in bytes.
     pub size: u64,
     /// What the service believes it is, when it says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -28,12 +30,15 @@ pub struct RawAttachment {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawMessage {
+    /// The service's own id for the message.
     pub id: String,
+    /// Who posted it.
     pub author_id: String,
     /// Display name, when the service gave one. Used only to address somebody.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_name: Option<String>,
     #[serde(default)]
+    /// Whether the service marks the author as automated.
     pub author_is_bot: bool,
     /// The channel or thread the message was posted in.
     pub channel_id: String,
@@ -41,6 +46,7 @@ pub struct RawMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_channel_id: Option<String>,
     #[serde(default)]
+    /// What was said, which may be empty when only files were sent.
     pub content: String,
     /// Files attached to it, in the order they were attached.
     #[serde(default)]
@@ -56,9 +62,12 @@ pub struct RawMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawDeletion {
+    /// The message that was deleted.
     pub id: String,
+    /// The channel or thread it was deleted from.
     pub channel_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// For a thread, the channel it hangs off. Otherwise none.
     pub parent_channel_id: Option<String>,
 }
 

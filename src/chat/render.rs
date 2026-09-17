@@ -358,6 +358,7 @@ pub fn when_relative_plain(epoch_ms: i64, now: i64) -> String {
     }
 }
 
+/// A line saying something went wrong but the session carries on.
 pub fn warning_line(text: &str) -> String {
     prefixed(PrefixKey::Warning, text)
 }

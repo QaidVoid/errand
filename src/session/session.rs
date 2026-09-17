@@ -65,11 +65,15 @@ use crate::session::rules::rules_block;
 /// A message as a session sees it, whatever surface it arrived from.
 #[derive(Debug, Clone)]
 pub struct IncomingMessage {
+    /// The message's own id, as the surface names it.
     pub id: String,
+    /// Who sent it.
     pub author_id: String,
     /// Display name, when the service gave one.
     pub author_name: Option<String>,
+    /// What was said, which may be empty when only files were sent.
     pub content: String,
+    /// Files it carried, in the order they were attached.
     pub attachments: Vec<RawAttachment>,
 }
 
@@ -235,7 +239,9 @@ pub type StopBox = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + 
 pub struct RunningBox {
     /// The agent process, driven over the protocol.
     pub process: Arc<dyn AgentProcess>,
+    /// Turns a path as the agent sees it into one on this host.
     pub to_host_path: HostPathOf,
+    /// Ends the sandbox, reporting whether it went.
     pub stop: StopBox,
 }
 
@@ -275,17 +281,24 @@ pub type DescribeImages = Arc<
 
 /// Everything the manager gives a session at construction.
 pub struct SessionOptions {
+    /// This session's own identifier, which also names its sandbox.
     pub id: String,
+    /// Which directory it works in.
     pub project: ProjectSelection,
     /// Provider and model this session runs on, when the opening message named
     /// them. Absent leaves the configured pair, which is the ordinary case.
     pub chosen: Option<ChosenModel>,
+    /// Where it keeps what it will outlive the sandbox with.
     pub state_dir: String,
     /// What the session reports through, with secrets scrubbed at it.
     pub views: Arc<Redacting>,
+    /// Starts the sandbox this session runs in.
     pub launcher: Launcher,
+    /// Admits this session's turns up to the configured cap.
     pub scheduler: Arc<Scheduler>,
+    /// The configuration it runs on.
     pub config: Config,
+    /// Where it says what it is doing.
     pub log: Logger,
     /// Injected by tests; the session builds real timers when none is
     /// given.
@@ -296,6 +309,7 @@ pub struct SessionOptions {
     pub owner_name: Option<String>,
     /// The turn a resumed session carries on from.
     pub start_turn: Option<u32>,
+    /// Opens a pull request, or none when GitHub is not configured.
     pub open_pull_request: Option<OpenPullRequest>,
     /// The thread this session runs in, for linking back to the conversation.
     pub thread_id: Option<String>,
@@ -308,6 +322,7 @@ pub struct SessionOptions {
     pub available_models: Vec<String>,
     /// Where the provider is reached for a delegated question.
     pub delegate_base_url: Option<String>,
+    /// Why nothing can run yet, or none when it can.
     pub unavailable: Option<Unavailable>,
     /// Accounts that may control any session, not only their own.
     pub operator_ids: Vec<String>,
@@ -320,7 +335,9 @@ pub struct SessionOptions {
     pub on_model_changed: Option<OnModelChanged>,
     /// Memory, or none when it is switched off.
     pub memory: Option<Arc<MemoryStore>>,
+    /// Fetches a file a message carried, or none when nothing can.
     pub fetch_attachment: Option<FetchAttachment>,
+    /// Describes an image this session's model cannot see.
     pub describe_images: Option<DescribeImages>,
     /// Continue the agent conversation already stored in the state directory.
     pub resume: bool,
@@ -1517,8 +1534,11 @@ impl Running {
     ///
     /// The agent reports each turn's own cost. Context is the latest turn's
     /// input rather than a sum, because it is what the model is carrying now.
-    // The agent reports token counts as whole numbers in float fields.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the agent reports token counts as whole numbers in float fields"
+    )]
     async fn accrue(&mut self, usage: &Usage) {
         let context_window = self
             .client
@@ -2927,9 +2947,11 @@ impl Running {
     /// budget between two checks, and nothing here can stop it mid-write.
     /// What it does guarantee is that a session filling a disk stops rather
     /// than continuing until the disk is full.
-    // Byte counts sit far below f64's exact range, and the log fields hold
-    // them as milliseconds-epoch-sized integers.
-    #[allow(clippy::cast_precision_loss, clippy::cast_possible_wrap)]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        reason = "byte counts sit far below f64's exact range, and the log fields hold them as milliseconds-epoch-sized integers"
+    )]
     async fn check_disk(&mut self) {
         if self.ended {
             return;

@@ -36,6 +36,7 @@ pub const TYPING_REFRESH_MS: u64 = 8_000;
 /// Everything one send or edit leaves behind, for later edits and reactions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageHandle {
+    /// The service's own id for the message, which an edit needs.
     pub id: String,
 }
 

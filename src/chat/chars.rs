@@ -92,6 +92,7 @@ pub enum PrefixKey {
     dead_code,
     reason = "the tests walk the whole table, which is the point of enumerating it"
 )]
+/// Every prefix key, so a test can assert the table covers them all.
 pub const ALL_PREFIXES: [PrefixKey; 6] = [
     PrefixKey::Tool,
     PrefixKey::Thinking,

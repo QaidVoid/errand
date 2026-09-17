@@ -11,7 +11,9 @@
 /// Why an address was allowed or refused, phrased for a startup failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressVerdict {
+    /// Whether the interface may bind here.
     pub allowed: bool,
+    /// Why, in words an operator can act on.
     pub reason: String,
 }
 

@@ -20,9 +20,10 @@ pub struct Endpoint {
 }
 
 /// What the model was asked, and what it was shown.
-///
-// `question` is what the field is called wherever an ask travels.
-#[allow(clippy::struct_field_names)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "`question` is what the field is called wherever an ask travels"
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Question {
     /// What is wanted to know.

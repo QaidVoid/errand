@@ -21,11 +21,17 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionUsage {
+    /// Tokens sent, not counting cache reads.
     pub input: u64,
+    /// Tokens the model produced.
     pub output: u64,
+    /// Tokens served from the prompt cache.
     pub cache_read: u64,
+    /// Tokens written into the prompt cache.
     pub cache_write: u64,
+    /// Everything above, as the agent totals it.
     pub total_tokens: u64,
+    /// What it has cost so far, in the provider's currency.
     pub cost: f64,
     /// Tokens in the most recent request, which is the context it carries.
     pub context_tokens: u64,
@@ -75,10 +81,13 @@ pub struct ToolActivity {
     /// The agent's own identifier for the call, so a result can find it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// The tool's name.
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// What it acted on, when its arguments name one readably.
     pub target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Whether it failed, once it has finished.
     pub failed: Option<bool>,
 }
 
@@ -86,8 +95,11 @@ pub struct ToolActivity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolResult {
+    /// The agent's own identifier for the call this answers.
     pub id: String,
+    /// The tool's name.
     pub name: String,
+    /// Whether the call failed.
     pub failed: bool,
     /// Already truncated to the configured limit.
     pub output: String,

@@ -24,10 +24,12 @@ use crate::session::views::Recorder;
 /// One recorded thing, with when it happened and the turn it belongs to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Journaled {
+    /// When it was written, in milliseconds.
     pub at: i64,
     /// Absent in a transcript written before turns were recorded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn: Option<u32>,
+    /// The event itself, exactly as the session reported it.
     pub entry: SessionEvent,
 }
 
@@ -50,6 +52,7 @@ pub const OPENING_SCAN_BYTES: usize = 64 * 1024;
 /// What was read back, and what was left behind.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredTranscript {
+    /// What was read back, oldest first.
     pub entries: Vec<Journaled>,
     /// Entries older than those returned, so a replay can admit to the gap.
     pub dropped: usize,

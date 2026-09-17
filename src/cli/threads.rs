@@ -17,7 +17,9 @@ use crate::session::registry::{ThreadRecord, ThreadRegistry};
 /// Where the project a session worked in is read from the policy it kept.
 #[derive(Debug, Clone)]
 pub struct Project {
+    /// The directory name, which is what a person recognises.
     pub name: String,
+    /// Where it sits on this host.
     pub path: String,
 }
 
@@ -33,14 +35,19 @@ type ProjectOf =
 
 /// What the commands need, injected so a test needs no disk and no clock.
 pub struct Deps {
+    /// The threads this host remembers.
     pub registry: Arc<Mutex<ThreadRegistry>>,
+    /// Bytes a thread's state directory holds.
     pub size_of: SizeOf,
+    /// Deletes a thread's state directory.
     pub remove: Remove,
     /// Where session state directories live, so a forgotten one can be found.
     pub state_root: String,
+    /// The project a session worked in, read back from disk.
     pub project_of: ProjectOf,
     /// One line of output, wherever the terminal is.
     pub write: Arc<dyn Fn(&str) + Send + Sync>,
+    /// The clock, injected so output is stable in a test.
     pub now: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 

@@ -22,11 +22,13 @@ pub const ATTACHMENTS_DIR: &str = "attachments";
 /// A file as it arrived from the chat service, before anything was done.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawAttachment {
+    /// The service's own id for the file.
     pub id: String,
     /// The name the sender's file had. Never used as a path without checking.
     pub name: String,
     /// Where to fetch it from, which the service signs and expires.
     pub url: String,
+    /// How large the service says it is, in bytes.
     pub size: u64,
     /// What the service believes it is, when it says.
     pub content_type: Option<String>,
@@ -37,28 +39,36 @@ pub struct RawAttachment {
 pub struct Taken {
     /// The path within the project, which is what the agent is told.
     pub path: String,
+    /// The file's contents, held so an image can also be shown to a model.
     pub bytes: Vec<u8>,
+    /// What the service believed it was, when it said.
     pub content_type: Option<String>,
 }
 
 /// A file that was not taken, and why, in words worth posting.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Refused {
+    /// The name the sender's file had.
     pub name: String,
+    /// Why it was not taken, in words worth posting.
     pub reason: String,
 }
 
 /// What came of a message's attachments.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Outcome {
+    /// Files that reached the project, in the order they arrived.
     pub taken: Vec<Taken>,
+    /// Files that did not, each with its reason.
     pub refused: Vec<Refused>,
 }
 
 /// Limits on what may arrive.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Limits {
+    /// Largest single file that may be taken.
     pub max_bytes: u64,
+    /// How many files one message may carry.
     pub max_count: usize,
 }
 

@@ -540,6 +540,7 @@ fn url_host(target: &str) -> Option<String> {
     Some(host.to_owned())
 }
 
+/// The listener that admits a session's connections and tunnels them.
 pub(crate) mod server;
 
 pub use server::Broker;

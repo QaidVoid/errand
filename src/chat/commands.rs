@@ -61,6 +61,7 @@ const OPTION_NAMES: [&str; 3] = ["path", "instruction", "title"];
      bot and applications.commands selected, then start again."
 )]
 pub struct CommandRegistrationError {
+    /// What the service said, for the operator to act on.
     pub detail: String,
 }
 
@@ -121,7 +122,9 @@ pub fn build_commands() -> Vec<CreateCommand> {
 pub struct TranslatedCommand {
     /// The thread the command was used in, or none when used outside one.
     pub thread_id: Option<String>,
+    /// Who ran it.
     pub user_id: String,
+    /// What to call them in the answer.
     pub user_name: String,
     /// The command as text, exactly as an in-thread message would have been.
     pub content: String,

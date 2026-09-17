@@ -32,6 +32,7 @@ use crate::session::session::{DescribeImages, IncomingMessage};
     gaps.iter().map(|gap| format!("  - {gap}")).collect::<Vec<_>>().join("\n")
 )]
 pub struct EnforcementGapError {
+    /// What the backend could not enforce on this host.
     pub gaps: Vec<String>,
 }
 
@@ -161,9 +162,13 @@ pub fn render_startup_report(
 
 /// A slash command run against the daemon.
 pub struct SlashCommand {
+    /// The thread the command was used in, or none when used outside one.
     pub thread_id: Option<String>,
+    /// Who ran it.
     pub user_id: String,
+    /// What to call them in the answer.
     pub user_name: String,
+    /// The command as text, exactly as an in-thread message would have been.
     pub content: String,
 }
 
@@ -181,14 +186,21 @@ pub type ReplyInChannel =
 
 /// Everything the daemon needs, with the transport injected for testability.
 pub struct DaemonOptions {
+    /// The configuration every session is started from.
     pub config: Config,
+    /// The backend sessions are confined by.
     pub sandbox: Arc<dyn crate::session::manager::SandboxPool>,
+    /// What makes a thread for a new session.
     pub threads: Arc<dyn ThreadFactory>,
+    /// Where the daemon says what it is doing.
     pub log: Logger,
+    /// Posts a refusal back to the channel, outside any thread.
     pub reply_in_channel: ReplyInChannel,
     /// Memory, or none when it is switched off.
     pub memory: Option<Arc<MemoryStore>>,
+    /// Powers the host off, or none when `!shutdown` is not offered.
     pub power_off: Option<PowerOff>,
+    /// Says what is left of the provider window, or none when unmetered.
     pub describe_usage: Option<DescribeUsage>,
     /// Describes an attached image for a session whose model cannot see one,
     /// or none when every session's model can.

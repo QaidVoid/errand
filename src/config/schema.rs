@@ -251,10 +251,10 @@ pub struct WebConfig {
 }
 
 /// Bounds on how much work exists at once.
-///
-// The names carry the configuration keys they stand for, which share the
-// prefix on purpose.
-#[allow(clippy::struct_field_names)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "the names carry the configuration keys they stand for"
+)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LimitsConfig {
@@ -269,10 +269,10 @@ pub struct LimitsConfig {
 }
 
 /// Deadlines that end or unblock a session.
-///
-// The names carry the configuration keys they stand for, which share the
-// suffix on purpose.
-#[allow(clippy::struct_field_names)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "the names carry the configuration keys they stand for"
+)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeoutsConfig {

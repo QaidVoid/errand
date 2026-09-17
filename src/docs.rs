@@ -25,7 +25,9 @@ use crate::session::commands::{COMMANDS, CommandAccess, CommandGroup};
 /// One field of one configuration section.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
+    /// The field's name, as the configuration file spells it.
     pub name: String,
+    /// The type it accepts, as the schema declares it.
     pub type_: String,
     /// What its doc comment says, as one paragraph.
     pub says: String,
@@ -34,9 +36,18 @@ pub struct Field {
 /// One section of the configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Section {
+    /// The field's name, as the configuration file spells it.
     pub name: String,
+    /// What its doc comment says, as one paragraph.
     pub says: String,
+    /// Its fields, in the order the schema declares them.
     pub fields: Vec<Field>,
+}
+
+/// How far a line opens or closes square brackets, for spanning attributes.
+fn bracket_depth(line: &str) -> i32 {
+    i32::try_from(line.matches('[').count()).unwrap_or(0)
+        - i32::try_from(line.matches(']').count()).unwrap_or(0)
 }
 
 /// Reads the interfaces out of the schema.
@@ -47,15 +58,27 @@ pub struct Section {
 pub fn read_schema(source: &str) -> Vec<Section> {
     let mut sections: Vec<Section> = Vec::new();
     let mut comment: Vec<String> = Vec::new();
+    let mut attribute_depth = 0_i32;
 
     for line in source.lines() {
         let trimmed = line.trim();
 
+        // An attribute may run over several lines, and the lines inside one
+        // are not declarations. Counted rather than matched, so a reason
+        // string spanning lines does not read as a field.
+        if attribute_depth > 0 {
+            attribute_depth += bracket_depth(trimmed);
+            continue;
+        }
         if let Some(doc) = trimmed.strip_prefix("///") {
             comment.push(doc.trim().to_owned());
             continue;
         }
-        if trimmed.starts_with("//") || trimmed.starts_with("#[") || trimmed.is_empty() {
+        if trimmed.starts_with("#[") {
+            attribute_depth = bracket_depth(trimmed);
+            continue;
+        }
+        if trimmed.starts_with("//") || trimmed.is_empty() {
             continue;
         }
 

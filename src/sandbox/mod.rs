@@ -8,13 +8,21 @@ use std::sync::Arc;
 
 use crate::log::Logger;
 
+/// What a backend must offer, and what it reports it enforces.
 pub mod backend;
+/// The bailey backend: a confined process on this host.
 pub mod bailey;
+/// The egress broker every confined session dials out through.
 pub mod broker;
+/// Whether a path stays inside the directory a session is confined to.
 pub mod paths;
+/// The podman backend: a session in a container.
 pub mod podman;
+/// The policy document a bailey launch is given.
 pub mod policy;
+/// Chooses the backend the configuration asked for.
 pub mod runtime;
+/// Starts a confined launcher and wires up its pipes.
 pub mod spawn;
 
 /// What one run of a backend's tool answered with.
@@ -255,6 +263,7 @@ impl Backend {
         }
     }
 
+    /// Names of sandboxes this system owns that no live session claims.
     pub async fn list_orphans(&self) -> Result<Vec<String>, backend::SandboxLaunchError> {
         match self {
             Backend::Bailey(bailey) => Ok(bailey.list_orphans()),

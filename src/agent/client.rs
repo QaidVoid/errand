@@ -69,9 +69,12 @@ pub type Callback<A = ()> = Option<Box<dyn Fn(A) + Send + Sync>>;
 
 /// Everything the client reports outward. Every callback is optional.
 ///
-// The `on_` prefix is what every handler is called in the protocol's own
-// vocabulary; renaming the fields would not make them fields.
-#[allow(clippy::struct_field_names)]
+/// The `on_` prefix is what every handler is called in the protocol's own
+/// vocabulary; renaming the fields would not make them fields.
+#[allow(
+    clippy::struct_field_names,
+    reason = "the prefix is the protocol's own vocabulary"
+)]
 #[derive(Default)]
 pub struct AgentHandlers {
     /// A turn started.
@@ -134,23 +137,37 @@ enum DialogReply {
     Confirmed(bool),
 }
 
+/// A question the agent is blocked on, and the timer that gives up on it.
 pub(crate) struct PendingDialog {
+    /// What was asked, so an answer can be matched to it.
     pub(crate) request: DialogRequest,
+    /// Gives up on the question when nobody answers in time.
     pub(crate) timer: tokio::task::JoinHandle<()>,
 }
 
 /// The client's mutable state, shared between the caller and the readers.
 pub(crate) struct ClientState {
+    /// Splits the agent's stream into whole records.
     pub(crate) framer: LineFramer,
+    /// Where the process is between starting and gone.
     pub(crate) lifecycle: AgentState,
+    /// Whether the exit has already been reported, so it is reported once.
     pub(crate) exit_reported: bool,
+    /// Whether this turn has already said the agent is thinking.
     pub(crate) thinking_reported: bool,
+    /// The last thing the assistant said, for a turn that ends without more.
     pub(crate) last_words: String,
+    /// Whether this turn said anything at all.
     pub(crate) produced_text: bool,
+    /// Why this turn failed, when it did.
     pub(crate) turn_failure: Option<String>,
+    /// How much context the model holds, once the agent has said.
     pub(crate) context_window: Option<f64>,
+    /// Questions the agent is blocked on, by correlation id.
     pub(crate) dialogs: BTreeMap<String, PendingDialog>,
+    /// Commands waiting on a response, by correlation id.
     pub(crate) requests: BTreeMap<String, oneshot::Sender<AgentRecord>>,
+    /// Counter behind the correlation ids this client issues.
     pub(crate) next_request_id: u64,
 }
 

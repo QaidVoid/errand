@@ -162,6 +162,7 @@ struct SendBody {
     text: Option<String>,
 }
 
+/// The server every route handler is given.
 pub type ServerState = Arc<WebServer>;
 
 impl WebServer {
@@ -332,8 +333,10 @@ impl WebServer {
     ///
     /// Goes through the session so the containment is the one the sandbox
     /// applies, rather than a second implementation that could be looser.
-    // The refusal is a ready response, which is the point of the shape.
-    #[allow(clippy::result_large_err)]
+    #[allow(
+        clippy::result_large_err,
+        reason = "the refusal is a ready response, which is the point of the shape"
+    )]
     fn locate(&self, id: &str, requested: &str) -> Result<(String, String), Response> {
         let relative = match requested.trim() {
             "" => ".".to_owned(),

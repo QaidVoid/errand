@@ -27,7 +27,9 @@ pub const LOCK_FILENAME: &str = "daemon.lock";
      gone."
 )]
 pub struct AlreadyRunningError {
+    /// The daemon already holding the lock.
     pub pid: i32,
+    /// Where the lock file sits, so an operator can clear a stale one.
     pub path: String,
 }
 

@@ -160,7 +160,7 @@ Who may power off the host from a chat message.  Off unless the list has somebod
 
 ## limits
 
-Bounds on how much work exists at once. 
+Bounds on how much work exists at once.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
@@ -171,7 +171,7 @@ Bounds on how much work exists at once.
 
 ## timeouts
 
-Deadlines that end or unblock a session. 
+Deadlines that end or unblock a session.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |

@@ -27,7 +27,9 @@ use crate::session::github::{SessionLinks, attribution_footer};
 /// A repository on GitHub, as the API addresses it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Repo {
+    /// The account or organisation the repository sits under.
     pub owner: String,
+    /// The repository's own name.
     pub name: String,
 }
 
@@ -79,8 +81,11 @@ fn owner_name(path: &str) -> Option<Repo> {
 /// What a command said.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ran {
+    /// The command's exit status.
     pub code: i32,
+    /// What it wrote to standard output.
     pub stdout: String,
+    /// What it wrote to standard error.
     pub stderr: String,
 }
 
@@ -100,14 +105,19 @@ pub type Sleep = Arc<dyn Fn(u64) -> Pin<Box<dyn Future<Output = ()> + Send>> + S
 
 /// One call to the GitHub API.
 pub struct ApiCall {
+    /// The HTTP method, as the API expects it.
     pub method: String,
+    /// The credential the call is made with.
     pub token: String,
+    /// The JSON body, for a call that carries one.
     pub body: Option<Value>,
 }
 
 /// What the API said.
 pub struct ApiReply {
+    /// The HTTP status.
     pub status: u16,
+    /// The parsed JSON body, or an empty object when it was not JSON.
     pub body: Value,
 }
 
@@ -122,6 +132,7 @@ pub struct PullRequestError(pub String);
 
 /// What a session produced, and where it should go.
 pub struct Request {
+    /// How this host reaches GitHub, and who it pushes as.
     pub github: GithubConfig,
     /// The session's directory, which holds the repository rather than being
     /// one.
@@ -133,6 +144,7 @@ pub struct Request {
     pub title: String,
     /// Who asked, and where the conversation is.
     pub requested_by: String,
+    /// Where the conversation is, for the body to point back at.
     pub links: SessionLinks,
 }
 

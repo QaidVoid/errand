@@ -42,6 +42,7 @@ pub struct Held {
     /// before turns were kept, which is why a transcript written by an older
     /// daemon still reads.
     pub turn: Option<u32>,
+    /// The event itself, as a replaying view receives it.
     pub entry: SessionEvent,
 }
 
@@ -71,9 +72,13 @@ pub trait SessionView: Send + Sync {
 /// The state a view needs in order to look right the moment it attaches.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ViewState {
+    /// Whether a turn is running now.
     pub busy: bool,
+    /// What the session is waiting on, when it is waiting.
     pub waiting: Option<String>,
+    /// Whether the session is over.
     pub ended: bool,
+    /// What it has cost so far, once anything has.
     pub usage: Option<SessionUsage>,
 }
 

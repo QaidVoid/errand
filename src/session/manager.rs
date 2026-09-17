@@ -79,7 +79,9 @@ pub type FoundView = Pin<Box<dyn Future<Output = Option<Arc<dyn SessionView>>> +
 
 /// One thread made for a session: where it lives, and the view to show it.
 pub struct CreatedThread {
+    /// The thread's own id, as the service names it.
     pub id: String,
+    /// The view a session posts to.
     pub view: Arc<dyn SessionView>,
 }
 
@@ -133,11 +135,17 @@ pub trait SandboxPool: Send + Sync {
 
 /// Options for the session manager.
 pub struct ManagerOptions {
+    /// The configuration every session is started from.
     pub config: Config,
+    /// The backend sessions are confined by.
     pub sandbox: Arc<dyn SandboxPool>,
+    /// Admits turns up to the configured cap.
     pub scheduler: Arc<Scheduler>,
+    /// What makes a thread for a new session.
     pub threads: Arc<dyn ThreadFactory>,
+    /// The threads this host remembers across restarts.
     pub registry: Arc<Mutex<ThreadRegistry>>,
+    /// Where the manager says what it is doing.
     pub log: Logger,
     /// Injected so identifiers are predictable in tests.
     pub make_id: Option<Arc<dyn Fn() -> String + Send + Sync>>,
@@ -583,9 +591,13 @@ impl SessionManager {
     /// A daemon restart ends every sandbox, but the agent's history lives in
     /// the session state directory, so a thread can be picked up where it
     /// stopped rather than being told it is over.
-    // The resume mirrors the launch step for step, with the stored record
-    // in place of the opening message's choices.
-    #[allow(clippy::too_many_lines)]
+    ///
+    /// The resume mirrors the launch step for step, with the stored record in
+    /// place of the opening message's choices.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the resume is one linear sequence; splitting it would hide the order"
+    )]
     pub async fn resume(&self, thread_id: &str, message: IncomingMessage) -> StartOutcome {
         let record = self
             .options
@@ -928,9 +940,13 @@ enum ThreadKind {
 
 /// A request to start a session with no message to hang it on.
 pub struct DetachedRequest {
+    /// The project the session should work in.
     pub project: String,
+    /// What to ask it first.
     pub prompt: String,
+    /// Whose session it is.
     pub owner_id: String,
+    /// What to call them, when the service said.
     pub owner_name: Option<String>,
 }
 

@@ -7,10 +7,15 @@
 
 use std::path::{Component, Path, PathBuf};
 
+/// Finds the configuration file and reads it.
 pub mod load;
+/// Removes secrets from anything about to leave the daemon.
 pub mod redact;
+/// The shape of a resolved configuration, and its defaults.
 pub mod schema;
+/// Reads a byte size written the way people write one.
 pub mod size;
+/// Turns whatever was written into a configuration, or refuses.
 pub mod validate;
 
 #[cfg(test)]

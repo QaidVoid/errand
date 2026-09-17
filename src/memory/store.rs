@@ -39,11 +39,11 @@ impl Scope {
     }
 }
 
-/// One remembered fact.
-///
-// `fact` is what the field is called in the store and in every message that
-// carries one.
-#[allow(clippy::struct_field_names)]
+/// One remembered fact, as the store holds it.
+#[allow(
+    clippy::struct_field_names,
+    reason = "`fact` is what the field is called in the store and in every message that carries one"
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fact {
     /// Where it sits in the store, which orders it against its neighbours.
