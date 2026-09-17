@@ -12,12 +12,12 @@
 ```sh
 git clone https://github.com/QaidVoid/errand
 cd errand
-deno task build
+cargo build --release
 ```
 
 That produces `dist/errand`: one binary carrying the web interface and its own
 runtime, with what it may do compiled into it. A host that runs it needs neither
-a checkout nor deno.
+a checkout nor a toolchain.
 
 ## Configure it
 

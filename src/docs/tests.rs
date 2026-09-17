@@ -125,22 +125,29 @@ fn writing_pages_repairs_exactly_the_stale_ones() {
     assert!(stale_pages(root.path()).is_empty());
 }
 
-/// The committed pages are the TypeScript generator's until the cutover: the
-/// Rust schema carries condensed doc comments, so this generator's prose
-/// differs. The byte check against what is committed activates at the
-/// cutover, when these pages become the ones in the tree.
 #[test]
-#[ignore = "the committed pages flip to this generator at the cutover (group 13)"]
 fn the_committed_pages_match_the_code_this_generator_reads() {
     let root = super::repo_root();
 
     assert_eq!(stale_pages(&root), Vec::<String>::new());
 }
 
+/// Brings the committed pages back in step, for whoever edited the schema or
+/// the tables. Not part of the ordinary run: an opt-in, so a test run never
+/// writes into the tree.
+#[test]
+#[ignore = "writes the committed pages; run with --ignored when the code changed"]
+fn regenerate_the_reference_pages() {
+    let root = super::repo_root();
+
+    write_pages(&root);
+    assert_eq!(stale_pages(&root), Vec::<String>::new());
+}
+
 /// A tree laid out like the repository, with pages this generator produced.
 fn mirrored_tree() -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("a temp directory");
-    let schema_path = root.path().join("rust/src/config/schema.rs");
+    let schema_path = root.path().join("src/config/schema.rs");
     std::fs::create_dir_all(schema_path.parent().unwrap()).expect("the schema directory");
     std::fs::write(&schema_path, schema()).expect("the schema is copied");
 

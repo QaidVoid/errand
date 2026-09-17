@@ -63,7 +63,7 @@ start_pre() {
 
 	if [ ! -x "${errand_binary}" ]; then
 		eerror "no runnable errand at ${errand_binary}"
-		eerror "build one with \`deno task build\`, or set errand_binary in"
+		eerror "build one with \`cargo build --release\`, or set errand_binary in"
 		eerror "/etc/conf.d/${RC_SVCNAME}"
 		return 1
 	fi

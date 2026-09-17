@@ -14,7 +14,7 @@ to the same thread.
 - The chat token never enters a sandbox.
 
 Full documentation, including every configuration field, is in
-[docs](docs), built with `deno task build:docs`.
+[docs](docs), built with VitePress from `docs`.
 
 ## What you need
 
@@ -95,7 +95,8 @@ out. To have the cheaper model do the work rather than describe it, use
 An optional local web interface reads a session as it happens, browses the
 project, and starts new ones. It has no login: the address it binds to is the
 access control, and a public bind is refused rather than warned about. Build it
-once with `deno task build`, then add a `web` section to the configuration:
+once (`cd web && deno run -A --node-modules-dir npm:vite build .`, then
+`cargo build --release`), then add a `web` section to the configuration:
 
 ```json
 { "web": { "host": "127.0.0.1", "port": 8787 } }
@@ -113,7 +114,7 @@ commands, so they can be picked rather than remembered. A message starting
 `!!!` is an aside: the people in the thread see it and the agent is never told.
 
 Full documentation, including every configuration field, is in
-[docs](docs), built with `deno task build:docs`.
+[docs](docs), built with VitePress from `docs`.
 
 ## Running it as a service
 
@@ -128,26 +129,26 @@ service definitions for both init systems.
 ## Development
 
 ```sh
-deno task check     # formatting, lint, types, tests, the ASCII rule, the interface
-deno task test      # the test suite
-deno task start     # run the daemon from the checkout
-deno task build     # the interface and a single binary, into dist/
-deno task docs      # regenerate the reference pages from the code
-deno task dev:web   # the interface against a running daemon
-deno task dev:docs  # the documentation site
+cargo fmt --check   # formatting
+cargo clippy        # lint, pedantic, warnings denied
+cargo test          # the test suite
+cargo run -- run    # run the daemon from the checkout
+cargo build --release   # the daemon binary, into target/release/
 ```
 
-`deno task build` produces `dist/errand`: one binary carrying the interface and
-its own runtime, with what it may do compiled in, so a host that runs it needs
-neither a checkout nor deno.
+`cargo build --release` produces `target/release/errand`. The web interface
+builds out of `web` into `dist/web`:
 
-The interface keeps its dependencies in `web/deno.json` rather than the root
-one. They are build tools, and sharing an import map put every one of them
-inside the daemon's binary: about a hundred megabytes of bundler that never
-runs at runtime.
+```sh
+cd web && deno run -A --node-modules-dir npm:vite build .
+```
 
-The daemon runs under an explicit permission set rather than with the whole
-machine available to it, which is visible in `deno task start`.
+The reference pages are generated from the schema, the command table, and the
+character table; `cargo test` fails when what is committed no longer matches,
+and `cargo test regenerate_the_reference_pages -- --ignored` brings them back
+in step.
+
+The documentation site builds with VitePress from `docs`.
 
 Project rules are in [AGENTS.md](AGENTS.md).
 

@@ -637,17 +637,16 @@ pub fn pages(schema: &str) -> BTreeMap<String, String> {
     ])
 }
 
-/// The repository root this crate lives in.
+/// The repository root, which is the crate itself since the cutover.
 pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
         .canonicalize()
-        .expect("the crate root sits inside the repository")
+        .expect("the crate root is the repository root")
 }
 
 /// Which committed pages no longer match the code, oldest first.
 pub fn stale_pages(root: &Path) -> Vec<String> {
-    let schema = std::fs::read_to_string(root.join("rust/src/config/schema.rs"))
+    let schema = std::fs::read_to_string(root.join("src/config/schema.rs"))
         .expect("the schema is in the tree");
     pages(&schema)
         .into_iter()
@@ -660,7 +659,7 @@ pub fn stale_pages(root: &Path) -> Vec<String> {
 
 /// Brings the committed pages back in step, naming what changed.
 pub fn write_pages(root: &Path) -> Vec<String> {
-    let schema = std::fs::read_to_string(root.join("rust/src/config/schema.rs"))
+    let schema = std::fs::read_to_string(root.join("src/config/schema.rs"))
         .expect("the schema is in the tree");
     let mut written = Vec::new();
     for (path, wanted) in pages(&schema) {

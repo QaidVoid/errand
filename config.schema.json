@@ -1,48 +1,33 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/QaidVoid/errand/main/config.schema.json",
-  "title": "errand configuration",
   "type": "object",
   "description": "The fully resolved configuration the daemon runs on.",
   "additionalProperties": false,
   "properties": {
     "chat": {
-      "description": "Chat connection and who may drive the bot.",
       "type": "object",
+      "description": "Chat connection and who may drive the bot.",
       "additionalProperties": false,
       "properties": {
         "token": {
-          "description": "Bot token. Secret. Never enters a sandbox.",
-          "type": "string"
+          "type": "string",
+          "description": "Bot token. Secret. Never enters a sandbox."
         },
         "channelId": {
-          "description": "The single channel the daemon serves. Everything else is ignored.",
-          "type": "string"
+          "type": "string",
+          "description": "The single channel the daemon serves. Everything else is ignored."
         },
         "allowedUserIds": {
-          "description": "Accounts permitted to drive sessions. Must not be empty. The single entry `ALLOW_EVERY_USER` opens it to everyone who can post in the served channel. That is a deliberate, visible choice: an empty list is still a refusal to start, so nobody arrives at open access by leaving a field blank.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "description": "Accounts permitted to drive sessions. Must not be empty."
         },
         "blockedUserIds": {
-          "description": "Accounts refused before anything else is considered. Ahead of the allowlist and of any session role, so excluding somebody is one decision rather than an audit of every list they appear on.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "description": "Accounts refused before anything else is considered."
         },
         "operatorUserIds": {
-          "description": "Accounts that may control any session, not only their own.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "description": "Accounts that may control any session, not only their own."
         },
         "startOnMention": {
-          "description": "Require a message to mention the bot before it starts a session. Off by default, so every top-level message in the served channel starts one. Turn it on where the channel is also used for talking: people can then hold an ordinary conversation in it, and only a message addressed to the bot opens a thread and a sandbox.",
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Require a message to mention the bot before it starts a session."
         }
       },
       "required": [
@@ -54,69 +39,67 @@
       ]
     },
     "agent": {
-      "description": "Which model the agent talks to, and the credential it reaches it with.",
       "type": "object",
+      "description": "Which model the agent talks to, and the credential it reaches it with.",
       "additionalProperties": false,
       "properties": {
         "provider": {
-          "description": "Provider id, such as `anthropic` or `zai-coding-cn`.",
-          "type": "string"
+          "type": "string",
+          "description": "Provider id, such as `anthropic` or `zai-coding-cn`."
         },
         "model": {
-          "description": "Model pattern or id. Omit to use the provider's default.",
-          "type": "string"
+          "type": "string",
+          "description": "Model pattern or id. Omitted to use the provider's default."
         },
         "visionModel": {
-          "description": "Model an image is shown to when the working model cannot see one. Omit and the cheapest model of the same provider that accepts images is used. Naming one here is how that choice is made deliberately.",
-          "type": "string"
+          "type": "string",
+          "description": "Model an image is shown to when the working model cannot see one."
         },
         "credentialName": {
-          "description": "Environment variable the agent reads, such as `ANTHROPIC_API_KEY`.",
-          "type": "string"
+          "type": "string",
+          "description": "Environment variable the agent reads, such as `ANTHROPIC_API_KEY`."
         },
         "credential": {
-          "description": "The credential value. Secret.",
-          "type": "string"
+          "type": "string",
+          "description": "The credential value. Secret."
         },
         "delegate": {
-          "description": "A cheaper model the session's model may ask about one artefact. Absent means no delegation at all: the session's own model does everything, which is what it did before this existed.",
           "type": "object",
+          "description": "A cheaper model to ask about one artefact, or none.",
           "additionalProperties": false,
           "properties": {
             "model": {
-              "description": "The model asked. Must be one the provider serves under the same key.",
-              "type": "string"
+              "type": "string",
+              "description": "The model asked. Must be one the provider serves under the same key."
             },
             "perTurn": {
-              "description": "How many delegations one turn may make before the rest stay at home.",
-              "type": "number"
+              "type": "number",
+              "description": "How many delegations one turn may make before the rest stay at home."
             },
             "deadlineMs": {
-              "description": "How long one delegation may take before it is abandoned.",
-              "type": "number"
+              "type": "number",
+              "description": "How long one delegation may take before it is abandoned."
             },
             "baseUrl": {
-              "description": "Where the provider is reached, when the model store does not say. Read from the agent's own model store by default, so the same endpoint that serves the session is the one asked.",
-              "type": "string"
+              "type": "string",
+              "description": "Where the provider is reached, when the model store does not say."
             }
           },
           "required": [
-            "model"
+            "model",
+            "perTurn",
+            "deadlineMs"
           ]
         },
         "rulesPath": {
-          "description": "File of standing instructions given to every session, or undefined for none. A project's own `AGENTS.md` says how to work on that project and the agent reads it without help. This is what the operator wants of every session, whatever it is working on: the conventions of the house rather than of one repository. Absolute, and read on the host, so the path needs no grant and a session never sees the file itself. Defaults to `AGENTS.md` beside the configuration file when one is there, so the common case needs no setting. Naming a path that cannot be read is a refusal to start; the default simply not being there is not, since a default nobody asked for must not be able to stop the daemon. Re-read for each session, so editing it does not need a restart. It is paid for in the agent's context on every turn, which is the reason to keep it to the rules that actually matter.",
-          "type": "string"
+          "type": "string",
+          "description": "File of standing instructions given to every session, or none."
         },
         "providers": {
-          "description": "Providers the operator defines, beyond the ones the agent knows itself. Written into the agent's own configuration directory verbatim, in the shape that configuration uses: a `baseUrl`, which API it speaks, and the models it serves. Passed through rather than restated here, because the schema belongs to the agent and copying it would mean this refusing a field the agent had just learned. A definition is how a provider the agent has no entry for is reached at all, and how one it does know is pointed somewhere else. The key is the provider name `agent.provider` and `--model provider/id` refer to."
+          "description": "Providers the operator defines, beyond the ones the agent knows.  Written into the agent's own configuration verbatim, in the shape that configuration uses, because the schema belongs to the agent."
         },
         "aliases": {
-          "description": "Short names for models, so a session is started without spelling one out. The value is what the name stands for, `provider/id` or a bare id, exactly as `--model` takes it. A thinking level may be written into it as a default, and one given on the name itself wins: with `muse` standing for `meta/muse-spark-1.3-contributor:high`, `--model muse` asks for high and `--model muse:xhigh` asks for xhigh.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
+          "description": "Short names for models, so a session is started without spelling one."
         }
       },
       "required": [
@@ -128,21 +111,21 @@
       ]
     },
     "github": {
-      "description": "The GitHub identity a session works with, when one is configured. Optional: a session with no GitHub configuration still runs, and simply has no credential to reach a repository with.",
       "type": "object",
+      "description": "How a session reaches GitHub, or none when unconfigured.",
       "additionalProperties": false,
       "properties": {
         "token": {
-          "description": "Token the agent authenticates with. Secret, and reachable by the agent.",
-          "type": "string"
+          "type": "string",
+          "description": "Token the agent authenticates with. Secret, and reachable by the agent."
         },
         "userName": {
-          "description": "Name commits are authored with. Free text: where a fork lands is read back from the API, so this does not have to be the bot's login.",
-          "type": "string"
+          "type": "string",
+          "description": "Name commits are authored with."
         },
         "userEmail": {
-          "description": "Email commits are authored with.",
-          "type": "string"
+          "type": "string",
+          "description": "Email commits are authored with."
         }
       },
       "required": [
@@ -152,63 +135,55 @@
       ]
     },
     "projectRoot": {
-      "description": "Absolute path under which every session's project directory lives. A session works in a subdirectory of this and nowhere else.",
-      "type": "string"
+      "type": "string",
+      "description": "Absolute path under which every session's project directory lives."
     },
     "stateDir": {
-      "description": "Where per-session state directories are created on the host.",
-      "type": "string"
+      "type": "string",
+      "description": "Where per-session state directories are created on the host."
     },
     "sandbox": {
-      "description": "What a session may consume, and what the backend enforces.",
       "type": "object",
+      "description": "What a session may consume, and what the backend enforces.",
       "additionalProperties": false,
       "properties": {
         "backend": {
-          "description": "Which backend confines sessions.",
           "type": "string",
           "enum": [
             "podman",
             "bailey"
-          ]
+          ],
+          "description": "Which backend confines sessions."
         },
         "requireFullEnforcement": {
-          "description": "Refuse to start when the backend cannot enforce every configured guarantee on this host, rather than reporting the gap and continuing.",
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Refuse to start when the backend cannot enforce every configured guarantee on this host, rather than reporting the gap and continuing."
         },
         "network": {
-          "description": "Network exposure granted to a session.",
           "type": "string",
           "enum": [
             "restricted",
             "none"
-          ]
+          ],
+          "description": "Network exposure granted to a session."
         },
         "egressPorts": {
-          "description": "Ports a session may open outbound, when the network is not `none`. The default is HTTPS alone, which is all a model provider needs. Adding a port widens what a session can reach: 80 lets it speak plaintext HTTP, so a mirror or a redirect that has not moved to TLS resolves. Enforced by the generated policy, so it holds under the bailey backend; podman bounds the network by namespace rather than by port.",
-          "type": "array",
-          "items": {
-            "type": "number"
-          }
+          "description": "Ports a session may open outbound, when the network is not `none`."
         },
         "egress": {
-          "description": "What a session may reach outbound, and how that is enforced.",
           "type": "object",
+          "description": "What a session may reach outbound, and whether it is brokered.",
           "additionalProperties": false,
           "properties": {
             "mode": {
-              "description": "Whether egress is port-only (`open`) or forced through the broker (`proxy`)."
+              "description": "Whether egress is port-only or forced through the broker."
             },
             "allow": {
-              "description": "Hosts the broker permits under `proxy` mode, on top of the provider. The model provider is always allowed, since a session cannot work without it. Everything else a session legitimately fetches is named here: a code host, a package registry, a mirror. A leading `*.` matches subdomains, so `*.githubusercontent.com` covers the hosts a clone pulls from. A lone `*` admits any host, keeping the broker as an audit pass-through that still gates the port and logs every connection but restricts no host. Ignored under `open` mode, where nothing consults an allowlist.",
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
+              "description": "Hosts the broker permits, on top of the provider. A leading `*.` matches subdomains; a lone `*` admits any host."
             },
             "allowInternal": {
-              "description": "Whether the broker may dial an address on the host's own network. Off by default: the broker runs on the host, so reaching loopback or a private range through it is a way back in that the network namespace was built to close, and a name resolving there is how an allowlisted wildcard becomes one. Turned on, an allowlist entry written as an IP literal may name an internal address on purpose, which is how an internal mirror or a provider running on this machine is reached. A name is still judged by where it resolves even then, because what a name points at is not the operator's to decide.",
-              "type": "boolean"
+              "type": "boolean",
+              "description": "Whether the broker may dial an address on the host's own network."
             }
           },
           "required": [
@@ -218,66 +193,54 @@
           ]
         },
         "image": {
-          "description": "Container image the podman backend runs. Inert under bailey.",
-          "type": "string"
+          "type": "string",
+          "description": "Container image the podman backend runs. Inert under bailey."
         },
         "memory": {
-          "description": "Memory ceiling per session, in size syntax such as `4g`.",
-          "type": "string"
+          "type": "string",
+          "description": "Memory ceiling per session, in size syntax such as `4g`."
         },
         "cpus": {
-          "description": "CPU ceiling per session, in cores.",
-          "type": "number"
+          "type": "number",
+          "description": "CPU ceiling per session, in cores."
         },
         "pids": {
-          "description": "Process count ceiling per session.",
-          "type": "number"
+          "type": "number",
+          "description": "Process count ceiling per session."
         },
         "fileMax": {
-          "description": "Largest single file a session may write, in size syntax.",
-          "type": "string"
+          "type": "string",
+          "description": "Largest single file a session may write, in size syntax."
         },
         "disk": {
-          "description": "How much a session may add to its project and state together. Measured rather than enforced, because no backend caps what a process tree writes in aggregate without root. Passing it ends the session.",
-          "type": "string"
+          "type": "string",
+          "description": "How much a session may add to its project and state together.  Measured rather than enforced, because no backend caps what a process tree writes in aggregate without root. Passing it ends the session."
         },
         "diskCheckMs": {
-          "description": "How often a session's disk use is measured, in milliseconds.",
-          "type": "number"
+          "type": "number",
+          "description": "How often a session's disk use is measured, in milliseconds."
         },
         "gracePeriodMs": {
-          "description": "How long a sandbox may take to stop before it is killed.",
-          "type": "number"
+          "type": "number",
+          "description": "How long a sandbox may take to stop before it is killed."
         },
         "hideHostAddress": {
-          "description": "Hide the host's network identity from a session, when it has a network. A session shares the host's network namespace by default, so it can read the host address, the MAC, and the ARP neighbours. With this set, the bailey backend runs egress through a private namespace instead, so a session sees a synthetic address and MAC. The namespace gets IPv6 as well where the host has it, and the ports a session may open are unchanged. The podman backend already gives each session its own network, so this does not apply to it.",
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Hide the host's network identity from a session, when it has a network."
         },
         "policyExtra": {
-          "description": "Paths granted to a session on top of what the daemon already grants. Additive only. The generated policy still places the project and the state directory, still bounds the environment, and still clears the backend's own profile first; this names more that a session may reach, and can take nothing away. Every path is absolute, since a relative one in a policy means nothing. What is granted here is reported at startup, so the enforcement report never describes a tighter boundary than the one actually applied.",
           "type": "object",
+          "description": "Paths granted on top of the generated policy, or none.",
           "additionalProperties": false,
           "properties": {
             "read": {
-              "description": "Directories or files a session may read.",
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
+              "description": "Directories or files a session may read."
             },
             "write": {
-              "description": "Directories or files a session may write. Widens what it can change.",
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
+              "description": "Directories or files a session may write."
             },
             "execute": {
-              "description": "Directories a session may execute from.",
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
+              "description": "Directories a session may execute from."
             }
           },
           "required": [
@@ -287,59 +250,50 @@
           ]
         },
         "pathExtra": {
-          "description": "Directories added to a session's PATH, or undefined for none. Named after the agent's own wrappers and ahead of the system directories, so a program named here is the one a session finds. This adds nothing a session may reach: a directory that is not also granted under `PolicyExtraConfig` is a name on a path leading nowhere. The podman backend takes its PATH from the image and ignores this.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "description": "Directories added to a session's PATH, or none."
         },
         "env": {
-          "description": "Variables set in every session's environment, or undefined for none. The environment is built rather than inherited, so a toolchain that reads one has no other way to be told. `PATH` and `HOME` are refused, since the daemon sets both to paths the policy places, and so is the name carrying the provider credential. A name the daemon sets itself keeps the daemon's value. Every value reaches the agent, so nothing secret belongs here.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
+          "description": "Variables set in every session's environment, or none."
         }
-      }
+      },
+      "required": [
+        "backend"
+      ]
     },
     "output": {
-      "description": "How much of the agent's activity reaches the thread.",
       "type": "object",
+      "description": "How much of the agent's activity reaches the thread.",
       "additionalProperties": false,
       "properties": {
         "forwardToolOutput": {
-          "description": "Whether tool output bodies are posted, not just that a tool ran.",
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether tool output bodies are posted, not just that a tool ran."
         },
         "maxToolOutputChars": {
-          "description": "Longest tool output posted before it is truncated and marked as such.",
-          "type": "number"
+          "type": "number",
+          "description": "Longest tool output posted before it is truncated and marked as such."
         },
         "maxAttachmentBytes": {
-          "description": "Largest attached file taken into a session, in bytes. Well under what the chat service itself allows, on purpose: the limit is what is sensible to hand an agent, not what can be uploaded.",
-          "type": "number"
+          "type": "number",
+          "description": "Largest attached file taken into a session, in bytes."
         },
         "maxAttachmentsPerMessage": {
-          "description": "Most attached files taken from one message. The rest are refused.",
-          "type": "number"
+          "type": "number",
+          "description": "Most attached files taken from one message. The rest are refused."
         },
         "postDiffs": {
-          "description": "Post a diff after the agent changes a file. A diff shows intent rather than contents, which is both smaller and less likely to put something private in a channel than uploading whole files.",
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Post a diff after the agent changes a file."
         }
       }
     },
     "shutdown": {
-      "description": "Who may power off the host from a chat message. Off unless the list has somebody in it. This is the one command that acts on the machine rather than on a session, so it is not covered by any session role: whoever starts a thread owns it, and owning a thread is no reason to be able to turn the computer off.",
       "type": "object",
+      "description": "Who may power off the host. Empty means nobody, which is the default.",
       "additionalProperties": false,
       "properties": {
         "allowedUserIds": {
-          "description": "Account ids permitted to power off the host.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "description": "Account ids permitted to power off the host."
         }
       },
       "required": [
@@ -347,73 +301,81 @@
       ]
     },
     "web": {
-      "description": "The local web interface. Absent means no listener at all, which is how the daemon behaves without one. There is no login: the address it binds to is the access control, and that address is checked rather than trusted.",
       "type": "object",
+      "description": "The web interface, or none when one is not served.",
       "additionalProperties": false,
       "properties": {
         "host": {
-          "description": "Address to bind to. Must be loopback, private, or a tailnet address.",
-          "type": "string"
+          "type": "string",
+          "description": "Address to bind to. Must be loopback, private, or a tailnet address."
         },
         "port": {
-          "description": "",
-          "type": "number"
+          "type": "number",
+          "description": "Port to listen on."
         },
         "observer": {
-          "description": "When true the interface may watch and read but not start, prompt, or control anything.",
-          "type": "boolean"
+          "type": "boolean",
+          "description": "When true the interface may watch and read but not start, prompt, or control anything."
         },
         "publicUrl": {
-          "description": "Where the interface is reachable from outside, such as behind a tunnel. Used to link a session from somewhere that is not the chat service, so a pull request can name the conversation that asked for it. Absent when the interface is not published, in which case no such link is offered.",
-          "type": "string"
+          "type": "string",
+          "description": "Where the interface is reachable from outside, such as behind a tunnel."
         }
       }
     },
     "limits": {
-      "description": "Bounds on how much work exists at once.",
       "type": "object",
+      "description": "Bounds on how much work exists at once.",
       "additionalProperties": false,
       "properties": {
         "maxConcurrentTurns": {
-          "description": "Sessions that may have a model turn in flight simultaneously.",
-          "type": "number"
+          "type": "number",
+          "description": "Sessions that may have a model turn in flight simultaneously."
         },
         "maxLiveSessions": {
-          "description": "Sessions that may exist at all.",
-          "type": "number"
+          "type": "number",
+          "description": "Sessions that may exist at all."
         },
         "maxQueueLength": {
-          "description": "Prompts that may wait for a turn slot.",
-          "type": "number"
+          "type": "number",
+          "description": "Prompts that may wait for a turn slot."
         },
         "maxQueueWaitMs": {
-          "description": "How long a queued prompt may wait before it expires unsent.",
-          "type": "number"
+          "type": "number",
+          "description": "How long a queued prompt may wait before it expires unsent."
         }
       }
     },
     "timeouts": {
-      "description": "Deadlines that end or unblock a session.",
       "type": "object",
+      "description": "Deadlines that end or unblock a session.",
       "additionalProperties": false,
       "properties": {
         "idleMs": {
-          "description": "No message and no agent activity for this long ends the session.",
-          "type": "number"
+          "type": "number",
+          "description": "No message and no agent activity for this long ends the session."
         },
         "startupMs": {
-          "description": "How long the agent has to become ready before it is abandoned.",
-          "type": "number"
+          "type": "number",
+          "description": "How long the agent has to become ready before it is abandoned."
         },
         "questionMs": {
-          "description": "How long a question posted to a thread waits for an answer.",
-          "type": "number"
+          "type": "number",
+          "description": "How long a question posted to a thread waits for an answer."
         },
         "abortMs": {
-          "description": "How long an abort waits for the agent before it is forced.",
-          "type": "number"
+          "type": "number",
+          "description": "How long an abort waits for the agent before it is forced."
         }
-      }
+      },
+      "required": [
+        "startupMs",
+        "questionMs",
+        "abortMs"
+      ]
+    },
+    "problems": {
+      "description": "Every problem found, in the order the checks ran."
     },
     "$schema": {
       "type": "string",
@@ -429,6 +391,10 @@
     "output",
     "shutdown",
     "limits",
-    "timeouts"
-  ]
+    "timeouts",
+    "problems"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/QaidVoid/errand/main/config.schema.json",
+  "title": "errand configuration"
 }

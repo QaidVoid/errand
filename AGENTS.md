@@ -49,14 +49,15 @@ default habits.
 
 - One coherent, working unit of work per commit. Not after every file touched,
   not one giant commit at the end.
-- `deno task check` and `deno task test` pass before every commit.
+- `cargo fmt --check`, `cargo clippy`, and `cargo test` pass before every
+  commit.
 - Commit messages use semantic format: `type: imperative message` or
   `type(scope): imperative message`, within 68 characters. Multi-line only
   when the body genuinely adds something.
 
 ## Dependencies
 
-- Add dependencies with `deno add`, never by hand-editing the import map.
+- Add dependencies with `cargo add`, never by hand-editing `Cargo.toml`.
 - Every new dependency needs a reason that the standard library and the
   existing dependencies cannot meet.
 
