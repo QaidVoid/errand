@@ -54,6 +54,10 @@ pub enum NoticeLevel {
 
 impl NoticeLevel {
     /// The level as it is written down.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             NoticeLevel::Started => "started",

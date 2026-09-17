@@ -9,10 +9,6 @@ use tokio::sync::Notify;
 use super::{DEFAULT_MAX_BUFFERED, Outbox, OutboxTask, TaskError};
 use crate::log::{LogFields, LogLevel, Logger};
 
-fn silent() -> Logger {
-    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
-}
-
 type Lines = Arc<Mutex<Vec<(LogLevel, String)>>>;
 
 fn logger(lines: &Lines) -> Logger {

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use serenity::model::channel::Channel;
 use serenity::model::id::ChannelId;
 
+use crate::agent::protocol::AgentImage;
 use crate::chat::commands::{acknowledge, register_commands};
 use crate::chat::gateway::{Gateway, GatewayHandlers};
 use crate::chat::render::{MESSAGE_LIMIT, split_message, when_relative, when_relative_plain};
@@ -36,6 +37,7 @@ use crate::provider::zai::{fetch_quota, meters_usage};
 use crate::sandbox::bailey::{EGRESS_MAP_ADDRESS, provider_prefix};
 use crate::sandbox::broker::Broker;
 use crate::sandbox::broker::ProviderRoute;
+use crate::session::session::DescribeImages;
 
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
 use crate::session::session::IncomingMessage;
@@ -784,6 +786,18 @@ async fn run(
                 })
             }))
         },
+        describe_images: describer.map(|describer| {
+            let describer = Arc::new(describer);
+            Arc::new(move |images: Vec<AgentImage>, question: String| {
+                let describer = Arc::clone(&describer);
+                Box::pin(async move {
+                    describer
+                        .describe(images, &question)
+                        .await
+                        .map_err(|error| error.to_string())
+                }) as Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
+            }) as DescribeImages
+        }),
         public_url: config.web.as_ref().and_then(|web| web.public_url.clone()),
         operator_ids: Some(operator_ids),
         available_models: models.iter().map(|model| model.id.clone()).collect(),

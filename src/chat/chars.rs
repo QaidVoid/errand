@@ -73,6 +73,10 @@ pub enum PrefixKey {
     /// A tool call started.
     Tool,
     /// The agent is thinking.
+    #[allow(
+        dead_code,
+        reason = "the tests walk the whole table, which is the point of enumerating it"
+    )]
     Thinking,
     /// The agent is asking the user something.
     Question,
@@ -84,6 +88,10 @@ pub enum PrefixKey {
     Connection,
 }
 
+#[allow(
+    dead_code,
+    reason = "the tests walk the whole table, which is the point of enumerating it"
+)]
 pub const ALL_PREFIXES: [PrefixKey; 6] = [
     PrefixKey::Tool,
     PrefixKey::Thinking,
@@ -134,14 +142,13 @@ impl PrefixKey {
     pub fn glyph(self) -> String {
         glyph(&self.entry())
     }
-
-    /// Leads a status line with the glyph for its state.
-    pub fn prefixed(self, text: &str) -> String {
-        prefixed(self, text)
-    }
 }
 
 /// Every enumerated character, reactions and prefixes together.
+#[allow(
+    dead_code,
+    reason = "the tests walk the whole table, which is the point of enumerating it"
+)]
 pub fn all_chars() -> Vec<ChatChar> {
     let mut all = Vec::new();
     let reactions = [

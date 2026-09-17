@@ -32,10 +32,6 @@ fn silent() -> Logger {
     Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
-async fn settle() {
-    tokio::time::sleep(Duration::from_millis(20)).await;
-}
-
 /// An agent that answers its readiness call and otherwise says nothing.
 struct QuietAgent {
     queue: Mutex<std::collections::VecDeque<u8>>,
@@ -46,7 +42,6 @@ struct QuietAgent {
 #[derive(Clone)]
 struct QuietControls {
     fake: Arc<QuietAgent>,
-    exit: watch::Receiver<Option<i32>>,
     sender: Arc<Mutex<Option<watch::Sender<Option<i32>>>>>,
 }
 
@@ -62,7 +57,6 @@ impl QuietAgent {
             Arc::clone(&fake),
             QuietControls {
                 fake,
-                exit: exit_receiver,
                 sender: Arc::new(Mutex::new(Some(exit_sender))),
             },
         )
@@ -70,10 +64,6 @@ impl QuietAgent {
 }
 
 impl QuietControls {
-    fn assemble(self) -> QuietControls {
-        self
-    }
-
     fn end(&self) {
         {
             let mut closed = self.fake.closed.lock().unwrap();
@@ -297,20 +287,6 @@ impl SessionView for QuietView {
     }
 }
 
-struct NoClock;
-
-impl crate::admission::scheduler::Clock for NoClock {
-    fn now(&self) -> i64 {
-        0
-    }
-
-    fn set_timeout(&self, _action: crate::admission::scheduler::Timer, _ms: i64) -> u64 {
-        0
-    }
-
-    fn clear_timeout(&self, _handle: u64) {}
-}
-
 fn config_with(overrides: &serde_json::Value) -> crate::config::schema::Config {
     let mut base = json!({
         "chat": {
@@ -357,7 +333,6 @@ fn raw_with(content: &str, id: &str, author_id: &str) -> RawMessage {
 struct Harness {
     daemon: Daemon,
     threads: Arc<FakeThreads>,
-    sandbox: Arc<FakeSandbox>,
     replies: Arc<Mutex<Vec<String>>>,
     lines: Arc<Mutex<Vec<(LogLevel, String)>>>,
     _root: tempfile::TempDir,
@@ -413,6 +388,7 @@ async fn with_daemon(
         config,
         sandbox: Arc::clone(&sandbox) as Arc<dyn SandboxPool>,
         threads: Arc::clone(&threads) as Arc<dyn ThreadFactory>,
+        describe_images: None,
         log: {
             let lines = Arc::clone(&lines);
             Logger::new(
@@ -442,7 +418,6 @@ async fn with_daemon(
     let harness = Harness {
         daemon,
         threads,
-        sandbox,
         replies,
         lines,
         _root: root,

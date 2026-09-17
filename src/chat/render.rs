@@ -282,11 +282,6 @@ pub struct Usage {
     pub context_window: f64,
 }
 
-/// The line announcing that the agent is thinking.
-pub fn thinking_line() -> String {
-    prefixed(PrefixKey::Thinking, "thinking")
-}
-
 /// Suffixes, smallest first, each a thousand times the one before.
 const MAGNITUDES: [(f64, &str); 3] = [(1_000_000_000.0, "B"), (1_000_000.0, "M"), (1_000.0, "k")];
 
@@ -381,14 +376,6 @@ pub fn question_line(text: &str) -> String {
 /// position is a number, not a state, so no emoji spells it.
 pub fn marker(state: &str) -> String {
     format!("[{state}]")
-}
-
-/// Every enumerated prefix glyph, for asserting output stays inside the table.
-pub fn prefix_glyphs() -> Vec<String> {
-    crate::chat::chars::ALL_PREFIXES
-        .into_iter()
-        .map(|key| key.prefixed("").trim_end().to_owned())
-        .collect()
 }
 
 /// What a compaction achieved, or that it did not say.

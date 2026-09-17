@@ -274,6 +274,10 @@ impl MemoryStore {
     }
 
     /// Closes the database.
+    #[allow(
+        dead_code,
+        reason = "the daemon closes by dropping the store; the tests close to surface an error"
+    )]
     pub fn close(self) -> rusqlite::Result<()> {
         self.db
             .into_inner()

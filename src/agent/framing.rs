@@ -78,6 +78,10 @@ impl LineFramer {
     }
 
     /// Bytes held for a record that has not terminated yet.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn pending_bytes(&self) -> usize {
         self.buffer.len()
     }

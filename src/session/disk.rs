@@ -58,6 +58,10 @@ pub enum Verdict {
 
 impl Verdict {
     /// The verdict as it is written down.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             Verdict::Under => "under",

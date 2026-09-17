@@ -266,8 +266,8 @@ async fn nothing_is_asked_while_the_provider_is_being_backed_off() {
 async fn no_free_slot_means_the_work_stays_with_the_sessions_own_model() {
     let (mut turn, scheduler, sent) =
         delegations(2, FakeSender::new(json!({ "choices": [] })), 5_000);
-    let _first = scheduler.try_admit("other");
-    let _second = scheduler.try_admit("other");
+    let _first = scheduler.try_admit();
+    let _second = scheduler.try_admit();
 
     let answer = turn.run(&json!({ "question": "q", "path": "a.log" })).await;
 

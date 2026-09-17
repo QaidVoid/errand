@@ -22,7 +22,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::admission::scheduler::{QueueEntry, Scheduler, SubmitOutcome, Ticket};
 use crate::agent::client::{AgentClient, AgentHandlers, AgentProcess};
 use crate::agent::delegate::{DelegationOutcome, TurnDelegations};
-use crate::agent::protocol::{AgentImage, DialogRequest, Usage};
+use crate::agent::protocol::{AgentImage, DialogRequest, StreamingBehavior, Usage};
 use crate::agent::requests::{DELEGATE_COMMAND, delegate_command_contents, delegate_instructions};
 use crate::chat::diff::file_diff;
 use crate::chat::render::{
@@ -442,8 +442,8 @@ enum Signal {
     },
     Retry(String),
     Dialog(DialogRequest),
-    DialogTimeout(DialogRequest),
-    UnsupportedDialog(String),
+    DialogTimeout,
+    UnsupportedDialog,
     ProtocolViolation(String),
     Exit {
         code: i64,
@@ -560,6 +560,10 @@ impl SessionHandle {
     }
 
     /// Everyone invited to take part, for reporting and persistence.
+    #[allow(
+        dead_code,
+        reason = "the daemon persists the guest list through on_guests_changed instead"
+    )]
     pub async fn guest_list(&self) -> Vec<String> {
         let (reply, answer) = oneshot::channel();
         if self.commands.send(Signal::Guests { reply }).await.is_err() {
@@ -855,13 +859,13 @@ impl Running {
                     self.reset_idle_timer();
                     self.say(&question_line(&dialog_lines(&request))).await;
                 }
-                Signal::DialogTimeout(_) => {
+                Signal::DialogTimeout => {
                     self.say(
                         "the question went unanswered for too long and was cancelled; the session is still running",
                     )
                     .await;
                 }
-                Signal::UnsupportedDialog(_) => {
+                Signal::UnsupportedDialog => {
                     self.say(&warning_line(
                         "the agent asked for a text editor, which a thread cannot provide; it was told to carry on without one",
                     ))
@@ -1376,7 +1380,7 @@ impl Running {
             client.prompt(
                 content,
                 (!images.is_empty()).then(|| images.to_vec()),
-                Some("followUp"),
+                Some(StreamingBehavior::FollowUp),
             )
         });
         if !sent {
@@ -1591,8 +1595,8 @@ impl Running {
         });
         on!(on_retry, String, Signal::Retry);
         on!(on_dialog, DialogRequest, Signal::Dialog);
-        on!(on_dialog_timeout, DialogRequest, Signal::DialogTimeout);
-        on!(on_unsupported_dialog, String, Signal::UnsupportedDialog);
+        on!(on_dialog_timeout, DialogRequest, |_| Signal::DialogTimeout);
+        on!(on_unsupported_dialog, String, |_| Signal::UnsupportedDialog);
         on!(on_protocol_violation, String, Signal::ProtocolViolation);
         on!(on_exit, (i64, bool), |(code, _during)| Signal::Exit {
             code
@@ -3287,15 +3291,6 @@ fn display_name(message: &IncomingMessage) -> String {
         .author_name
         .clone()
         .unwrap_or_else(|| message.author_id.clone())
-}
-
-/// An attachment as the agent protocol carries an image.
-fn image_json(file: &attachments::Taken) -> Value {
-    json!({
-        "type": "image",
-        "data": encode_base64(&file.bytes),
-        "mimeType": file.content_type.clone().unwrap_or_else(|| "image/png".to_owned()),
-    })
 }
 
 /// The name an end reason is written with.

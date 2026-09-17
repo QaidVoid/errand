@@ -6,35 +6,19 @@
 //! managing what it left on disk is an operator's job and belongs where an
 //! operator already is.
 
-// The port lands each module with its tests before anything calls it, and the
-// interface (a later group) wires more of what the sessions and the chat
-// layer already export. Modules whose surface is not all reachable from the
-// daemon yet carry an allow(dead_code) of their own.
-#[allow(dead_code)]
 mod admission;
-#[allow(dead_code)]
 mod agent;
-#[allow(dead_code)]
 mod chat;
-#[allow(dead_code)]
 mod cli;
-#[allow(dead_code)]
 mod config;
-#[allow(dead_code)]
 mod daemon;
-#[allow(dead_code)]
 mod lock;
 mod log;
-#[allow(dead_code)]
 mod memory;
-#[allow(dead_code)]
 mod provider;
-#[allow(dead_code)]
 mod sandbox;
 mod serve;
-#[allow(dead_code)]
 mod session;
-#[allow(dead_code)]
 mod web;
 
 #[cfg(test)]
@@ -46,7 +30,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use crate::cli::threads::Deps;
-use crate::config::load::{config_path, load_config};
+use crate::config::load::{config_path, file_exists, load_config};
 use crate::config::schema::ConfigError;
 use crate::log::{LogValue, fields};
 use crate::session::registry::ThreadRegistry;
@@ -77,12 +61,12 @@ fn usage(env: &Vars) -> String {
 /// to the reader, whose error path therefore describes a blank one. Kept, so
 /// an operator comparing output between the two daemons sees the same words.
 fn load(env: &Vars) -> Result<crate::config::schema::Config, ConfigError> {
-    let path = config_path(env, |candidate| std::path::Path::new(candidate).exists());
+    let path = config_path(env, file_exists);
     load_config(
         &path,
         |read| std::fs::read_to_string(read),
         &Vars::new(),
-        |candidate| std::path::Path::new(candidate).exists(),
+        file_exists,
     )
 }
 

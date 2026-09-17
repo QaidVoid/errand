@@ -48,6 +48,10 @@ impl StartOutcome {
     }
 
     /// The refusal's words, for a test's sake.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn refused_reason(&self) -> &str {
         match self {
             StartOutcome::Started { .. } => "",
@@ -56,6 +60,10 @@ impl StartOutcome {
     }
 
     /// The session, when there is one.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn session(&self) -> Option<&SessionHandle> {
         match self {
             StartOutcome::Started { session } => Some(session),
@@ -168,11 +176,9 @@ struct Shared {
     delegate_base_url: Option<String>,
     unavailable: Option<Unavailable>,
     launcher: Launcher,
-    secrets: Vec<String>,
     guild_id: Arc<Mutex<Option<String>>>,
     registry: Arc<Mutex<ThreadRegistry>>,
     threads: Arc<dyn ThreadFactory>,
-    now: Option<Arc<dyn Fn() -> i64 + Send + Sync>>,
 }
 
 /// The book a session's ending has to reach, shared with its task.
@@ -212,11 +218,9 @@ impl SessionManager {
                 let sandbox = Arc::clone(&options.sandbox);
                 Arc::new(move |launch: SandboxLaunch| Arc::clone(&sandbox).launch(launch))
             },
-            secrets: Vec::new(),
             guild_id: Arc::new(Mutex::new(None)),
             registry: Arc::clone(&options.registry),
             threads: Arc::clone(&options.threads),
-            now: options.now.clone(),
         });
         Self {
             options,

@@ -138,9 +138,6 @@ pub type OnMessage = Arc<dyn Fn(RawMessage, crate::chat::inbound::InboundDecisio
 /// One callback on the daemon, from the gateway.
 pub type OnCommand = Arc<dyn Fn(TranslatedCommand, Arc<dyn Fn(&str) + Send + Sync>) + Send + Sync>;
 
-/// One callback on the daemon, from the gateway.
-pub type OnEvent = Arc<dyn Fn() + Send + Sync>;
-
 /// What the gateway reports to the daemon.
 ///
 /// Every callback receives plain shapes; the chat library's types stop here.

@@ -133,6 +133,10 @@ where
     }
 
     /// Forgets what was held, so the next question reaches the provider.
+    #[allow(
+        dead_code,
+        reason = "the tests expire the held window rather than waiting out its lifetime"
+    )]
     pub fn forget(&mut self) {
         self.held = None;
         self.held_at = 0;

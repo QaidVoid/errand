@@ -35,14 +35,6 @@ pub(crate) type RunFuture<T> = Pin<Box<dyn Future<Output = std::io::Result<T>> +
 pub(crate) type Run =
     Arc<dyn Fn(Vec<String>, Option<String>) -> RunFuture<RunResult> + Send + Sync>;
 
-/// How one running sandbox is ended, per backend.
-pub enum HandleStop {
-    /// Baileys are ended by signalling the process group and untrusting.
-    Bailey(Box<BaileyStop>),
-    /// Podman containers are stopped by asking podman, then removed.
-    Podman(Box<PodmanStop>),
-}
-
 /// Everything the bailey stop path needs.
 pub struct BaileyStop {
     /// The session being stopped.
@@ -94,14 +86,6 @@ pub enum SandboxHandle {
 }
 
 impl SandboxHandle {
-    /// The sandbox's discoverable name.
-    pub fn name(&self) -> String {
-        match self {
-            SandboxHandle::Bailey(stop) => stop.name.clone(),
-            SandboxHandle::Podman(stop) => stop.name.clone(),
-        }
-    }
-
     /// The project path the sandbox was started on.
     pub fn project_path(&self) -> String {
         match self {
@@ -245,14 +229,6 @@ pub enum Backend {
 }
 
 impl Backend {
-    /// Which backend this is.
-    pub fn name(&self) -> crate::config::schema::SandboxBackend {
-        match self {
-            Backend::Bailey(_) => crate::config::schema::SandboxBackend::Bailey,
-            Backend::Podman(_) => crate::config::schema::SandboxBackend::Podman,
-        }
-    }
-
     /// Checks that this backend can run here and reports what it can enforce.
     ///
     /// Returns [`backend::SandboxUnavailableError`] when it cannot run at all.
@@ -326,11 +302,6 @@ pub(crate) fn resolve_root(path: &str) -> String {
         resolved.push(part.as_os_str());
     }
     resolved.to_string_lossy().into_owned()
-}
-
-/// Joins onto a root and resolves, for paths built from a name and a root.
-pub(crate) fn join_resolved(root: &str, name: &str) -> String {
-    resolve_root(&Path::new(root).join(name).to_string_lossy())
 }
 
 /// The real backend, offered to the session manager through its trait.

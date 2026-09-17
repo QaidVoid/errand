@@ -23,7 +23,7 @@ use crate::session::manager::{
     ManagerOptions, SessionManager, StartOutcome, ThreadFactory, Unavailable,
 };
 use crate::session::registry::ThreadRegistry;
-use crate::session::session::IncomingMessage;
+use crate::session::session::{DescribeImages, IncomingMessage};
 
 /// Raised when the backend cannot enforce what configuration demands.
 #[derive(Debug, thiserror::Error)]
@@ -190,6 +190,9 @@ pub struct DaemonOptions {
     pub memory: Option<Arc<MemoryStore>>,
     pub power_off: Option<PowerOff>,
     pub describe_usage: Option<DescribeUsage>,
+    /// Describes an attached image for a session whose model cannot see one,
+    /// or none when every session's model can.
+    pub describe_images: Option<DescribeImages>,
     /// Where the interface is published, when it is.
     pub public_url: Option<String>,
     /// Models this host knows the provider serves, for `!model`.
@@ -249,7 +252,7 @@ impl Daemon {
             unavailable: options.unavailable.clone(),
             operator_ids: options.operator_ids.clone(),
             memory: options.memory.clone(),
-            describe_images: None,
+            describe_images: options.describe_images.clone(),
             public_url: options.public_url.clone(),
             available_models: options.available_models.clone(),
             delegate_base_url: options.delegate_base_url.clone(),
@@ -262,11 +265,6 @@ impl Daemon {
             registry,
             options,
         }
-    }
-
-    /// The admission scheduler, for the wiring that shares it.
-    pub fn scheduler(&self) -> Arc<Scheduler> {
-        Arc::clone(&self.scheduler)
     }
 
     /// The session manager, for the interface and the wiring.
@@ -657,22 +655,6 @@ impl Daemon {
         self.sessions.shutdown().await;
         self.scheduler.shutdown();
     }
-}
-
-/// A clock the constructor's probe never reaches; the real one is wired by
-/// serve.
-struct NoClockForBuild;
-
-impl crate::admission::scheduler::Clock for NoClockForBuild {
-    fn now(&self) -> i64 {
-        0
-    }
-
-    fn set_timeout(&self, _action: crate::admission::scheduler::Timer, _ms: i64) -> u64 {
-        0
-    }
-
-    fn clear_timeout(&self, _handle: u64) {}
 }
 
 /// Checks the backend and reports what it can enforce on this host.

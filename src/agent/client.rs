@@ -18,8 +18,9 @@ use tokio::sync::oneshot;
 
 use crate::agent::framing::LineFramer;
 use crate::agent::protocol::{
-    AgentRecord, DialogMethod, DialogRequest, Usage, as_dialog_request, is_fire_and_forget,
-    message_role, message_text, starts_thinking, thinking_ended, tool_target, usage_of,
+    AgentRecord, DialogMethod, DialogRequest, StreamingBehavior, Usage, as_dialog_request,
+    is_fire_and_forget, message_role, message_text, starts_thinking, thinking_ended, tool_target,
+    usage_of,
 };
 use crate::log::Logger;
 
@@ -65,9 +66,6 @@ pub trait AgentProcess: Send + Sync + 'static {
 
 /// A callback that reports one fact. The unit form reports an event alone.
 pub type Callback<A = ()> = Option<Box<dyn Fn(A) + Send + Sync>>;
-
-/// The process ended. Reported exactly once, with whether a turn ran.
-pub type OnExit = Option<Box<dyn Fn(i64, bool) + Send + Sync>>;
 
 /// Everything the client reports outward. Every callback is optional.
 ///
@@ -293,16 +291,28 @@ impl AgentClient {
     }
 
     /// Where the agent is in its life.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn state(&self) -> AgentState {
         self.inner.state.lock().expect("the client lock").lifecycle
     }
 
     /// False once the process has ended or a write has failed.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn is_alive(&self) -> bool {
         self.state() != AgentState::Ended
     }
 
     /// True while a turn is running.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn is_working(&self) -> bool {
         self.state() == AgentState::Working
     }
@@ -361,14 +371,14 @@ impl AgentClient {
         &self,
         message: &str,
         images: Option<Vec<Value>>,
-        behavior: Option<&str>,
+        behavior: Option<StreamingBehavior>,
     ) -> bool {
         let mut command = json!({ "type": "prompt", "message": message });
         if let Some(images) = images {
             command["images"] = Value::Array(images);
         }
         if let Some(behavior) = behavior {
-            command["streamingBehavior"] = json!(behavior);
+            command["streamingBehavior"] = json!(behavior.as_wire());
         }
         self.send(&command)
     }
@@ -380,11 +390,6 @@ impl AgentClient {
             command["images"] = Value::Array(images);
         }
         self.send(&command)
-    }
-
-    /// Queues a message for after the running turn finishes.
-    pub fn follow_up(&self, message: &str) -> bool {
-        self.send(&json!({ "type": "follow_up", "message": message }))
     }
 
     /// Switches the model the session runs on, from this turn onward.

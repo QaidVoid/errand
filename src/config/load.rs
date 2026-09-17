@@ -36,9 +36,6 @@ pub const CONFIG_FILENAME_JSONC: &str = "config.jsonc";
 /// Both accepted basenames, plain JSON first so an existing setup is unchanged.
 const CONFIG_BASENAMES: [&str; 2] = [CONFIG_FILENAME, CONFIG_FILENAME_JSONC];
 
-/// Where a system service keeps it.
-pub const SYSTEM_CONFIG_PATH: &str = "/etc/errand/config.json";
-
 /// House rules looked for beside the configuration when none were named.
 pub const RULES_FILENAME: &str = "AGENTS.md";
 

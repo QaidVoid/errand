@@ -429,17 +429,6 @@ pub fn answer_without_session(content: &str) -> Option<String> {
     (first_word(content) == "!help").then(help_text)
 }
 
-/// Commands the daemon answers itself, wherever they are typed.
-///
-/// They are about the machine or the provider rather than about a session, so
-/// a thread is neither needed to run one nor a reason to be allowed to.
-pub const DAEMON_COMMANDS: [&str; 2] = ["!shutdown", "!usage"];
-
-/// Whether the daemon answers this command rather than a session.
-pub fn is_daemon_command(content: &str) -> bool {
-    DAEMON_COMMANDS.contains(&first_word(content))
-}
-
 const GROUP_TITLES: [(CommandGroup, &str); 4] = [
     (Session, "THE SESSION"),
     (People, "WHO TAKES PART"),

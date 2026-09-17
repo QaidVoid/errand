@@ -81,17 +81,10 @@ impl Clock for SystemClock {
 /// Held for the duration of one turn, and released exactly once.
 #[derive(Debug)]
 pub struct Ticket {
-    /// The session the turn belongs to.
-    pub session_id: String,
     released_at: Mutex<Option<i64>>,
 }
 
 impl Ticket {
-    /// True once this ticket has been released.
-    pub fn is_released(&self) -> bool {
-        self.released_at.lock().expect("a ticket lock").is_some()
-    }
-
     /// Marks the ticket spent. Returns false on a second release.
     fn mark_released(&self, at: i64) -> bool {
         let mut released = self.released_at.lock().expect("a ticket lock");
@@ -198,6 +191,10 @@ impl Scheduler {
     }
 
     /// Sessions that exist, running a turn or not.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn sessions(&self) -> usize {
         self.state.lock().expect("the scheduler lock").live_sessions
     }
@@ -209,6 +206,10 @@ impl Scheduler {
     }
 
     /// How long the current backoff will last, for reporting.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn backoff_remaining_ms(&self) -> i64 {
         let state = self.state.lock().expect("the scheduler lock");
         (state.backoff_until - self.clock.now()).max(0)
@@ -251,20 +252,19 @@ impl Scheduler {
     /// For work that is worth doing only immediately: a delegated subtask
     /// waiting behind a queue would stall the turn it was meant to make
     /// cheaper, so it is given up on instead.
-    pub fn try_admit(self: &Arc<Self>, session_id: &str) -> Option<Ticket> {
+    pub fn try_admit(self: &Arc<Self>) -> Option<Ticket> {
         if !self.can_admit_now() {
             return None;
         }
         self.state.lock().expect("the scheduler lock").in_flight += 1;
         Some(Ticket {
-            session_id: session_id.to_owned(),
             released_at: Mutex::new(None),
         })
     }
 
     /// Submits a prompt, admitting it now or queueing it behind the cap.
     pub fn submit(self: &Arc<Self>, entry: QueueEntry) -> SubmitOutcome {
-        if let Some(ticket) = self.try_admit(&entry.session_id) {
+        if let Some(ticket) = self.try_admit() {
             return SubmitOutcome::Admitted { ticket };
         }
 
@@ -452,7 +452,6 @@ impl Scheduler {
                 next
             };
             (next.entry.on_admitted)(Ticket {
-                session_id: next.entry.session_id,
                 released_at: Mutex::new(None),
             });
         }

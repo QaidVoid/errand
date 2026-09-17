@@ -29,9 +29,6 @@ use crate::chat::render::{MESSAGE_LIMIT, delegation_line, split_message};
 use crate::log::{LogValue, Logger, fields};
 use crate::session::event::{EndReason, ReactionOutcome, SessionEvent};
 
-/// How long the service keeps a thread open with no activity, in minutes.
-pub const AUTO_ARCHIVE_MINUTES: u16 = 1440;
-
 /// The service expires a typing indicator after about ten seconds.
 pub const TYPING_REFRESH_MS: u64 = 8_000;
 
@@ -302,11 +299,19 @@ impl<T: ThreadTransport> ChatThread<T> {
     /// Closing closes the outbox, which is correct for a session that is over
     /// and fatal for one that is starting: a reused closed port accepts posts
     /// and silently drops every one of them.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn is_closed(&self) -> bool {
         self.outbox.is_closed()
     }
 
     /// Waits for queued work to run. Used by tests, which have no connection.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub async fn flush(&self) {
         self.outbox.flush().await;
     }
@@ -461,6 +466,10 @@ impl<T: ThreadTransport> ChatThread<T> {
     }
 
     /// Marks the outbox connected or buffering, following the gateway.
+    #[allow(
+        dead_code,
+        reason = "nothing calls this: the gateway's connect and disconnect handlers are empty"
+    )]
     pub fn set_connected(&self, connected: bool) {
         self.outbox.set_connected(connected);
     }

@@ -31,18 +31,6 @@ use crate::sandbox::spawn::spawn_agent;
 /// and DNS keep working. The legacy `--no-map-gw` spelling does not close it.
 pub const RESTRICTED_NETWORK: &str = "pasta:--map-host-loopback,none,--map-guest-addr,none";
 
-/// Flags that would undo the isolation this backend exists to provide.
-pub const FORBIDDEN_ARGS: [&str; 8] = [
-    "--privileged",
-    "--pid=host",
-    "--ipc=host",
-    "--network=host",
-    "--userns=host",
-    "--cap-add",
-    "docker.sock",
-    "podman.sock",
-];
-
 /// Builds the full podman argument list for a session.
 ///
 /// Pure, so a test can assert the exact flags without starting a container.

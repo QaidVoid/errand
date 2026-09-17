@@ -162,6 +162,7 @@ pub struct ViewFanOut {
 
 impl ViewFanOut {
     /// Creates a fan-out keeping the default amount of history.
+    #[allow(dead_code, reason = "the daemon builds every fan-out with_recorder")]
     pub fn new(log: Logger) -> Self {
         Self::with_recorder(log, DEFAULT_TRANSCRIPT_LIMIT, None)
     }
@@ -220,6 +221,10 @@ impl ViewFanOut {
     }
 
     /// How many views are currently attached.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn size(&self) -> usize {
         self.inner
             .lock()
@@ -234,12 +239,20 @@ impl ViewFanOut {
     }
 
     /// Everything kept for replay, oldest first.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn history(&self) -> Vec<SessionEvent> {
         let inner = self.inner.lock().expect("the view fan-out lock");
         inner.held.iter().map(|held| held.entry.clone()).collect()
     }
 
     /// Everything kept for replay, with the turn each belongs to.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn held(&self) -> Vec<Held> {
         self.inner
             .lock()
@@ -249,6 +262,10 @@ impl ViewFanOut {
     }
 
     /// How much was dropped from the record, which a replay must admit to.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn dropped_count(&self) -> usize {
         self.inner.lock().expect("the view fan-out lock").dropped
     }

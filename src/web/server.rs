@@ -200,6 +200,10 @@ impl WebServer {
 
     /// The port the listener actually took, which a test needs when it asked
     /// for an ephemeral one.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn bound_port(&self) -> Option<u16> {
         *self.bound.lock().expect("the bound lock")
     }

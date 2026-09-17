@@ -45,13 +45,6 @@ pub struct TurnDelegations<S: Sources, P: Sender> {
     send: Arc<P>,
 }
 
-impl<S: Sources, P: Sender> TurnDelegations<S, P> {
-    /// The sender delegations go through, for asserting on what left.
-    pub fn sender(&self) -> Arc<P> {
-        Arc::clone(&self.send)
-    }
-}
-
 impl<S: Sources + 'static, P: Sender> TurnDelegations<S, P> {
     /// The delegations of one turn.
     pub fn new(
@@ -105,7 +98,7 @@ impl<S: Sources + 'static, P: Sender> TurnDelegations<S, P> {
         // spend the turn's allowance.
         self.used += 1;
 
-        let Some(ticket) = self.scheduler.try_admit("delegation") else {
+        let Some(ticket) = self.scheduler.try_admit() else {
             return Outcome::Refused(Refused {
                 refused: if self.scheduler.paused_because().is_none() {
                     "there was no free slot to ask a second model".to_owned()

@@ -259,7 +259,6 @@ struct Harness {
     manager: Arc<SessionManager>,
     root: tempfile::TempDir,
     base: String,
-    scheduler: Arc<Scheduler>,
 }
 
 async fn with_server_where(
@@ -367,7 +366,6 @@ async fn with_server_where(
         manager,
         root,
         base,
-        scheduler,
     };
     run(&harness).await;
 

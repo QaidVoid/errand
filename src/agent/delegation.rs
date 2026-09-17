@@ -59,6 +59,10 @@ pub enum Outcome<T> {
 }
 
 /// True when a result is a refusal rather than a value.
+#[allow(
+    dead_code,
+    reason = "the tests classify an outcome the daemon matches on directly"
+)]
 pub fn is_refused<T>(value: &Outcome<T>) -> bool {
     matches!(value, Outcome::Refused(_))
 }

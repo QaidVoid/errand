@@ -3,7 +3,19 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use super::{FORBIDDEN_ARGS, PodmanSandbox, RESTRICTED_NETWORK, podman_args};
+use super::{PodmanSandbox, RESTRICTED_NETWORK, podman_args};
+
+/// Flags that would undo the isolation this backend exists to provide.
+const FORBIDDEN_ARGS: [&str; 8] = [
+    "--privileged",
+    "--pid=host",
+    "--ipc=host",
+    "--network=host",
+    "--userns=host",
+    "--cap-add",
+    "docker.sock",
+    "podman.sock",
+];
 use crate::config::schema::{
     EgressConfig, EgressMode, NetworkMode, SandboxBackend, SandboxConfig, defaults,
 };

@@ -9,6 +9,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
@@ -27,10 +28,16 @@ pub struct TokioProcess {
     stdout: AsyncMutex<tokio::process::ChildStdout>,
     stderr: AsyncMutex<tokio::process::ChildStderr>,
     exited: watch::Receiver<Option<i32>>,
+    killed: Arc<AtomicBool>,
 }
 
 impl AgentProcess for TokioProcess {
     fn write(&self, bytes: &[u8]) -> std::io::Result<()> {
+        if self.killed.load(Ordering::Relaxed) {
+            return Err(std::io::Error::other(
+                "the sandbox launcher has been terminated",
+            ));
+        }
         self.stdin
             .send(bytes.to_vec())
             .map_err(|_| std::io::Error::other("the sandbox launcher has been terminated"))
@@ -126,16 +133,18 @@ pub fn spawn_agent(
         let status = waiting.wait().await.ok().and_then(|status| status.code());
         let _ = exit_sender.send(status);
     });
+    let killed = Arc::new(AtomicBool::new(false));
     let process = TokioProcess {
         stdin: stdin_sender,
         stdout: AsyncMutex::new(stdout),
         stderr: AsyncMutex::new(stderr),
         exited: exit_receiver,
+        killed: Arc::clone(&killed),
     };
     Ok(SpawnedAgent {
         pid,
         process: Arc::new(process),
-        killed: std::sync::atomic::AtomicBool::new(false),
+        killed,
     })
 }
 
@@ -145,7 +154,7 @@ pub struct SpawnedAgent {
     pub pid: i32,
     /// The pipes the protocol speaks over.
     pub process: Arc<dyn AgentProcess>,
-    killed: std::sync::atomic::AtomicBool,
+    killed: Arc<AtomicBool>,
 }
 
 impl SpawnedAgent {
@@ -155,15 +164,9 @@ impl SpawnedAgent {
     /// the group is already gone, or the process never made it far enough to
     /// lead one, the launcher itself is signalled instead.
     pub fn kill(&self, signal: Signal) {
-        self.killed
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.killed.store(true, Ordering::Relaxed);
         if kill(Pid::from_raw(-self.pid), signal).is_err() {
             let _ = kill(Pid::from_raw(self.pid), signal);
         }
-    }
-
-    /// Whether the launcher has been asked to stop.
-    pub fn is_killed(&self) -> bool {
-        self.killed.load(std::sync::atomic::Ordering::Relaxed)
     }
 }

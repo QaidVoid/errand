@@ -47,7 +47,6 @@ struct QuietAgent {
 #[derive(Clone)]
 struct QuietControls {
     fake: Arc<QuietAgent>,
-    exit: watch::Receiver<Option<i32>>,
     sender: Arc<Mutex<Option<watch::Sender<Option<i32>>>>>,
 }
 
@@ -62,7 +61,6 @@ impl QuietAgent {
         });
         let controls = QuietControls {
             fake: Arc::clone(&fake),
-            exit: exit_receiver,
             sender: Arc::new(Mutex::new(Some(exit_sender))),
         };
         (fake, controls)
@@ -90,10 +88,6 @@ impl QuietControls {
         if let Some(sender) = self.sender.lock().unwrap().take() {
             let _ = sender.send(Some(code));
         }
-    }
-
-    fn written(&self) -> Vec<String> {
-        self.fake.written.lock().unwrap().clone()
     }
 }
 
@@ -382,7 +376,6 @@ struct Harness {
     sandbox: Arc<FakeSandbox>,
     threads: Arc<FakeThreads>,
     registry: Arc<Mutex<ThreadRegistry>>,
-    scheduler: Arc<Scheduler>,
     root: tempfile::TempDir,
 }
 
@@ -467,7 +460,6 @@ async fn with_manager_options(
         sandbox,
         threads,
         registry,
-        scheduler,
         root,
     };
 

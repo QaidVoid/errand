@@ -46,7 +46,6 @@ struct FakeAgent {
 #[derive(Clone)]
 struct FakeControls {
     fake: Arc<FakeAgent>,
-    exit: watch::Receiver<Option<i32>>,
     sender: Arc<Mutex<Option<watch::Sender<Option<i32>>>>>,
 }
 
@@ -65,7 +64,6 @@ impl FakeAgent {
             Arc::clone(&fake),
             FakeControls {
                 fake,
-                exit: exit_receiver,
                 sender: Arc::new(Mutex::new(Some(exit_sender))),
             },
         )
@@ -571,10 +569,6 @@ fn config_with(overrides: &Value) -> Arc<crate::config::schema::Config> {
 const OWNER: &str = "100000000000000001";
 const GUEST: &str = "200000000000000002";
 const STRANGER: &str = "300000000000000003";
-
-fn message(content: &str) -> IncomingMessage {
-    message_from(content, OWNER, "m1")
-}
 
 fn message_from(content: &str, from: &str, id: &str) -> IncomingMessage {
     IncomingMessage {

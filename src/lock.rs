@@ -58,6 +58,10 @@ pub struct DaemonLock {
 
 impl DaemonLock {
     /// Where the lock file sits.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn path(&self) -> &Path {
         &self.path
     }

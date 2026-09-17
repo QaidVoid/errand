@@ -19,12 +19,6 @@ use serenity::model::id::GuildId;
 use crate::log::{LogValue, Logger, fields};
 use crate::session::commands::{COMMANDS, CommandAccess};
 
-/// What the slash commands are built from, before the library sees them.
-pub struct CommandDefinitions {
-    /// The guild-scoped definitions to register.
-    pub commands: Vec<CreateCommand>,
-}
-
 /// Commands that take a path or an instruction, so the client prompts for it.
 const TEXT_OPTION: &[(&str, &str, &str, bool)] = &[
     (

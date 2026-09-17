@@ -89,16 +89,28 @@ impl Outbox {
     }
 
     /// Tasks waiting to run.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn pending(&self) -> usize {
         self.state.lock().expect("the outbox lock").buffer.len()
     }
 
     /// True once closed, after which nothing more will ever be sent.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn is_closed(&self) -> bool {
         self.state.lock().expect("the outbox lock").closed
     }
 
     /// Tasks discarded because the buffer was full.
+    #[allow(
+        dead_code,
+        reason = "read by this module's tests, which assert on state the daemon never asks for"
+    )]
     pub fn dropped_count(&self) -> usize {
         self.state.lock().expect("the outbox lock").dropped
     }
@@ -126,6 +138,10 @@ impl Outbox {
     /// Marks the gateway up or down. While down, tasks buffer instead of
     /// being attempted, and the order they were queued in is preserved for
     /// the flush.
+    #[allow(
+        dead_code,
+        reason = "nothing calls this: the gateway's connect and disconnect handlers are empty"
+    )]
     pub fn set_connected(&self, connected: bool) {
         let was_connected = {
             let mut state = self.state.lock().expect("the outbox lock");

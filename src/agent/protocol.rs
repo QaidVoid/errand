@@ -11,13 +11,24 @@ pub type AgentRecord = Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingBehavior {
     /// Redirect the running turn.
+    #[allow(
+        dead_code,
+        reason = "the protocol names both spellings; steering has its own command"
+    )]
     Steer,
     /// Queue for after the running turn.
     FollowUp,
 }
 
-/// A record the agent sent that carries nothing this system acts on.
-pub const UNRECOGNIZED: &str = "unrecognized";
+impl StreamingBehavior {
+    /// The spelling the protocol uses on the wire.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            StreamingBehavior::Steer => "steer",
+            StreamingBehavior::FollowUp => "followUp",
+        }
+    }
+}
 
 /// An image a chat message carried, as it is handed to a describing model.
 #[derive(Debug, Clone, PartialEq)]
@@ -128,15 +139,6 @@ pub fn as_dialog_request(record: &Value) -> Option<DialogRequest> {
         placeholder: text_of(record, "placeholder"),
         prefill: text_of(record, "prefill"),
     })
-}
-
-/// A tool call the agent has started.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ToolStart {
-    /// The name of the tool.
-    pub tool_name: String,
-    /// What it acted on, when its arguments name one readably.
-    pub target: Option<String>,
 }
 
 /// Pulls a readable target out of a tool call's arguments, when there is one.

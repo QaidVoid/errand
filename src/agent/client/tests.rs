@@ -13,10 +13,10 @@ use crate::log::{LogFields, Logger};
 
 /// A process a test writes records into, standing in for the agent.
 struct Fake {
+    exit: watch::Receiver<Option<i32>>,
     queue: Mutex<VecDeque<u8>>,
     written: Mutex<Vec<String>>,
     closed: Mutex<bool>,
-    exit: watch::Receiver<Option<i32>>,
 }
 
 fn fake_process() -> (Arc<Fake>, FakeControls) {
@@ -25,11 +25,10 @@ fn fake_process() -> (Arc<Fake>, FakeControls) {
         queue: Mutex::new(VecDeque::new()),
         written: Mutex::new(Vec::new()),
         closed: Mutex::new(false),
-        exit: exit_receiver.clone(),
+        exit: exit_receiver,
     });
     let controls = FakeControls {
         fake: Arc::clone(&fake),
-        exit: exit_receiver,
         sender: Mutex::new(Some(exit_sender)),
     };
     (fake, controls)
@@ -37,7 +36,6 @@ fn fake_process() -> (Arc<Fake>, FakeControls) {
 
 struct FakeControls {
     fake: Arc<Fake>,
-    exit: watch::Receiver<Option<i32>>,
     sender: Mutex<Option<watch::Sender<Option<i32>>>>,
 }
 

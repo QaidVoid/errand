@@ -306,15 +306,15 @@ fn a_slot_can_be_taken_without_queueing_or_refused_outright() {
     let clock = TestClock::new();
     let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
 
-    assert!(scheduler.try_admit("a").is_some());
-    let second = scheduler.try_admit("a");
+    assert!(scheduler.try_admit().is_some());
+    let second = scheduler.try_admit();
     assert!(second.is_some());
-    assert!(scheduler.try_admit("a").is_none(), "the cap is reached");
+    assert!(scheduler.try_admit().is_none(), "the cap is reached");
 
     if let Some(ticket) = second {
         scheduler.release(&ticket);
     }
-    assert!(scheduler.try_admit("a").is_some());
+    assert!(scheduler.try_admit().is_some());
 }
 
 #[test]
@@ -324,8 +324,8 @@ fn no_slot_is_given_out_while_the_provider_is_being_backed_off() {
     clock.bind(Arc::clone(&scheduler));
 
     scheduler.note_rate_limit();
-    assert!(scheduler.try_admit("a").is_none());
+    assert!(scheduler.try_admit().is_none());
 
     clock.advance(5_001);
-    assert!(scheduler.try_admit("a").is_some());
+    assert!(scheduler.try_admit().is_some());
 }

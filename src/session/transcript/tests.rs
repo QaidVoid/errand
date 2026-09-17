@@ -7,7 +7,7 @@ use crate::session::event::{NoticeLevel, SessionEvent};
 
 /// A temp directory with a transcript in it, and the lines its log caught.
 struct Keep {
-    root: tempfile::TempDir,
+    _root: tempfile::TempDir,
     path: std::path::PathBuf,
     lines: Arc<Mutex<Vec<(LogLevel, String)>>>,
 }
@@ -16,7 +16,7 @@ fn keep() -> Keep {
     let root = tempfile::tempdir().expect("a temp directory");
     let path = root.path().join("transcript.jsonl");
     Keep {
-        root,
+        _root: root,
         path,
         lines: Arc::new(Mutex::new(Vec::new())),
     }
