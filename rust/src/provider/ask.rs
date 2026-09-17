@@ -154,3 +154,29 @@ fn tokens_of(body: &Value) -> Option<i64> {
         .get("total_tokens")
         .and_then(Value::as_i64)
 }
+
+/// Performs a delegation request over HTTPS, as the agent's own calls do.
+pub struct HttpSender;
+
+impl Sender for HttpSender {
+    async fn send(
+        &self,
+        url: String,
+        request: SendRequest,
+    ) -> Result<(u16, Option<Value>), String> {
+        let client = reqwest::Client::new();
+        let mut sent = client.post(url);
+        for (name, value) in &request.headers {
+            sent = sent.header(name.as_str(), value.as_str());
+        }
+        let answer = sent
+            .header("Content-Type", "application/json")
+            .body(request.body)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        let status = answer.status().as_u16();
+        let body = answer.json::<Value>().await.unwrap_or(Value::Null);
+        Ok((status, Some(body)))
+    }
+}

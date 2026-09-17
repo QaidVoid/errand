@@ -374,8 +374,12 @@ impl AgentClient {
     }
 
     /// Redirects the turn that is already running.
-    pub fn steer(&self, message: &str) -> bool {
-        self.send(&json!({ "type": "steer", "message": message }))
+    pub fn steer(&self, message: &str, images: Option<Vec<Value>>) -> bool {
+        let mut command = json!({ "type": "steer", "message": message });
+        if let Some(images) = images {
+            command["images"] = Value::Array(images);
+        }
+        self.send(&command)
     }
 
     /// Queues a message for after the running turn finishes.

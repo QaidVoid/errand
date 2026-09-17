@@ -11,7 +11,7 @@ pub mod load;
 pub mod redact;
 pub mod schema;
 pub mod size;
-mod validate;
+pub mod validate;
 
 #[cfg(test)]
 mod example_test;

@@ -13,6 +13,7 @@
 //! through `spawn_blocking` where the daemon calls it.
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use rusqlite::Connection;
 
@@ -66,8 +67,12 @@ pub const MAX_PROJECT_FACTS: i64 = 500;
 const DEFAULT_FACT_LIMIT: i64 = 100;
 
 /// Memory backed by one SQLite file.
+///
+/// The connection sits behind a mutex rather than the store living behind
+/// one: the methods are short and never hold the lock across a wait, and the
+/// session task holds the store through an `Arc`.
 pub struct MemoryStore {
-    db: Connection,
+    db: Mutex<Connection>,
 }
 
 impl MemoryStore {
@@ -96,7 +101,7 @@ impl MemoryStore {
             CREATE INDEX IF NOT EXISTS facts_by_subject
                 ON facts (scope, subject, id DESC);",
         )?;
-        Ok(Self { db })
+        Ok(Self { db: Mutex::new(db) })
     }
 
     /// Records who an account id belongs to, for addressing them by name.
@@ -106,7 +111,7 @@ impl MemoryStore {
         display_name: &str,
         now: i64,
     ) -> rusqlite::Result<()> {
-        self.db.execute(
+        self.db.lock().expect("the memory lock").execute(
             "INSERT INTO users (user_id, display_name, updated_at) VALUES (?1, ?2, ?3)
              ON CONFLICT (user_id) DO UPDATE SET display_name = excluded.display_name,
                                                  updated_at = excluded.updated_at",
@@ -118,6 +123,8 @@ impl MemoryStore {
     /// The name last seen for an account, if any.
     pub fn display_name(&self, user_id: &str) -> rusqlite::Result<Option<String>> {
         self.db
+            .lock()
+            .expect("the memory lock")
             .query_row(
                 "SELECT display_name FROM users WHERE user_id = ?1",
                 [user_id],
@@ -146,7 +153,7 @@ impl MemoryStore {
             return Ok(false);
         }
 
-        let written = self.db.execute(
+        let written = self.db.lock().expect("the memory lock").execute(
             "INSERT OR IGNORE INTO facts (scope, subject, fact, session_id, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![scope.as_str(), subject, trimmed, session_id, now],
@@ -157,7 +164,7 @@ impl MemoryStore {
         // the one that needs pruning. Oldest go first; the newest are the live
         // ones.
         if stored && scope == Scope::Project {
-            self.db.execute(
+            self.db.lock().expect("the memory lock").execute(
                 "DELETE FROM facts WHERE scope = 'project' AND subject = ?1 AND id NOT IN (
                     SELECT id FROM facts WHERE scope = 'project' AND subject = ?1
                     ORDER BY id DESC LIMIT ?2
@@ -175,7 +182,8 @@ impl MemoryStore {
         subject: &str,
         limit: i64,
     ) -> rusqlite::Result<Vec<Fact>> {
-        let mut statement = self.db.prepare(
+        let db = self.db.lock().expect("the memory lock");
+        let mut statement = db.prepare(
             "SELECT id, fact, created_at FROM facts
              WHERE scope = ?1 AND subject = ?2 ORDER BY id DESC LIMIT ?3",
         )?;
@@ -193,12 +201,14 @@ impl MemoryStore {
     /// Removes everything held for one subject, returning how many facts went,
     /// so somebody asking to be forgotten is told what was actually there.
     pub fn forget(&self, scope: Scope, subject: &str) -> rusqlite::Result<usize> {
-        let gone = self.db.execute(
+        let gone = self.db.lock().expect("the memory lock").execute(
             "DELETE FROM facts WHERE scope = ?1 AND subject = ?2",
             rusqlite::params![scope.as_str(), subject],
         )?;
         if scope == Scope::User {
             self.db
+                .lock()
+                .expect("the memory lock")
                 .execute("DELETE FROM users WHERE user_id = ?1", [subject])?;
         }
         Ok(gone)
@@ -265,7 +275,11 @@ impl MemoryStore {
 
     /// Closes the database.
     pub fn close(self) -> rusqlite::Result<()> {
-        self.db.close().map_err(|(_, error)| error)
+        self.db
+            .into_inner()
+            .expect("the memory lock")
+            .close()
+            .map_err(|(_, error)| error)
     }
 }
 
