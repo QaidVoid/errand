@@ -271,6 +271,18 @@ impl SessionManager {
             .find(|session| session.id() == session_id)
     }
 
+    /// Whether a turn is running for the named live session.
+    ///
+    /// The state lives on the session's fan-out, which the manager already
+    /// holds, so the interface can list sessions without each one having to
+    /// answer a question mid-turn.
+    pub fn is_busy(&self, session_id: &str) -> bool {
+        let views = self.state.views.lock().expect("the views map lock");
+        views
+            .get(session_id)
+            .is_some_and(|fan_out| fan_out.state().busy)
+    }
+
     /// True when the thread once held a session that has since ended.
     pub fn is_finished_thread(&self, thread_id: &str) -> bool {
         self.state

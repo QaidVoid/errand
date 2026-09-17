@@ -34,7 +34,11 @@ mod sandbox;
 mod serve;
 #[allow(dead_code)]
 mod session;
+#[allow(dead_code)]
+mod web;
 
+#[cfg(test)]
+mod docs;
 #[cfg(test)]
 mod test_util;
 

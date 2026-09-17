@@ -656,14 +656,12 @@ async fn run(
     }
 
     // A request from the interface acts as an operator, which is the
-    // authority that reaching a private listener already implies. The
-    // interface is not part of the Rust daemon yet, so its authority is not
-    // granted here either.
-    if config.web.is_some() {
-        log.warn(
-            "the web interface is not part of the Rust daemon yet; continuing without it",
-            &fields([]),
-        );
+    // authority that reaching a private listener already implies. An observer
+    // gets none.
+    let web_operates = config.web.as_ref().is_some_and(|web| !web.observer);
+    let mut operator_ids = config.chat.operator_user_ids.clone();
+    if web_operates {
+        operator_ids.push(crate::web::server::WEB_ACTOR.to_owned());
     }
 
     let unavailable: Option<crate::session::session::Unavailable> =
@@ -787,7 +785,7 @@ async fn run(
             }))
         },
         public_url: config.web.as_ref().and_then(|web| web.public_url.clone()),
-        operator_ids: Some(config.chat.operator_user_ids.clone()),
+        operator_ids: Some(operator_ids),
         available_models: models.iter().map(|model| model.id.clone()).collect(),
         delegate_base_url,
         unavailable,
@@ -823,6 +821,48 @@ async fn run(
         }
     }
 
+    // Started after the daemon is accepting, so the interface never lists a
+    // session the daemon is not yet ready to act on.
+    let mut web: Option<Arc<crate::web::server::WebServer>> = None;
+    if let Some(web_config) = config.web.clone() {
+        let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../dist/web");
+        // Resolved lazily per name, so a mention reads as the person it names.
+        let memory_for_names = Arc::clone(&memory);
+        let names: crate::web::view::NameLookup =
+            Arc::new(move |id| memory_for_names.display_name(id).ok().flatten());
+        let web_server = crate::web::server::WebServer::new(
+            web_config,
+            daemon.sessions(),
+            assets,
+            log.clone(),
+            guild_id.map(|guild| guild.get().to_string()),
+            Some(names),
+        );
+        match web_server.start().await {
+            Ok(()) => {
+                log.info(
+                    "ACCESS: anyone who can reach the interface acts with operator authority",
+                    &fields([]),
+                );
+                log.info(
+                    "  the agent's sandbox is unaffected by this; the interface is not sandboxed",
+                    &fields([]),
+                );
+                if web_server.observer() {
+                    log.info(
+                        "  the interface is an observer and cannot change anything",
+                        &fields([]),
+                    );
+                }
+                web = Some(web_server);
+            }
+            Err(error) => {
+                log.error(&error.to_string(), &fields([]));
+                log.warn("continuing without the web interface", &fields([]));
+            }
+        }
+    }
+
     log.info(
         "accepting messages",
         &fields([("channel", LogValue::from(config.chat.channel_id.as_str()))]),
@@ -836,6 +876,9 @@ async fn run(
     );
     if let Some(mut broker) = broker.take() {
         broker.close();
+    }
+    if let Some(web) = &web {
+        web.stop();
     }
     daemon.shutdown().await;
     lock.release();

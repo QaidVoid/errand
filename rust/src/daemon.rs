@@ -205,7 +205,7 @@ pub struct DaemonOptions {
 /// The running daemon.
 pub struct Daemon {
     scheduler: Arc<Scheduler>,
-    sessions: SessionManager,
+    sessions: Arc<SessionManager>,
     accepting: AtomicBool,
     registry: Arc<Mutex<ThreadRegistry>>,
     options: DaemonOptions,
@@ -257,7 +257,7 @@ impl Daemon {
         });
         Self {
             scheduler,
-            sessions,
+            sessions: Arc::new(sessions),
             accepting: AtomicBool::new(false),
             registry,
             options,
@@ -270,8 +270,8 @@ impl Daemon {
     }
 
     /// The session manager, for the interface and the wiring.
-    pub fn sessions(&self) -> &SessionManager {
-        &self.sessions
+    pub fn sessions(&self) -> Arc<SessionManager> {
+        Arc::clone(&self.sessions)
     }
 
     /// True once startup finished and messages may be acted on.
