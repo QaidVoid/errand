@@ -201,11 +201,11 @@ impl<P: Post> ImageDescriber<P> {
 /// Returns nothing when there is nothing to do, whether because the model can
 /// see, because the provider has no model that can, or because the host has no
 /// agent installation to read the store from.
-pub fn image_describer(
+pub fn image_describer<P: Post>(
     agent: &AgentConfig,
     directory: Option<&str>,
-    post: impl Post,
-) -> Option<ImageDescriber<impl Post>> {
+    post: P,
+) -> Option<ImageDescriber<P>> {
     let models = read_models(directory, &agent.provider);
     let own = model_by_id(&models, agent.model.as_deref());
     if own.is_none() || sees_images(own) {
@@ -248,3 +248,6 @@ impl Post for HttpPost {
         Ok(PostResponse { status, body })
     }
 }
+
+#[cfg(test)]
+mod tests;

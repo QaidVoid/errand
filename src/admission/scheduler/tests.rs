@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::{Clock, QueueEntry, Scheduler, SubmitOutcome, Timer, Ticket};
+use super::{Clock, QueueEntry, Scheduler, SubmitOutcome, Ticket, Timer};
 use crate::config::schema::LimitsConfig;
 
 fn limits() -> LimitsConfig {
@@ -50,7 +50,9 @@ impl TestClock {
                     .map(|(handle, timer)| (*handle, *timer))
                     .collect();
                 due.sort_by_key(|(handle, _)| *handle);
-                due.into_iter().map(|(handle, (_, action))| (handle, action)).collect()
+                due.into_iter()
+                    .map(|(handle, (_, action))| (handle, action))
+                    .collect()
             };
             if due.is_empty() {
                 return;
@@ -82,9 +84,16 @@ impl Clock for TestClock {
     }
 }
 
+/// How long a prompt may wait, as the clock counts.
+fn wait_ms() -> i64 {
+    i64::try_from(limits().max_queue_wait_ms).expect("a configured wait fits an i64")
+}
+
 /// A submitted prompt whose progress is recorded in the words a test reads.
 fn entry(session_id: &str, seen: &Arc<Mutex<Vec<String>>>) -> QueueEntry {
-    let session = session_id.to_owned();
+    let admitted = session_id.to_owned();
+    let expired = session_id.to_owned();
+    let moved = session_id.to_owned();
     let admitted_seen = Arc::clone(seen);
     let expired_seen = Arc::clone(seen);
     let position_seen = Arc::clone(seen);
@@ -94,16 +103,19 @@ fn entry(session_id: &str, seen: &Arc<Mutex<Vec<String>>>) -> QueueEntry {
             admitted_seen
                 .lock()
                 .unwrap()
-                .push(format!("admitted:{session}"));
+                .push(format!("admitted:{admitted}"));
         }),
         on_expired: Box::new(move || {
-            expired_seen.lock().unwrap().push(format!("expired:{session_id}"));
+            expired_seen
+                .lock()
+                .unwrap()
+                .push(format!("expired:{expired}"));
         }),
         on_position_changed: Some(Box::new(move |position: usize| {
             position_seen
                 .lock()
                 .unwrap()
-                .push(format!("position:{session_id}:{position}"));
+                .push(format!("position:{moved}:{position}"));
         })),
     }
 }
@@ -198,7 +210,11 @@ fn a_session_that_ends_takes_its_queued_prompts_with_it() {
 
     assert_eq!(scheduler.cancel_session("gone"), 1);
     assert_eq!(scheduler.queue_length(), 1);
-    assert!(seen.lock().unwrap().contains(&"position:stays:1".to_owned()));
+    assert!(
+        seen.lock()
+            .unwrap()
+            .contains(&"position:stays:1".to_owned())
+    );
 }
 
 #[test]
@@ -211,7 +227,7 @@ fn a_prompt_that_waited_too_long_expires_instead_of_being_sent() {
     scheduler.submit(entry("b", &seen));
     scheduler.submit(entry("late", &seen));
 
-    clock.advance(limits().max_queue_wait_ms + 1);
+    clock.advance(wait_ms() + 1);
 
     assert!(seen.lock().unwrap().contains(&"expired:late".to_owned()));
     assert_eq!(scheduler.queue_length(), 0);
@@ -279,7 +295,7 @@ fn shutdown_stops_the_timers_so_the_daemon_can_exit() {
     scheduler.submit(entry("c", &seen));
 
     scheduler.shutdown();
-    clock.advance(limits().max_queue_wait_ms * 10);
+    clock.advance(wait_ms() * 10);
 
     assert_eq!(scheduler.queue_length(), 0);
     assert!(!seen.lock().unwrap().contains(&"expired:c".to_owned()));

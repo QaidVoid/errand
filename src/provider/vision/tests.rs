@@ -1,6 +1,7 @@
 //! Tests for vision routing, ported from `vision_test.ts`.
 
-use std::future::Future;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 
@@ -42,8 +43,8 @@ fn agent() -> AgentConfig {
         credential: "secret-key".to_owned(),
         delegate: None,
         rules_path: None,
-        providers: Default::default(),
-        aliases: Default::default(),
+        providers: serde_json::Map::new(),
+        aliases: BTreeMap::new(),
     }
 }
 
@@ -53,7 +54,7 @@ fn agent_with_model(model: Option<&str>) -> AgentConfig {
     config
 }
 
-fn with_store(contents: Value) -> (TempDir, String) {
+fn with_store(contents: &Value) -> (TempDir, String) {
     let directory = TempDir::with_prefix("errand-models-").expect("a temporary directory");
     std::fs::write(
         directory.path().join("models-store.json"),
@@ -68,7 +69,7 @@ fn with_store(contents: Value) -> (TempDir, String) {
 #[derive(Clone)]
 struct FakePost {
     answer: Result<PostResponse, String>,
-    calls: std::rc::Rc<std::cell::RefCell<Vec<(String, Value)>>>,
+    calls: Arc<Mutex<Vec<(String, Value)>>>,
 }
 
 impl FakePost {
@@ -80,7 +81,7 @@ impl FakePost {
                     "choices": [{ "message": { "content": "  a stack trace saying ENOSPC  " } }],
                 }),
             }),
-            calls: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            calls: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -90,7 +91,7 @@ impl FakePost {
                 status: 429,
                 body: json!({ "error": { "message": "rate limited" } }),
             }),
-            calls: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            calls: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -100,32 +101,32 @@ impl FakePost {
                 status: 200,
                 body: json!({ "choices": [{ "message": { "content": "   " } }] }),
             }),
-            calls: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            calls: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     fn calls(&self) -> Vec<(String, Value)> {
-        self.calls.borrow().clone()
+        self.calls.lock().unwrap().clone()
     }
 }
 
 impl Post for FakePost {
-    fn post(
-        &self,
-        url: String,
-        request: PostRequest,
-    ) -> impl Future<Output = Result<PostResponse, String>> + Send {
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait is async; a stand-in that answers at once still has to match it"
+    )]
+    async fn post(&self, url: String, request: PostRequest) -> Result<PostResponse, String> {
         self.calls
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .push((url, serde_json::from_str(&request.body).expect("JSON body")));
-        let answer = self.answer.clone();
-        async move { answer }
+        self.answer.clone()
     }
 }
 
 #[test]
 fn the_store_says_which_models_can_be_shown_an_image() {
-    let (_dir, path) = with_store(store());
+    let (_dir, path) = with_store(&store());
     let models = read_models(Some(&path), "zai-coding-cn");
 
     assert_eq!(models.len(), 3);
@@ -135,7 +136,7 @@ fn the_store_says_which_models_can_be_shown_an_image() {
 
 #[test]
 fn a_host_with_no_store_or_an_unreadable_one_lists_nothing() {
-    let (_dir, path) = with_store(store());
+    let (_dir, path) = with_store(&store());
     assert!(read_models(Some(&path), "somebody-else").is_empty());
     assert!(read_models(Some("/nowhere/at/all"), "zai-coding-cn").is_empty());
     assert!(read_models(None, "zai-coding-cn").is_empty());
@@ -144,8 +145,7 @@ fn a_host_with_no_store_or_an_unreadable_one_lists_nothing() {
 #[test]
 fn a_store_that_is_not_json_is_treated_as_no_store_at_all() {
     let directory = TempDir::with_prefix("errand-models-").expect("a temporary directory");
-    std::fs::write(directory.path().join("models-store.json"), "{ not json")
-        .expect("written");
+    std::fs::write(directory.path().join("models-store.json"), "{ not json").expect("written");
     let path = directory.path().to_string_lossy().into_owned();
 
     assert!(read_models(Some(&path), "zai-coding-cn").is_empty());
@@ -154,16 +154,19 @@ fn a_store_that_is_not_json_is_treated_as_no_store_at_all() {
 /// Describing an image is a paragraph, and the work is done by another model.
 #[test]
 fn the_cheapest_model_that_can_see_is_the_one_chosen() {
-    let (_dir, path) = with_store(store());
+    let (_dir, path) = with_store(&store());
 
     let chosen = vision_model(&read_models(Some(&path), "zai-coding-cn"), None);
 
-    assert_eq!(chosen.map(|chosen| chosen.id), Some("glm-5.3-flash".to_owned()));
+    assert_eq!(
+        chosen.map(|chosen| chosen.id),
+        Some("glm-5.3-flash".to_owned())
+    );
 }
 
 #[test]
 fn a_model_named_in_the_configuration_wins_over_the_cheapest() {
-    let (_dir, path) = with_store(store());
+    let (_dir, path) = with_store(&store());
     let models = read_models(Some(&path), "zai-coding-cn");
 
     assert_eq!(
@@ -178,7 +181,7 @@ fn a_model_named_in_the_configuration_wins_over_the_cheapest() {
 
 #[test]
 fn a_session_whose_model_can_already_see_routes_nothing() {
-    let (_dir, path) = with_store(store());
+    let (_dir, path) = with_store(&store());
     let config = agent_with_model(Some("glm-5.3-flash"));
 
     assert!(image_describer(&config, Some(&path), FakePost::described()).is_none());
@@ -188,20 +191,22 @@ fn a_session_whose_model_can_already_see_routes_nothing() {
 /// would take images away from a model that can.
 #[test]
 fn a_model_the_store_does_not_list_is_left_alone() {
-    let (_dir, path) = with_store(store());
+    let (_dir, path) = with_store(&store());
 
     assert!(
-        image_describer(&agent_with_model(Some("glm-5.3-*")), Some(&path), FakePost::described())
-            .is_none()
+        image_describer(
+            &agent_with_model(Some("glm-5.3-*")),
+            Some(&path),
+            FakePost::described()
+        )
+        .is_none()
     );
-    assert!(
-        image_describer(&agent_with_model(None), Some(&path), FakePost::described()).is_none()
-    );
+    assert!(image_describer(&agent_with_model(None), Some(&path), FakePost::described()).is_none());
 }
 
 #[test]
 fn a_provider_with_nothing_that_can_see_routes_nothing() {
-    let (_dir, path) = with_store(json!({
+    let (_dir, path) = with_store(&json!({
         "zai-coding-cn": {
             "models": [{ "id": "glm-5.3", "baseUrl": "https://api.example/v1",
                          "input": ["text"] }],
@@ -214,7 +219,7 @@ fn a_provider_with_nothing_that_can_see_routes_nothing() {
 /// Knowing a model can see is no use without knowing where to reach it.
 #[test]
 fn a_model_with_nowhere_to_reach_it_is_not_chosen() {
-    let (_dir, path) = with_store(json!({
+    let (_dir, path) = with_store(&json!({
         "zai-coding-cn": {
             "models": [
                 { "id": "glm-5.3", "baseUrl": "https://api.example/v1", "input": ["text"] },
@@ -228,10 +233,9 @@ fn a_model_with_nowhere_to_reach_it_is_not_chosen() {
 
 #[tokio::test]
 async fn a_text_only_model_gets_a_description_from_the_one_that_can_see() {
-    let (_dir, path) = with_store(store());
+    let (_dir, path) = with_store(&store());
     let answering = FakePost::described();
-    let describer = image_describer(&agent(), Some(&path), answering.clone())
-        .expect("a describer");
+    let describer = image_describer(&agent(), Some(&path), answering.clone()).expect("a describer");
 
     assert_eq!(describer.model, "glm-5.3-flash");
     let block = describer
@@ -282,7 +286,11 @@ async fn what_was_asked_is_passed_along_with_the_image() {
         .cloned()
         .unwrap_or_default();
     assert!(content[0].to_string().contains("what is the error?"));
-    assert!(content[1].to_string().contains("data:image/png;base64,aGVsbG8="));
+    assert!(
+        content[1]
+            .to_string()
+            .contains("data:image/png;base64,aGVsbG8=")
+    );
 }
 
 #[tokio::test]
@@ -360,7 +368,7 @@ fn the_note_says_plainly_what_the_agent_is_being_given() {
 
 #[test]
 fn the_agent_directory_is_found_by_override_then_by_convention() {
-    let (_dir, path) = with_store(store());
+    let (_dir, path) = with_store(&store());
 
     let env = [
         ("PI_CODING_AGENT_DIR".to_owned(), path.clone()),

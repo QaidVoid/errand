@@ -491,3 +491,6 @@ impl Scheduler {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
