@@ -382,8 +382,10 @@ impl SessionManager {
         }
     }
 
-    // One arm per step, in the order the original refuses and reserves.
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per step, in the order the original refuses and reserves"
+    )]
     async fn launch(
         &self,
         id: String,

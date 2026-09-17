@@ -301,9 +301,10 @@ pub fn tokens(count: f64) -> String {
         // One decimal until three digits, then none: 12.3M, but 123M.
         let digits = usize::from(scaled.abs() < 100.0);
 
-        // Rounding can push a value into the next magnitude: 999,999 would
-        // read as 1000k, which is a magnitude out. Carry it up instead.
-        #[allow(clippy::uninlined_format_args)]
+        #[allow(
+            clippy::uninlined_format_args,
+            reason = "rounding can push a value into the next magnitude: 999,999 would read as 1000k, which is a magnitude out. Carry it up instead"
+        )]
         let rounded = format!("{scaled:.digits$}", digits = digits);
         if rounded
             .trim_start_matches('-')

@@ -266,13 +266,15 @@ impl ThreadRegistry {
         Self::sync_directory(&parent);
     }
 
+    /// Flushes the directory entry, so the rename survives a power loss.
+    ///
+    /// Not every platform allows opening a directory, and not every file
+    /// system answers the flush. Either way the rename already happened; only
+    /// its durability is weaker, which is not worth failing the write over.
     fn sync_directory(parent: &Path) {
-        // Not every platform allows opening a directory. The rename still
-        // happened; only its durability across a power loss is weaker.
         let Ok(directory) = std::fs::File::open(parent) else {
             return;
         };
-        // As above.
         let _ = directory.sync_all();
     }
 

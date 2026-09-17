@@ -63,9 +63,10 @@ usage: errand threads <command>
 
 fn human_size(bytes: u64) -> String {
     let units = ["B", "K", "M", "G", "T"];
-    // A directory that would lose precision past 52 bits is terabytes, and
-    // the drift is the same one the TypeScript table showed.
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a directory that would lose precision past 52 bits is terabytes, and the drift is the same one the TypeScript table showed"
+    )]
     let mut size = bytes as f64;
     let mut unit = 0;
     while size >= 1024.0 && unit < units.len() - 1 {

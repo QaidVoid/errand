@@ -114,9 +114,10 @@ pub fn next_check_ms(
     since_last: u64,
     slowest: u64,
 ) -> u64 {
-    // Byte counts and their ratios live far below f64's exact range; only
-    // the ratio matters here, not the last bits of a petabyte-scale count.
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "byte counts and their ratios live far below f64's exact range; only the ratio matters here, not the last bits of a petabyte-scale count"
+    )]
     let grew = written as f64 - last_written as f64;
     if grew <= 0.0 || since_last == 0 {
         return slowest;
@@ -129,9 +130,11 @@ pub fn next_check_ms(
         (remaining / per_ms) * 0.5
     };
 
-    // Float to integer casts saturate, so a projection beyond every u64 lands
-    // on the slowest interval rather than wrapping.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "float to integer casts saturate, so a projection beyond every u64 lands on the slowest interval rather than wrapping"
+    )]
     let rounded = projected.round() as u64;
     MIN_CHECK_MS.max(slowest.min(rounded))
 }

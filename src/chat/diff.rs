@@ -139,7 +139,6 @@ pub fn file_diff(before: &str, after: &str) -> FileDiff {
         .filter(|(kind, _)| *kind == OpKind::Removed)
         .count();
 
-    // Keep a changed line, and any context line close enough to one.
     let mut keep = vec![false; ops.len()];
     for (index, (kind, _)) in ops.iter().enumerate() {
         if *kind == OpKind::Kept {

@@ -769,9 +769,10 @@ impl Shared {
         true
     }
 
-    // One table of the protocol's event kinds; splitting it would scatter
-    // the dispatch the tests read as a whole.
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one table of the protocol's event kinds; splitting it would scatter the dispatch the tests read as a whole"
+    )]
     fn dispatch_event(&self, record: &AgentRecord) {
         let kind = record.get("type").and_then(Value::as_str).unwrap_or("");
         match kind {

@@ -248,8 +248,10 @@ pub async fn serve(config: Config, log: Logger) -> i32 {
     // Taken before anything connects or spawns, so a second daemon fails fast
     // instead of racing the first one for every message that arrives.
     let _ = std::fs::create_dir_all(&config.state_dir);
-    // A pid fits an i32 everywhere the daemon runs, so this cannot wrap.
-    #[allow(clippy::cast_possible_wrap)]
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "a pid fits an i32 everywhere the daemon runs, so this cannot wrap"
+    )]
     let pid = std::process::id() as i32;
     let mut lock = match acquire_lock(&config.state_dir, pid) {
         Ok(lock) => lock,

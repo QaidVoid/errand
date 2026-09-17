@@ -325,8 +325,10 @@ impl Daemon {
         };
         self.registry.lock().expect("the registry lock").load();
         let threads = self.registry.lock().expect("the registry lock").size();
-        // A count this large does not happen; the cast matches LogValue::from.
-        #[allow(clippy::cast_possible_wrap)]
+        #[allow(
+            clippy::cast_possible_wrap,
+            reason = "a count this large does not happen; the cast matches LogValue::from"
+        )]
         let threads = threads as i64;
         self.options.log.info(
             "thread index loaded",

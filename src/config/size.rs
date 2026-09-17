@@ -42,12 +42,11 @@ pub fn parse_size(text: &str) -> Option<u64> {
     if !amount.is_finite() {
         return None;
     }
-    // A size that large is beyond what any limit means; the floor keeps the
-    // whole bytes either way.
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
+        clippy::cast_sign_loss,
+        reason = "a size that large is beyond what any limit means; the floor keeps the whole bytes either way"
     )]
     Some((amount * scale as f64).floor() as u64)
 }

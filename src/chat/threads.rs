@@ -367,8 +367,10 @@ impl<T: ThreadTransport> ChatThread<T> {
 
     /// Renders a change as a fenced diff, which is all a thread can show.
     pub fn post_diff(&self, path: &str, added: u64, removed: u64, body: &str) {
-        // Diff line counts sit far below any pointer-width limit.
-        #[allow(clippy::cast_possible_truncation)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "diff line counts sit far below any pointer-width limit"
+        )]
         let diff = crate::chat::diff::FileDiff {
             empty: false,
             added: added as usize,

@@ -103,7 +103,6 @@ pub fn to_raw(message: &Message, parent_channel_id: Option<ChannelId>) -> RawMes
     RawMessage {
         id: message.id.get().to_string(),
         author_id: message.author.id.get().to_string(),
-        // The display name, falling back to the account name.
         author_name: message
             .author
             .global_name

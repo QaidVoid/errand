@@ -357,8 +357,10 @@ impl crate::agent::delegation::Sources for SessionSources {
         &self.project_root
     }
 
-    // The trait's signature is async; reading a small file needs no await.
-    #[allow(clippy::unused_async_trait_impl)]
+    #[allow(
+        clippy::unused_async_trait_impl,
+        reason = "the trait's signature is async; reading a small file needs no await"
+    )]
     async fn read_file(&self, path: &str) -> std::io::Result<String> {
         std::fs::read_to_string(path)
     }
@@ -1465,8 +1467,11 @@ impl Running {
         self.apply_withdrawal(message_id).await
     }
 
-    // Keeping the signature async keeps every caller's await uniform.
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[allow(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "keeping the signature async keeps every caller's await uniform"
+    )]
     async fn apply_withdrawal(&mut self, message_id: &str) -> bool {
         let said = match withdraw_from_record(&self.options.state_dir, message_id) {
             Ok(Some(said)) => said,
@@ -1648,8 +1653,10 @@ impl Running {
             .unwrap_or_else(|| self.options.owner_id.clone());
         let mention = format!("<@{who}> ");
         let spent = if self.usage.turns > 0 {
-            // Token totals sit far below f64's exact range.
-            #[allow(clippy::cast_precision_loss)]
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "token totals sit far below f64's exact range"
+            )]
             let shown = crate::chat::render::Usage {
                 input: self.usage.input as f64,
                 cache_read: self.usage.cache_read as f64,
@@ -2569,9 +2576,10 @@ impl Running {
             .or_else(|| self.options.config.agent.model.clone())
     }
 
-    // One arm per command keeps the switch readable, as the original's
-    // switch does.
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per command keeps the switch readable, as the original's switch does"
+    )]
     async fn answer_command(&mut self, word: &str, rest: &str, message: &IncomingMessage) {
         let access = crate::session::commands::COMMANDS
             .iter()
@@ -2808,8 +2816,10 @@ impl Running {
         self.react(&message.id, ReactionOutcome::Accepted).await;
     }
 
-    // Token totals sit far below f64's exact range.
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "token totals sit far below f64's exact range"
+    )]
     fn describe_status(&self) -> String {
         let mut lines = vec![
             format!("project: {}", self.options.project.name),
@@ -2933,8 +2943,11 @@ impl Running {
         self.disk_timer = Some(self.timers.set_timeout(SessionTimer::Disk, MIN_CHECK_MS));
     }
 
-    // Keeping the signature async keeps every caller's await uniform.
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[allow(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "keeping the signature async keeps every caller's await uniform"
+    )]
     async fn measure_disk(&self) -> u64 {
         let project = tree_bytes(&self.options.project.path).unwrap_or(0);
         let state = tree_bytes(&self.options.state_dir).unwrap_or(0);
