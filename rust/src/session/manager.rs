@@ -15,7 +15,9 @@ use crate::config::redact::secret_values;
 use crate::config::schema::Config;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
-use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
+use crate::sandbox::backend::{
+    CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
+};
 use crate::session::event::EndReason;
 use crate::session::ids::{TOKEN_LENGTH, session_id, session_token};
 use crate::session::model::{ChosenModel, expand_alias, resolve_model, select_model};
@@ -25,9 +27,10 @@ use crate::session::record::{prepare_record_dir, record_dir, withdraw_from_recor
 use crate::session::redacted::Redacting;
 use crate::session::registry::{ThreadRecord, ThreadRegistry};
 use crate::session::rules::house_rules_text;
+pub use crate::session::session::Unavailable;
 use crate::session::session::{
     DescribeImages, IncomingMessage, Launcher, OnGuestsChanged, OnModelChanged, OpenPullRequest,
-    RunningBox, SessionHandle, SessionOptions, Unavailable,
+    RunningBox, SessionHandle, SessionOptions,
 };
 use crate::session::transcript::{TRANSCRIPT_FILENAME, Transcript};
 use crate::session::views::{Attached, DEFAULT_TRANSCRIPT_LIMIT, Held, SessionView, ViewFanOut};
@@ -96,6 +99,11 @@ pub trait ThreadFactory: Send + Sync {
 
 /// What the manager needs from the sandbox layer.
 pub trait SandboxPool: Send + Sync {
+    /// Checks that this backend can run here and reports what it can enforce.
+    fn probe(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<CapabilityReport, SandboxUnavailableError>> + Send + '_>>;
+
     /// Starts one session's sandbox.
     ///
     /// Takes the pool by value so the returned future is `Send` on its own,

@@ -120,6 +120,14 @@ impl SandboxHandle {
         paths::host_path_under(backend::WORKSPACE_PATH, &project, agent_path)
     }
 
+    /// The agent process inside, for the protocol client to drive.
+    pub fn process(&self) -> Arc<dyn crate::agent::client::AgentProcess> {
+        match self {
+            SandboxHandle::Bailey(stop) => Arc::clone(&stop.spawned.process),
+            SandboxHandle::Podman(stop) => Arc::clone(&stop.spawned.process),
+        }
+    }
+
     /// Stops the sandbox and everything in it, escalating to a kill after the
     /// grace period. Safe to call more than once.
     ///
@@ -323,4 +331,68 @@ pub(crate) fn resolve_root(path: &str) -> String {
 /// Joins onto a root and resolves, for paths built from a name and a root.
 pub(crate) fn join_resolved(root: &str, name: &str) -> String {
     resolve_root(&Path::new(root).join(name).to_string_lossy())
+}
+
+/// The real backend, offered to the session manager through its trait.
+impl crate::session::manager::SandboxPool for Backend {
+    fn probe(
+        &self,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        crate::sandbox::backend::CapabilityReport,
+                        crate::sandbox::backend::SandboxUnavailableError,
+                    >,
+                > + Send
+                + '_,
+        >,
+    > {
+        Box::pin(self.probe())
+    }
+
+    fn launch(
+        self: Arc<Self>,
+        launch: crate::sandbox::backend::SandboxLaunch,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        crate::session::session::RunningBox,
+                        crate::sandbox::backend::SandboxLaunchError,
+                    >,
+                > + Send,
+        >,
+    > {
+        let launch = launch;
+        Box::pin(async move {
+            let handle = std::sync::Arc::new(Self::launch(&self, &launch).await?);
+            Ok(crate::session::session::RunningBox {
+                process: handle.process(),
+                to_host_path: Arc::new({
+                    let handle = std::sync::Arc::clone(&handle);
+                    move |path: &str| handle.to_host_path(path)
+                }),
+                stop: Arc::new({
+                    let handle = std::sync::Arc::clone(&handle);
+                    move || {
+                        let handle = std::sync::Arc::clone(&handle);
+                        Box::pin(async move { handle.stop().await })
+                            as Pin<Box<dyn Future<Output = bool> + Send>>
+                    }
+                }),
+            })
+        })
+    }
+
+    fn list_orphans(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + '_>> {
+        Box::pin(async move { Self::list_orphans(self).await.unwrap_or_default() })
+    }
+
+    fn remove_orphans<'a>(
+        &'a self,
+        names: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = usize> + Send + 'a>> {
+        Box::pin(async move { Self::remove_orphans(self, names).await })
+    }
 }

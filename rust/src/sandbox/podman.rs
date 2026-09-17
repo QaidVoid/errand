@@ -134,6 +134,32 @@ pub struct PodmanSandbox {
     run: super::Run,
 }
 
+/// Runs the installed tool. Injected for tests.
+pub fn run_podman(args: Vec<String>, cwd: Option<String>) -> super::RunFuture<super::RunResult> {
+    Box::pin(async move {
+        let mut command = tokio::process::Command::new("podman");
+        command
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
+        let output = command.output().await?;
+        Ok(super::RunResult {
+            code: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    })
+}
+
+/// The daemon's own runner for the installed tool.
+pub fn run_podman_arc() -> super::Run {
+    Arc::new(run_podman)
+}
+
 impl PodmanSandbox {
     /// A backend over the installed tool.
     pub fn new(config: SandboxConfig, log: Logger, run: super::Run) -> Self {

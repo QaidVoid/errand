@@ -174,18 +174,47 @@ pub struct Gateway {
     give_up: std::sync::Mutex<GiveUp>,
     /// The bot's own account id, once the service has said.
     bot_id: std::sync::Mutex<Option<String>>,
+    /// The shard messenger, captured on ready, for presence updates.
+    shard: std::sync::Mutex<Option<serenity::gateway::ShardMessenger>>,
+    /// Signalled once the connection is ready to use.
+    ready: tokio::sync::watch::Receiver<bool>,
+    /// The other end of `ready`; held so the channel cannot die first.
+    ready_sender: tokio::sync::watch::Sender<bool>,
 }
 
 impl Gateway {
     /// A gateway on the served channel, reporting through `handlers`.
     pub fn new(config: ChatConfig, handlers: GatewayHandlers, log: Logger) -> Arc<Self> {
+        let (ready_sender, ready) = tokio::sync::watch::channel(false);
         Arc::new(Self {
             config,
             handlers: Arc::new(handlers),
             log,
             give_up: std::sync::Mutex::new(GiveUp::new()),
             bot_id: std::sync::Mutex::new(None),
+            shard: std::sync::Mutex::new(None),
+            ready,
+            ready_sender,
         })
+    }
+
+    /// Waits for the connection to answer its handshake, no longer than the
+    /// timeout given.
+    pub async fn wait_ready(&self, timeout_ms: u64) -> Result<(), String> {
+        let mut ready = self.ready.clone();
+        let wait = async {
+            loop {
+                if *ready.borrow() {
+                    return Ok(());
+                }
+                if ready.changed().await.is_err() {
+                    return Err("the connection was closed before it was ready".to_owned());
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), wait)
+            .await
+            .map_err(|_| format!("the connection was not ready in {timeout_ms}ms"))?
     }
 
     /// The intents the daemon needs, no more than that.
@@ -396,8 +425,10 @@ impl EventHandler for Gateway {
         }
     }
 
-    async fn ready(&self, _ctx: Context, ready: Ready) {
+    async fn ready(&self, ctx: Context, ready: Ready) {
         *self.bot_id.lock().expect("the bot id lock") = Some(ready.user.id.get().to_string());
+        *self.shard.lock().expect("the shard lock") = Some(ctx.shard);
+        self.ready_sender.send_replace(true);
     }
 }
 
@@ -422,11 +453,11 @@ impl Gateway {
     /// Never fails the caller: this is decoration on a connection that may be
     /// down, and a status that failed to set is not a reason to fail the
     /// thing that asked.
-    // A method on the gateway, as the callers hold it, even though the
-    // context carries everything the call needs.
-    #[allow(clippy::unused_self)]
-    pub fn set_status(&self, ctx: &Context, text: Option<&str>) {
+    pub fn set_status(&self, text: Option<&str>) {
+        let Some(shard) = self.shard.lock().expect("the shard lock").clone() else {
+            return;
+        };
         let activity = text.map(serenity::gateway::ActivityData::custom);
-        ctx.set_presence(activity, serenity::model::user::OnlineStatus::Online);
+        shard.set_presence(activity, serenity::model::user::OnlineStatus::Online);
     }
 }

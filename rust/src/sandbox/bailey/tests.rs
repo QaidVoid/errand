@@ -468,7 +468,11 @@ fn an_operators_provider_definition_survives_the_brokers_base_url() {
         },
     );
     let merged = provider_config(&defined, &brokered);
-    let meta = merged.get("meta").expect("the merged provider");
+    let providers = merged
+        .get("providers")
+        .and_then(Value::as_object)
+        .expect("the providers map");
+    let meta = providers.get("meta").expect("the merged provider");
 
     // Only where it is reached changes; what it is stays.
     assert_eq!(
@@ -506,9 +510,13 @@ fn a_provider_the_operator_never_defined_still_gets_its_base_url() {
         },
     );
     let merged = provider_config(&serde_json::Map::new(), &brokered);
+    let providers = merged
+        .get("providers")
+        .and_then(Value::as_object)
+        .expect("the providers map");
 
     assert_eq!(
-        merged.get("zai-coding-cn"),
+        providers.get("zai-coding-cn"),
         Some(&json!({
             "baseUrl": "http://169.254.169.1:8443/provider/zai-coding-cn",
             "apiKey": "n",
@@ -524,9 +532,13 @@ fn without_a_broker_the_definitions_pass_through_less_the_credential() {
         json!({ "baseUrl": "https://api.meta.example/v1", "credential": "k" }),
     );
     let merged = provider_config(&defined, &BTreeMap::new());
+    let providers = merged
+        .get("providers")
+        .and_then(Value::as_object)
+        .expect("the providers map");
 
     assert_eq!(
-        merged.get("meta"),
+        providers.get("meta"),
         Some(&json!({ "baseUrl": "https://api.meta.example/v1" }))
     );
 }

@@ -394,7 +394,7 @@ impl<T: ThreadTransport> ChatThread<T> {
         if body.is_empty() {
             return;
         }
-        self.post(&format!("```\\n{body}\\n```"));
+        self.post(&format!("```\n{body}\n```"));
     }
 
     /// Adds a line of tool activity, extending the current block when there

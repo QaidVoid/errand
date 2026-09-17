@@ -1,13 +1,15 @@
 //! errand runs a coding agent from a chat channel, in a sandbox it cannot
 //! escape.
 //!
-//! The Rust daemon is ported into this crate module by module, mirroring
-//! `src/` one to one. Until the cutover, the TypeScript daemon under `src/`
-//! is the implementation and this crate carries the ported modules and the
-//! suite that judges them.
+//! The command line is what an operator runs: the daemon is one subcommand
+//! among several rather than the only thing this program does, because
+//! managing what it left on disk is an operator's job and belongs where an
+//! operator already is.
 
-// The port lands each module with its tests before anything calls it, so the
-// tree holds unusable exports until the daemon is wired (group 10).
+// The port lands each module with its tests before anything calls it, and the
+// interface (a later group) wires more of what the sessions and the chat
+// layer already export. Modules whose surface is not all reachable from the
+// daemon yet carry an allow(dead_code) of their own.
 #[allow(dead_code)]
 mod admission;
 #[allow(dead_code)]
@@ -15,8 +17,13 @@ mod agent;
 #[allow(dead_code)]
 mod chat;
 #[allow(dead_code)]
+mod cli;
+#[allow(dead_code)]
 mod config;
 #[allow(dead_code)]
+mod daemon;
+#[allow(dead_code)]
+mod lock;
 mod log;
 #[allow(dead_code)]
 mod memory;
@@ -24,10 +31,203 @@ mod memory;
 mod provider;
 #[allow(dead_code)]
 mod sandbox;
+mod serve;
 #[allow(dead_code)]
 mod session;
 
 #[cfg(test)]
 mod test_util;
 
-fn main() {}
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use crate::cli::threads::Deps;
+use crate::config::load::{config_path, load_config};
+use crate::config::schema::ConfigError;
+use crate::log::{LogValue, fields};
+use crate::session::registry::ThreadRegistry;
+
+/// The environment an operator's shell hands over.
+type Vars = BTreeMap<String, String>;
+
+fn usage(env: &Vars) -> String {
+    [
+        "usage: errand <command>".to_owned(),
+        String::new(),
+        "  run                  run the daemon until it is told to stop".to_owned(),
+        "  threads [command]    manage remembered threads and their data".to_owned(),
+        "  help                 this".to_owned(),
+        String::new(),
+        format!(
+            "the configuration is read from {}",
+            config_path(env, |candidate| std::path::Path::new(candidate).exists())
+        ),
+    ]
+    .join("\n")
+}
+
+/// Reads the configuration the way every command does.
+///
+/// The search sees the environment, but the "looked in" list a missing file
+/// reports does not: the TypeScript entry point never handed the environment
+/// to the reader, whose error path therefore describes a blank one. Kept, so
+/// an operator comparing output between the two daemons sees the same words.
+fn load(env: &Vars) -> Result<crate::config::schema::Config, ConfigError> {
+    let path = config_path(env, |candidate| std::path::Path::new(candidate).exists());
+    load_config(
+        &path,
+        |read| std::fs::read_to_string(read),
+        &Vars::new(),
+        |candidate| std::path::Path::new(candidate).exists(),
+    )
+}
+
+/// Pulls a `name = "value"` pair off the front of a grant body, leaving the
+/// rest of it.
+fn grant_pair<'a>(body: &'a str, name: &str) -> Option<(&'a str, String)> {
+    let body = body.trim_start().strip_prefix(name)?;
+    let body = body.trim_start().strip_prefix('=')?.trim_start();
+    let body = body.strip_prefix('"')?;
+    let end = body.find('"')?;
+    Some((&body[end + 1..], body[..end].to_owned()))
+}
+
+/// The host path of the grant placed at /workspace, which is how a policy
+/// names the project it was written for.
+fn workspace_grant(policy: &str) -> Option<String> {
+    let mut rest = policy;
+    while let Some(open) = rest.find('{') {
+        let close = rest[open..].find('}')? + open;
+        let body = &rest[open + 1..close];
+        let (rest_of_grant, path) = grant_pair(body, "path")?;
+        let (rest_of_grant, at) = grant_pair(rest_of_grant, "at")?;
+        if at == "/workspace" && rest_of_grant.trim().is_empty() {
+            return Some(path);
+        }
+        rest = &rest[close + 1..];
+    }
+    None
+}
+
+/// The project a session worked in, read back from the policy it was run
+/// under.
+///
+/// The policy names the project as the grant placed at the workspace, which
+/// is the one thing on disk that still says where the work was. Nothing is
+/// guessed at: a policy that does not say returns nothing, and the caller
+/// refuses.
+fn project_of(state_dir: &str) -> Option<crate::cli::threads::Project> {
+    let policy = std::fs::read_to_string(
+        std::path::Path::new(state_dir).join(crate::sandbox::policy::POLICY_FILENAME),
+    )
+    .ok()?;
+    let path = workspace_grant(&policy)?;
+    let name = std::path::Path::new(&path)
+        .file_name()?
+        .to_string_lossy()
+        .into_owned();
+    Some(crate::cli::threads::Project { name, path })
+}
+
+async fn threads(args: &[String], env: &Vars) -> Result<i32, ConfigError> {
+    let config = load(env)?;
+    let log = crate::log::logger();
+    let registry = Arc::new(Mutex::new(ThreadRegistry::new(
+        ThreadRegistry::path_for(&config.state_dir),
+        log,
+    )));
+    registry.lock().unwrap().load();
+
+    Ok(crate::cli::threads::run_threads(
+        args,
+        &Deps {
+            registry,
+            size_of: Arc::new(|state_dir| {
+                Box::pin(async move { crate::session::disk::tree_bytes(&state_dir) })
+            }),
+            remove: Arc::new(|state_dir| {
+                Box::pin(async move {
+                    // The record sits beside the state directory, so removing
+                    // a thread has to take it too or the transcript outlives
+                    // what it describes.
+                    tokio::fs::remove_dir_all(&state_dir)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let _ =
+                        tokio::fs::remove_dir_all(crate::session::record::record_dir(&state_dir))
+                            .await;
+                    Ok(())
+                })
+            }),
+            state_root: config.state_dir,
+            project_of: Arc::new(|state_dir| Box::pin(async move { project_of(&state_dir) })),
+            write: Arc::new(|line| println!("{line}")),
+            now: Arc::new(crate::log::now_ms),
+        },
+    )
+    .await)
+}
+
+/// Runs the daemon, turning the failures an operator can act on into an exit
+/// code and one line rather than a stack trace.
+async fn run(env: &Vars) -> i32 {
+    let log = crate::log::logger();
+    let config = match load(env) {
+        Ok(config) => config,
+        Err(error) => {
+            log.error(
+                "the daemon failed to start",
+                &fields([("detail", LogValue::from(format!("ConfigError: {error}")))]),
+            );
+            return 1;
+        }
+    };
+    crate::serve::serve(config, log).await
+}
+
+fn main() -> std::process::ExitCode {
+    let env: Vars = std::env::vars_os()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.to_string_lossy().into_owned(),
+            )
+        })
+        .collect();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("a tokio runtime is always buildable");
+
+    match runtime.block_on(dispatch(args, env)) {
+        Ok(code) => std::process::ExitCode::from(u8::try_from(code).unwrap_or(1)),
+        Err(error) => {
+            // A configuration problem is the operator's to fix, so it is
+            // printed as itself rather than as a stack trace.
+            eprintln!("ConfigError: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+async fn dispatch(args: Vec<String>, env: Vars) -> Result<i32, ConfigError> {
+    let Some(command) = args.first().cloned() else {
+        println!("{}", usage(&env));
+        return Ok(2);
+    };
+    match command.as_str() {
+        "run" => Ok(run(&env).await),
+        "threads" => threads(&args[1..], &env).await,
+        "help" | "--help" => {
+            println!("{}", usage(&env));
+            Ok(0)
+        }
+        other => {
+            eprintln!("there is no command called {other}");
+            eprintln!("{}", usage(&env));
+            Ok(2)
+        }
+    }
+}

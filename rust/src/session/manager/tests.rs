@@ -15,7 +15,9 @@ use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
 use crate::config::validate::validate_config;
 use crate::log::Logger;
-use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
+use crate::sandbox::backend::{
+    CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
+};
 use crate::sandbox::paths;
 use crate::session::event::EndReason;
 use crate::session::record::record_dir;
@@ -202,6 +204,19 @@ impl FakeSandbox {
 }
 
 impl SandboxPool for FakeSandbox {
+    fn probe(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<CapabilityReport, SandboxUnavailableError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            Ok(CapabilityReport {
+                backend: crate::config::schema::SandboxBackend::Bailey,
+                gaps: Vec::new(),
+                notes: Vec::new(),
+            })
+        })
+    }
+
     fn launch(
         self: Arc<Self>,
         launch: SandboxLaunch,

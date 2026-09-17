@@ -55,6 +55,11 @@ pub fn run_bailey(args: Vec<String>, cwd: Option<String>) -> super::RunFuture<su
     })
 }
 
+/// The daemon's own runner for the installed tool.
+pub fn run_bailey_arc() -> super::Run {
+    Arc::new(run_bailey)
+}
+
 /// The environment a session runs with.
 ///
 /// Rebuilt from a named list rather than inherited. The daemon's own
@@ -197,7 +202,11 @@ pub fn provider_config(
         fields.insert("apiKey".to_owned(), Value::String(through.nonce.clone()));
         providers.insert(name.clone(), Value::Object(fields));
     }
-    providers
+    // The agent reads its models from a file whose shape names the map, so
+    // the providers ride under that key rather than at the top level.
+    let mut wrapped = Map::new();
+    wrapped.insert("providers".to_owned(), Value::Object(providers));
+    wrapped
 }
 
 /// What the daemon holds back from a session, and what it gives instead.

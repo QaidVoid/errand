@@ -224,3 +224,27 @@ pub fn image_describer(
         post,
     })
 }
+
+/// Performs a vision request over HTTPS, as the production daemon does.
+#[derive(Clone, Copy, Default)]
+pub struct HttpPost;
+
+impl Post for HttpPost {
+    async fn post(&self, url: String, request: PostRequest) -> Result<PostResponse, String> {
+        let client = reqwest::Client::new();
+        let mut sent = client.post(url);
+        for (name, value) in &request.headers {
+            sent = sent.header(name.as_str(), value.as_str());
+        }
+        let answer = sent
+            .header("Content-Type", "application/json")
+            .body(request.body)
+            .timeout(std::time::Duration::from_millis(request.timeout_ms))
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        let status = answer.status().as_u16();
+        let body = answer.json::<serde_json::Value>().await.unwrap_or_default();
+        Ok(PostResponse { status, body })
+    }
+}

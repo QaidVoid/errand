@@ -543,5 +543,7 @@ fn url_host(target: &str) -> Option<String> {
 
 pub(crate) mod server;
 
+pub use server::Broker;
+
 #[cfg(test)]
 mod tests;
