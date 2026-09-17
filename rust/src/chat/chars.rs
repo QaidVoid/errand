@@ -187,3 +187,15 @@ pub fn prefixed(key: PrefixKey, text: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// The glyph a reported outcome is shown with, one to one.
+impl From<crate::session::event::ReactionOutcome> for ReactionKey {
+    fn from(outcome: crate::session::event::ReactionOutcome) -> Self {
+        match outcome {
+            crate::session::event::ReactionOutcome::Accepted => ReactionKey::Accepted,
+            crate::session::event::ReactionOutcome::Succeeded => ReactionKey::Succeeded,
+            crate::session::event::ReactionOutcome::Failed => ReactionKey::Failed,
+            crate::session::event::ReactionOutcome::Interrupted => ReactionKey::Interrupted,
+        }
+    }
+}

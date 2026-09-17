@@ -15,6 +15,7 @@ reqwest = { version = "0.13.5", features = ["json", "stream"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
+serenity = { version = "0.12.5", default-features = false, features = ["builder", "client", "gateway", "model", "http", "rustls_backend", "cache"] }
 tempfile = "3.27.0"
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util", "net", "fs"] }
