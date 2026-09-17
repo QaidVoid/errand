@@ -23,15 +23,20 @@ fn taking_the_lock_writes_the_holders_process_id() {
     });
 }
 
+/// This process's own id, as the lock file records one.
+fn own_pid() -> i32 {
+    i32::try_from(process::id()).expect("a pid fits an i32 everywhere the daemon runs")
+}
+
 /// Two daemons on one token both act on every message.
 #[test]
 fn a_second_daemon_is_refused_while_the_first_is_alive() {
     with_state_dir(|state_dir| {
-        let mut first = acquire_lock(state_dir, process::id() as i32).expect("the lock is free");
+        let mut first = acquire_lock(state_dir, own_pid()).expect("the lock is free");
 
         let error = acquire_lock(state_dir, 9999).expect_err("the second daemon is refused");
 
-        assert_eq!(error.pid, process::id() as i32);
+        assert_eq!(error.pid, own_pid());
         assert!(error.to_string().contains(state_dir));
         first.release();
     });
@@ -87,7 +92,7 @@ fn releasing_removes_the_lock_and_twice_is_not_an_error() {
 
 #[test]
 fn a_process_is_running_when_it_is_and_not_when_it_is_not() {
-    assert!(is_running(process::id() as i32));
+    assert!(is_running(own_pid()));
     assert!(!is_running(999_999_999));
     assert!(!is_running(0));
     assert!(!is_running(-1));

@@ -2,7 +2,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use super::{OPENING_SCAN_BYTES, Transcript};
-use crate::log::{LogLevel, Logger};
+use crate::log::{LogFields, LogLevel, Logger, Sink};
 use crate::session::event::{NoticeLevel, SessionEvent};
 
 /// A temp directory with a transcript in it, and the lines its log caught.
@@ -25,9 +25,9 @@ fn keep() -> Keep {
 impl Keep {
     fn transcript(&self) -> Transcript {
         let lines = Arc::clone(&self.lines);
-        let sink: Arc<dyn Fn(LogLevel, &str) + Send + Sync> =
+        let sink: Sink =
             Arc::new(move |level, line| lines.lock().unwrap().push((level, line.to_owned())));
-        Transcript::new(&self.path, Some(Logger::new(Default::default(), sink)))
+        Transcript::new(&self.path, Some(Logger::new(LogFields::new(), sink)))
     }
 
     fn logged(&self) -> Vec<(LogLevel, String)> {
@@ -241,9 +241,9 @@ fn a_transcript_that_cannot_be_written_says_so_and_does_not_throw() {
     let keep = keep();
     let blocked = Transcript::new(keep.path.join("nested").join("transcript.jsonl"), {
         let lines = Arc::clone(&keep.lines);
-        let sink: Arc<dyn Fn(LogLevel, &str) + Send + Sync> =
+        let sink: Sink =
             Arc::new(move |level, line| lines.lock().unwrap().push((level, line.to_owned())));
-        Some(Logger::new(Default::default(), sink))
+        Some(Logger::new(LogFields::new(), sink))
     });
 
     blocked.append_at(&post("nowhere to go"), Some(1), 1_000);

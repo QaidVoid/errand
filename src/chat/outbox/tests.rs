@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
 use super::{DEFAULT_MAX_BUFFERED, Outbox, OutboxTask, TaskError};
-use crate::log::{LogLevel, Logger};
+use crate::log::{LogFields, LogLevel, Logger};
 
 fn silent() -> Logger {
-    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
 type Lines = Arc<Mutex<Vec<(LogLevel, String)>>>;
@@ -18,7 +18,7 @@ type Lines = Arc<Mutex<Vec<(LogLevel, String)>>>;
 fn logger(lines: &Lines) -> Logger {
     let sink = Arc::clone(lines);
     Logger::new(
-        Default::default(),
+        LogFields::new(),
         Arc::new(move |level, line| {
             sink.lock().unwrap().push((level, line.to_owned()));
         }),
@@ -53,10 +53,6 @@ where
     Box::new(move || Box::pin(run()) as Pin<Box<dyn Future<Output = Result<(), TaskError>> + Send>>)
 }
 
-fn ok() -> Result<(), TaskError> {
-    Ok(())
-}
-
 fn failed(why: &str) -> Result<(), TaskError> {
     Err(Box::new(std::io::Error::other(why)) as TaskError)
 }
@@ -70,7 +66,7 @@ fn recording(ran: &Arc<Mutex<Vec<String>>>, word: &str) -> OutboxTask {
         let word = word.clone();
         async move {
             ran.lock().unwrap().push(word);
-            ok()
+            Ok(())
         }
     })
 }
@@ -85,7 +81,7 @@ fn recording_slow(ran: &Arc<Mutex<Vec<String>>>, release: &Arc<Notify>) -> Outbo
         async move {
             release.notified().await;
             ran.lock().unwrap().push("slow".to_owned());
-            ok()
+            Ok(())
         }
     })
 }
@@ -101,7 +97,7 @@ async fn what_is_queued_runs_in_the_order_it_was_queued() {
             let ran = Arc::clone(&ran);
             async move {
                 ran.lock().unwrap().push(index);
-                ok()
+                Ok(())
             }
         }));
     }
@@ -121,7 +117,7 @@ async fn a_slow_task_holds_the_ones_behind_it_until_it_finishes() {
     box_.enqueue(recording_slow(&ran, &release));
     box_.enqueue(recording(&ran, "fast"));
 
-    assert!(*ran.lock().unwrap() == Vec::<String>::new());
+    assert_eq!(*ran.lock().unwrap(), Vec::<String>::new());
     release.notify_one();
     box_.flush().await;
     assert_eq!(*ran.lock().unwrap(), ["slow".to_owned(), "fast".to_owned()]);
@@ -136,7 +132,7 @@ async fn nothing_is_attempted_while_the_connection_is_down() {
     box_.set_connected(false);
     box_.enqueue(recording(&ran, "held"));
     box_.flush().await;
-    assert!(*ran.lock().unwrap() == Vec::<String>::new());
+    assert_eq!(*ran.lock().unwrap(), Vec::<String>::new());
 
     box_.set_connected(true);
     box_.flush().await;
@@ -160,7 +156,7 @@ async fn a_task_that_fails_is_retried_in_place_when_the_connection_returns() {
             if *failing.lock().unwrap() {
                 return failed("the gateway went");
             }
-            ok()
+            Ok(())
         }
     }));
     box_.enqueue(recording(&attempts, "second"));
@@ -198,7 +194,7 @@ async fn a_full_buffer_drops_the_oldest_and_keeps_the_newest() {
             let ran = Arc::clone(&ran);
             async move {
                 ran.lock().unwrap().push(index);
-                ok()
+                Ok(())
             }
         }));
     }
@@ -219,12 +215,12 @@ async fn a_gap_is_announced_once_not_on_every_drain_after_it() {
 
     box_.set_connected(false);
     for _ in 0..3 {
-        box_.enqueue(task(|| async { ok() }));
+        box_.enqueue(task(|| async { Ok(()) }));
     }
     box_.set_connected(true);
     box_.flush().await;
     box_.flush().await;
-    box_.enqueue(task(|| async { ok() }));
+    box_.enqueue(task(|| async { Ok(()) }));
     box_.flush().await;
 
     assert_eq!(*gaps.lock().unwrap(), [2]);
@@ -243,7 +239,7 @@ async fn closing_discards_what_is_queued_and_takes_nothing_more() {
     box_.set_connected(true);
     box_.flush().await;
 
-    assert!(*ran.lock().unwrap() == Vec::<String>::new());
+    assert_eq!(*ran.lock().unwrap(), Vec::<String>::new());
     assert!(box_.is_closed());
     assert_eq!(box_.pending(), 0);
 }
@@ -272,8 +268,8 @@ async fn a_failure_to_announce_a_gap_is_reported_and_not_lost() {
     let box_ = Outbox::new(logger(&logged), announce, 1);
 
     box_.set_connected(false);
-    box_.enqueue(task(|| async { ok() }));
-    box_.enqueue(task(|| async { ok() }));
+    box_.enqueue(task(|| async { Ok(()) }));
+    box_.enqueue(task(|| async { Ok(()) }));
     box_.set_connected(true);
     box_.flush().await;
 

@@ -9,7 +9,7 @@ fn a_size_is_read_as_bytes_with_or_without_a_suffix() {
     assert_eq!(parse_size("4g"), Some(4 * 1024_u64.pow(3)));
     assert_eq!(
         parse_size("1.5g"),
-        Some((1.5 * 1024_u64.pow(3) as f64).floor() as u64)
+        Some(1024_u64.pow(3) + 1024_u64.pow(3) / 2)
     );
 }
 

@@ -8,7 +8,7 @@ use super::{USAGE_PATH, fetch_gateway_usage, read_gateway_usage};
 use crate::provider::usage::{Fetch, FetchError, HttpRequest, HttpResponse};
 
 /// The shape the gateway actually answers with, trimmed to what is read.
-fn usage_body(limiting: Value) -> Value {
+fn usage_body(limiting: &Value) -> Value {
     json!({
         "provider": "muse-code",
         "scope": "key",
@@ -80,23 +80,25 @@ impl Fetch for Fake {
 struct Unavailable;
 
 impl Fetch for Unavailable {
-    fn fetch(
-        &self,
-        _url: String,
-        _request: HttpRequest,
-    ) -> impl Future<Output = Result<HttpResponse, FetchError>> + Send {
-        async {
-            Ok(HttpResponse {
-                status: 503,
-                body: None,
-            })
-        }
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait is async; a stand-in that answers at once still has to match it"
+    )]
+    async fn fetch(&self, _url: String, _request: HttpRequest) -> Result<HttpResponse, FetchError> {
+        Ok(HttpResponse {
+            status: 503,
+            body: None,
+        })
     }
 }
 
+#[expect(
+    clippy::float_cmp,
+    reason = "the fixtures hold values a f64 holds exactly"
+)]
 #[test]
 fn an_open_window_is_read_as_what_has_been_used_of_it() {
-    let quota = read_gateway_usage(&usage_body(open())).expect("an answer");
+    let quota = read_gateway_usage(&usage_body(&open())).expect("an answer");
     assert_eq!(quota.percentage, 12.0);
     assert_eq!(
         quota.resets_at,
@@ -110,13 +112,17 @@ fn an_open_window_is_read_as_what_has_been_used_of_it() {
 }
 
 /// The gateway says outright, and that beats the arithmetic.
+#[expect(
+    clippy::float_cmp,
+    reason = "the fixtures hold values a f64 holds exactly"
+)]
 #[test]
 fn a_spent_window_is_spent_whatever_the_percentages_say() {
     let mut limiting = open();
     limiting["spent"] = json!(true);
     limiting["peakUsedPercent"] = json!(97);
     limiting["remainingPercent"] = json!(3);
-    let quota = read_gateway_usage(&usage_body(limiting)).expect("an answer");
+    let quota = read_gateway_usage(&usage_body(&limiting)).expect("an answer");
 
     assert_eq!(quota.percentage, 100.0);
 }
@@ -128,7 +134,7 @@ fn an_unspent_window_never_reads_as_full() {
     limiting["spent"] = json!(false);
     limiting["peakUsedPercent"] = json!(100);
     limiting["remainingPercent"] = json!(0);
-    let quota = read_gateway_usage(&usage_body(limiting)).expect("an answer");
+    let quota = read_gateway_usage(&usage_body(&limiting)).expect("an answer");
 
     assert!(quota.percentage < 100.0);
 }
@@ -139,26 +145,26 @@ fn an_unspent_window_never_reads_as_full() {
 fn an_answer_the_gateway_is_unsure_of_is_no_answer() {
     let mut stale = open();
     stale["status"] = json!("stale");
-    assert_eq!(read_gateway_usage(&usage_body(stale)), None);
+    assert_eq!(read_gateway_usage(&usage_body(&stale)), None);
 
     let mut unknown = open();
     unknown["status"] = json!("unknown");
-    assert_eq!(read_gateway_usage(&usage_body(unknown)), None);
+    assert_eq!(read_gateway_usage(&usage_body(&unknown)), None);
 
     let mut no_reset = open();
     no_reset["resetsAt"] = Value::Null;
-    assert_eq!(read_gateway_usage(&usage_body(no_reset)), None);
+    assert_eq!(read_gateway_usage(&usage_body(&no_reset)), None);
 
     let mut bad_reset = open();
     bad_reset["resetsAt"] = json!("not a time");
-    assert_eq!(read_gateway_usage(&usage_body(bad_reset)), None);
+    assert_eq!(read_gateway_usage(&usage_body(&bad_reset)), None);
 
     assert_eq!(read_gateway_usage(&json!({})), None);
     assert_eq!(read_gateway_usage(&Value::Null), None);
 
     // Neither percentage present, so there is nothing to report.
     assert_eq!(
-        read_gateway_usage(&usage_body(json!({
+        read_gateway_usage(&usage_body(&json!({
             "status": "ok",
             "spent": false,
             "resetsAt": "2026-09-16T08:39:43.000Z",
@@ -167,9 +173,13 @@ fn an_answer_the_gateway_is_unsure_of_is_no_answer() {
     );
 }
 
+#[expect(
+    clippy::float_cmp,
+    reason = "the fixtures hold values a f64 holds exactly"
+)]
 #[tokio::test]
 async fn usage_is_asked_for_beside_the_base_url_with_the_key() {
-    let fetch = Fake::answer(usage_body(open()));
+    let fetch = Fake::answer(usage_body(&open()));
 
     let window = fetch_gateway_usage("https://gateway.example/v1/", "the-key", &fetch, 10_000)
         .await

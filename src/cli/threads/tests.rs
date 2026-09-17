@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::{Deps, Found, Project, find_thread, run_threads};
-use crate::log::Logger;
+use crate::log::{LogFields, Logger};
 use crate::session::registry::{ThreadRecord, ThreadRegistry};
 
 const NOW: i64 = 1_700_000_000_000;
@@ -47,7 +47,7 @@ fn harness(records: Vec<ThreadRecord>) -> Harness {
     let root = tempfile::tempdir().expect("a temp directory");
     let registry = Arc::new(Mutex::new(ThreadRegistry::new(
         root.path().join("threads.json").display().to_string(),
-        Logger::new(Default::default(), Arc::new(|_level, _line| {})),
+        Logger::new(LogFields::new(), Arc::new(|_level, _line| {})),
     )));
     for record in records {
         registry.lock().unwrap().remember(record);
@@ -173,7 +173,7 @@ fn a_thread_can_be_named_by_a_part_of_its_id_when_only_one_matches() {
         find_thread(&records, "thread-aa"),
         Some(Found::One(found)) if found.thread_id == "thread-aaaa"
     ));
-    assert!(matches!(find_thread(&records, "nothing"), None));
+    assert!(find_thread(&records, "nothing").is_none());
     assert!(matches!(
         find_thread(&records, "thread-"),
         Some(Found::Ambiguous(_))
@@ -523,7 +523,7 @@ async fn reviving_reads_the_project_from_what_the_session_left_on_disk() {
     let root = tempfile::tempdir().unwrap();
     let registry = Arc::new(Mutex::new(ThreadRegistry::new(
         root.path().join("threads.json").display().to_string(),
-        Logger::new(Default::default(), Arc::new(|_level, _line| {})),
+        Logger::new(LogFields::new(), Arc::new(|_level, _line| {})),
     )));
     let written = Arc::new(Mutex::new(Vec::new()));
     let deps = Deps {

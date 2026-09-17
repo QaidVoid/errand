@@ -142,7 +142,7 @@ fn thread(forward_tool_output: bool) -> (ChatThread<FakeChannel>, Arc<FakeChanne
     let channel = FakeChannel::new();
     let port = ChatThread::new(
         Arc::clone(&channel),
-        crate::log::Logger::new(Default::default(), Arc::new(|_level, _line| {})),
+        crate::log::Logger::new(crate::log::LogFields::new(), Arc::new(|_level, _line| {})),
         forward_tool_output,
     );
     (port, channel)

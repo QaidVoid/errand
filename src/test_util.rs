@@ -12,11 +12,10 @@ pub(crate) fn repo_root() -> PathBuf {
                 return dir;
             }
         }
-        if !dir.pop() {
-            panic!(
-                "could not find the repository root from {}",
-                env!("CARGO_MANIFEST_DIR")
-            );
-        }
+        assert!(
+            dir.pop(),
+            "could not find the repository root from {}",
+            env!("CARGO_MANIFEST_DIR")
+        );
     }
 }

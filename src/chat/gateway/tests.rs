@@ -114,7 +114,7 @@ fn an_outage_is_worth_waiting_out_and_a_refusal_is_not() {
 fn a_library_message_is_reduced_to_the_facts_the_filter_needs() {
     let message = library_message(wire_message());
 
-    let raw = to_raw(&message, Some(ChannelId::new(800000000000000010)));
+    let raw = to_raw(&message, Some(ChannelId::new(800_000_000_000_000_010)));
     assert_eq!(raw.author_id, "800000000000000003");
     assert_eq!(raw.author_name.as_deref(), Some("amelia"));
     assert_eq!(raw.channel_id, "900000000000000002");

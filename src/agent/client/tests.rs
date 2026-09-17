@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::{AgentClient, AgentHandlers, AgentProcess, AnswerOutcome};
-use crate::log::Logger;
+use crate::log::{LogFields, Logger};
 
 /// A process a test writes records into, standing in for the agent.
 struct Fake {
@@ -42,7 +42,7 @@ struct FakeControls {
 }
 
 impl FakeControls {
-    fn send(&self, record: Value) {
+    fn send(&self, record: &Value) {
         self.chunk(&format!("{record}\n"));
     }
 
@@ -134,7 +134,7 @@ fn client(handlers: AgentHandlers, dialog_timeout_ms: u64) -> TestSetup {
 }
 
 fn silent() -> Logger {
-    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
 /// Lets the stream reader drain what a test just pushed.
@@ -164,7 +164,7 @@ async fn readiness_is_the_agent_answering_and_it_carries_the_context_window() {
 
     setup
         .controls
-        .send(json!({ "type": "response", "id": sent["id"], "data": { "model": { "contextWindow": 200_000 } } }));
+        .send(&json!({ "type": "response", "id": sent["id"], "data": { "model": { "contextWindow": 200_000 } } }));
     let _ = ready.await.expect("readiness resolves");
 
     assert_eq!(setup.agent.context_window(), Some(200_000.0));
@@ -193,16 +193,16 @@ async fn a_turn_moves_the_agent_through_working_and_back_to_ready() {
         300_000,
     );
 
-    setup.controls.send(json!({ "type": "agent_start" }));
+    setup.controls.send(&json!({ "type": "agent_start" }));
     settle().await;
     assert_eq!(setup.agent.state(), super::AgentState::Working);
     assert!(setup.agent.is_working());
 
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "message_end",
         "message": { "role": "assistant", "content": [{ "type": "text", "text": "done" }] },
     }));
-    setup.controls.send(json!({ "type": "agent_settled" }));
+    setup.controls.send(&json!({ "type": "agent_settled" }));
     settle().await;
 
     assert_eq!(setup.agent.state(), super::AgentState::Ready);
@@ -229,7 +229,7 @@ async fn an_exit_during_a_turn_says_so_and_an_idle_exit_does_not() {
         },
         300_000,
     );
-    first.controls.send(json!({ "type": "agent_start" }));
+    first.controls.send(&json!({ "type": "agent_start" }));
     settle().await;
     first.controls.close(1);
     let _ = first.done.await;
@@ -294,11 +294,11 @@ async fn only_the_assistants_words_are_reported_not_the_prompt_echoed_back() {
         300_000,
     );
 
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "message_end",
         "message": { "role": "user", "content": [{ "type": "text", "text": "the prompt" }] },
     }));
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "message_end",
         "message": { "role": "assistant", "content": [{ "type": "text", "text": "  the answer  " }] },
     }));
@@ -326,14 +326,14 @@ async fn thinking_is_reported_once_a_turn_and_each_finished_thought_once() {
         300_000,
     );
 
-    setup.controls.send(json!({ "type": "agent_start" }));
+    setup.controls.send(&json!({ "type": "agent_start" }));
     setup.controls.send(
-        json!({ "type": "message_update", "assistantMessageEvent": { "type": "thinking_start" } }),
+        &json!({ "type": "message_update", "assistantMessageEvent": { "type": "thinking_start" } }),
     );
     setup.controls.send(
-        json!({ "type": "message_update", "assistantMessageEvent": { "type": "thinking_start" } }),
+        &json!({ "type": "message_update", "assistantMessageEvent": { "type": "thinking_start" } }),
     );
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "message_update",
         "assistantMessageEvent": { "type": "thinking_end", "content": "weighed it" },
     }));
@@ -374,13 +374,13 @@ async fn tool_calls_report_their_target_and_whether_they_failed() {
         300_000,
     );
 
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "tool_execution_start",
         "toolCallId": "t1",
         "toolName": "bash",
         "args": { "command": "ls -la" },
     }));
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "tool_execution_end",
         "toolCallId": "t1",
         "toolName": "bash",
@@ -416,7 +416,7 @@ async fn usage_is_reported_when_a_turn_ends() {
         300_000,
     );
 
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "turn_end",
         "message": { "model": "cheap-model",
                      "usage": { "input": 10, "output": 2, "totalTokens": 12 } },
@@ -430,7 +430,7 @@ async fn usage_is_reported_when_a_turn_ends() {
 #[tokio::test]
 async fn a_select_dialog_is_answered_by_number_or_by_name() {
     let setup = client(AgentHandlers::default(), 300_000);
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "extension_ui_request",
         "id": "d-1",
         "method": "select",
@@ -448,11 +448,11 @@ async fn a_select_dialog_is_answered_by_number_or_by_name() {
         AnswerOutcome::Accepted
     );
     let last: Value =
-        serde_json::from_str(&setup.controls.written().last().expect("a written command"))
+        serde_json::from_str(setup.controls.written().last().expect("a written command"))
             .expect("JSON");
     assert_eq!(last["value"], "dev");
 
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "extension_ui_request",
         "id": "d-2",
         "method": "select",
@@ -465,7 +465,7 @@ async fn a_select_dialog_is_answered_by_number_or_by_name() {
         AnswerOutcome::Accepted
     );
     let last: Value =
-        serde_json::from_str(&setup.controls.written().last().expect("a written command"))
+        serde_json::from_str(setup.controls.written().last().expect("a written command"))
             .expect("JSON");
     assert_eq!(last["value"], "main");
 
@@ -475,7 +475,7 @@ async fn a_select_dialog_is_answered_by_number_or_by_name() {
 #[tokio::test]
 async fn a_reply_that_answers_nothing_leaves_the_dialog_standing() {
     let setup = client(AgentHandlers::default(), 300_000);
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "extension_ui_request",
         "id": "d-1",
         "method": "confirm",
@@ -500,7 +500,7 @@ async fn a_reply_that_answers_nothing_leaves_the_dialog_standing() {
         AnswerOutcome::Accepted
     );
     let last: Value =
-        serde_json::from_str(&setup.controls.written().last().expect("a written command"))
+        serde_json::from_str(setup.controls.written().last().expect("a written command"))
             .expect("JSON");
     assert_eq!(last["confirmed"], true);
 
@@ -523,7 +523,7 @@ async fn an_editor_request_is_cancelled_immediately() {
         300_000,
     );
 
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "extension_ui_request",
         "id": "d-1",
         "method": "editor",
@@ -534,7 +534,7 @@ async fn an_editor_request_is_cancelled_immediately() {
     assert_eq!(*unsupported.lock().unwrap(), vec!["editor".to_owned()]);
     assert_eq!(setup.agent.pending_dialog(), None);
     let last: Value =
-        serde_json::from_str(&setup.controls.written().last().expect("a written command"))
+        serde_json::from_str(setup.controls.written().last().expect("a written command"))
             .expect("JSON");
     assert_eq!(last["cancelled"], true);
 
@@ -557,7 +557,7 @@ async fn a_dialog_nobody_answers_is_cancelled_and_the_caller_told() {
         10,
     );
 
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "extension_ui_request",
         "id": "d-1",
         "method": "confirm",
@@ -588,7 +588,7 @@ async fn an_informational_request_is_neither_answered_nor_reported() {
         300_000,
     );
 
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "extension_ui_request",
         "id": "n-1",
         "method": "notify",
@@ -620,7 +620,7 @@ async fn a_command_the_agent_refuses_is_reported_id_or_no_id() {
         300_000,
     );
 
-    setup.controls.send(json!({
+    setup.controls.send(&json!({
         "type": "response",
         "command": "prompt",
         "success": false,
@@ -644,11 +644,11 @@ async fn a_request_resolves_on_its_answer_and_rejects_on_its_deadline() {
         tokio::spawn(async move { asking.request(json!({ "type": "compact" }), 1_000).await });
     settle().await;
     let sent: Value =
-        serde_json::from_str(&setup.controls.written().last().expect("a written command"))
+        serde_json::from_str(setup.controls.written().last().expect("a written command"))
             .expect("JSON");
     setup
         .controls
-        .send(json!({ "type": "response", "id": sent["id"], "data": { "freed": 1_200 } }));
+        .send(&json!({ "type": "response", "id": sent["id"], "data": { "freed": 1_200 } }));
     let record = answered.await.expect("answered").expect("answered");
     assert_eq!(record["data"]["freed"], 1_200);
 

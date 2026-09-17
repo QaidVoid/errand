@@ -8,7 +8,8 @@ use crate::config::schema::{
     EgressConfig, EgressMode, NetworkMode, SandboxBackend, SandboxConfig, defaults,
 };
 use crate::config::size::parse_size;
-use crate::log::Logger;
+use crate::log::{LogFields, Logger};
+use crate::sandbox::Run;
 use crate::sandbox::backend::{SYSTEM_LABEL, SandboxLaunch};
 use tempfile::TempDir;
 
@@ -58,28 +59,27 @@ fn launch() -> SandboxLaunch {
         system_prompt_path: None,
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
-        providers: Default::default(),
+        providers: serde_json::Map::new(),
         resume: false,
     }
 }
 
-fn fake_run(
-    answers: BTreeMap<String, (Option<i32>, Option<String>)>,
-) -> (
-    impl Fn(Vec<String>, Option<String>) -> super::super::RunFuture<super::super::RunResult>
-    + Send
-    + Sync
-    + 'static,
-    Arc<Mutex<Vec<Vec<String>>>>,
-) {
-    let calls: Arc<Mutex<Vec<Vec<String>>>> = Arc::new(Mutex::new(Vec::new()));
+/// What a scripted command answers: its exit code and its stdout.
+type Answer = (Option<i32>, Option<String>);
+
+/// The argument lists a fake runner was handed, in order.
+type Calls = Arc<Mutex<Vec<Vec<String>>>>;
+
+/// Answers podman's commands from a script, and records what was asked.
+fn fake_run(answers: BTreeMap<String, Answer>) -> (Run, Calls) {
+    let calls: Calls = Arc::new(Mutex::new(Vec::new()));
     let call_log = Arc::clone(&calls);
     let run = move |args: Vec<String>, _cwd: Option<String>| {
         let answers = answers.clone();
         let calls = Arc::clone(&call_log);
         Box::pin(async move {
             calls.lock().unwrap().push(args.clone());
-            let key = args.first().map(String::as_str).unwrap_or("");
+            let key = args.first().map_or("", String::as_str);
             let (code, stdout) = answers.get(key).cloned().unwrap_or((None, None));
             Ok(super::super::RunResult {
                 code: code.unwrap_or(0),
@@ -94,11 +94,11 @@ fn fake_run(
             })
         }) as super::super::RunFuture<super::super::RunResult>
     };
-    (run, calls)
+    (Arc::new(run), calls)
 }
 
 fn silent() -> Logger {
-    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
 /// Each of these would undo the isolation this backend exists to provide.
@@ -256,7 +256,7 @@ async fn podman_that_is_not_rootless_cannot_run_this_backend() {
     let mut answers = BTreeMap::new();
     answers.insert("info".to_owned(), (Some(0), Some("false".to_owned())));
     let (run, _calls) = fake_run(answers);
-    let sandbox = PodmanSandbox::new(config(), silent(), Arc::new(run));
+    let sandbox = PodmanSandbox::new(config(), silent(), run);
 
     let error = sandbox.probe().await.expect_err("refused");
     assert!(error.to_string().contains("not running rootless"));
@@ -267,7 +267,7 @@ async fn a_missing_image_is_reported_at_startup_not_at_the_first_session() {
     let mut answers = BTreeMap::new();
     answers.insert("image".to_owned(), (Some(1), None));
     let (run, _calls) = fake_run(answers);
-    let sandbox = PodmanSandbox::new(config(), silent(), Arc::new(run));
+    let sandbox = PodmanSandbox::new(config(), silent(), run);
 
     let error = sandbox.probe().await.expect_err("refused");
     assert!(error.to_string().contains("is not present"));
@@ -276,7 +276,7 @@ async fn a_missing_image_is_reported_at_startup_not_at_the_first_session() {
 #[tokio::test]
 async fn a_healthy_host_reports_what_it_enforces_and_no_gaps() {
     let (run, _calls) = fake_run(BTreeMap::new());
-    let sandbox = PodmanSandbox::new(config(), silent(), Arc::new(run));
+    let sandbox = PodmanSandbox::new(config(), silent(), run);
 
     let report = sandbox.probe().await.expect("a report");
 
@@ -298,7 +298,7 @@ async fn leftover_containers_are_found_by_label_and_removed() {
         (Some(0), Some("errand-s-1\nerrand-s-2\n".to_owned())),
     );
     let (run, calls) = fake_run(answers);
-    let sandbox = PodmanSandbox::new(config(), silent(), Arc::new(run));
+    let sandbox = PodmanSandbox::new(config(), silent(), run);
 
     assert_eq!(
         sandbox.list_orphans().await.expect("listed"),

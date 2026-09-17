@@ -150,7 +150,10 @@ fn a_project_keeps_the_newest_facts_and_drops_the_oldest() {
     let kept = memory
         .facts_for(Scope::Project, "demo", i64::MAX)
         .expect("read back");
-    assert_eq!(kept.len() as i64, MAX_PROJECT_FACTS);
+    assert_eq!(
+        i64::try_from(kept.len()).expect("a count fits"),
+        MAX_PROJECT_FACTS
+    );
     assert_eq!(kept[0].fact, format!("fact {}", MAX_PROJECT_FACTS + 9));
     memory.close().expect("closes");
 }

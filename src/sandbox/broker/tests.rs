@@ -11,13 +11,13 @@ use super::server::{Broker, read_request_head};
 use super::{
     ProviderRoute, Resolve, host_allowed, is_private_address, parse_connect, public_address,
 };
-use crate::log::Logger;
+use crate::log::{LogFields, Logger};
 
 fn silent() -> Logger {
-    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
-fn resolver(addresses: Vec<&str>) -> Resolve {
+fn resolver(addresses: &[&str]) -> Resolve {
     let addresses: Vec<String> = addresses
         .iter()
         .map(|address| address.to_owned().to_owned())
@@ -105,7 +105,7 @@ fn a_connect_line_yields_its_host_and_port_or_nothing() {
     assert_eq!(parse_connect("CONNECT evil.com/path:443 HTTP/1.1"), None);
 }
 
-/// Connects to the broker as an HTTPS_PROXY client would, sends one CONNECT.
+/// Connects to the broker as an `HTTPS_PROXY` client would, sends one CONNECT.
 async fn try_connect(port: u16, authority: &str) -> String {
     let mut conn = TcpStream::connect(("127.0.0.1", port))
         .await
@@ -347,7 +347,7 @@ fn host_internal_addresses_are_refused_whatever_the_allowlist_says() {
 async fn a_name_is_judged_by_where_it_resolves_not_by_its_spelling() {
     // Resolves to loopback: nothing to dial.
     assert_eq!(
-        public_address("rebind.test", false, Some(&resolver(vec!["127.0.0.1"]))).await,
+        public_address("rebind.test", false, Some(&resolver(&["127.0.0.1"]))).await,
         None
     );
     // Mixed: the public one is what gets dialled, and it is an address, so
@@ -357,7 +357,7 @@ async fn a_name_is_judged_by_where_it_resolves_not_by_its_spelling() {
         public_address(
             "mixed.test",
             false,
-            Some(&resolver(vec!["10.0.0.1", "9.9.9.9"]))
+            Some(&resolver(&["10.0.0.1", "9.9.9.9"]))
         )
         .await,
         Some("9.9.9.9".to_owned())
@@ -392,7 +392,7 @@ async fn allow_internal_admits_a_literal_address_never_a_name() {
     assert_eq!(public_address("10.0.0.5", false, None).await, None);
 
     // A name that resolves internally is refused whether the flag is on or off.
-    let mirror = resolver(vec!["10.0.0.5"]);
+    let mirror = resolver(&["10.0.0.5"]);
     assert_eq!(
         public_address("mirror.internal", true, Some(&mirror)).await,
         None
@@ -497,7 +497,7 @@ fn v6_forms_that_are_internal_in_their_own_right() {
 
 /// The provider route is what the JSON definitions compile into.
 #[allow(dead_code)]
-fn _route_shape(route: ProviderRoute) -> serde_json::Value {
+fn _route_shape(route: &ProviderRoute) -> serde_json::Value {
     json!({ "prefix": route.prefix })
 }
 

@@ -105,10 +105,9 @@ fn a_withdrawn_message_leaves_both_copies() {
 
     let removed = withdraw_from_record(state, "m-2").expect("the record is rewritten");
     assert_eq!(removed.as_deref(), Some(session.said.as_str()));
-    assert_eq!(
+    assert!(
         withdraw_from_agent_session(state, &removed.expect("the text is reported"))
-            .expect("the stored conversation is rewritten"),
-        true
+            .expect("the stored conversation is rewritten")
     );
 
     let transcript =
@@ -142,10 +141,7 @@ fn a_message_nobody_sent_here_withdraws_nothing() {
         withdraw_from_record(state, "not-a-message").expect("it reads"),
         None
     );
-    assert_eq!(
-        withdraw_from_agent_session(state, "words never said").expect("it reads"),
-        false
-    );
+    assert!(!withdraw_from_agent_session(state, "words never said").expect("it reads"));
 }
 
 /// Repairing the agent's file is not a withdrawal's business.
@@ -158,10 +154,7 @@ fn a_line_that_cannot_be_parsed_is_carried_across_untouched() {
     text.push_str("\n{ this is not json");
     std::fs::write(&path, text).expect("the torn line is added");
 
-    assert_eq!(
-        withdraw_from_agent_session(state, &session.said).expect("it rewrites"),
-        true
-    );
+    assert!(withdraw_from_agent_session(state, &session.said).expect("it rewrites"));
     let stored = std::fs::read_to_string(&path).expect("it reads");
     assert!(stored.contains("{ this is not json"));
     assert!(!stored.contains("ghp_TOPSECRET123"));

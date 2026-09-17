@@ -127,18 +127,21 @@ pub fn read_schema(source: &str) -> Vec<Section> {
         }
     }
 
-    if sections.is_empty() {
-        panic!("no interfaces were found in the schema");
-    }
+    assert!(
+        !sections.is_empty(),
+        "no interfaces were found in the schema"
+    );
     for section in &sections {
-        if section.fields.is_empty() {
-            panic!("{} was read with no fields", section.name);
-        }
+        assert!(
+            !section.fields.is_empty(),
+            "{} was read with no fields",
+            section.name
+        );
     }
     sections
 }
 
-/// Turns a snake_case field name into the camelCase key the file uses.
+/// Turns a `snake_case` field name into the camelCase key the file uses.
 fn to_camel(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut upper = false;

@@ -6,11 +6,11 @@ use super::{
     DEFAULT_TRANSCRIPT_LIMIT, Held, Recorder, SessionView, ViewError, ViewFanOut, WITHDRAWN_NOTE,
     label_of, shown_text,
 };
-use crate::log::Logger;
+use crate::log::{LogFields, Logger};
 use crate::session::event::{Delegated, NoticeLevel, SessionEvent, SessionUsage};
 
 fn silent() -> Logger {
-    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
 /// A view that writes down everything it was told, in order.

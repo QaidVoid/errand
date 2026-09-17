@@ -16,7 +16,7 @@ use crate::agent::client::AgentProcess;
 use crate::chat::inbound::{InboundDecision, RawMessage};
 use crate::config::schema::SandboxBackend;
 use crate::config::validate::validate_config;
-use crate::log::{LogLevel, Logger};
+use crate::log::{LogFields, LogLevel, Logger};
 use crate::memory::store::{MemoryStore, Scope};
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
@@ -29,7 +29,7 @@ use crate::session::views::SessionView;
 const OWNER: &str = "100000000000000001";
 
 fn silent() -> Logger {
-    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
 async fn settle() {
@@ -311,7 +311,7 @@ impl crate::admission::scheduler::Clock for NoClock {
     fn clear_timeout(&self, _handle: u64) {}
 }
 
-fn config_with(overrides: serde_json::Value) -> crate::config::schema::Config {
+fn config_with(overrides: &serde_json::Value) -> crate::config::schema::Config {
     let mut base = json!({
         "chat": {
             "token": "a.token.value",
@@ -399,7 +399,7 @@ async fn with_daemon(
             settings[key.as_str()] = value.clone();
         }
     }
-    let config = config_with(settings);
+    let config = config_with(&settings);
     let threads = Arc::new(FakeThreads {
         created: Mutex::new(Vec::new()),
         closed: Arc::new(Mutex::new(Vec::new())),
@@ -416,7 +416,7 @@ async fn with_daemon(
         log: {
             let lines = Arc::clone(&lines);
             Logger::new(
-                Default::default(),
+                LogFields::new(),
                 Arc::new(move |level, line| {
                     lines.lock().unwrap().push((level, line.to_owned()));
                 }),
@@ -1008,7 +1008,7 @@ fn a_backend_with_nothing_missing_says_so_plainly() {
 /// Anyone who can post can run code, which is worth saying out loud.
 #[test]
 fn an_open_allowlist_is_reported_as_the_decision_it_is() {
-    let config = config_with(json!({
+    let config = config_with(&json!({
         "chat": {
             "token": "t",
             "channelId": "c",
@@ -1033,15 +1033,15 @@ fn an_open_allowlist_is_reported_as_the_decision_it_is() {
 
 #[test]
 fn a_setting_the_chosen_backend_ignores_is_reported_as_inert() {
-    assert!(inert_settings(&config_with(json!({}))).is_empty());
+    assert!(inert_settings(&config_with(&json!({}))).is_empty());
     assert_eq!(
-        inert_settings(&config_with(json!({
+        inert_settings(&config_with(&json!({
             "sandbox": { "image": "localhost/mine:v2" },
         }))),
         ["sandbox.image is set but only the podman backend uses it".to_owned()]
     );
     assert!(
-        inert_settings(&config_with(json!({
+        inert_settings(&config_with(&json!({
             "sandbox": { "backend": "podman", "image": "localhost/mine:v2" },
         })))
         .is_empty()
@@ -1355,14 +1355,14 @@ async fn an_operator_may_forget_from_the_channel_and_is_told_what_went() {
 #[test]
 fn create_sandbox_names_the_configured_backend() {
     let root = tempfile::tempdir().unwrap();
-    let config = config_with(json!({
+    let config = config_with(&json!({
         "projectRoot": root.path().join("projects").display().to_string(),
         "stateDir": root.path().join("state").display().to_string(),
     }));
     let sandbox = create_sandbox(&config, silent(), None, None);
     assert!(matches!(sandbox, crate::sandbox::Backend::Bailey(_)));
 
-    let config = config_with(json!({
+    let config = config_with(&json!({
         "projectRoot": root.path().join("projects").display().to_string(),
         "stateDir": root.path().join("state").display().to_string(),
         "sandbox": { "backend": "podman" },

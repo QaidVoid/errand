@@ -48,7 +48,7 @@ fn an_interaction_becomes_the_text_command_it_stands_for() {
 fn a_command_naming_an_account_carries_the_account_id() {
     let command = translate(
         "allow",
-        &[user_option("user", 900000000000000002)],
+        &[user_option("user", 900_000_000_000_000_002)],
         "thread-1",
         true,
         "u1",

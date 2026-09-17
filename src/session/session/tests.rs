@@ -9,14 +9,13 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
 use super::{
-    IncomingMessage, Launcher, OpenPullRequest, RunningBox, SessionHandle, SessionOptions,
-    SessionTimer, Signal, Timers, Unavailable,
+    DescribeImages, FetchAttachment, FetchBox, IncomingMessage, Launcher, OpenPullRequest,
+    RunningBox, SessionHandle, SessionOptions, SessionTimer, Signal, Timers, Unavailable,
 };
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
-use crate::agent::protocol::AgentImage;
 use crate::config::validate::validate_config;
-use crate::log::Logger;
+use crate::log::{LogFields, Logger};
 use crate::memory::store::{MemoryStore, Scope};
 use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
@@ -27,7 +26,7 @@ use crate::session::redacted::Redacting;
 use crate::session::views::{SessionView, ViewError, ViewFanOut};
 
 fn silent() -> Logger {
-    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
 async fn settle() {
@@ -74,7 +73,7 @@ impl FakeAgent {
 }
 
 impl FakeControls {
-    fn send(&self, record: Value) {
+    fn send(&self, record: &Value) {
         self.chunk(&format!("{record}\n"));
     }
 
@@ -91,7 +90,7 @@ impl FakeControls {
     }
 
     /// Answers the most recent request, by its correlation id.
-    fn answer(&self, data: Value) {
+    fn answer(&self, data: &Value) {
         let written = self.written();
         let last = written.iter().rev().find(|line| line.contains("\"id\""));
         let id = last.and_then(|line| {
@@ -99,21 +98,21 @@ impl FakeControls {
                 .ok()
                 .and_then(|parsed| parsed.get("id").cloned())
         });
-        self.send(json!({ "type": "response", "id": id, "success": true, "data": data }));
+        self.send(&json!({ "type": "response", "id": id, "success": true, "data": data }));
     }
 
     /// Reports a whole turn: it starts, speaks, costs something, and settles.
     fn run_turn_saying(&self, text: &str) {
-        self.send(json!({ "type": "agent_start" }));
-        self.send(json!({
+        self.send(&json!({ "type": "agent_start" }));
+        self.send(&json!({
             "type": "message_end",
             "message": { "role": "assistant", "content": [{ "type": "text", "text": text }] },
         }));
-        self.send(json!({
+        self.send(&json!({
             "type": "turn_end",
             "usage": { "input": 10, "output": 2, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 12, "cost": 0.01 },
         }));
-        self.send(json!({ "type": "agent_settled" }));
+        self.send(&json!({ "type": "agent_settled" }));
     }
 
     /// Writes to stderr, as a dying process does.
@@ -359,9 +358,9 @@ impl FakeThread {
         events
             .iter()
             .filter_map(|event| match event {
-                SessionEvent::Post { text } => Some(text.clone()),
-                SessionEvent::Notice { text, .. } => Some(text.clone()),
-                SessionEvent::Reply { text, .. } => Some(text.clone()),
+                SessionEvent::Post { text }
+                | SessionEvent::Notice { text, .. }
+                | SessionEvent::Reply { text, .. } => Some(text.clone()),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -546,7 +545,7 @@ impl Clock for NoClock {
     fn clear_timeout(&self, _handle: u64) {}
 }
 
-fn config_with(overrides: Value) -> Arc<crate::config::schema::Config> {
+fn config_with(overrides: &Value) -> Arc<crate::config::schema::Config> {
     let mut base = json!({
         "chat": {
             "token": "a.token.value",
@@ -636,30 +635,8 @@ struct SessionTestCase {
     first: Option<String>,
     guest_ids: Vec<String>,
     memory: Option<Arc<MemoryStore>>,
-    describe_images: Option<
-        Arc<
-            dyn Fn(
-                    Vec<AgentImage>,
-                    String,
-                ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
-                + Send
-                + Sync,
-        >,
-    >,
-    fetch_attachment: Option<
-        Arc<
-            dyn Fn(
-                    String,
-                ) -> Pin<
-                    Box<
-                        dyn Future<
-                                Output = Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>,
-                            > + Send,
-                    >,
-                > + Send
-                + Sync,
-        >,
-    >,
+    describe_images: Option<DescribeImages>,
+    fetch_attachment: Option<FetchAttachment>,
     open_pull_request: Option<OpenPullRequest>,
     unavailable: Option<Unavailable>,
     start: bool,
@@ -695,7 +672,7 @@ async fn with_session(
     let config = case
         .config
         .clone()
-        .unwrap_or_else(|| config_with(json!({})));
+        .unwrap_or_else(|| config_with(&json!({})));
     let thread = FakeThread::new();
     let sandbox = FakeSandbox::new();
     let timers = TestTimers::new();
@@ -778,7 +755,7 @@ async fn with_session(
         settle().await;
         harness
             .controls()
-            .answer(json!({ "model": { "contextWindow": 200_000 } }));
+            .answer(&json!({ "model": { "contextWindow": 200_000 } }));
         let _ = starting.await.expect("start task joins");
     }
 
@@ -887,7 +864,7 @@ async fn a_turn_is_reported_priced_and_closed_by_pinging_whoever_asked() {
 async fn a_message_during_a_running_turn_steers_it_rather_than_queueing() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
-            harness.controls().send(json!({ "type": "agent_start" }));
+            harness.controls().send(&json!({ "type": "agent_start" }));
             settle().await;
 
             harness
@@ -1399,7 +1376,7 @@ async fn a_pull_request_the_agent_asked_for_opens_when_somebody_asked_too() {
     let opened = Arc::new(Mutex::new(Vec::new()));
     with_session(
         SessionTestCase {
-            config: Some(config_with(json!({
+            config: Some(config_with(&json!({
                 "github": { "token": "ghp", "userName": "errand-bot", "userEmail": "bot@example.com" },
             }))),
             open_pull_request: {
@@ -1463,7 +1440,7 @@ async fn a_pull_request_nobody_asked_for_is_refused_and_cleared() {
     let opened = Arc::new(Mutex::new(0));
     with_session(
         SessionTestCase {
-            config: Some(config_with(json!({
+            config: Some(config_with(&json!({
                 "github": { "token": "ghp", "userName": "errand-bot", "userEmail": "bot@example.com" },
             }))),
             open_pull_request: {
@@ -1530,7 +1507,7 @@ async fn a_session_with_no_github_identity_says_so_rather_than_failing() {
 async fn the_git_identity_and_the_gh_wrapper_are_in_place_before_the_launch() {
     with_session(
         SessionTestCase {
-            config: Some(config_with(json!({
+            config: Some(config_with(&json!({
                 "github": { "token": "ghp", "userName": "errand-bot", "userEmail": "bot@example.com" },
             }))),
             ..Default::default()
@@ -1569,13 +1546,13 @@ async fn the_git_identity_and_the_gh_wrapper_are_in_place_before_the_launch() {
 async fn what_a_tool_did_is_reported_and_its_output_truncated() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
-            harness.controls().send(json!({
+            harness.controls().send(&json!({
                 "type": "tool_execution_start",
                 "toolCallId": "t1",
                 "toolName": "bash",
                 "args": { "command": "ls -la" },
             }));
-            harness.controls().send(json!({
+            harness.controls().send(&json!({
                 "type": "tool_execution_end",
                 "toolCallId": "t1",
                 "toolName": "bash",
@@ -1597,7 +1574,7 @@ async fn an_edit_is_shown_as_a_diff_of_what_actually_changed() {
             let file = harness.root.path().join("project").join("main.ts");
             std::fs::write(&file, "const x = 1;\n").unwrap();
 
-            harness.controls().send(json!({
+            harness.controls().send(&json!({
                 "type": "tool_execution_start",
                 "toolCallId": "t1",
                 "toolName": "edit",
@@ -1605,7 +1582,7 @@ async fn an_edit_is_shown_as_a_diff_of_what_actually_changed() {
             }));
             settle().await;
             std::fs::write(&file, "const x = 2;\n").unwrap();
-            harness.controls().send(json!({
+            harness.controls().send(&json!({
                 "type": "tool_execution_end",
                 "toolCallId": "t1",
                 "toolName": "edit",
@@ -1625,7 +1602,7 @@ async fn an_edit_is_shown_as_a_diff_of_what_actually_changed() {
 async fn a_question_from_the_agent_is_asked_in_the_thread_and_answered_back() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
-            harness.controls().send(json!({
+            harness.controls().send(&json!({
                 "type": "extension_ui_request",
                 "id": "d1",
                 "method": "confirm",
@@ -1835,35 +1812,16 @@ async fn stopping_says_so_so_the_thread_can_be_archived() {
     .await;
 }
 
-fn png_fetch() -> Option<
-    Arc<
-        dyn Fn(
-                String,
-            ) -> Pin<
-                Box<
-                    dyn Future<Output = Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>>
-                        + Send,
-                >,
-            > + Send
-            + Sync,
-    >,
-> {
-    Some(Arc::new(|_url: String| {
-        Box::pin(async { Ok(PNG.to_vec()) })
-            as Pin<
-                Box<
-                    dyn Future<Output = Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>>
-                        + Send,
-                >,
-            >
-    }))
+/// A fetcher that answers every url with the same small PNG.
+fn png_fetch() -> FetchAttachment {
+    Arc::new(|_url: String| Box::pin(async { Ok(PNG.to_vec()) }) as FetchBox)
 }
 
 #[tokio::test]
 async fn an_attached_file_is_saved_and_the_agent_is_told_where_it_went() {
     with_session(
         SessionTestCase {
-            fetch_attachment: png_fetch(),
+            fetch_attachment: Some(png_fetch()),
             ..Default::default()
         },
         |harness| {
@@ -1892,7 +1850,7 @@ async fn an_attached_file_is_saved_and_the_agent_is_told_where_it_went() {
 async fn a_message_with_no_text_but_a_file_still_starts_a_turn() {
     with_session(
         SessionTestCase {
-            fetch_attachment: png_fetch(),
+            fetch_attachment: Some(png_fetch()),
             ..Default::default()
         },
         |harness| {
@@ -1915,7 +1873,7 @@ async fn a_message_with_no_text_but_a_file_still_starts_a_turn() {
 async fn an_image_is_described_for_a_model_that_cannot_see_it() {
     with_session(
         SessionTestCase {
-            fetch_attachment: png_fetch(),
+            fetch_attachment: Some(png_fetch()),
             describe_images: Some(Arc::new(|_images, question| {
                 Box::pin(async move { Ok(format!("described: it says ENOSPC ({question})")) })
             })),
@@ -1944,7 +1902,7 @@ async fn an_image_is_described_for_a_model_that_cannot_see_it() {
 async fn a_description_that_fails_leaves_the_path_and_says_what_went_wrong() {
     with_session(
         SessionTestCase {
-            fetch_attachment: png_fetch(),
+            fetch_attachment: Some(png_fetch()),
             describe_images: Some(Arc::new(|_images, _question| {
                 Box::pin(async { Err("the describing model refused".to_owned()) })
             })),
@@ -1975,7 +1933,7 @@ async fn a_description_that_fails_leaves_the_path_and_says_what_went_wrong() {
 async fn a_model_that_can_see_is_handed_the_image_itself() {
     with_session(
         SessionTestCase {
-            fetch_attachment: png_fetch(),
+            fetch_attachment: Some(png_fetch()),
             ..Default::default()
         },
         |harness| {
@@ -2207,7 +2165,7 @@ async fn asking_to_interrupt_again_does_not_start_a_second_wait() {
         Box::pin(async move {
             // A turn that starts and does not settle, so the session
             // stays busy.
-            harness.controls().send(json!({ "type": "agent_start" }));
+            harness.controls().send(&json!({ "type": "agent_start" }));
             settle().await;
 
             harness
@@ -2252,7 +2210,7 @@ async fn an_interruption_the_agent_confirms_does_not_force_stop() {
         SessionTestCase::default(),
         |harness| {
             Box::pin(async move {
-                harness.controls().send(json!({ "type": "agent_start" }));
+                harness.controls().send(&json!({ "type": "agent_start" }));
                 settle().await;
 
                 harness
@@ -2262,11 +2220,11 @@ async fn an_interruption_the_agent_confirms_does_not_force_stop() {
 
                 // The agent answers, so the turn settles well inside the
                 // deadline.
-                harness.controls().send(json!({
+                harness.controls().send(&json!({
                     "type": "turn_end",
                     "usage": { "input": 1, "output": 1, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 2, "cost": 0 },
                 }));
-                harness.controls().send(json!({ "type": "agent_settled" }));
+                harness.controls().send(&json!({ "type": "agent_settled" }));
                 settle().await;
                 harness.timers.advance(200);
                 settle().await;
@@ -2277,9 +2235,6 @@ async fn an_interruption_the_agent_confirms_does_not_force_stop() {
     )
     .await;
 }
-
-/// The withdrawal scenarios of the `message-withdrawal` capability, walked
-/// against the session itself.
 
 /// What a session's record holds, as the daemon writes it.
 fn seed_withdrawn_record(harness: &Harness, said: &str) {
@@ -2353,7 +2308,7 @@ async fn a_turn_in_progress_survives_a_withdrawal() {
             seed_withdrawn_record(harness, said);
 
             // A turn starts and does not settle, so the session is busy.
-            harness.controls().send(json!({ "type": "agent_start" }));
+            harness.controls().send(&json!({ "type": "agent_start" }));
             settle().await;
 
             // Held, because the agent is appending to its conversation.

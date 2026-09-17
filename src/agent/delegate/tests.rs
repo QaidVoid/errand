@@ -1,6 +1,5 @@
 //! Tests for a turn's delegations, ported from `delegate_test.ts`.
 
-use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
@@ -31,10 +30,14 @@ fn endpoint() -> Endpoint {
 struct TestSources;
 
 impl Sources for TestSources {
-    fn project_root(&self) -> &str {
+    fn project_root(&self) -> &'static str {
         "/projects/demo"
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait is async; a stand-in that answers at once still has to match it"
+    )]
     async fn read_file(&self, _path: &str) -> std::io::Result<String> {
         Ok("line one\nline two failed\nline three".to_owned())
     }
@@ -86,23 +89,25 @@ const REPLY: &str = r#"{
 }"#;
 
 impl super::super::super::provider::ask::Sender for FakeSender {
-    fn send(
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait is async; a stand-in that answers at once still has to match it"
+    )]
+    async fn send(
         &self,
         url: String,
         request: SendRequest,
-    ) -> impl Future<Output = Result<(u16, Option<Value>), String>> + Send {
-        async move {
-            if self.never {
-                return Err("network is down".to_owned());
-            }
-            self.sent
-                .lock()
-                .unwrap()
-                .push((url, serde_json::from_str(&request.body).expect("JSON body")));
-            let answer = self.answer.lock().unwrap().clone();
-            let status = *self.status.lock().unwrap();
-            Ok((status, Some(answer)))
+    ) -> Result<(u16, Option<Value>), String> {
+        if self.never {
+            return Err("network is down".to_owned());
         }
+        self.sent
+            .lock()
+            .unwrap()
+            .push((url, serde_json::from_str(&request.body).expect("JSON body")));
+        let answer = self.answer.lock().unwrap().clone();
+        let status = *self.status.lock().unwrap();
+        Ok((status, Some(answer)))
     }
 }
 
@@ -216,7 +221,7 @@ async fn a_turn_may_delegate_only_so_many_times() {
     assert!(is_refused(&second));
     match second {
         Outcome::Refused(refused) => {
-            assert!(refused.refused.contains("already delegated"))
+            assert!(refused.refused.contains("already delegated"));
         }
         Outcome::Ready(_) => panic!("expected a refusal"),
     }
@@ -250,7 +255,7 @@ async fn nothing_is_asked_while_the_provider_is_being_backed_off() {
 
     match answer {
         Outcome::Refused(refused) => {
-            assert!(refused.refused.contains("backed off"))
+            assert!(refused.refused.contains("backed off"));
         }
         Outcome::Ready(_) => panic!("expected a refusal"),
     }
@@ -268,7 +273,7 @@ async fn no_free_slot_means_the_work_stays_with_the_sessions_own_model() {
 
     match answer {
         Outcome::Refused(refused) => {
-            assert!(refused.refused.contains("no free slot"))
+            assert!(refused.refused.contains("no free slot"));
         }
         Outcome::Ready(_) => panic!("expected a refusal"),
     }
@@ -302,7 +307,7 @@ async fn a_provider_refusal_is_reported_not_thrown() {
 
     match answer {
         Outcome::Refused(refused) => {
-            assert!(refused.refused.contains("refused the question"))
+            assert!(refused.refused.contains("refused the question"));
         }
         Outcome::Ready(_) => panic!("expected a refusal"),
     }

@@ -48,5 +48,5 @@ fn the_table_covers_every_reaction_and_prefix_there_is() {
 fn the_table_is_written_without_a_single_literal_glyph() {
     let source = std::fs::read_to_string(repo_root().join("src/chat/chars.rs"))
         .expect("the table source is readable");
-    assert!(source.chars().all(|character| character.is_ascii()));
+    assert!(source.is_ascii());
 }

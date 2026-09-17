@@ -10,7 +10,8 @@ use super::{
     egress_proxy_url, parse_doctor, provider_config, session_environment,
 };
 use crate::config::schema::{EgressConfig, EgressMode, SandboxBackend, SandboxConfig, defaults};
-use crate::log::Logger;
+use crate::log::{LogFields, Logger};
+use crate::sandbox::Run;
 use crate::sandbox::backend::SandboxLaunch;
 use tempfile::TempDir;
 
@@ -59,7 +60,7 @@ fn launch() -> SandboxLaunch {
         system_prompt_path: None,
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
-        providers: Default::default(),
+        providers: serde_json::Map::new(),
         resume: false,
     }
 }
@@ -67,23 +68,22 @@ fn launch() -> SandboxLaunch {
 const HEALTHY: &str =
     "landlock: yes (abi 5)\nuser namespaces: yes\ncgroup delegation: yes\nseccomp: yes";
 
+/// What a scripted command answers: its exit code, its stdout, its stderr.
+type Answer = (Option<i32>, Option<String>, Option<String>);
+
+/// The argument lists a fake runner was handed, in order.
+type Calls = Arc<Mutex<Vec<Vec<String>>>>;
+
 /// Answers the tool's commands from a script, and records what was asked.
-fn fake_run(
-    answers: BTreeMap<String, (Option<i32>, Option<String>, Option<String>)>,
-) -> (
-    impl Fn(Vec<String>, Option<String>) -> super::super::RunFuture<super::super::RunResult>
-    + Send
-    + Sync,
-    Arc<Mutex<Vec<Vec<String>>>>,
-) {
-    let calls: Arc<Mutex<Vec<Vec<String>>>> = Arc::new(Mutex::new(Vec::new()));
+fn fake_run(answers: BTreeMap<String, Answer>) -> (Run, Calls) {
+    let calls: Calls = Arc::new(Mutex::new(Vec::new()));
     let call_log = Arc::clone(&calls);
     let run = move |args: Vec<String>, _cwd: Option<String>| {
         let answers = answers.clone();
         let calls = Arc::clone(&call_log);
         Box::pin(async move {
             calls.lock().unwrap().push(args.clone());
-            let key = args.first().map(String::as_str).unwrap_or("");
+            let key = args.first().map_or("", String::as_str);
             let (code, stdout, stderr) = answers.get(key).cloned().unwrap_or((None, None, None));
             Ok(super::super::RunResult {
                 code: code.unwrap_or(0),
@@ -98,29 +98,20 @@ fn fake_run(
             })
         }) as super::super::RunFuture<super::super::RunResult>
     };
-    (run, calls)
+    (Arc::new(run), calls)
 }
 
 fn silent() -> Logger {
-    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
 fn bailey_with(
     config: &SandboxConfig,
     root: &str,
-    run: impl Fn(Vec<String>, Option<String>) -> super::super::RunFuture<super::super::RunResult>
-    + Send
-    + Sync
-    + 'static,
+    run: Run,
     options: BaileyOptions,
 ) -> BaileySandbox {
-    BaileySandbox::new(
-        config.clone(),
-        silent(),
-        root.to_owned(),
-        Arc::new(run),
-        options,
-    )
+    BaileySandbox::new(config.clone(), silent(), root.to_owned(), run, options)
 }
 
 #[tokio::test]
@@ -167,7 +158,7 @@ async fn a_tool_that_is_not_installed_is_reported_as_unavailable() {
             Err::<super::super::RunResult, _>(std::io::Error::other("no such command"))
         }) as super::super::RunFuture<super::super::RunResult>
     };
-    let sandbox = bailey_with(&config(), "/state", run, BaileyOptions::default());
+    let sandbox = bailey_with(&config(), "/state", Arc::new(run), BaileyOptions::default());
 
     let error = sandbox.probe().await.expect_err("refused");
     assert!(error.to_string().contains("not installed"));

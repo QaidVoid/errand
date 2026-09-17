@@ -30,6 +30,10 @@ impl Sources for TestSources {
         &self.root
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait is async; a stand-in that answers at once still has to match it"
+    )]
     async fn read_file(&self, path: &str) -> std::io::Result<String> {
         if self.read_fails {
             return Err(std::io::Error::other("no such file"));
@@ -50,8 +54,8 @@ fn sources() -> TestSources {
     TestSources::default()
 }
 
-fn accepted(raw: serde_json::Value) -> Delegation {
-    match parse_delegation(&raw) {
+fn accepted(raw: &serde_json::Value) -> Delegation {
+    match parse_delegation(raw) {
         Outcome::Ready(delegation) => delegation,
         Outcome::Refused(refused) => {
             panic!("expected acceptance, got: {}", refused.refused)
@@ -62,7 +66,7 @@ fn accepted(raw: serde_json::Value) -> Delegation {
 #[test]
 fn a_question_about_a_file_is_accepted() {
     assert_eq!(
-        accepted(json!({ "question": "which tests fail?", "path": "out.log" })),
+        accepted(&json!({ "question": "which tests fail?", "path": "out.log" })),
         Delegation {
             question: "which tests fail?".to_owned(),
             source: super::Source::File {
@@ -75,13 +79,13 @@ fn a_question_about_a_file_is_accepted() {
 #[test]
 fn a_question_about_a_calls_output_or_an_attachment_is_accepted() {
     assert_eq!(
-        accepted(json!({ "question": "what broke?", "callId": "c1" })).source,
+        accepted(&json!({ "question": "what broke?", "callId": "c1" })).source,
         super::Source::Output {
             call_id: "c1".to_owned()
         }
     );
     assert_eq!(
-        accepted(json!({ "question": "what is shown?", "attachment": "shot.png" })).source,
+        accepted(&json!({ "question": "what is shown?", "attachment": "shot.png" })).source,
         super::Source::Attachment {
             name: "shot.png".to_owned()
         }
@@ -128,7 +132,7 @@ fn anything_that_is_not_a_request_at_all_is_refused() {
 #[tokio::test]
 async fn a_file_is_read_and_named_for_attribution() {
     let resolved = resolve_source(
-        &accepted(json!({ "question": "q", "path": "logs/out.txt" })),
+        &accepted(&json!({ "question": "q", "path": "logs/out.txt" })),
         &sources(),
     )
     .await;
@@ -145,7 +149,7 @@ async fn a_file_is_read_and_named_for_attribution() {
 async fn a_file_outside_the_project_is_refused_however_it_is_spelled() {
     for path in ["../secrets.env", "/etc/passwd", "a/../../out"] {
         let resolved = resolve_source(
-            &accepted(json!({ "question": "q", "path": path })),
+            &accepted(&json!({ "question": "q", "path": path })),
             &sources(),
         )
         .await;
@@ -167,14 +171,14 @@ async fn a_file_that_cannot_be_read_is_refused_rather_than_throwing() {
         ..TestSources::default()
     };
     let resolved = resolve_source(
-        &accepted(json!({ "question": "q", "path": "missing.txt" })),
+        &accepted(&json!({ "question": "q", "path": "missing.txt" })),
         &test_sources,
     )
     .await;
 
     match resolved {
         Outcome::Refused(refused) => {
-            assert!(refused.refused.contains("could not be read"))
+            assert!(refused.refused.contains("could not be read"));
         }
         Outcome::Ready(_) => panic!("expected a refusal"),
     }
@@ -183,7 +187,7 @@ async fn a_file_that_cannot_be_read_is_refused_rather_than_throwing() {
 #[tokio::test]
 async fn a_calls_output_is_found_by_id_and_an_unknown_id_is_refused() {
     let found = resolve_source(
-        &accepted(json!({ "question": "q", "callId": "c1" })),
+        &accepted(&json!({ "question": "q", "callId": "c1" })),
         &sources(),
     )
     .await;
@@ -193,7 +197,7 @@ async fn a_calls_output_is_found_by_id_and_an_unknown_id_is_refused() {
     }
 
     let missing = resolve_source(
-        &accepted(json!({ "question": "q", "callId": "c9" })),
+        &accepted(&json!({ "question": "q", "callId": "c9" })),
         &sources(),
     )
     .await;
@@ -203,7 +207,7 @@ async fn a_calls_output_is_found_by_id_and_an_unknown_id_is_refused() {
 #[tokio::test]
 async fn an_attachment_is_found_by_name_and_an_unknown_one_is_refused() {
     let found = resolve_source(
-        &accepted(json!({ "question": "q", "attachment": "shot.png" })),
+        &accepted(&json!({ "question": "q", "attachment": "shot.png" })),
         &sources(),
     )
     .await;
@@ -213,7 +217,7 @@ async fn an_attachment_is_found_by_name_and_an_unknown_one_is_refused() {
     }
 
     let missing = resolve_source(
-        &accepted(json!({ "question": "q", "attachment": "other.png" })),
+        &accepted(&json!({ "question": "q", "attachment": "other.png" })),
         &sources(),
     )
     .await;

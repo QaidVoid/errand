@@ -14,7 +14,7 @@ use super::{
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
 use crate::config::validate::validate_config;
-use crate::log::Logger;
+use crate::log::{LogFields, Logger};
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
@@ -29,7 +29,7 @@ use crate::session::views::{SessionView, ViewError};
 const OWNER: &str = "100000000000000001";
 
 fn silent() -> Logger {
-    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
 async fn settle() {
@@ -70,7 +70,7 @@ impl QuietAgent {
 }
 
 impl QuietControls {
-    fn send(&self, record: serde_json::Value) {
+    fn send(&self, record: &serde_json::Value) {
         self.fake
             .queue
             .lock()
@@ -191,15 +191,15 @@ impl FakeSandbox {
             .last()
             .map(|(_, controls)| controls.clone())
             .expect("no agent has been launched");
-        controls.send(json!({ "type": "agent_start" }));
-        controls.send(json!({
+        controls.send(&json!({ "type": "agent_start" }));
+        controls.send(&json!({
             "type": "message_end",
             "message": { "role": "assistant", "content": [{ "type": "text", "text": "done" }] },
         }));
-        controls.send(json!({ "type": "turn_end", "usage": {
+        controls.send(&json!({ "type": "turn_end", "usage": {
             "input": 1, "output": 1, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 2, "cost": 0,
         } }));
-        controls.send(json!({ "type": "agent_settled" }));
+        controls.send(&json!({ "type": "agent_settled" }));
     }
 }
 
@@ -388,7 +388,7 @@ struct Harness {
 
 fn config_with(
     root: &std::path::Path,
-    overrides: serde_json::Value,
+    overrides: &serde_json::Value,
 ) -> crate::config::schema::Config {
     let mut base = json!({
         "chat": {
@@ -413,11 +413,11 @@ fn config_with(
 }
 
 async fn with_manager(run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + '_>>) {
-    with_manager_options(json!({}), None, run).await;
+    with_manager_options(&json!({}), None, run).await;
 }
 
 async fn with_manager_options(
-    overrides: serde_json::Value,
+    overrides: &serde_json::Value,
     unavailable: Option<crate::session::session::Unavailable>,
     run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + '_>>,
 ) {
@@ -600,7 +600,7 @@ async fn no_thread_means_no_sandbox_and_the_slot_is_given_back() {
 #[tokio::test]
 async fn a_spent_window_refuses_before_a_thread_or_a_sandbox_exists() {
     with_manager_options(
-        json!({}),
+        &json!({}),
         Some(Arc::new(|_provider| {
             Box::pin(async { Some("come back at nine".to_owned()) })
                 as Pin<Box<dyn Future<Output = Option<String>> + Send>>
@@ -622,7 +622,7 @@ async fn a_spent_window_refuses_before_a_thread_or_a_sandbox_exists() {
 #[tokio::test]
 async fn more_sessions_than_the_host_allows_are_refused_with_a_reason() {
     with_manager_options(
-        json!({ "limits": { "maxLiveSessions": 1 } }),
+        &json!({ "limits": { "maxLiveSessions": 1 } }),
         None,
         |harness| {
             Box::pin(async move {
@@ -1092,7 +1092,7 @@ async fn the_opening_message_can_choose_the_model_the_session_starts_on() {
 #[tokio::test]
 async fn a_known_provider_in_front_of_the_model_switches_provider_too() {
     with_manager_options(
-        json!({
+        &json!({
             "agent": {
                 "provider": "anthropic",
                 "credentialName": "ANTHROPIC_API_KEY",
@@ -1149,7 +1149,7 @@ async fn the_flag_is_taken_off_the_prompt_the_agent_is_given() {
 #[tokio::test]
 async fn a_resumed_thread_comes_back_on_the_model_it_was_started_with() {
     with_manager_options(
-        json!({
+        &json!({
             "agent": {
                 "provider": "anthropic",
                 "credentialName": "ANTHROPIC_API_KEY",
@@ -1222,7 +1222,7 @@ async fn a_thread_started_on_the_configured_model_still_resumes_on_it() {
 #[tokio::test]
 async fn a_short_name_starts_the_session_on_the_model_it_stands_for() {
     with_manager_options(
-        json!({
+        &json!({
             "agent": {
                 "provider": "anthropic",
                 "credentialName": "ANTHROPIC_API_KEY",
@@ -1306,7 +1306,7 @@ async fn a_deliberate_stop_still_ends_the_thread_for_good() {
 #[tokio::test]
 async fn a_model_switch_inside_a_resumed_thread_is_remembered_too() {
     with_manager_options(
-        json!({
+        &json!({
             "agent": {
                 "provider": "anthropic",
                 "credentialName": "ANTHROPIC_API_KEY",
@@ -1384,7 +1384,7 @@ async fn a_model_switch_inside_a_resumed_thread_is_remembered_too() {
 #[tokio::test]
 async fn a_spent_default_provider_does_not_refuse_another_provider() {
     with_manager_options(
-        json!({
+        &json!({
             "agent": {
                 "provider": "anthropic",
                 "credentialName": "ANTHROPIC_API_KEY",
@@ -1417,7 +1417,7 @@ async fn a_spent_default_provider_does_not_refuse_another_provider() {
 #[tokio::test]
 async fn a_spent_provider_still_refuses_a_prompt_that_would_use_it() {
     with_manager_options(
-        json!({
+        &json!({
             "agent": {
                 "provider": "anthropic",
                 "credentialName": "ANTHROPIC_API_KEY",

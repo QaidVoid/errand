@@ -24,7 +24,7 @@ fn launch() -> SandboxLaunch {
         system_prompt_path: None,
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
-        providers: Default::default(),
+        providers: serde_json::Map::new(),
         resume: false,
     }
 }
@@ -43,7 +43,7 @@ struct Overrides<'a> {
     path_extra: Option<&'a [String]>,
 }
 
-fn policy_bytes_with<'a>(launch: &'a SandboxLaunch, overrides: Overrides<'a>) -> String {
+fn policy_bytes_with<'a>(launch: &'a SandboxLaunch, overrides: &Overrides<'a>) -> String {
     let runtime = runtime();
     let options = PolicyOptions {
         launch: overrides.launch.unwrap_or(launch),
@@ -61,7 +61,7 @@ fn policy_bytes_with<'a>(launch: &'a SandboxLaunch, overrides: Overrides<'a>) ->
     policy_contents(&options)
 }
 
-fn policy_bytes(overrides: Overrides) -> String {
+fn policy_bytes(overrides: &Overrides) -> String {
     let held = launch();
     policy_bytes_with(&held, overrides)
 }
@@ -72,13 +72,13 @@ fn overrides() -> Overrides<'static> {
 
 #[test]
 fn the_policy_clears_the_profiles_grants_before_listing_its_own() {
-    assert!(policy_bytes(overrides()).contains("reset = true"));
+    assert!(policy_bytes(&overrides()).contains("reset = true"));
 }
 
 /// A host path names the operator and the shape of their machine.
 #[test]
 fn the_project_and_the_state_are_placed_never_shown_as_host_paths() {
-    let written = policy_bytes(overrides());
+    let written = policy_bytes(&overrides());
 
     assert!(written.contains(r#"{ path = "/home/operator/code/demo", at = "/workspace" }"#));
     assert!(
@@ -88,7 +88,7 @@ fn the_project_and_the_state_are_placed_never_shown_as_host_paths() {
 
 #[test]
 fn the_state_directory_is_readable_as_well_as_writable() {
-    let written = policy_bytes(overrides());
+    let written = policy_bytes(&overrides());
     let read = written
         .split('\n')
         .find(|line| line.starts_with("read = "))
@@ -105,7 +105,7 @@ fn the_state_directory_is_readable_as_well_as_writable() {
 /// Only the project and the session's own state may be written.
 #[test]
 fn nothing_outside_the_session_is_writable() {
-    let write = policy_bytes(overrides())
+    let write = policy_bytes(&overrides())
         .split('\n')
         .find(|line| line.starts_with("write = "))
         .unwrap_or("")
@@ -119,7 +119,7 @@ fn nothing_outside_the_session_is_writable() {
 
 #[test]
 fn the_hosts_own_resolver_is_never_granted() {
-    let written = policy_bytes(overrides());
+    let written = policy_bytes(&overrides());
 
     assert!(
         written.contains(r#"{ path = "/var/lib/errand/resolv.conf", at = "/etc/resolv.conf" }"#)
@@ -145,7 +145,7 @@ fn only_the_named_variables_cross_and_no_value_is_written() {
         ]),
         ..launch()
     };
-    let written = policy_bytes_with(&held, overrides());
+    let written = policy_bytes_with(&held, &overrides());
 
     assert!(written.contains(r#"pass = ["GH_TOKEN", "ZAI_API_KEY"]"#));
     assert!(!written.contains("secret-value"));
@@ -154,7 +154,7 @@ fn only_the_named_variables_cross_and_no_value_is_written() {
 
 #[test]
 fn the_agents_own_directories_are_readable_or_it_cannot_start() {
-    let written = policy_bytes(overrides());
+    let written = policy_bytes(&overrides());
 
     assert!(written.contains("\"/opt/agent/lib/pi\""));
     assert!(written.contains("/opt/agent/bin"));
@@ -162,7 +162,7 @@ fn the_agents_own_directories_are_readable_or_it_cannot_start() {
 
 #[test]
 fn the_wrapper_directory_leads_the_path_and_is_executable() {
-    let written = policy_bytes(overrides());
+    let written = policy_bytes(&overrides());
     let path = written
         .split('\n')
         .find(|line| line.starts_with("set = "))
@@ -182,7 +182,7 @@ fn the_wrapper_directory_leads_the_path_and_is_executable() {
 #[test]
 fn a_file_size_ceiling_is_set_as_a_resource_limit() {
     assert!(
-        policy_bytes(Overrides {
+        policy_bytes(&Overrides {
             file_max: Some("512m"),
             ..overrides()
         })
@@ -192,9 +192,9 @@ fn a_file_size_ceiling_is_set_as_a_resource_limit() {
 
 #[test]
 fn outbound_https_is_allowed_and_no_network_means_no_egress_at_all() {
-    assert!(policy_bytes(overrides()).contains(r#"egress_allow = [{ host = "*", port = 443 }]"#));
+    assert!(policy_bytes(&overrides()).contains(r#"egress_allow = [{ host = "*", port = 443 }]"#));
 
-    let offline = policy_bytes(Overrides {
+    let offline = policy_bytes(&Overrides {
         network: Some(NetworkMode::None),
         ..overrides()
     });
@@ -204,7 +204,7 @@ fn outbound_https_is_allowed_and_no_network_means_no_egress_at_all() {
 
 #[test]
 fn configured_ports_become_the_egress_allowlist_in_order() {
-    let configured = policy_bytes(Overrides {
+    let configured = policy_bytes(&Overrides {
         egress_ports: Some(&[80, 443]),
         ..overrides()
     });
@@ -217,7 +217,7 @@ fn configured_ports_become_the_egress_allowlist_in_order() {
 /// A session with no network opens nothing, whatever ports were named.
 #[test]
 fn ports_do_not_grant_egress_to_a_session_that_has_no_network() {
-    let offline = policy_bytes(Overrides {
+    let offline = policy_bytes(&Overrides {
         network: Some(NetworkMode::None),
         egress_ports: Some(&[80, 443]),
         ..overrides()
@@ -244,7 +244,7 @@ fn extra() -> PolicyExtraConfig {
 #[test]
 fn paths_granted_by_configuration_reach_the_policy() {
     let granted = extra();
-    let policy = policy_bytes(Overrides {
+    let policy = policy_bytes(&Overrides {
         extra: Some(&granted),
         ..overrides()
     });
@@ -258,12 +258,12 @@ fn paths_granted_by_configuration_reach_the_policy() {
 /// Additive only: what the daemon grants is the floor, not a suggestion.
 #[test]
 fn an_extra_grant_takes_nothing_away() {
-    let plain = policy_bytes(Overrides {
+    let plain = policy_bytes(&Overrides {
         resolv_conf: Some("/state/resolv.conf"),
         ..overrides()
     });
     let granted = extra();
-    let widened = policy_bytes(Overrides {
+    let widened = policy_bytes(&Overrides {
         resolv_conf: Some("/state/resolv.conf"),
         extra: Some(&granted),
         ..overrides()
@@ -293,7 +293,7 @@ fn an_extra_grant_takes_nothing_away() {
 /// A grant that names nothing must not silently widen anything.
 #[test]
 fn granting_nothing_changes_nothing() {
-    let plain = policy_bytes(Overrides {
+    let plain = policy_bytes(&Overrides {
         resolv_conf: Some("/state/resolv.conf"),
         ..overrides()
     });
@@ -302,7 +302,7 @@ fn granting_nothing_changes_nothing() {
         write: Vec::new(),
         execute: Vec::new(),
     };
-    let widened = policy_bytes(Overrides {
+    let widened = policy_bytes(&Overrides {
         resolv_conf: Some("/state/resolv.conf"),
         extra: Some(&empty),
         ..overrides()
@@ -314,7 +314,7 @@ fn granting_nothing_changes_nothing() {
 #[test]
 fn variables_set_by_configuration_reach_the_policy() {
     let env = BTreeMap::from([("CARGO_HOME".to_owned(), "/var/cache/cargo".to_owned())]);
-    let policy = policy_bytes(Overrides {
+    let policy = policy_bytes(&Overrides {
         resolv_conf: Some("/state/resolv.conf"),
         env: Some(&env),
         ..overrides()
@@ -328,7 +328,7 @@ fn variables_set_by_configuration_reach_the_policy() {
 #[test]
 fn a_variable_the_daemon_passes_cannot_be_shadowed_by_configuration() {
     let env = BTreeMap::from([("ZAI_API_KEY".to_owned(), "not-the-real-one".to_owned())]);
-    let policy = policy_bytes(Overrides {
+    let policy = policy_bytes(&Overrides {
         resolv_conf: Some("/state/resolv.conf"),
         env: Some(&env),
         ..overrides()
@@ -341,7 +341,7 @@ fn a_variable_the_daemon_passes_cannot_be_shadowed_by_configuration() {
 #[test]
 fn directories_added_by_configuration_lead_the_system_path() {
     let path_extra = vec!["/opt/toolchains/bin".to_owned()];
-    let policy = policy_bytes(Overrides {
+    let policy = policy_bytes(&Overrides {
         resolv_conf: Some("/state/resolv.conf"),
         path_extra: Some(&path_extra),
         ..overrides()
@@ -353,12 +353,10 @@ fn directories_added_by_configuration_lead_the_system_path() {
         .unwrap_or("");
     let path_start = named
         .find("PATH = \"")
-        .map(|at| at + "PATH = \"".len())
-        .unwrap_or(0);
+        .map_or(0, |at| at + "PATH = \"".len());
     let path_end = named[path_start..]
         .find('"')
-        .map(|at| path_start + at)
-        .unwrap_or(path_start);
+        .map_or(path_start, |at| path_start + at);
     let path: Vec<&str> = named[path_start..path_end].split(':').collect();
 
     assert!(
@@ -373,7 +371,7 @@ fn directories_added_by_configuration_lead_the_system_path() {
 fn every_familys_certificate_bundle_is_reachable_not_just_debians() {
     // Measured targets of the canonical bundle path: arch /etc/ca-certificates,
     // fedora /etc/pki, tumbleweed /var/lib/ca-certificates.
-    let written = policy_bytes(overrides());
+    let written = policy_bytes(&overrides());
 
     for path in [
         "/etc/ssl",
@@ -400,7 +398,7 @@ fn the_runtimes_directories_are_granted_execute_not_only_read() {
     };
     let text = policy_bytes_with(
         &launch(),
-        Overrides {
+        &Overrides {
             runtime: Some(&runtime),
             ..overrides()
         },
@@ -422,6 +420,6 @@ fn the_runtimes_directories_are_granted_execute_not_only_read() {
 #[test]
 fn the_rendered_policy_matches_the_typescript_byte_for_byte() {
     let golden = include_str!("tests/golden.toml");
-    let written = policy_bytes(overrides());
+    let written = policy_bytes(&overrides());
     assert_eq!(written, golden);
 }

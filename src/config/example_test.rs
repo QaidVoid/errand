@@ -36,7 +36,7 @@ fn the_example_configuration_is_one_the_daemon_accepts() {
     assert!(
         config
             .github
-            .and_then(|github| Some(github.user_name))
+            .map(|github| github.user_name)
             .is_some_and(|name| !name.is_empty())
     );
     assert_eq!(config.web.map(|web| web.port), Some(defaults::WEB_PORT));

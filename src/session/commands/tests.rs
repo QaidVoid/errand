@@ -81,7 +81,7 @@ fn no_session_role_turns_the_host_off() {
 fn every_command_declares_its_access_and_its_group() {
     for (name, meta) in COMMANDS {
         assert!(name.starts_with('!'), "{name}");
-        assert!(meta.summary.len() > 0, "{name}");
+        assert!(!meta.summary.is_empty(), "{name}");
         let _ = meta.access;
     }
 }

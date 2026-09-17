@@ -32,14 +32,14 @@ fn valid(overrides: Value) -> Value {
     base
 }
 
-fn problems_of(raw: Value) -> Vec<String> {
-    match validate_config(&raw) {
+fn problems_of(raw: &Value) -> Vec<String> {
+    match validate_config(raw) {
         Err(ConfigError { problems }) => problems,
         Ok(_) => panic!("the configuration was expected to be refused"),
     }
 }
 
-fn problems_contain(raw: Value, needle: &str) -> bool {
+fn problems_contain(raw: &Value, needle: &str) -> bool {
     problems_of(raw)
         .iter()
         .any(|problem| problem.contains(needle))
@@ -62,7 +62,7 @@ fn a_minimal_file_resolves_with_the_documented_defaults_filled_in() {
 
 #[test]
 fn every_problem_is_reported_not_only_the_first() {
-    let problems = problems_of(json!({ "chat": {}, "agent": {} }));
+    let problems = problems_of(&json!({ "chat": {}, "agent": {} }));
 
     assert!(problems.len() > 3);
     let said = problems.join("\n");
@@ -76,12 +76,12 @@ fn every_problem_is_reported_not_only_the_first() {
 #[test]
 fn a_misspelled_setting_is_refused_rather_than_ignored() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "requireFullEnforcment": false } })),
+        &valid(json!({ "sandbox": { "requireFullEnforcment": false } })),
         "sandbox.requireFullEnforcment is not a setting"
     ));
 
     assert!(problems_contain(
-        valid(json!({ "projectRooot": "/tmp/x" })),
+        &valid(json!({ "projectRooot": "/tmp/x" })),
         "config.projectRooot is not a setting"
     ));
 }
@@ -89,7 +89,7 @@ fn a_misspelled_setting_is_refused_rather_than_ignored() {
 #[test]
 fn an_empty_allowlist_refuses_to_start_rather_than_admitting_everyone() {
     assert!(problems_contain(
-        valid(json!({ "chat": { "token": "t", "channelId": "c", "allowedUserIds": [] } })),
+        &valid(json!({ "chat": { "token": "t", "channelId": "c", "allowedUserIds": [] } })),
         "allow-everyone"
     ));
 }
@@ -97,18 +97,18 @@ fn an_empty_allowlist_refuses_to_start_rather_than_admitting_everyone() {
 #[test]
 fn paths_must_be_absolute_and_must_not_be_the_same_directory() {
     assert!(problems_contain(
-        valid(json!({ "projectRoot": "./projects" })),
+        &valid(json!({ "projectRoot": "./projects" })),
         "projectRoot must be an absolute path"
     ));
     assert!(problems_contain(
-        valid(json!({ "projectRoot": "/tmp/same", "stateDir": "/tmp/same" })),
+        &valid(json!({ "projectRoot": "/tmp/same", "stateDir": "/tmp/same" })),
         "must be different directories"
     ));
 }
 
 #[test]
 fn sizes_and_counts_are_checked_so_a_typo_cannot_become_a_limit() {
-    let problems = problems_of(valid(json!({
+    let problems = problems_of(&valid(json!({
         "sandbox": { "memory": "four gigs", "cpus": 0 },
         "limits": { "maxQueueLength": -3 },
     })));
@@ -122,7 +122,7 @@ fn sizes_and_counts_are_checked_so_a_typo_cannot_become_a_limit() {
 #[test]
 fn a_backend_that_does_not_exist_is_named_with_the_ones_that_do() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "backend": "docker" } })),
+        &valid(json!({ "sandbox": { "backend": "docker" } })),
         "sandbox.backend must be one of podman, bailey"
     ));
 }
@@ -130,11 +130,11 @@ fn a_backend_that_does_not_exist_is_named_with_the_ones_that_do() {
 #[test]
 fn anything_that_is_not_an_object_is_refused_with_one_clear_reason() {
     assert_eq!(
-        problems_of(json!([1, 2, 3])),
+        problems_of(&json!([1, 2, 3])),
         vec!["the configuration file must contain a JSON object"]
     );
     assert_eq!(
-        problems_of(json!("nope")),
+        problems_of(&json!("nope")),
         vec!["the configuration file must contain a JSON object"]
     );
 }
@@ -152,7 +152,7 @@ fn the_container_image_defaults_and_is_refused_when_it_is_not_a_name() {
     assert_eq!(config.sandbox.image, "localhost/mine:v2");
 
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "image": 7 } })),
+        &valid(json!({ "sandbox": { "image": 7 } })),
         "sandbox.image must be a non-empty string"
     ));
 }
@@ -184,7 +184,7 @@ fn a_github_identity_is_taken_whole() {
 /// Pushing as half an identity is worse than not being able to push.
 #[test]
 fn a_github_section_missing_a_field_is_refused_not_half_filled() {
-    let problems = problems_of(valid(json!({ "github": { "token": "ghp-value" } }))).join("\n");
+    let problems = problems_of(&valid(json!({ "github": { "token": "ghp-value" } }))).join("\n");
 
     assert!(problems.contains("github.userName is required"));
     assert!(problems.contains("github.userEmail is required"));
@@ -193,7 +193,7 @@ fn a_github_section_missing_a_field_is_refused_not_half_filled() {
 #[test]
 fn a_misspelled_github_setting_is_refused_like_any_other() {
     assert!(problems_contain(
-        valid(json!({
+        &valid(json!({
             "github": { "token": "t", "userName": "n", "userEmail": "e", "userNmae": "typo" },
         })),
         "github.userNmae is not a setting"
@@ -230,8 +230,8 @@ fn what_reaches_a_thread_can_be_turned_up_or_down() {
     })))
     .expect("resolves");
 
-    assert_eq!(config.output.forward_tool_output, true);
-    assert_eq!(config.output.post_diffs, false);
+    assert!(config.output.forward_tool_output);
+    assert!(!config.output.post_diffs);
     assert_eq!(config.output.max_tool_output_chars, 4000);
     assert_eq!(
         config.output.max_attachments_per_message,
@@ -241,7 +241,7 @@ fn what_reaches_a_thread_can_be_turned_up_or_down() {
 
 #[test]
 fn an_output_limit_that_is_not_a_number_is_refused() {
-    let problems = problems_of(valid(json!({
+    let problems = problems_of(&valid(json!({
         "output": { "maxAttachmentBytes": "5mb", "postDiffs": "yes" },
     })))
     .join("\n");
@@ -264,7 +264,7 @@ fn nobody_may_power_off_the_host_unless_somebody_is_named() {
 #[test]
 fn a_shutdown_list_that_is_not_a_list_of_accounts_is_refused() {
     assert!(problems_contain(
-        valid(json!({ "shutdown": { "allowedUserIds": "everyone" } })),
+        &valid(json!({ "shutdown": { "allowedUserIds": "everyone" } })),
         "shutdown.allowedUserIds must be a list of account ids"
     ));
 }
@@ -314,7 +314,7 @@ fn an_interface_that_says_only_that_it_exists_gets_the_defaults() {
 #[test]
 fn an_interface_port_that_is_not_a_port_is_refused() {
     assert!(problems_contain(
-        valid(json!({ "web": { "port": "8080" } })),
+        &valid(json!({ "web": { "port": "8080" } })),
         "web.port must be a number greater than zero"
     ));
 }
@@ -358,7 +358,7 @@ fn extra_grants_are_taken_as_absolute_paths() {
 #[test]
 fn a_relative_path_in_a_grant_is_refused_not_resolved() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "policyExtra": { "read": ["./shared", "/fine"] } } })),
+        &valid(json!({ "sandbox": { "policyExtra": { "read": ["./shared", "/fine"] } } })),
         "must be an absolute path"
     ));
 }
@@ -367,7 +367,7 @@ fn a_relative_path_in_a_grant_is_refused_not_resolved() {
 #[test]
 fn an_empty_grant_is_refused_rather_than_silently_doing_nothing() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "policyExtra": {} } })),
+        &valid(json!({ "sandbox": { "policyExtra": {} } })),
         "grants nothing"
     ));
 }
@@ -375,7 +375,7 @@ fn an_empty_grant_is_refused_rather_than_silently_doing_nothing() {
 #[test]
 fn a_misspelled_grant_list_is_refused_like_any_other_setting() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "policyExtra": { "reed": ["/opt"] } } })),
+        &valid(json!({ "sandbox": { "policyExtra": { "reed": ["/opt"] } } })),
         "sandbox.policyExtra.reed is not a setting"
     ));
 }
@@ -411,7 +411,7 @@ fn variables_named_in_configuration_are_read() {
 #[test]
 fn a_variable_the_policy_sets_itself_is_refused() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "env": { "HOME": "/somewhere" } } })),
+        &valid(json!({ "sandbox": { "env": { "HOME": "/somewhere" } } })),
         "must not set HOME"
     ));
 }
@@ -420,7 +420,7 @@ fn a_variable_the_policy_sets_itself_is_refused() {
 #[test]
 fn the_variable_carrying_the_credential_is_refused() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "env": { "ANTHROPIC_API_KEY": "not-the-real-one" } } })),
+        &valid(json!({ "sandbox": { "env": { "ANTHROPIC_API_KEY": "not-the-real-one" } } })),
         "carries the provider credential"
     ));
 }
@@ -428,7 +428,7 @@ fn the_variable_carrying_the_credential_is_refused() {
 #[test]
 fn a_name_no_shell_would_accept_is_refused() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "env": { "CARGO HOME": "/var/cache" } } })),
+        &valid(json!({ "sandbox": { "env": { "CARGO HOME": "/var/cache" } } })),
         "is not a variable name"
     ));
 }
@@ -436,7 +436,7 @@ fn a_name_no_shell_would_accept_is_refused() {
 #[test]
 fn a_value_that_is_not_a_string_is_refused() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "env": { "CARGO_HOME": 7 } } })),
+        &valid(json!({ "sandbox": { "env": { "CARGO_HOME": 7 } } })),
         "must be a string"
     ));
 }
@@ -444,7 +444,7 @@ fn a_value_that_is_not_a_string_is_refused() {
 #[test]
 fn an_empty_environment_is_refused_rather_than_silently_doing_nothing() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "env": {} } })),
+        &valid(json!({ "sandbox": { "env": {} } })),
         "names nothing"
     ));
 }
@@ -464,7 +464,7 @@ fn directories_added_to_the_path_are_taken_as_absolute_paths() {
 #[test]
 fn a_relative_directory_on_the_path_is_refused() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "pathExtra": ["bin"] } })),
+        &valid(json!({ "sandbox": { "pathExtra": ["bin"] } })),
         "must be an absolute path"
     ));
 }
@@ -488,7 +488,7 @@ fn configured_egress_ports_are_read_in_order() {
 #[test]
 fn a_port_outside_the_socket_range_is_refused() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "egressPorts": [80, 70000] } })),
+        &valid(json!({ "sandbox": { "egressPorts": [80, 70000] } })),
         "not a port between 1 and 65535"
     ));
 }
@@ -496,7 +496,7 @@ fn a_port_outside_the_socket_range_is_refused() {
 #[test]
 fn an_empty_egress_list_is_refused_rather_than_silencing_the_network() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "egressPorts": [] } })),
+        &valid(json!({ "sandbox": { "egressPorts": [] } })),
         "names no port"
     ));
 }
@@ -504,7 +504,7 @@ fn an_empty_egress_list_is_refused_rather_than_silencing_the_network() {
 #[test]
 fn the_host_address_is_shown_to_a_session_by_default() {
     let config = validate_config(&valid(json!({}))).expect("resolves");
-    assert_eq!(config.sandbox.hide_host_address, false);
+    assert!(!config.sandbox.hide_host_address);
 }
 
 #[test]
@@ -514,7 +514,7 @@ fn hiding_the_host_address_is_read_as_a_flag() {
         .sandbox
         .hide_host_address;
 
-    assert_eq!(hidden, true);
+    assert!(hidden);
 }
 
 #[test]
@@ -542,7 +542,7 @@ fn a_relative_rules_path_is_refused_rather_than_resolved_against_the_daemons_cwd
     // Resolving it would make the same configuration name a different file
     // depending on where the daemon happened to be started from.
     assert!(problems_contain(
-        valid(json!({
+        &valid(json!({
             "agent": {
                 "provider": "anthropic",
                 "credentialName": "ANTHROPIC_API_KEY",
@@ -557,7 +557,7 @@ fn a_relative_rules_path_is_refused_rather_than_resolved_against_the_daemons_cwd
 #[test]
 fn a_rules_path_that_is_not_a_path_at_all_is_refused() {
     assert!(problems_contain(
-        valid(json!({
+        &valid(json!({
             "agent": {
                 "provider": "anthropic",
                 "credentialName": "ANTHROPIC_API_KEY",
@@ -621,7 +621,7 @@ fn a_lone_star_catch_all_is_accepted_as_an_allowlist_entry() {
 #[test]
 fn an_unknown_egress_mode_is_refused() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "egress": { "mode": "wideopen" } } })),
+        &valid(json!({ "sandbox": { "egress": { "mode": "wideopen" } } })),
         "sandbox.egress.mode must be one of open, proxy"
     ));
 }
@@ -631,7 +631,7 @@ fn a_malformed_allowlist_entry_is_refused_rather_than_handed_to_the_broker() {
     // A broker told to permit "http://x" or "x/y" either permits nothing or
     // more than was meant, so a non-hostname is a configuration error.
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "egress": { "allow": ["http://evil.com/x"] } } })),
+        &valid(json!({ "sandbox": { "egress": { "allow": ["http://evil.com/x"] } } })),
         "is not a hostname"
     ));
 }
@@ -639,7 +639,7 @@ fn a_malformed_allowlist_entry_is_refused_rather_than_handed_to_the_broker() {
 #[test]
 fn an_unknown_key_under_egress_is_refused() {
     assert!(problems_contain(
-        valid(json!({ "sandbox": { "egress": { "mode": "proxy", "allowlist": [] } } })),
+        &valid(json!({ "sandbox": { "egress": { "mode": "proxy", "allowlist": [] } } })),
         "sandbox.egress"
     ));
 }
@@ -680,7 +680,7 @@ fn provider_definitions_are_passed_through_and_their_shape_is_checked() {
 
 #[test]
 fn a_provider_definition_that_is_not_an_object_is_refused() {
-    let problems = problems_of(valid(json!({
+    let problems = problems_of(&valid(json!({
         "agent": {
             "provider": "p",
             "credentialName": "K",

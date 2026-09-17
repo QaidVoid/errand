@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use super::{MAX_REMEMBERED, ThreadRecord, ThreadRegistry, is_record};
-use crate::log::{LogLevel, Logger};
+use crate::log::{LogFields, LogLevel, Logger};
 use tempfile::TempDir;
 
 fn record(overrides: impl FnOnce(&mut ThreadRecord)) -> ThreadRecord {
@@ -31,7 +31,7 @@ fn collected() -> (Lines, Logger) {
     let lines: Lines = Arc::new(Mutex::new(Vec::new()));
     let sink_lines = Arc::clone(&lines);
     let log = Logger::new(
-        Default::default(),
+        LogFields::new(),
         Arc::new(move |level: LogLevel, line: &str| {
             sink_lines.lock().unwrap().push((level, line.to_owned()));
         }),
@@ -124,7 +124,7 @@ fn threads_are_listed_most_recently_used_first() {
 fn the_oldest_are_dropped_once_the_bound_is_passed() {
     let (_root, mut registry, _path, _lines) = with_registry();
     for index in 0..(MAX_REMEMBERED + 3) {
-        let index = index as i64;
+        let index = i64::try_from(index).expect("a count fits");
         registry.remember(record(|held| {
             held.thread_id = format!("t-{index}");
             held.updated_at = index;
@@ -206,7 +206,7 @@ fn an_index_that_cannot_be_written_says_so_at_the_time() {
     std::fs::write(&path, "not a directory").expect("written");
     let sink_lines = Arc::clone(&lines);
     let log = Logger::new(
-        Default::default(),
+        LogFields::new(),
         Arc::new(move |level: LogLevel, line: &str| {
             sink_lines.lock().unwrap().push((level, line.to_owned()));
         }),

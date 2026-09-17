@@ -75,7 +75,7 @@ fn a_line_separator_inside_a_string_is_not_a_record_boundary() {
 #[test]
 fn a_multi_byte_character_split_across_chunks_survives() {
     let mut framer = LineFramer::default();
-    let raw = format!("{{\"text\":\"\u{1F50C}\"}}\n").into_bytes();
+    let raw = "{\"text\":\"\u{1F50C}\"}\n".to_string().into_bytes();
 
     let first = framer.push(&raw[..11]).expect("held");
     let second = framer.push(&raw[11..]).expect("completed");

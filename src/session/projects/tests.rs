@@ -97,9 +97,7 @@ fn a_project_that_is_a_symlink_out_of_the_root_is_refused() {
     let root_path = root.path().to_string_lossy().into_owned();
     let chosen = select_project("escapee: go", &root_path, "loose");
 
-    let error = ensure_project_directory(&chosen, &root_path)
-        .err()
-        .expect("an escape is refused");
+    let error = ensure_project_directory(&chosen, &root_path).expect_err("an escape is refused");
     assert!(matches!(error, ProjectEscapeError { .. }));
 }
 

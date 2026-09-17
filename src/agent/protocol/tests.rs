@@ -7,6 +7,10 @@ use super::{
     thinking_ended, tool_target, usage_of,
 };
 
+#[expect(
+    clippy::float_cmp,
+    reason = "the fixtures hold values a f64 holds exactly"
+)]
 #[test]
 fn usage_is_read_off_a_record_counting_cache_reads_apart_from_input() {
     let usage = usage_of(&json!({

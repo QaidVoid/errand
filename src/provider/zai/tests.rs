@@ -75,17 +75,15 @@ impl Fetch for Fake {
 struct NotJson;
 
 impl Fetch for NotJson {
-    fn fetch(
-        &self,
-        _url: String,
-        _request: HttpRequest,
-    ) -> impl Future<Output = Result<HttpResponse, FetchError>> + Send {
-        async {
-            Ok(HttpResponse {
-                status: 200,
-                body: None,
-            })
-        }
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait is async; a stand-in that answers at once still has to match it"
+    )]
+    async fn fetch(&self, _url: String, _request: HttpRequest) -> Result<HttpResponse, FetchError> {
+        Ok(HttpResponse {
+            status: 200,
+            body: None,
+        })
     }
 }
 
@@ -93,17 +91,15 @@ impl Fetch for NotJson {
 struct ServerError;
 
 impl Fetch for ServerError {
-    fn fetch(
-        &self,
-        _url: String,
-        _request: HttpRequest,
-    ) -> impl Future<Output = Result<HttpResponse, FetchError>> + Send {
-        async {
-            Ok(HttpResponse {
-                status: 500,
-                body: Some(json!({})),
-            })
-        }
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait is async; a stand-in that answers at once still has to match it"
+    )]
+    async fn fetch(&self, _url: String, _request: HttpRequest) -> Result<HttpResponse, FetchError> {
+        Ok(HttpResponse {
+            status: 500,
+            body: Some(json!({})),
+        })
     }
 }
 
@@ -176,6 +172,10 @@ async fn a_provider_that_cannot_be_reached_says_nothing_not_no() {
 /// A window nothing has been charged to has nothing scheduled to reset, and
 /// z.ai sends null for it. Reading that as no answer cleared the status
 /// exactly when the window was emptiest.
+#[expect(
+    clippy::float_cmp,
+    reason = "the fixtures hold values a f64 holds exactly"
+)]
 #[test]
 fn an_untouched_window_is_an_answer_reset_time_or_not() {
     let body = json!({

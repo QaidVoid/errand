@@ -177,7 +177,8 @@ fn repo_git() -> (Arc<FakeGit>, Run) {
 
 /// A session directory holding one repository, `project`.
 struct WithRepo {
-    _root: tempfile::TempDir,
+    /// Held for its lifetime: dropping it takes the directory with it.
+    root: tempfile::TempDir,
     project: String,
     repo: String,
 }
@@ -187,7 +188,7 @@ fn with_repo() -> WithRepo {
     let project = root.path().join("project");
     std::fs::create_dir_all(project.join(".git")).expect("the repository is made");
     WithRepo {
-        _root: root,
+        root,
         project: project.parent().unwrap().display().to_string(),
         repo: project.display().to_string(),
     }
@@ -256,22 +257,22 @@ fn the_repository_is_found_one_level_down_from_the_session() {
 #[test]
 fn a_session_that_is_itself_a_repository_is_the_repository() {
     let kept = with_repo();
-    std::fs::create_dir_all(kept._root.path().join(".git")).unwrap();
-    let project = kept._root.path().display().to_string();
+    std::fs::create_dir_all(kept.root.path().join(".git")).unwrap();
+    let project = kept.root.path().display().to_string();
     assert_eq!(find_repository(&project, None).unwrap(), project);
 }
 
 #[test]
 fn several_repositories_are_named_so_somebody_can_say_which() {
     let kept = with_repo();
-    std::fs::create_dir_all(kept._root.path().join("other").join(".git")).unwrap();
+    std::fs::create_dir_all(kept.root.path().join("other").join(".git")).unwrap();
 
     let error = find_repository(&kept.project, None).unwrap_err();
 
     assert!(error.to_string().contains("other, project"));
     assert_eq!(
         find_repository(&kept.project, Some("other")).unwrap(),
-        kept._root.path().join("other").display().to_string()
+        kept.root.path().join("other").display().to_string()
     );
 }
 
@@ -294,7 +295,7 @@ fn a_session_holding_no_repository_says_so_plainly() {
 #[test]
 fn a_directory_whose_git_is_a_redirect_file_is_not_a_repository() {
     let kept = with_repo();
-    let linked = kept._root.path().join("linked");
+    let linked = kept.root.path().join("linked");
     std::fs::create_dir(&linked).unwrap();
     std::fs::write(linked.join(".git"), "gitdir: /elsewhere\n").unwrap();
 

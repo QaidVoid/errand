@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -9,11 +8,11 @@ use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::delegate::TurnDelegations;
 use crate::agent::delegation::Sources;
 use crate::config::schema::LimitsConfig;
-use crate::log::Logger;
+use crate::log::{LogFields, Logger};
 use crate::provider::ask::{Endpoint, SendRequest, Sender};
 
 fn silent() -> Logger {
-    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
 fn endpoint() -> Endpoint {
@@ -33,6 +32,10 @@ impl Sources for DiskSources {
         &self.root
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait is async; a stand-in that answers at once still has to match it"
+    )]
     async fn read_file(&self, path: &str) -> std::io::Result<String> {
         std::fs::read_to_string(path)
     }
@@ -53,18 +56,20 @@ struct FakeSender {
 }
 
 impl Sender for FakeSender {
-    fn send(
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait is async; a stand-in that answers at once still has to match it"
+    )]
+    async fn send(
         &self,
         url: String,
         request: SendRequest,
-    ) -> impl Future<Output = Result<(u16, Option<Value>), String>> + Send {
-        async move {
-            self.sent
-                .lock()
-                .unwrap()
-                .push((url, serde_json::from_str(&request.body).expect("JSON body")));
-            Ok((200, Some(self.answer.clone())))
-        }
+    ) -> Result<(u16, Option<Value>), String> {
+        self.sent
+            .lock()
+            .unwrap()
+            .push((url, serde_json::from_str(&request.body).expect("JSON body")));
+        Ok((200, Some(self.answer.clone())))
     }
 }
 
@@ -145,7 +150,7 @@ impl Harness {
         )
     }
 
-    fn request(&self, id: &str, body: Value) {
+    fn request(&self, id: &str, body: &Value) {
         std::fs::write(
             self.directory.join(format!("{id}.request")),
             body.to_string(),
@@ -180,7 +185,7 @@ async fn a_question_about_a_calls_output_is_asked_and_answered() {
         }),
     );
     let mut turn = harness.turn(8);
-    harness.request("d1", json!({ "question": "what failed?", "callId": "t1" }));
+    harness.request("d1", &json!({ "question": "what failed?", "callId": "t1" }));
 
     harness.watcher.sweep(Some(&mut turn)).await;
 
@@ -201,7 +206,7 @@ async fn only_the_question_and_the_artefact_are_sent() {
         }),
     );
     let mut turn = harness.turn(8);
-    harness.request("d1", json!({ "question": "what failed?", "callId": "t1" }));
+    harness.request("d1", &json!({ "question": "what failed?", "callId": "t1" }));
 
     harness.watcher.sweep(Some(&mut turn)).await;
 
@@ -235,7 +240,7 @@ async fn a_question_about_a_project_file_reads_that_file() {
     let mut turn = harness.turn(8);
     harness.request(
         "d1",
-        json!({ "question": "what does it export?", "path": "main.ts" }),
+        &json!({ "question": "what does it export?", "path": "main.ts" }),
     );
 
     harness.watcher.sweep(Some(&mut turn)).await;
@@ -261,7 +266,7 @@ async fn a_file_outside_the_project_is_refused_and_nothing_is_asked() {
     let mut turn = harness.turn(8);
     harness.request(
         "d1",
-        json!({ "question": "read this", "path": "../../../etc/passwd" }),
+        &json!({ "question": "read this", "path": "../../../etc/passwd" }),
     );
 
     harness.watcher.sweep(Some(&mut turn)).await;
@@ -285,7 +290,7 @@ async fn a_request_naming_nothing_to_look_at_is_refused() {
     let mut turn = harness.turn(8);
     harness.request(
         "d1",
-        json!({ "question": "what should I do about the parser?" }),
+        &json!({ "question": "what should I do about the parser?" }),
     );
 
     harness.watcher.sweep(Some(&mut turn)).await;
@@ -311,7 +316,7 @@ async fn a_request_naming_several_things_is_refused() {
     let mut turn = harness.turn(8);
     harness.request(
         "d1",
-        json!({ "question": "look", "path": "main.ts", "callId": "t1" }),
+        &json!({ "question": "look", "path": "main.ts", "callId": "t1" }),
     );
 
     harness.watcher.sweep(Some(&mut turn)).await;
@@ -359,7 +364,7 @@ async fn a_turn_stops_delegating_once_it_has_used_its_allowance() {
     );
     let mut turn = harness.turn(2);
     for id in ["d1", "d2", "d3"] {
-        harness.request(id, json!({ "question": "what failed?", "callId": "t1" }));
+        harness.request(id, &json!({ "question": "what failed?", "callId": "t1" }));
     }
 
     harness.watcher.sweep(Some(&mut turn)).await;
@@ -382,7 +387,7 @@ async fn a_delegation_with_no_turn_running_is_refused_rather_than_queued() {
             "usage": {}
         }),
     );
-    harness.request("d1", json!({ "question": "what failed?", "callId": "t1" }));
+    harness.request("d1", &json!({ "question": "what failed?", "callId": "t1" }));
 
     harness.watcher.sweep::<DiskSources, FakeSender>(None).await;
 
@@ -406,7 +411,7 @@ async fn a_request_is_taken_away_before_it_is_run() {
         }),
     );
     let mut turn = harness.turn(8);
-    harness.request("d1", json!({ "question": "what failed?", "callId": "t1" }));
+    harness.request("d1", &json!({ "question": "what failed?", "callId": "t1" }));
 
     harness.watcher.sweep(Some(&mut turn)).await;
     harness.watcher.sweep(Some(&mut turn)).await;
@@ -424,7 +429,7 @@ async fn what_happened_is_reported_with_what_it_cost_and_saved() {
         }),
     );
     let mut turn = harness.turn(8);
-    harness.request("d1", json!({ "question": "what failed?", "callId": "t1" }));
+    harness.request("d1", &json!({ "question": "what failed?", "callId": "t1" }));
 
     harness.watcher.sweep(Some(&mut turn)).await;
 

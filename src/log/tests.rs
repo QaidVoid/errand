@@ -12,11 +12,11 @@ fn at() -> i64 {
         .as_millisecond()
 }
 
-fn collected() -> (
-    Arc<Mutex<Vec<(LogLevel, String)>>>,
-    impl Fn(LogLevel, &str) + Send + Sync,
-) {
-    let lines: Arc<Mutex<Vec<(LogLevel, String)>>> = Arc::new(Mutex::new(Vec::new()));
+/// The lines a sink has been handed, in order.
+type Lines = Arc<Mutex<Vec<(LogLevel, String)>>>;
+
+fn collected() -> (Lines, impl Fn(LogLevel, &str) + Send + Sync) {
+    let lines: Lines = Arc::new(Mutex::new(Vec::new()));
     let sink_lines = Arc::clone(&lines);
     let sink = move |level: LogLevel, line: &str| {
         sink_lines.lock().unwrap().push((level, line.to_owned()));

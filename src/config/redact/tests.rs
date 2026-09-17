@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use super::{REDACTION, redact_config, redact_text, secret_values};
-use crate::config::load::load_config;
+use crate::config::load::{Environment, load_config};
 use crate::config::schema::{Config, SECRET_PATHS};
 use crate::config::validate::validate_config;
 
@@ -26,7 +26,7 @@ fn config() -> Config {
             })
             .to_string())
         },
-        &Default::default(),
+        &Environment::new(),
         |_| false,
     )
     .expect("a valid configuration")

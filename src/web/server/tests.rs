@@ -11,7 +11,7 @@ use super::WebServer;
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
 use crate::config::validate::validate_config;
-use crate::log::Logger;
+use crate::log::{LogFields, Logger};
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
@@ -28,7 +28,7 @@ use crate::session::views::{SessionView, ViewError};
 const OWNER: &str = "100000000000000001";
 
 fn silent() -> Logger {
-    Logger::new(Default::default(), Arc::new(|_level, _line| {}))
+    Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
 /// An agent that answers its readiness call and then says nothing.

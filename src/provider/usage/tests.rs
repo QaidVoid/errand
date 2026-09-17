@@ -21,11 +21,11 @@ fn window(provider: &str, percentage: f64, relative: Option<&str>) -> Window {
     }
 }
 
-fn quota(percentage: f64, resets_at: Option<i64>) -> Option<Quota> {
-    Some(Quota {
+fn quota(percentage: f64, resets_at: Option<i64>) -> Quota {
+    Quota {
         percentage,
         resets_at,
-    })
+    }
 }
 
 /// One provider reads as a sentence: there is room, and naming it says nothing.
@@ -82,7 +82,7 @@ fn the_status_is_kept_inside_what_the_service_accepts() {
         .map(|index| {
             window(
                 &format!("provider-with-a-long-name-{index}"),
-                index as f64,
+                f64::from(index),
                 Some("in 3h"),
             )
         })
@@ -105,7 +105,7 @@ async fn an_unspent_window_is_reused_briefly_then_asked_about_again() {
             let signals = signals.clone();
             async move {
                 let _ = signals.send(());
-                quota(20.0, Some(9_999_999))
+                Some(quota(20.0, Some(9_999_999)))
             }
         },
         move || clock.load(std::sync::atomic::Ordering::Relaxed),
@@ -132,7 +132,7 @@ async fn a_spent_window_is_not_asked_about_again_until_it_resets() {
             let signals = signals.clone();
             async move {
                 let _ = signals.send(());
-                quota(100.0, Some(500_000))
+                Some(quota(100.0, Some(500_000)))
             }
         },
         move || clock.load(std::sync::atomic::Ordering::Relaxed),
@@ -177,7 +177,7 @@ async fn forgetting_makes_the_next_question_reach_the_provider() {
             let signals = signals.clone();
             async move {
                 let _ = signals.send(());
-                quota(20.0, Some(9_999_999))
+                Some(quota(20.0, Some(9_999_999)))
             }
         },
         || 1_000,
