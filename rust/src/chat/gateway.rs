@@ -411,3 +411,22 @@ async fn parent_of(ctx: &Context, channel_id: ChannelId) -> Option<ChannelId> {
         _ => None,
     }
 }
+
+impl Gateway {
+    /// Sets the line under the bot's name, or clears it when given nothing.
+    ///
+    /// Custom is the only activity type that shows the text alone, with no
+    /// verb in front of it; the name the API requires is not displayed, which
+    /// `ActivityData::custom` fills for us.
+    ///
+    /// Never fails the caller: this is decoration on a connection that may be
+    /// down, and a status that failed to set is not a reason to fail the
+    /// thing that asked.
+    // A method on the gateway, as the callers hold it, even though the
+    // context carries everything the call needs.
+    #[allow(clippy::unused_self)]
+    pub fn set_status(&self, ctx: &Context, text: Option<&str>) {
+        let activity = text.map(serenity::gateway::ActivityData::custom);
+        ctx.set_presence(activity, serenity::model::user::OnlineStatus::Online);
+    }
+}
