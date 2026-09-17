@@ -19,7 +19,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, Notify, watch};
 
 use crate::log::{LogValue, Logger, fields};
 
@@ -50,6 +50,8 @@ struct Inner {
 /// An ordered, buffered work queue for one thread.
 pub struct Outbox {
     state: Arc<Mutex<Inner>>,
+    /// Woken when the outbox closes, so a follower stops watching with it.
+    closed_signal: Arc<Notify>,
     // Held while a drain runs, so a flush waits for one already in flight
     // rather than starting a second.
     draining: Arc<AsyncMutex<()>>,
@@ -62,6 +64,7 @@ impl Clone for Outbox {
     fn clone(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
+            closed_signal: Arc::clone(&self.closed_signal),
             draining: Arc::clone(&self.draining),
             log: self.log.clone(),
             announce_drops: Arc::clone(&self.announce_drops),
@@ -81,6 +84,7 @@ impl Outbox {
                 announced: 0,
                 closed: false,
             })),
+            closed_signal: Arc::new(Notify::new()),
             draining: Arc::new(AsyncMutex::new(())),
             log,
             announce_drops,
@@ -98,10 +102,6 @@ impl Outbox {
     }
 
     /// True once closed, after which nothing more will ever be sent.
-    #[allow(
-        dead_code,
-        reason = "read by this module's tests, which assert on state the daemon never asks for"
-    )]
     pub fn is_closed(&self) -> bool {
         self.state.lock().expect("the outbox lock").closed
     }
@@ -138,10 +138,6 @@ impl Outbox {
     /// Marks the gateway up or down. While down, tasks buffer instead of
     /// being attempted, and the order they were queued in is preserved for
     /// the flush.
-    #[allow(
-        dead_code,
-        reason = "nothing calls this: the gateway's connect and disconnect handlers are empty"
-    )]
     pub fn set_connected(&self, connected: bool) {
         let was_connected = {
             let mut state = self.state.lock().expect("the outbox lock");
@@ -150,6 +146,36 @@ impl Outbox {
         if connected && !was_connected {
             self.drain_soon();
         }
+    }
+
+    /// Follows a connection, buffering while it is down and draining when it
+    /// comes back.
+    ///
+    /// A failed post turns this outbox off on its own, and only a connection
+    /// coming back turns it on again, so an outbox that follows nothing stops
+    /// posting for good after one failure. The watch is the fan-out: no
+    /// register of live threads has to be kept, and the follower ends with
+    /// the outbox rather than outliving it.
+    pub fn follow(&self, mut connection: watch::Receiver<bool>) {
+        let this = self.clone();
+        let closed = Arc::clone(&self.closed_signal);
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    () = closed.notified() => return,
+                    changed = connection.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                    }
+                }
+                if this.is_closed() {
+                    return;
+                }
+                let connected = *connection.borrow();
+                this.set_connected(connected);
+            }
+        });
     }
 
     /// Waits for everything queued so far to run.
@@ -164,9 +190,12 @@ impl Outbox {
 
     /// Stops accepting work and discards anything still queued.
     pub fn close(&self) {
-        let mut state = self.state.lock().expect("the outbox lock");
-        state.closed = true;
-        state.buffer.clear();
+        {
+            let mut state = self.state.lock().expect("the outbox lock");
+            state.closed = true;
+            state.buffer.clear();
+        }
+        self.closed_signal.notify_waiters();
     }
 
     /// Starts a drain in the background, if one is not already running.

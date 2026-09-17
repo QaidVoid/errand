@@ -435,6 +435,12 @@ async fn run(
     let sessions_holder: Arc<tokio::sync::Mutex<Option<Arc<Daemon>>>> =
         Arc::new(tokio::sync::Mutex::new(None));
 
+    // Every thread's outbox follows this one flag, so a reconnect drains what
+    // buffered while the gateway was down without the daemon having to keep a
+    // register of which threads are live.
+    let (connection, watching) = tokio::sync::watch::channel(true);
+    let connection = Arc::new(connection);
+
     let gateway = Gateway::new(
         config.chat.clone(),
         GatewayHandlers {
@@ -501,8 +507,25 @@ async fn run(
                     });
                 })
             },
-            on_connected: Arc::new(|| {}),
-            on_disconnected: Arc::new(|| {}),
+            on_connected: {
+                let log = log.clone();
+                let connection = Arc::clone(&connection);
+                Arc::new(move || {
+                    let _ = connection.send(true);
+                    log.info("connected", &fields([]));
+                })
+            },
+            on_disconnected: {
+                let log = log.clone();
+                let connection = Arc::clone(&connection);
+                Arc::new(move || {
+                    let _ = connection.send(false);
+                    log.warn(
+                        "disconnected; sessions keep running and output is buffered",
+                        &fields([]),
+                    );
+                })
+            },
             on_gave_up: {
                 let log = log.clone();
                 Arc::new(move |attempts| {
@@ -558,6 +581,7 @@ async fn run(
         Arc::clone(&http),
         log.clone(),
         config.output.forward_tool_output,
+        watching,
     ));
 
     let memory = Arc::new(

@@ -422,13 +422,21 @@ async fn what_a_thread_does_not_show_it_says_nothing_about() {
 #[tokio::test]
 async fn nothing_is_sent_while_the_connection_is_down() {
     let (port, channel) = thread(false);
+    let (connection, watching) = tokio::sync::watch::channel(true);
+    port.follow(watching);
 
-    port.set_connected(false);
+    let _ = connection.send(false);
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
     port.post("held until it is back");
     port.flush().await;
     assert!(channel.records().is_empty());
 
-    port.set_connected(true);
+    let _ = connection.send(true);
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
     port.flush().await;
     assert_eq!(channel.records().len(), 1);
 }

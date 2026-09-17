@@ -21,6 +21,7 @@ use serenity::model::channel::ChannelType;
 use serenity::model::channel::MessageFlags;
 use serenity::model::channel::ReactionType;
 use serenity::model::id::{ChannelId, MessageId};
+use tokio::sync::watch;
 
 use crate::chat::chars::reaction;
 use crate::chat::diff::render_diff;
@@ -465,13 +466,9 @@ impl<T: ThreadTransport> ChatThread<T> {
         }));
     }
 
-    /// Marks the outbox connected or buffering, following the gateway.
-    #[allow(
-        dead_code,
-        reason = "nothing calls this: the gateway's connect and disconnect handlers are empty"
-    )]
-    pub fn set_connected(&self, connected: bool) {
-        self.outbox.set_connected(connected);
+    /// Buffers while the gateway is down and drains when it comes back.
+    pub fn follow(&self, connection: watch::Receiver<bool>) {
+        self.outbox.follow(connection);
     }
 
     /// Creates, updates, or takes away the one message reporting queue
@@ -729,6 +726,8 @@ pub struct ChatThreadFactory {
     log: Logger,
     /// Whether a thread shows what tools produced. Off unless configured.
     forward_tool_output: bool,
+    /// Whether the gateway is up, which every port it builds follows.
+    connection: watch::Receiver<bool>,
 }
 
 impl ChatThreadFactory {
@@ -738,21 +737,25 @@ impl ChatThreadFactory {
         http: Arc<serenity::http::Http>,
         log: Logger,
         forward_tool_output: bool,
+        connection: watch::Receiver<bool>,
     ) -> Self {
         Self {
             channel_id,
             http,
             log,
             forward_tool_output,
+            connection,
         }
     }
 
     fn adopt(&self, thread_id: ChannelId) -> ChatThread<SerenityThread> {
-        ChatThread::new(
+        let thread = ChatThread::new(
             Arc::new(SerenityThread::new(thread_id, Arc::clone(&self.http))),
             self.log.clone(),
             self.forward_tool_output,
-        )
+        );
+        thread.follow(self.connection.clone());
+        thread
     }
 
     /// Starts a thread from the message that asked for the session.

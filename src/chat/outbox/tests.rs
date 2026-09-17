@@ -49,6 +49,13 @@ where
     Box::new(move || Box::pin(run()) as Pin<Box<dyn Future<Output = Result<(), TaskError>> + Send>>)
 }
 
+/// Lets the spawned drain and follow tasks run.
+async fn settle() {
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+}
+
 fn failed(why: &str) -> Result<(), TaskError> {
     Err(Box::new(std::io::Error::other(why)) as TaskError)
 }
@@ -277,4 +284,54 @@ async fn a_failure_to_announce_a_gap_is_reported_and_not_lost() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(said.contains("reporting dropped messages"));
+}
+
+#[tokio::test]
+async fn a_followed_outbox_picks_back_up_when_the_connection_returns() {
+    // A failed task turns the outbox off on its own. Without something to
+    // turn it back on, the thread stops posting for the rest of the session.
+    let (connection, watching) = tokio::sync::watch::channel(true);
+    let (box_, _gaps, _lines) = outbox(8);
+    box_.follow(watching);
+    let attempts = Arc::new(Mutex::new(0_usize));
+    box_.enqueue(task(move || {
+        let attempts = Arc::clone(&attempts);
+        async move {
+            let mut count = attempts.lock().unwrap();
+            *count += 1;
+            if *count == 1 {
+                failed("the gateway went away")
+            } else {
+                Ok(())
+            }
+        }
+    }));
+    settle().await;
+    assert!(box_.pending() > 0, "the failed task is kept");
+
+    let _ = connection.send(false);
+    settle().await;
+    let _ = connection.send(true);
+    settle().await;
+
+    assert_eq!(
+        box_.pending(),
+        0,
+        "the buffer drains when the gateway is back"
+    );
+}
+
+#[tokio::test]
+async fn a_closed_outbox_stops_following() {
+    let (connection, watching) = tokio::sync::watch::channel(true);
+    let (box_, _gaps, _lines) = outbox(8);
+    box_.follow(watching);
+    box_.close();
+    settle().await;
+
+    let _ = connection.send(false);
+    settle().await;
+
+    assert!(box_.is_closed());
+    assert_eq!(connection.receiver_count(), 0, "the follower let go");
 }
