@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use crate::agent::protocol::AgentImage;
 use crate::config::schema::AgentConfig;
 use crate::provider::models::{model_by_id, read_models, sees_images, vision_model};
+use crate::session::model::{configured_model, split_level};
 
 /// How long a description may take before the turn goes on without it.
 pub const TIMEOUT_MS: u64 = 60_000;
@@ -206,8 +207,16 @@ pub fn image_describer<P: Post>(
     directory: Option<&str>,
     post: P,
 ) -> Option<ImageDescriber<P>> {
-    let models = read_models(directory, &agent.provider);
-    let own = model_by_id(&models, agent.model.as_deref());
+    let configured = configured_model(agent);
+    let provider = configured
+        .as_ref()
+        .and_then(|model| model.provider.as_deref())
+        .unwrap_or(agent.provider.as_str());
+    let models = read_models(directory, provider);
+    // The level is not part of what the store calls a model, and looking one
+    // up with it on finds nothing.
+    let named = configured.as_ref().map(|model| split_level(&model.model).0);
+    let own = model_by_id(&models, named.as_deref());
     if own.is_none() || sees_images(own) {
         return None;
     }

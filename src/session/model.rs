@@ -7,6 +7,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::config::schema::AgentConfig;
+
 /// A `--model` on the opening message, and the prompt with it removed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelSelection {
@@ -150,3 +152,28 @@ pub fn expand_alias(value: &str, aliases: &BTreeMap<String, String>) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// Every provider this host knows by name.
+///
+/// The one a session starts on and each one the operator defined, which is
+/// what makes the leading segment of `provider/id` readable as a provider
+/// rather than as part of a model's name.
+pub fn known_providers(agent: &AgentConfig) -> Vec<&str> {
+    let mut known = vec![agent.provider.as_str()];
+    known.extend(agent.providers.keys().map(String::as_str));
+    known
+}
+
+/// The model a session runs on when the opening message named none.
+///
+/// The configured model may name its provider, as `!model` and `--model`
+/// both let somebody do. Having written one is the more specific thing to
+/// have said, so it settles which provider the session starts on rather than
+/// the standing `provider` doing it.
+pub fn configured_model(agent: &AgentConfig) -> Option<ChosenModel> {
+    let named = agent.model.as_deref()?;
+    Some(resolve_model(
+        &expand_alias(named, &agent.aliases),
+        &known_providers(agent),
+    ))
+}

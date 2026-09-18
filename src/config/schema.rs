@@ -107,9 +107,17 @@ pub struct DelegateConfig {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
-    /// Provider id, such as `anthropic` or `zai-coding-cn`.
+    /// Provider id a session starts on, such as `anthropic` or `zai-coding-cn`.
+    ///
+    /// Only where `model` does not name one of its own, which is the more
+    /// specific thing to have written and settles it instead.
     pub provider: String,
     /// Model pattern or id. Omitted to use the provider's default.
+    ///
+    /// May name its provider as `provider/id`, may carry a thinking level as
+    /// `id:max`, and may be a short name from `aliases`. A leading segment is
+    /// only read as a provider when it is one this configuration defines, so
+    /// a model id holding a slash of its own stays whole.
     pub model: Option<String>,
     /// Model an image is shown to when the working model cannot see one.
     pub vision_model: Option<String>,

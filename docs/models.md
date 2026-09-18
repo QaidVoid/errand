@@ -4,6 +4,23 @@ A session runs on one model, and there are two ways to bring a cheaper one into
 the work. They answer different questions, and only one of them lets the cheap
 model do anything.
 
+## Naming a model
+
+A model is named the same way everywhere: in `agent.model`, after `--model` in
+the message that starts a session, and after `!model` in a thread.
+
+```
+musecringe                  a model of the provider the session is on
+ajamxhacker/musecringe      a model of another provider you have defined
+ajamxhacker/musecringe:max  the same, thinking as hard as it can
+muse                        whatever `aliases` says that stands for
+```
+
+Naming a provider settles which one the session runs on, so it beats the
+standing `agent.provider`. A leading segment counts as a provider only when it
+is one your configuration defines, which leaves a model id holding a slash of
+its own, `meta/muse-spark-1.3`, whole.
+
 ## Switching the model a session runs on
 
 `!model` lists what this host knows the provider serves. `!model <name>` moves

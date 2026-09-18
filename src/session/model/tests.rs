@@ -164,3 +164,53 @@ fn short_m_is_the_same_flag_as_the_long_one() {
         }
     );
 }
+
+/// `!model` and `--model` both let somebody name a provider, and the
+/// configured default is written by the same person for the same reason. It
+/// reads the same way, or a session starts on the wrong provider's credential
+/// looking for a model spelled with a slash in it.
+#[test]
+fn the_configured_model_may_name_its_provider_too() {
+    let mut agent = crate::config::schema::AgentConfig {
+        provider: "zai-coding-cn".to_owned(),
+        model: Some("ajamxhacker/musecringe:max".to_owned()),
+        vision_model: None,
+        delegate: None,
+        rules_path: None,
+        providers: serde_json::Map::from_iter([
+            ("zai-coding-cn".to_owned(), serde_json::json!({})),
+            ("ajamxhacker".to_owned(), serde_json::json!({})),
+        ]),
+        aliases: BTreeMap::new(),
+    };
+
+    assert_eq!(
+        super::configured_model(&agent),
+        Some(super::ChosenModel {
+            provider: Some("ajamxhacker".to_owned()),
+            model: "musecringe:max".to_owned(),
+        })
+    );
+
+    // A short name stands for a model here as it does anywhere else.
+    agent.aliases = aliases(&[("muse", "ajamxhacker/musecringe")]);
+    agent.model = Some("muse".to_owned());
+    assert_eq!(
+        super::configured_model(&agent),
+        Some(super::ChosenModel {
+            provider: Some("ajamxhacker".to_owned()),
+            model: "musecringe".to_owned(),
+        })
+    );
+
+    // A provider nobody defined is part of the model's name, not a provider.
+    agent.aliases = BTreeMap::new();
+    agent.model = Some("meta/muse-spark".to_owned());
+    assert_eq!(
+        super::configured_model(&agent),
+        Some(super::ChosenModel {
+            provider: None,
+            model: "meta/muse-spark".to_owned(),
+        })
+    );
+}

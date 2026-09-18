@@ -22,7 +22,9 @@ use crate::sandbox::backend::{
 };
 use crate::session::event::EndReason;
 use crate::session::ids::{TOKEN_LENGTH, session_id, session_token};
-use crate::session::model::{ChosenModel, expand_alias, resolve_model, select_model};
+use crate::session::model::{
+    ChosenModel, expand_alias, known_providers, resolve_model, select_model,
+};
 use crate::session::pr;
 use crate::session::projects::{ProjectSelection, ensure_project_directory, select_project};
 use crate::session::record::{prepare_record_dir, record_dir, withdraw_from_record};
@@ -401,17 +403,7 @@ impl SessionManager {
         // runs on decides whose window matters, and another provider's being
         // spent is not a reason to refuse work this one can do.
         let asked = select_model(&project.prompt);
-        let known: Vec<&str> = [self.options.config.agent.provider.as_str()]
-            .into_iter()
-            .chain(
-                self.options
-                    .config
-                    .agent
-                    .providers
-                    .keys()
-                    .map(String::as_str),
-            )
-            .collect();
+        let known = known_providers(&self.options.config.agent);
         let chosen = asked.value.as_ref().map(|value| {
             resolve_model(
                 &expand_alias(value, &self.options.config.agent.aliases),

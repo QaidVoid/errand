@@ -54,8 +54,8 @@ Which model the agent talks to, and the credential it reaches it with.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `provider` | `string` | required | Provider id, such as `anthropic` or `zai-coding-cn`. |
-| `model` | `string or undefined` | none | Model pattern or id. Omitted to use the provider's default. |
+| `provider` | `string` | required | Provider id a session starts on, such as `anthropic` or `zai-coding-cn`.  Only where `model` does not name one of its own, which is the more specific thing to have written and settles it instead. |
+| `model` | `string or undefined` | none | Model pattern or id. Omitted to use the provider's default.  May name its provider as `provider/id`, may carry a thinking level as `id:max`, and may be a short name from `aliases`. A leading segment is only read as a provider when it is one this configuration defines, so a model id holding a slash of its own stays whole. |
 | `visionModel` | `string or undefined` | none | Model an image is shown to when the working model cannot see one. |
 | `rulesPath` | `string or undefined` | none | File of standing instructions given to every session, or none. |
 | `providers` | `Map<String, serde_json::Value` | none | Every provider, the one a session starts on included.  Each entry carries the credential errand reaches that provider with, optionally the `credentialName` the agent reads it from, and whatever else the agent's own configuration takes: `baseUrl`, `api`, `models`. Written into the agent's configuration verbatim apart from the credential, because that schema belongs to the agent.  A `defaultThinkingLevel` on a provider says how hard its models think when nobody says, and one on an entry of `models` says it for that model alone. Naming a model the host's store already lists says it for that model without listing it twice. |

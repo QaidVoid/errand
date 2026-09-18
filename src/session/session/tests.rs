@@ -2713,3 +2713,37 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
     })
     .await;
 }
+
+/// The configured model may name its provider, and that is where the session
+/// starts: on that provider's credential, with the model named bare. Reading
+/// the standing `provider` instead sends the wrong key to the wrong host.
+#[tokio::test]
+async fn a_configured_model_naming_a_provider_starts_the_session_there() {
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "model": "ajamxhacker/musecringe:max",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "ajamxhacker": { "credentialName": "AJAM_KEY", "credential": "other" },
+                },
+            },
+        }))),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            let launched = harness.sandbox.launched.lock().unwrap();
+            assert_eq!(launched[0].provider, "ajamxhacker");
+            assert_eq!(launched[0].model.as_deref(), Some("musecringe:max"));
+            assert_eq!(
+                launched[0].env.get("AJAM_KEY"),
+                Some(&"other".to_owned()),
+                "the credential is the one that provider is reached with"
+            );
+        })
+    })
+    .await;
+}

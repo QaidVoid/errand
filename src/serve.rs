@@ -25,7 +25,7 @@ use crate::chat::threads::ChatThreadFactory;
 use crate::chat::threads::plain;
 use crate::config::load::Environment;
 use crate::config::redact::{redact_text, secret_values};
-use crate::config::schema::{Config, EgressMode};
+use crate::config::schema::{AgentConfig, Config, EgressMode};
 use crate::daemon::SlashCommand;
 use crate::daemon::StartError;
 use crate::daemon::{Daemon, DaemonOptions};
@@ -58,6 +58,7 @@ use crate::sandbox::broker::Broker;
 use crate::sandbox::broker::ProviderRoute;
 use crate::sandbox::paths;
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
+use crate::session::model::{configured_model, split_level};
 use crate::session::session::DescribeImages;
 use crate::session::session::IncomingMessage;
 use crate::session::session::Unavailable;
@@ -396,17 +397,29 @@ struct Brokered {
 ///
 /// Returns nothing when the mode asks for no broker, and an exit code when
 /// one was asked for and could not be had.
+/// Where the configured model is reached, as the host's store has it.
+///
+/// The model may name its provider, so it is looked up under that one rather
+/// than the provider a session would otherwise start on. A thinking level is
+/// taken off first: it is not part of what the store calls a model.
+fn configured_base_url(agent: &AgentConfig, store: Option<&str>) -> Option<String> {
+    let configured = configured_model(agent);
+    let provider = configured
+        .as_ref()
+        .and_then(|model| model.provider.as_deref())
+        .unwrap_or(agent.provider.as_str());
+    let named = configured.as_ref().map(|model| split_level(&model.model).0);
+    model_by_id(&read_models(store, provider), named.as_deref())
+        .and_then(|model| model.base_url.clone())
+}
+
 async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>, Exit> {
     if config.sandbox.egress.mode != EgressMode::Proxy {
         return Ok(None);
     }
     let env = host_environment();
     let store = agent_directory(&env);
-    let provider_base = model_by_id(
-        &read_models(store.as_deref(), config.agent.provider.as_str()),
-        config.agent.model.as_deref(),
-    )
-    .and_then(|model| model.base_url.clone());
+    let provider_base = configured_base_url(&config.agent, store.as_deref());
     let provider_host = provider_base.as_deref().and_then(host_of);
     let mut allow: Vec<String> = provider_host
         .as_ref()

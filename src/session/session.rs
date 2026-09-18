@@ -970,8 +970,14 @@ impl Running {
 
         let mut env = BTreeMap::new();
         let agent = &self.options.config.agent;
-        if let Some(name) = agent.credential_name_of(&agent.provider) {
-            env.insert(name.to_owned(), agent.credential().to_owned());
+        // The provider this session starts on, which a named model or a
+        // switch may have made a different one from the standing default. A
+        // key for the provider it is not talking to reaches nothing.
+        let starting = self.provider();
+        if let Some(name) = agent.credential_name_of(&starting)
+            && let Some(credential) = agent.credential_of(&starting)
+        {
+            env.insert(name.to_owned(), credential.to_owned());
         }
         if let Some(github) = &github {
             // The GitHub token crosses too. Reading issues and leaving
@@ -2039,6 +2045,10 @@ impl Running {
                     .as_ref()
                     .and_then(|chosen| chosen.provider.clone())
             })
+            .or_else(|| {
+                crate::session::model::configured_model(&self.options.config.agent)
+                    .and_then(|configured| configured.provider)
+            })
             .unwrap_or_else(|| self.options.config.agent.provider.clone())
     }
 
@@ -2053,7 +2063,10 @@ impl Running {
             .as_ref()
             .map(|(_, model)| model.clone())
             .or_else(|| self.usage.model.clone())
-            .or_else(|| self.options.config.agent.model.clone())
+            .or_else(|| {
+                crate::session::model::configured_model(&self.options.config.agent)
+                    .map(|configured| configured.model)
+            })
     }
 
     /// The model this session runs on, on that provider.
@@ -2067,7 +2080,10 @@ impl Running {
                     .as_ref()
                     .map(|chosen| chosen.model.clone())
             })
-            .or_else(|| self.options.config.agent.model.clone())
+            .or_else(|| {
+                crate::session::model::configured_model(&self.options.config.agent)
+                    .map(|configured| configured.model)
+            })
     }
 
     /// Begins answering the delegations the agent asks for.
