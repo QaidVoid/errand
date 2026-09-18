@@ -4,8 +4,8 @@ use serde_json::json;
 
 use super::{
     MAX_LISTED_ENTRIES, MESSAGE_LIMIT, THREAD_NAME_LIMIT, Usage, bytes, compaction_line,
-    dialog_lines, directory_listing, file_view, split_message, thread_name, tokens, tool_line,
-    truncate, usage_summary, when_relative_plain,
+    dialog_lines, directory_listing, duration, file_view, split_message, thread_name, tokens,
+    tool_line, truncate, turn_timing, usage_summary, when_relative_plain,
 };
 use crate::agent::protocol::{DialogMethod, DialogRequest};
 use crate::session::files::{Entry, FileContents};
@@ -396,4 +396,32 @@ fn a_countdown_rounds_up_so_it_never_claims_less_wait_than_there_is() {
     let now = 1_000_000_000_000;
     assert_eq!(when_relative_plain(now + 61_000, now), "in 2m");
     assert_eq!(when_relative_plain(now + 1, now), "in 1m");
+}
+
+/// The wait before the first word is what a person in a thread feels, and it
+/// is not the same number as how long the whole turn took.
+#[test]
+fn a_turn_says_what_it_waited_and_what_it_took() {
+    assert_eq!(
+        turn_timing(Some(820), 47_300),
+        "820ms to first word, 47.3s in all"
+    );
+    // A turn that produced nothing has no first word to report.
+    assert_eq!(turn_timing(None, 1_500), "1.5s in all");
+}
+
+/// Sub-second is where an interesting first-token wait lives and hours is
+/// where a long agent turn lives, so neither end is rounded away.
+#[test]
+fn a_span_is_shown_in_the_unit_that_still_says_something() {
+    assert_eq!(duration(0), "0ms");
+    assert_eq!(duration(999), "999ms");
+    assert_eq!(duration(1_000), "1.0s");
+    assert_eq!(duration(59_940), "59.9s");
+    assert_eq!(duration(60_000), "1m00s");
+    assert_eq!(duration(3_599_000), "59m59s");
+    assert_eq!(duration(3_600_000), "1h00m");
+    assert_eq!(duration(7_830_000), "2h10m");
+    // A clock that went backwards is not a negative span.
+    assert_eq!(duration(-5), "0ms");
 }

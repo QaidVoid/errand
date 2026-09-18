@@ -633,6 +633,14 @@ struct Running {
     pending_withdrawals: Vec<String>,
     current_message_id: Option<String>,
     current_author_id: Option<String>,
+    /// When the prompt that opened this turn was sent, in milliseconds.
+    turn_started_at: Option<i64>,
+    /// When this turn first produced anything, thinking included.
+    ///
+    /// Held apart from the start so the wait before the first token can be
+    /// reported on its own: it is the part a person in a thread feels, and it
+    /// is not the same number as how long the whole turn took.
+    turn_first_output_at: Option<i64>,
     idle_timer: Option<u64>,
     disk_timer: Option<u64>,
     delegating_timer: Option<u64>,
@@ -722,6 +730,8 @@ impl Running {
             pending_withdrawals: Vec::new(),
             current_message_id: None,
             current_author_id: None,
+            turn_started_at: None,
+            turn_first_output_at: None,
             idle_timer: None,
             disk_timer: None,
             delegating_timer: None,
@@ -811,9 +821,14 @@ impl Running {
                         })
                         .await;
                 }
-                Signal::TurnStart | Signal::Thinking => self.reset_idle_timer(),
+                Signal::TurnStart => self.reset_idle_timer(),
+                Signal::Thinking => {
+                    self.reset_idle_timer();
+                    self.note_first_output();
+                }
                 Signal::AssistantText(text) => {
                     self.reset_idle_timer();
+                    self.note_first_output();
                     self.say(&text).await;
                 }
                 Signal::TurnSettled { produced, failure } => {
@@ -1401,6 +1416,8 @@ impl Running {
         self.ticket = ticket;
         self.current_message_id = Some(message.id.clone());
         self.current_author_id = Some(message.author_id.clone());
+        self.turn_started_at = Some(now_ms());
+        self.turn_first_output_at = None;
         self.views.send(SessionEvent::Waiting { text: None }).await;
         self.views.send(SessionEvent::Busy { busy: true }).await;
 
@@ -1685,16 +1702,33 @@ impl Running {
         // A turn that failed is not a turn that had nothing to say. Saying so
         // is the difference between "the model was brief" and "the request
         // never reached it", which otherwise look identical from the thread.
+        // Said on every ending, including a failure: how long it took before
+        // giving up is as much worth knowing as how long a good turn took.
+        let timing = self.turn_started_at.map(|started| {
+            let now = now_ms();
+            format!(
+                " {}",
+                crate::chat::render::turn_timing(
+                    self.turn_first_output_at.map(|first| first - started),
+                    now - started,
+                )
+            )
+        });
+        let timing = timing.unwrap_or_default();
+
         let ending = match (produced, failure) {
-            (true, _) => format!("{}{spent}", marker("done")),
+            (true, _) => format!("{}{spent}{timing}", marker("done")),
             (false, None) => {
                 format!(
-                    "{} the turn finished without producing any output{spent}",
+                    "{} the turn finished without producing any output{spent}{timing}",
                     marker("done")
                 )
             }
             (false, Some(failure)) => {
-                format!("{} the turn failed: {failure}{spent}", marker("failed"))
+                format!(
+                    "{} the turn failed: {failure}{spent}{timing}",
+                    marker("failed")
+                )
             }
         };
         // A warning rather than a done: the session is still alive and the
@@ -1718,6 +1752,8 @@ impl Running {
         })
         .await;
         self.turn_delegations = None;
+        self.turn_started_at = None;
+        self.turn_first_output_at = None;
         self.aborting = false;
         if let Some(handle) = self.abort_timer.take() {
             self.timers.clear_timeout(handle);
@@ -1988,6 +2024,13 @@ impl Running {
 
     /// The provider this session runs on: what was asked for, else
     /// configured.
+    /// Marks the moment this turn first produced something, once.
+    fn note_first_output(&mut self) {
+        if self.turn_started_at.is_some() && self.turn_first_output_at.is_none() {
+            self.turn_first_output_at = Some(now_ms());
+        }
+    }
+
     fn provider(&self) -> String {
         self.switched
             .as_ref()

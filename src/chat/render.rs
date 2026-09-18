@@ -357,6 +357,47 @@ pub fn when_relative_plain(epoch_ms: i64, now: i64) -> String {
     }
 }
 
+/// How long a turn took, and how much of it was spent before it said
+/// anything.
+///
+/// The wait before the first token is what a person in a thread actually
+/// feels, and it is not the same number as how long the whole turn took: a
+/// turn that answers at once and then runs tools for a minute reads very
+/// differently from one that sits silent for a minute and then answers.
+pub fn turn_timing(first_output_ms: Option<i64>, wall_ms: i64) -> String {
+    let mut parts = Vec::new();
+    if let Some(first) = first_output_ms.filter(|first| *first >= 0) {
+        parts.push(format!("{} to first word", duration(first)));
+    }
+    parts.push(format!("{} in all", duration(wall_ms.max(0))));
+    parts.join(", ")
+}
+
+/// A span, in the largest unit that still says something useful.
+///
+/// Sub-second is where the interesting end of a first-token wait lives, and
+/// hours is where a long agent turn lives, so neither end is rounded away.
+pub fn duration(ms: i64) -> String {
+    let ms = ms.max(0);
+    if ms < 1_000 {
+        return format!("{ms}ms");
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a turn is far below f64's exact range"
+    )]
+    let seconds = ms as f64 / 1_000.0;
+    if seconds < 60.0 {
+        return format!("{seconds:.1}s");
+    }
+    let whole = ms / 1_000;
+    let (minutes, seconds) = (whole / 60, whole % 60);
+    if minutes < 60 {
+        return format!("{minutes}m{seconds:02}s");
+    }
+    format!("{}h{:02}m", minutes / 60, minutes % 60)
+}
+
 /// A line saying something went wrong but the session carries on.
 pub fn warning_line(text: &str) -> String {
     prefixed(PrefixKey::Warning, text)
