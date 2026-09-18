@@ -131,7 +131,7 @@ async fn threads(args: &[String], env: &Vars) -> Result<i32, ConfigError> {
         ThreadRegistry::path_for(&config.state_dir),
         log,
     )));
-    registry.lock().unwrap().load();
+    registry.lock().expect("the registry lock").load();
 
     Ok(run_threads(
         args,
