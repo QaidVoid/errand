@@ -763,3 +763,37 @@ async fn a_git_directory_resolved_outside_the_repository_is_refused() {
     assert!(matches!(outcome, Err(PullRequestError(_))));
     assert!(outcome.unwrap_err().to_string().contains("outside it"));
 }
+
+/// GitHub refuses a request with no `User-Agent`, and the refusal is a 403
+/// that reads as a repository the bot cannot see. Every call has to carry one.
+#[tokio::test]
+async fn every_call_to_github_names_the_daemon() {
+    let seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let captured = Arc::clone(&seen);
+    let app = axum::Router::new().fallback(move |headers: axum::http::HeaderMap| {
+        let captured = Arc::clone(&captured);
+        async move {
+            *captured.lock().unwrap() = headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            "{}"
+        }
+    });
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("a loopback port");
+    let port = listener.local_addr().expect("a local address").port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("the server serves");
+    });
+
+    let sent = super::github_client()
+        .get(format!("http://127.0.0.1:{port}/repos/someone/theirs"))
+        .send()
+        .await;
+    assert!(sent.is_ok(), "the request reached the server");
+
+    let named = seen.lock().unwrap().clone();
+    assert_eq!(named.as_deref(), Some(super::USER_AGENT));
+}

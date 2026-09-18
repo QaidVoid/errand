@@ -697,13 +697,28 @@ pub fn run_command(
     })
 }
 
+/// How the daemon names itself to GitHub.
+///
+/// GitHub refuses a request that carries no `User-Agent` with a 403 that
+/// reads like a permissions failure. Deno's `fetch` sets one of its own, so
+/// the TypeScript daemon never had to; `reqwest` sets none, and without this
+/// every call fails, which looks from a thread like a repository the bot
+/// cannot reach.
+const USER_AGENT: &str = concat!("errand/", env!("CARGO_PKG_VERSION"));
+
+/// The client the daemon calls GitHub with.
+fn github_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()
+        .unwrap_or_default()
+}
+
 /// Calls the GitHub REST API as the bot.
 pub fn call_api(path: String, init: ApiCall) -> Pin<Box<dyn Future<Output = ApiReply> + Send>> {
     Box::pin(async move {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .unwrap_or_default();
+        let client = github_client();
         let method =
             reqwest::Method::from_bytes(init.method.as_bytes()).unwrap_or(reqwest::Method::GET);
         let mut request = client
