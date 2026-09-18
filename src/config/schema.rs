@@ -299,6 +299,10 @@ pub struct Config {
     /// Absolute path under which every session's project directory lives.
     pub project_root: String,
     /// Where per-session state directories are created on the host.
+    ///
+    /// Neither this nor `projectRoot` may sit inside the other. A session may
+    /// write both, and the transcript is kept beside this directory precisely
+    /// so that it cannot.
     pub state_dir: String,
     /// What a session may consume, and what the backend enforces.
     pub sandbox: SandboxConfig,

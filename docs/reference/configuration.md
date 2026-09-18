@@ -27,7 +27,7 @@ The fully resolved configuration the daemon runs on.
 | `chat` | `ChatConfig` | none | Chat connection and who may drive the bot. |
 | `agent` | `AgentConfig` | none | Which model the agent talks to, and the credential it reaches it with. |
 | `projectRoot` | `string` | required | Absolute path under which every session's project directory lives. |
-| `stateDir` | `string` | required | Where per-session state directories are created on the host. |
+| `stateDir` | `string` | required | Where per-session state directories are created on the host.  Neither this nor `projectRoot` may sit inside the other. A session may write both, and the transcript is kept beside this directory precisely so that it cannot. |
 | `sandbox` | `SandboxConfig` | none | What a session may consume, and what the backend enforces. |
 | `output` | `OutputConfig` | none | How much of the agent's activity reaches the thread. |
 | `shutdown` | `ShutdownConfig` | none | Who may power off the host. Empty means nobody, which is the default. |

@@ -140,7 +140,7 @@
     },
     "stateDir": {
       "type": "string",
-      "description": "Where per-session state directories are created on the host."
+      "description": "Where per-session state directories are created on the host.  Neither this nor `projectRoot` may sit inside the other. A session may write both, and the transcript is kept beside this directory precisely so that it cannot."
     },
     "sandbox": {
       "type": "object",

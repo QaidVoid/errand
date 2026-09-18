@@ -96,15 +96,35 @@ fn an_empty_allowlist_refuses_to_start_rather_than_admitting_everyone() {
 }
 
 #[test]
-fn paths_must_be_absolute_and_must_not_be_the_same_directory() {
+fn paths_must_be_absolute_and_neither_may_sit_inside_the_other() {
     assert!(problems_contain(
         &valid(json!({ "projectRoot": "./projects" })),
         "projectRoot must be an absolute path"
     ));
     assert!(problems_contain(
         &valid(json!({ "projectRoot": "/tmp/same", "stateDir": "/tmp/same" })),
-        "must be different directories"
+        "must be separate directories"
     ));
+    // The record directory is `{stateDir}.record`, kept out of the agent's
+    // write grant on purpose. State inside the project puts it back in.
+    assert!(problems_contain(
+        &valid(json!({ "projectRoot": "/tmp/work", "stateDir": "/tmp/work/state" })),
+        "must be separate directories"
+    ));
+    // The other way round is no better: the project would be inside the
+    // state directory a session is also given.
+    assert!(problems_contain(
+        &valid(json!({ "projectRoot": "/tmp/state/projects", "stateDir": "/tmp/state" })),
+        "must be separate directories"
+    ));
+    // A sibling whose name merely starts with the other's is fine.
+    assert!(
+        validate_config(&valid(
+            json!({ "projectRoot": "/tmp/work", "stateDir": "/tmp/workspace" })
+        ))
+        .is_ok(),
+        "a sibling is not a nesting"
+    );
 }
 
 #[test]

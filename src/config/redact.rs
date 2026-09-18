@@ -18,6 +18,10 @@ const MIN_SCRUBBABLE_LENGTH: usize = 8;
 
 /// Renders the effective configuration with every secret field blanked, for
 /// logging at startup.
+///
+/// The fixed paths in [`SECRET_PATHS`] are not the whole of it. An operator
+/// may define any number of providers under any names they like, each with a
+/// credential of its own, so those are walked rather than named.
 pub fn redact_config(config: &Config) -> Value {
     let mut clone =
         serde_json::to_value(config).expect("the resolved configuration always renders as JSON");
@@ -27,6 +31,20 @@ pub fn redact_config(config: &Config) -> Value {
         };
         if let Some(Value::Object(fields)) = read_path_mut(&mut clone, parent_path) {
             fields.insert(last.to_owned(), Value::String(REDACTION.to_owned()));
+        }
+    }
+
+    // A defined provider carries its own credential, and there is no fixed
+    // path to name it by: the operator chooses how many providers there are
+    // and what they are called. Walked instead, so a second provider's key is
+    // blanked as thoroughly as the first one's.
+    if let Some(Value::Object(providers)) = read_path_mut(&mut clone, "agent.providers") {
+        for definition in providers.values_mut() {
+            if let Value::Object(fields) = definition
+                && fields.contains_key("credential")
+            {
+                fields.insert("credential".to_owned(), Value::String(REDACTION.to_owned()));
+            }
         }
     }
     clone

@@ -372,6 +372,16 @@ fn one_of<T>(
     }
 }
 
+/// Whether one path is the other, or sits inside it.
+///
+/// Compared by component, so `/srv/work` does not read as containing
+/// `/srv/workspace`. Both are already resolved and absolute here.
+fn nests(one: &str, other: &str) -> bool {
+    let one = std::path::Path::new(one);
+    let other = std::path::Path::new(other);
+    one.starts_with(other) || other.starts_with(one)
+}
+
 fn directory(source: &Map<String, Value>, key: &str, problems: &mut Problems) -> String {
     match source.get(key) {
         Some(Value::String(value)) if !value.trim().is_empty() => {
@@ -1057,8 +1067,12 @@ pub fn validate_config(parsed: &Value) -> Result<Config, ConfigError> {
         ));
     }
 
-    if !project_root.is_empty() && project_root == state_dir {
-        problems.add("projectRoot and stateDir must be different directories");
+    if !project_root.is_empty() && !state_dir.is_empty() && nests(&project_root, &state_dir) {
+        problems.add(
+            "projectRoot and stateDir must be separate directories, neither inside the other: a \
+             session may write both its project and its state, and the transcript is kept beside \
+             the state directory precisely so it cannot",
+        );
     }
 
     if problems.found.is_empty() {
