@@ -5,7 +5,7 @@ use serde_json::json;
 use super::{
     MAX_LISTED_ENTRIES, MESSAGE_LIMIT, THREAD_NAME_LIMIT, Usage, bytes, compaction_line,
     dialog_lines, directory_listing, duration, file_view, split_message, thread_name, tokens,
-    tool_line, truncate, turn_timing, usage_summary, when_relative_plain,
+    tool_line, truncate, turn_summary, turn_timing, usage_summary, when_relative_plain,
 };
 use crate::agent::protocol::{DialogMethod, DialogRequest};
 use crate::session::files::{Entry, FileContents};
@@ -404,10 +404,10 @@ fn a_countdown_rounds_up_so_it_never_claims_less_wait_than_there_is() {
 fn a_turn_says_what_it_waited_and_what_it_took() {
     assert_eq!(
         turn_timing(Some(820), 47_300),
-        "820ms to first word, 47.3s in all"
+        "47.3s (820ms to first word)"
     );
     // A turn that produced nothing has no first word to report.
-    assert_eq!(turn_timing(None, 1_500), "1.5s in all");
+    assert_eq!(turn_timing(None, 1_500), "1.5s");
 }
 
 /// Sub-second is where an interesting first-token wait lives and hours is
@@ -424,4 +424,26 @@ fn a_span_is_shown_in_the_unit_that_still_says_something() {
     assert_eq!(duration(7_830_000), "2h10m");
     // A clock that went backwards is not a negative span.
     assert_eq!(duration(-5), "0ms");
+}
+
+/// Three questions, not one comma-separated run: how long it took, what it
+/// spent in tokens, and what it cost. A reader should not have to count
+/// commas to find the one they came for.
+#[test]
+fn a_turn_summary_groups_what_it_answers() {
+    let usage = Usage {
+        input: 7_000.0,
+        cache_read: 3_000.0,
+        total_tokens: 10_900.0,
+        cost: 0.000_3,
+        context_tokens: 3_300.0,
+        context_window: 1_000_000.0,
+    };
+
+    assert_eq!(
+        turn_summary("2.4s (1.6s to first word)", Some(&usage)),
+        "2.4s (1.6s to first word) | 10.9k tokens, 30% cached, 3.3k/1.0M context (0%), $0.0003"
+    );
+    // A turn with no usage yet is still worth timing.
+    assert_eq!(turn_summary("2.4s", None), "2.4s");
 }

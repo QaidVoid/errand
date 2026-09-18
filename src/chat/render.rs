@@ -267,6 +267,27 @@ pub fn usage_summary(usage: &Usage) -> String {
     parts.join(", ")
 }
 
+/// What a turn took and what it spent, as one line a person can scan.
+///
+/// Grouped rather than run together: how long it took, what it cost in
+/// tokens, and what it cost in money are three questions, and a single comma
+/// separated run makes the reader count commas to find the one they wanted.
+/// Time comes first because it is what somebody watching the thread was
+/// waiting on.
+pub fn turn_summary(timing: &str, usage: Option<&Usage>) -> String {
+    let mut groups = Vec::new();
+    if !timing.is_empty() {
+        groups.push(timing.to_owned());
+    }
+    if let Some(usage) = usage {
+        let spent = usage_summary(usage);
+        if !spent.is_empty() {
+            groups.push(spent);
+        }
+    }
+    groups.join(" | ")
+}
+
 /// What a session has spent, as the renderer reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Usage {
@@ -365,12 +386,11 @@ pub fn when_relative_plain(epoch_ms: i64, now: i64) -> String {
 /// turn that answers at once and then runs tools for a minute reads very
 /// differently from one that sits silent for a minute and then answers.
 pub fn turn_timing(first_output_ms: Option<i64>, wall_ms: i64) -> String {
-    let mut parts = Vec::new();
-    if let Some(first) = first_output_ms.filter(|first| *first >= 0) {
-        parts.push(format!("{} to first word", duration(first)));
+    let wall = duration(wall_ms.max(0));
+    match first_output_ms.filter(|first| *first >= 0) {
+        Some(first) => format!("{wall} ({} to first word)", duration(first)),
+        None => wall,
     }
-    parts.push(format!("{} in all", duration(wall_ms.max(0))));
-    parts.join(", ")
 }
 
 /// A span, in the largest unit that still says something useful.

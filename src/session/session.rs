@@ -27,7 +27,7 @@ use crate::agent::protocol::{AgentImage, DialogRequest, StreamingBehavior, Usage
 use crate::agent::requests::{DELEGATE_COMMAND, delegate_command_contents};
 use crate::chat::render::{
     bytes as byte_count, connection_line, dialog_lines, marker, question_line, tool_line, truncate,
-    usage_summary, warning_line,
+    warning_line,
 };
 use crate::config::schema::{Config, GithubConfig};
 use crate::config::size::parse_size;
@@ -1694,9 +1694,9 @@ impl Running {
                     .context_window
                     .map_or(0.0, |window| window as f64),
             };
-            format!(" {}", usage_summary(&shown))
+            Some(shown)
         } else {
-            String::new()
+            None
         };
 
         // A turn that failed is not a turn that had nothing to say. Saying so
@@ -1704,31 +1704,29 @@ impl Running {
         // never reached it", which otherwise look identical from the thread.
         // Said on every ending, including a failure: how long it took before
         // giving up is as much worth knowing as how long a good turn took.
-        let timing = self.turn_started_at.map(|started| {
-            let now = now_ms();
-            format!(
-                " {}",
-                crate::chat::render::turn_timing(
-                    self.turn_first_output_at.map(|first| first - started),
-                    now - started,
-                )
+        let timing = self.turn_started_at.map_or_else(String::new, |started| {
+            crate::chat::render::turn_timing(
+                self.turn_first_output_at.map(|first| first - started),
+                now_ms() - started,
             )
         });
-        let timing = timing.unwrap_or_default();
+        let summary = crate::chat::render::turn_summary(&timing, spent.as_ref());
+        let spent = if summary.is_empty() {
+            String::new()
+        } else {
+            format!(" {summary}")
+        };
 
         let ending = match (produced, failure) {
-            (true, _) => format!("{}{spent}{timing}", marker("done")),
+            (true, _) => format!("{}{spent}", marker("done")),
             (false, None) => {
                 format!(
-                    "{} the turn finished without producing any output{spent}{timing}",
+                    "{} the turn finished without producing any output{spent}",
                     marker("done")
                 )
             }
             (false, Some(failure)) => {
-                format!(
-                    "{} the turn failed: {failure}{spent}{timing}",
-                    marker("failed")
-                )
+                format!("{} the turn failed: {failure}{spent}", marker("failed"))
             }
         };
         // A warning rather than a done: the session is still alive and the
