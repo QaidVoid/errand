@@ -110,12 +110,15 @@ fn plain_git() -> (Arc<FakeGit>, Run) {
 struct FakeApi {
     answers: BTreeMap<String, Answer>,
     paths: Mutex<Vec<String>>,
+    /// The JSON bodies sent, so a test can assert on what was asked for.
+    bodies: Mutex<Vec<serde_json::Value>>,
 }
 
 fn fake_api(answers: BTreeMap<String, Answer>) -> (Arc<FakeApi>, Api) {
     let fake = Arc::new(FakeApi {
         answers,
         paths: Mutex::new(Vec::new()),
+        bodies: Mutex::new(Vec::new()),
     });
     let caller = Arc::clone(&fake);
     let api: Api = Arc::new(move |path, init| {
@@ -125,6 +128,9 @@ fn fake_api(answers: BTreeMap<String, Answer>) -> (Arc<FakeApi>, Api) {
                 .lock()
                 .unwrap()
                 .push(format!("{} {}", init.method, path));
+            if let Some(body) = &init.body {
+                fake.bodies.lock().unwrap().push(body.clone());
+            }
             let (status, body) = fake
                 .answers
                 .get(&format!("{} {}", init.method, path))
@@ -796,4 +802,101 @@ async fn every_call_to_github_names_the_daemon() {
 
     let named = seen.lock().unwrap().clone();
     assert_eq!(named.as_deref(), Some(super::USER_AGENT));
+}
+
+/// GitHub refuses to fork a repository into the account that owns it, so a
+/// session working in one of the bot's own repositories could never open a
+/// pull request. When the bot can already push, there is nothing to fork.
+#[tokio::test]
+async fn its_own_repository_is_pushed_to_directly_and_never_forked() {
+    let kept = with_repo();
+    let (git, run) = repo_git();
+    let (api_fake, api) = fake_api(BTreeMap::from([
+        (
+            "GET /repos/upstream/project".to_owned(),
+            (
+                200,
+                serde_json::json!({
+                    "default_branch": "trunk",
+                    "permissions": { "push": true },
+                }),
+            ),
+        ),
+        (
+            "POST /repos/upstream/project/pulls".to_owned(),
+            (
+                201,
+                serde_json::json!({"html_url": "https://github.com/upstream/project/pull/9"}),
+            ),
+        ),
+    ]));
+
+    let url = open_pull_request(
+        &request(&kept.project, "Do the thing", "amelia"),
+        &run,
+        &api,
+        &immediate_sleep(),
+    )
+    .await
+    .expect("a pull request on the bot's own repository");
+
+    assert_eq!(url, "https://github.com/upstream/project/pull/9");
+    let paths = api_fake.paths.lock().unwrap().join("\n");
+    assert!(!paths.contains("forks"), "nothing was forked: {paths}");
+
+    // The branch went to the upstream itself.
+    let pushed = git
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|call| call.args.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        pushed.contains("https://github.com/upstream/project.git"),
+        "{pushed}"
+    );
+
+    // A same-repository request names the branch alone: GitHub refuses the
+    // owner-qualified form when head and base are the same repository.
+    let sent = api_fake.bodies.lock().unwrap().clone();
+    let head = sent
+        .iter()
+        .find_map(|body| body.get("head").and_then(|head| head.as_str()))
+        .expect("a head");
+    assert!(!head.contains(':'), "head was qualified: {head}");
+}
+
+/// A repository the bot cannot push to is still forked first, which is the
+/// whole reason the fork-first flow exists.
+#[tokio::test]
+async fn somebody_elses_repository_is_still_forked_first() {
+    let kept = with_repo();
+    let (_git, run) = repo_git();
+    let (api_fake, api) = working_api();
+
+    open_pull_request(
+        &request(&kept.project, "Do the thing", "amelia"),
+        &run,
+        &api,
+        &immediate_sleep(),
+    )
+    .await
+    .expect("a pull request through the fork");
+
+    let paths = api_fake.paths.lock().unwrap().join("\n");
+    assert!(
+        paths.contains("POST /repos/upstream/project/forks"),
+        "{paths}"
+    );
+    let sent = api_fake.bodies.lock().unwrap().clone();
+    let head = sent
+        .iter()
+        .find_map(|body| body.get("head").and_then(|head| head.as_str()))
+        .expect("a head");
+    assert!(
+        head.contains(':'),
+        "a cross-repository head is qualified: {head}"
+    );
 }

@@ -378,6 +378,31 @@ pub fn find_repository(
 pub const FORK_WAIT_MS: u64 = 30_000;
 const FORK_POLL_MS: u64 = 1_000;
 
+/// Whether the account this token belongs to can already push to the target.
+///
+/// GitHub refuses to fork a repository into the account that owns it, so a
+/// session working in one of the bot's own repositories could never open a
+/// pull request: the fork answered 403 and the session reported that it could
+/// not fork. Asked first, so the fork is attempted only where it is possible.
+async fn can_push_to(api: &Api, token: &str, target: &Repo) -> bool {
+    let answer = api(
+        format!("/repos/{}/{}", target.owner, target.name),
+        ApiCall {
+            method: "GET".to_owned(),
+            token: token.to_owned(),
+            body: None,
+        },
+    )
+    .await;
+    answer.status == 200
+        && answer
+            .body
+            .get("permissions")
+            .and_then(|permissions| permissions.get("push"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
 /// Reads a repository out of an API answer that describes one.
 fn named(body: &Value) -> Option<Repo> {
     let owner = body.get("owner")?.get("login")?.as_str()?;
@@ -589,13 +614,26 @@ pub async fn open_pull_request(
     assert_contained(run, &project_path).await?;
     let branch = current_branch(run, &project_path).await?;
     let target = upstream(run, &project_path).await?;
-    let fork = fork_of(api, &request.github.token, &target, sleep).await?;
+
+    // Forking is for somebody else's repository. On one the bot can already
+    // push to, the branch goes straight to the upstream and the request is a
+    // same-repository one; the least-privilege reason for forking stands
+    // everywhere it applies, which is everywhere the bot has no write access.
+    let own = can_push_to(api, &request.github.token, &target).await;
+    let pushing_to = if own {
+        target.clone()
+    } else {
+        fork_of(api, &request.github.token, &target, sleep).await?
+    };
 
     let summary = push_work(
         run,
         &project_path,
         &branch,
-        &format!("https://github.com/{}/{}.git", fork.owner, fork.name),
+        &format!(
+            "https://github.com/{}/{}.git",
+            pushing_to.owner, pushing_to.name
+        ),
         &request.github.token,
     )
     .await?;
@@ -607,7 +645,7 @@ pub async fn open_pull_request(
             token: request.github.token.clone(),
             body: Some(make_pull(
                 &request.title,
-                &fork.owner,
+                (!own).then_some(pushing_to.owner.as_str()),
                 &branch,
                 &default_branch(api, &request.github.token, &target).await,
                 &pull_request_body(&summary, &request.requested_by, &request.links),
@@ -632,7 +670,12 @@ pub async fn open_pull_request(
         })
 }
 
-fn make_pull(title: &str, owner: &str, branch: &str, base: &str, body: &str) -> Value {
+/// The request body, with `head` naming the fork only when there is one.
+///
+/// A same-repository request names the branch alone. Qualifying it with the
+/// owner is what a cross-repository request needs, and GitHub refuses the
+/// qualified form when the head and the base are the same repository.
+fn make_pull(title: &str, fork_owner: Option<&str>, branch: &str, base: &str, body: &str) -> Value {
     #[derive(Serialize)]
     struct NewPull<'a> {
         title: &'a str,
@@ -643,7 +686,10 @@ fn make_pull(title: &str, owner: &str, branch: &str, base: &str, body: &str) -> 
     }
     json!(NewPull {
         title,
-        head: format!("{owner}:{branch}"),
+        head: match fork_owner {
+            Some(owner) => format!("{owner}:{branch}"),
+            None => branch.to_owned(),
+        },
         base,
         body,
         maintainer_can_modify: true,
