@@ -459,3 +459,42 @@ fn the_models_offered_are_the_ones_the_agent_can_reach() {
         "the defined provider's model is offered and the unreachable one is not"
     );
 }
+
+/// How hard a model thinks is worth saying once, next to the model, rather
+/// than typed onto every switch. A model says it for itself, a provider says
+/// it for all of its own, and naming a store model again says it for that one
+/// without listing it twice.
+#[test]
+fn a_model_can_be_told_how_hard_to_think_by_default() {
+    let (_dir, path) = with_store(&json!({
+        "zai-coding-cn": { "models": [{ "id": "glm-5.3" }, { "id": "glm-5.3-flash" }] },
+    }));
+    let mut agent = agent();
+    agent.providers = serde_json::Map::from_iter([
+        (
+            "zai-coding-cn".to_owned(),
+            json!({
+                "credential": "secret",
+                "defaultThinkingLevel": "High",
+                "models": [{ "id": "glm-5.3-flash", "defaultThinkingLevel": "low" }],
+            }),
+        ),
+        (
+            "ajamxhacker".to_owned(),
+            json!({
+                "credential": "secret",
+                "models": [{ "id": "musecringe" }],
+            }),
+        ),
+    ]);
+
+    let offered = crate::provider::models::available_models(&agent, Some(&path));
+    let sent: Vec<String> = offered.iter().map(|model| model.with_level("")).collect();
+
+    assert_eq!(
+        sent,
+        ["glm-5.3:high", "glm-5.3-flash:low", "musecringe"],
+        "the provider's level applies to its models, the model's own beats it, \
+         and a provider that names no level leaves the id alone"
+    );
+}

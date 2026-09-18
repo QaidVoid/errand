@@ -82,6 +82,12 @@ pub struct AvailableModel {
     pub provider: String,
     /// The model id, as the agent should be given it.
     pub id: String,
+    /// How hard it thinks when nobody says, with its colon already on.
+    ///
+    /// Read from the model's own `defaultThinkingLevel`, or the provider's
+    /// when the model names none. A level on the name beats both, because
+    /// somebody typing one is being more specific than the configuration.
+    pub default_level: Option<String>,
 }
 
 impl AvailableModel {
@@ -90,13 +96,22 @@ impl AvailableModel {
         format!("{}/{}", self.provider, self.id)
     }
 
-    /// The id to give the agent, with the level somebody asked for on it.
+    /// The id to give the agent, with a level on it when one applies.
     pub fn with_level(&self, asked: &str) -> String {
-        if asked.is_empty() {
-            return self.id.clone();
+        if !asked.is_empty() {
+            return format!("{}{asked}", self.id);
         }
-        format!("{}{asked}", self.id)
+        match &self.default_level {
+            Some(level) => format!("{}{level}", self.id),
+            None => self.id.clone(),
+        }
     }
+}
+
+/// A level as it is written onto a model name, with its colon.
+fn level_suffix(from: Option<&Value>) -> Option<String> {
+    let named = from?.get("defaultThinkingLevel")?.as_str()?.trim();
+    (!named.is_empty()).then(|| format!(":{}", named.to_lowercase()))
 }
 
 /// Every model a session can actually be switched to.
@@ -112,29 +127,44 @@ impl AvailableModel {
 /// models are read where each provider's models are written: the host store
 /// for the configured one, and the definition itself for the rest.
 pub fn available_models(agent: &AgentConfig, directory: Option<&str>) -> Vec<AvailableModel> {
+    let configured = level_suffix(agent.providers.get(&agent.provider));
     let mut found: Vec<AvailableModel> = read_models(directory, &agent.provider)
         .into_iter()
         .map(|model| AvailableModel {
             provider: agent.provider.clone(),
             id: model.id,
+            default_level: configured.clone(),
         })
         .collect();
 
     for (provider, definition) in &agent.providers {
+        let across = level_suffix(Some(definition));
         let listed = definition
             .get("models")
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        found.extend(
-            listed
-                .iter()
-                .filter_map(|model| model.get("id").and_then(Value::as_str))
-                .map(|id| AvailableModel {
-                    provider: provider.clone(),
-                    id: id.to_owned(),
-                }),
-        );
+        for model in listed {
+            let Some(id) = model.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let level = level_suffix(Some(model)).or_else(|| across.clone());
+            // The configured provider's models come from the store as well. A
+            // definition naming one again is saying something about it, not
+            // adding a second of it.
+            if let Some(known) = found
+                .iter_mut()
+                .find(|known| known.provider == *provider && known.id == id)
+            {
+                known.default_level = level;
+                continue;
+            }
+            found.push(AvailableModel {
+                provider: provider.clone(),
+                id: id.to_owned(),
+                default_level: level,
+            });
+        }
     }
     found
 }

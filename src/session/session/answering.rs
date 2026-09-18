@@ -34,6 +34,7 @@ pub(super) fn choose(available: &[AvailableModel], wanted: &str, current: &str) 
         return Chosen::One(AvailableModel {
             provider: current.to_owned(),
             id: wanted.to_owned(),
+            default_level: None,
         });
     }
 

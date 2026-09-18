@@ -2479,10 +2479,12 @@ fn a_model_carries_the_provider_that_serves_it() {
         AvailableModel {
             provider: "zai".to_owned(),
             id: "glm-5.3".to_owned(),
+            default_level: None,
         },
         AvailableModel {
             provider: "muse".to_owned(),
             id: "musecringe".to_owned(),
+            default_level: None,
         },
     ];
 
@@ -2506,10 +2508,12 @@ fn a_name_two_providers_serve_is_not_guessed_at() {
         AvailableModel {
             provider: "alpha".to_owned(),
             id: "shared".to_owned(),
+            default_level: None,
         },
         AvailableModel {
             provider: "beta".to_owned(),
             id: "shared".to_owned(),
+            default_level: None,
         },
     ];
 
@@ -2544,10 +2548,12 @@ fn the_listing_puts_this_sessions_provider_first() {
         AvailableModel {
             provider: "openrouter".to_owned(),
             id: "a".to_owned(),
+            default_level: None,
         },
         AvailableModel {
             provider: "zai".to_owned(),
             id: "glm".to_owned(),
+            default_level: None,
         },
     ];
 
@@ -2568,6 +2574,7 @@ fn an_alias_carrying_a_level_still_finds_its_model() {
     let available = vec![AvailableModel {
         provider: "ajamxhacker".to_owned(),
         id: "musecringe".to_owned(),
+        default_level: None,
     }];
 
     let expanded = crate::session::model::expand_alias("muse", &aliases);
@@ -2583,4 +2590,25 @@ fn an_alias_carrying_a_level_still_finds_its_model() {
         }
         _ => panic!("the alias must find its model"),
     }
+}
+
+/// A level nobody asked for comes from the model, then the provider. One
+/// typed on the name beats both: somebody saying `:max` is being specific.
+#[test]
+fn a_model_thinks_at_its_own_default_until_somebody_says_otherwise() {
+    let model = AvailableModel {
+        provider: "ajamxhacker".to_owned(),
+        id: "musecringe".to_owned(),
+        default_level: Some(":high".to_owned()),
+    };
+
+    assert_eq!(model.with_level(""), "musecringe:high");
+    assert_eq!(model.with_level(":max"), "musecringe:max");
+
+    let plain = AvailableModel {
+        provider: "zai".to_owned(),
+        id: "glm-5.3".to_owned(),
+        default_level: None,
+    };
+    assert_eq!(plain.with_level(""), "glm-5.3");
 }

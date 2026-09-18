@@ -16,6 +16,34 @@ the same sandbox, and you switch back to review. Switching is refused while a
 turn is running, because changing the model underneath a turn answers half a
 question with each.
 
+## How hard a model thinks
+
+A thinking level is written onto a model name with a colon, as
+`musecringe:max`, and typing one is always the last word. Saying it on every
+switch is tedious, so a level can be settled once in the configuration:
+
+```json
+{
+  "agent": {
+    "providers": {
+      "ajamxhacker": {
+        "credential": "...",
+        "defaultThinkingLevel": "high",
+        "models": [{ "id": "musecringe", "defaultThinkingLevel": "max" }]
+      }
+    }
+  }
+}
+```
+
+The model's own level wins over the provider's, and the provider's applies to
+every model it serves. `!model` says which level a model will think at when
+nobody asks, so the list is enough to know what a switch will do.
+
+Naming a model the host's store already lists does not add a second copy of it.
+It says something about the one that is there, which is how a level is set for
+a model of the provider the session starts on.
+
 ## Asking a cheaper model about one thing
 
 A delegation is a question about one artefact that already exists. The agent

@@ -124,6 +124,11 @@ pub struct AgentConfig {
     /// else the agent's own configuration takes: `baseUrl`, `api`, `models`.
     /// Written into the agent's configuration verbatim apart from the
     /// credential, because that schema belongs to the agent.
+    ///
+    /// A `defaultThinkingLevel` on a provider says how hard its models think
+    /// when nobody says, and one on an entry of `models` says it for that
+    /// model alone. Naming a model the host's store already lists says it for
+    /// that model without listing it twice.
     pub providers: Map<String, serde_json::Value>,
     /// Short names for models, so a session is started without spelling one.
     pub aliases: BTreeMap<String, String>,

@@ -88,7 +88,7 @@
           "description": "File of standing instructions given to every session, or none."
         },
         "providers": {
-          "description": "Every provider, the one a session starts on included.  Each entry carries the credential errand reaches that provider with, optionally the `credentialName` the agent reads it from, and whatever else the agent's own configuration takes: `baseUrl`, `api`, `models`. Written into the agent's configuration verbatim apart from the credential, because that schema belongs to the agent."
+          "description": "Every provider, the one a session starts on included.  Each entry carries the credential errand reaches that provider with, optionally the `credentialName` the agent reads it from, and whatever else the agent's own configuration takes: `baseUrl`, `api`, `models`. Written into the agent's configuration verbatim apart from the credential, because that schema belongs to the agent.  A `defaultThinkingLevel` on a provider says how hard its models think when nobody says, and one on an entry of `models` says it for that model alone. Naming a model the host's store already lists says it for that model without listing it twice."
         },
         "aliases": {
           "description": "Short names for models, so a session is started without spelling one."
