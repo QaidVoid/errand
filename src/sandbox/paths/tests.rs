@@ -1,6 +1,6 @@
 //! Tests for path containment, ported from `paths_test.ts`.
 
-use super::{host_path_under, within};
+use super::{host_path_under, read_beneath, truncate_beneath, within};
 
 const ROOT: &str = "/projects/demo";
 
@@ -89,4 +89,84 @@ fn a_root_is_matched_by_component_not_by_prefix() {
     // `/srv/project-old` shares the root's spelling but not its path.
     assert_eq!(within("/srv/project", "/srv/project-old/secret"), None);
     assert_eq!(within("/srv/project", "../project-old/secret"), None);
+}
+
+/// The daemon runs outside the sandbox and a session can write inside it, so
+/// a link planted in a session's own tree must not be a way to reach a file
+/// the session could never open itself.
+#[test]
+fn a_planted_link_reads_nothing_outside_the_root() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let outside = tempfile::tempdir().expect("a temporary directory");
+    std::fs::write(outside.path().join("secret"), "the host's own").expect("written");
+    std::fs::write(root.path().join("ordinary"), "the session's own").expect("written");
+    std::os::unix::fs::symlink(outside.path().join("secret"), root.path().join("escape"))
+        .expect("linked");
+    let inside = root.path().display().to_string();
+
+    assert_eq!(
+        read_beneath(&inside, "ordinary").expect("an ordinary file reads"),
+        "the session's own"
+    );
+    assert!(read_beneath(&inside, "escape").is_err(), "a link out");
+    assert!(read_beneath(&inside, "../secret").is_err(), "a climb out");
+    assert!(
+        read_beneath(
+            &inside,
+            &outside.path().join("secret").display().to_string()
+        )
+        .is_err(),
+        "an absolute path out"
+    );
+}
+
+/// A link that stays inside is refused too. A session with something to say
+/// about a file can say it in the file.
+#[test]
+fn even_a_link_that_points_back_inside_is_refused() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    std::fs::write(root.path().join("real"), "inside").expect("written");
+    std::os::unix::fs::symlink("real", root.path().join("alias")).expect("linked");
+    let inside = root.path().display().to_string();
+
+    assert_eq!(read_beneath(&inside, "real").expect("the file"), "inside");
+    assert!(read_beneath(&inside, "alias").is_err());
+}
+
+/// A directory on the way is as good a place to plant a link as the file.
+#[test]
+fn a_link_part_way_along_the_path_is_refused() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let outside = tempfile::tempdir().expect("a temporary directory");
+    std::fs::create_dir(outside.path().join("elsewhere")).expect("made");
+    std::fs::write(outside.path().join("elsewhere").join("secret"), "out").expect("written");
+    std::os::unix::fs::symlink(outside.path().join("elsewhere"), root.path().join("hop"))
+        .expect("linked");
+
+    assert!(read_beneath(&root.path().display().to_string(), "hop/secret").is_err());
+}
+
+/// Emptying a notes file must empty that file, not whatever it points at.
+#[test]
+fn truncating_through_a_link_leaves_the_target_alone() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let outside = tempfile::tempdir().expect("a temporary directory");
+    let target = outside.path().join("keep");
+    std::fs::write(&target, "must survive").expect("written");
+    std::os::unix::fs::symlink(&target, root.path().join("notes.md")).expect("linked");
+    let inside = root.path().display().to_string();
+
+    assert!(truncate_beneath(&inside, "notes.md").is_err());
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("read back"),
+        "must survive"
+    );
+
+    // An ordinary file in the same place is emptied as it always was.
+    std::fs::write(root.path().join("plain.md"), "spent").expect("written");
+    truncate_beneath(&inside, "plain.md").expect("emptied");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("plain.md")).expect("read back"),
+        ""
+    );
 }

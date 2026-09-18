@@ -11,6 +11,11 @@ fn path(root: &TempDir, name: &str) -> String {
     root.path().join(name).to_string_lossy().into_owned()
 }
 
+/// The project root the readers resolve beneath.
+fn root_of(root: &TempDir) -> String {
+    root.path().to_string_lossy().into_owned()
+}
+
 #[test]
 fn a_directory_lists_directories_first_then_by_name() {
     let root = with_project();
@@ -19,7 +24,7 @@ fn a_directory_lists_directories_first_then_by_name() {
     std::fs::write(path(&root, "readme.md"), "hello").expect("written");
     std::fs::write(path(&root, "deno.json"), "{}").expect("written");
 
-    let entries = read_directory(&path(&root, ""), "").expect("listed");
+    let entries = read_directory(&root_of(&root), "").expect("listed");
 
     assert_eq!(
         entries
@@ -45,7 +50,7 @@ fn each_entry_carries_the_path_to_ask_for_it_by() {
         "src"
     );
     assert_eq!(
-        read_directory(&path(&root, "src"), "src").expect("listed")[0].path,
+        read_directory(&root_of(&root), "src").expect("listed")[0].path,
         "src/main.ts"
     );
 }
@@ -55,7 +60,7 @@ fn an_empty_directory_lists_nothing_rather_than_failing() {
     let root = with_project();
 
     assert_eq!(
-        read_directory(&root.path().to_string_lossy(), "").expect("listed"),
+        read_directory(&root_of(&root), "").expect("listed"),
         Vec::new()
     );
 }
@@ -66,8 +71,7 @@ fn a_text_file_is_read_with_the_language_to_show_it_in() {
     std::fs::write(path(&root, "main.ts"), "const x = 1;\n").expect("written");
 
     let contents =
-        read_file_for_display(&path(&root, "main.ts"), "main.ts", super::MAX_INLINE_BYTES)
-            .expect("read");
+        read_file_for_display(&root_of(&root), "main.ts", super::MAX_INLINE_BYTES).expect("read");
 
     assert_eq!(contents.text, "const x = 1;\n");
     assert_eq!(contents.language, "ts");
@@ -82,12 +86,8 @@ fn a_file_with_a_nul_byte_is_reported_as_binary_not_as_text() {
     let root = with_project();
     std::fs::write(path(&root, "logo.png"), [0x89_u8, 0x50, 0, 0x1a]).expect("written");
 
-    let contents = read_file_for_display(
-        &path(&root, "logo.png"),
-        "logo.png",
-        super::MAX_INLINE_BYTES,
-    )
-    .expect("read");
+    let contents =
+        read_file_for_display(&root_of(&root), "logo.png", super::MAX_INLINE_BYTES).expect("read");
 
     assert!(contents.binary);
     assert_eq!(contents.text, "");
@@ -98,7 +98,7 @@ fn a_long_file_is_cut_and_says_the_whole_size_it_was_cut_from() {
     let root = with_project();
     std::fs::write(path(&root, "big.txt"), "x".repeat(5_000)).expect("written");
 
-    let contents = read_file_for_display(&path(&root, "big.txt"), "big.txt", 100).expect("read");
+    let contents = read_file_for_display(&root_of(&root), "big.txt", 100).expect("read");
 
     assert!(contents.truncated);
     assert_eq!(contents.text.chars().count(), 100);
@@ -112,7 +112,7 @@ fn a_cut_landing_inside_a_character_does_not_show_half_of_one() {
     let root = with_project();
     std::fs::write(path(&root, "wide.txt"), "ab\u{1F50C}cd").expect("written");
 
-    let contents = read_file_for_display(&path(&root, "wide.txt"), "wide.txt", 4).expect("read");
+    let contents = read_file_for_display(&root_of(&root), "wide.txt", 4).expect("read");
 
     assert_eq!(contents.text, "ab");
     assert!(!contents.text.contains('\u{FFFD}'));
@@ -123,7 +123,7 @@ fn a_directory_asked_for_as_a_file_says_so_rather_than_reading_it() {
     let root = with_project();
     std::fs::create_dir(path(&root, "src")).expect("created");
 
-    let error = read_file_for_display(&path(&root, "src"), "src", super::MAX_INLINE_BYTES)
+    let error = read_file_for_display(&root_of(&root), "src", super::MAX_INLINE_BYTES)
         .expect_err("a directory is not a file");
     assert_eq!(error.to_string(), "src is not a file");
 }

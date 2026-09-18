@@ -8,18 +8,28 @@ use super::{MAX_DIFFABLE_BYTES, MAX_INLINE, MAX_UPLOAD_BYTES, Running};
 use crate::chat::diff::file_diff;
 use crate::chat::render::{directory_listing, file_view};
 use crate::log::{LogValue, fields};
+use crate::sandbox::paths;
 use crate::session::event::SessionEvent;
 use crate::session::files::{NotAFileError, read_directory, read_file_for_display};
 
 impl Running {
     /// Records a file's contents before an edit, so the change can be shown.
+    /// Reads a project file, refusing a link however the path is spelled.
+    ///
+    /// The agent writes this tree, so a file the daemon is about to read can
+    /// have become a link to somewhere else since it was last looked at.
+    fn read_contained(&self, agent_path: &str) -> std::io::Result<String> {
+        let display = self.display_path(agent_path);
+        paths::read_beneath(&self.options.project.path, &display)
+    }
+
     pub(super) fn snapshot(&mut self, agent_path: &str) {
         let Some(host) = self.host_path(agent_path) else {
             return;
         };
         match std::fs::metadata(&host) {
             Ok(meta) if meta.is_file() && meta.len() <= MAX_DIFFABLE_BYTES => {
-                if let Ok(text) = std::fs::read_to_string(&host) {
+                if let Ok(text) = self.read_contained(agent_path) {
                     self.remember_edit(agent_path, text);
                 }
             }
@@ -59,7 +69,7 @@ impl Running {
             if !meta.is_file() || meta.len() > MAX_DIFFABLE_BYTES {
                 continue;
             }
-            let Ok(after) = std::fs::read_to_string(&host) else {
+            let Ok(after) = self.read_contained(&agent_path) else {
                 continue;
             };
 
@@ -108,6 +118,7 @@ impl Running {
     pub(super) async fn read_path(&mut self, request: &str) {
         let wanted = request.trim();
         let wanted = if wanted.is_empty() { "." } else { wanted };
+        let root = self.options.project.path.clone();
         let Some(host) = self.host_path(wanted) else {
             self.say(&format!("`{wanted}` is not inside this session's project"))
                 .await;
@@ -128,7 +139,7 @@ impl Running {
                 // A directory is listed whichever was asked for: `!cat` on
                 // one is a mistake worth answering rather than an error worth
                 // reporting.
-                match read_directory(&host, &display) {
+                match read_directory(&root, &display) {
                     Ok(entries) => {
                         self.say(&directory_listing(&entries, &display)).await;
                     }
@@ -138,7 +149,7 @@ impl Running {
                     }
                 }
             }
-            Ok(false) => match read_file_for_display(&host, &display, MAX_INLINE) {
+            Ok(false) => match read_file_for_display(&root, &display, MAX_INLINE) {
                 Ok(contents) => {
                     let shown = file_view(&contents);
                     self.say(&shown).await;

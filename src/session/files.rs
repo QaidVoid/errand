@@ -9,6 +9,7 @@
 //! thread or an interface makes of it is rendering, and lives with the
 //! rendering.
 
+use crate::sandbox::paths;
 use std::path::Path;
 
 /// Longest file read inline before it is cut. Whole files go by upload.
@@ -69,9 +70,15 @@ pub struct Entry {
 ///
 /// One order for every surface: a thread and an interface listing the same
 /// directory differently is a bug report waiting to happen.
-pub fn read_directory(host_path: &str, relative: &str) -> std::io::Result<Vec<Entry>> {
+pub fn read_directory(root: &str, relative: &str) -> std::io::Result<Vec<Entry>> {
+    // Resolved beneath the root before it is walked, so a link standing in
+    // for a directory lists nothing rather than listing somewhere else.
+    let opened = paths::open_beneath(root, relative, &paths::OpenOptions::read())?;
+    drop(opened);
+    let host_path =
+        paths::within(root, relative).ok_or_else(|| std::io::Error::other("outside the root"))?;
     let mut entries = Vec::new();
-    for found in std::fs::read_dir(host_path)? {
+    for found in std::fs::read_dir(&host_path)? {
         let found = found?;
         let file_type = found.file_type()?;
         let mut size = 0;
@@ -131,16 +138,22 @@ pub struct NotAFileError(pub String);
 ///
 /// Returns [`NotAFileError`] when the path is a directory or a device.
 pub fn read_file_for_display(
-    host_path: &str,
+    root: &str,
     relative: &str,
     limit: u64,
 ) -> Result<FileContents, NotAFileError> {
-    let meta = std::fs::metadata(host_path).map_err(|_| NotAFileError(relative.to_owned()))?;
+    // Opened once and then asked about itself, so what is measured and what
+    // is read are the same file however the tree changes underneath.
+    let file = paths::open_beneath(root, relative, &paths::OpenOptions::read())
+        .map_err(|_| NotAFileError(relative.to_owned()))?;
+    let meta = file
+        .metadata()
+        .map_err(|_| NotAFileError(relative.to_owned()))?;
     if !meta.is_file() {
         return Err(NotAFileError(relative.to_owned()));
     }
 
-    let raw = read_head(host_path, limit);
+    let raw = read_head(file, limit);
     let truncated = meta.len() > limit;
 
     if looks_binary(&raw) {
@@ -164,12 +177,9 @@ pub fn read_file_for_display(
     })
 }
 
-fn read_head(host_path: &str, limit: u64) -> Vec<u8> {
+fn read_head(mut file: std::fs::File, limit: u64) -> Vec<u8> {
     use std::io::Read;
 
-    let Ok(mut file) = std::fs::File::open(host_path) else {
-        return Vec::new();
-    };
     #[expect(clippy::cast_possible_truncation)]
     let mut buffer = vec![0_u8; limit.min(usize::MAX as u64) as usize];
     let mut read = 0;

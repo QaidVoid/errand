@@ -22,6 +22,7 @@ use crate::log::LogValue;
 use crate::log::Logger;
 use crate::log::fields;
 use crate::log::now_ms;
+use crate::sandbox::paths;
 use crate::sandbox::paths::host_path_under;
 use crate::session::event::SessionEvent;
 use crate::session::files::MAX_INLINE_BYTES;
@@ -339,7 +340,7 @@ impl WebServer {
         clippy::result_large_err,
         reason = "the refusal is a ready response, which is the point of the shape"
     )]
-    fn locate(&self, id: &str, requested: &str) -> Result<(String, String), Response> {
+    fn locate(&self, id: &str, requested: &str) -> Result<Located, Response> {
         let relative = match requested.trim() {
             "" => ".".to_owned(),
             trimmed => trimmed.to_owned(),
@@ -375,8 +376,26 @@ impl WebServer {
             ));
         };
         let relative = if relative == "." { "" } else { &relative };
-        Ok((host, relative.to_owned()))
+        Ok(Located {
+            root: project,
+            host,
+            relative: relative.to_owned(),
+        })
     }
+}
+
+/// A path inside one session's project, resolved three ways.
+///
+/// The root is what a reader resolves beneath, the relative path is what it
+/// asks for, and the host path is what a plain `metadata` call needs. Only the
+/// first two decide what is opened.
+struct Located {
+    /// The session's project directory.
+    root: String,
+    /// The resolved host path, for asking what kind of thing it is.
+    host: String,
+    /// The path under the root, as the browser asked for it.
+    relative: String,
 }
 
 /// What the interface is allowed to do, so it can show only what works.
@@ -627,9 +646,9 @@ async fn tree(
         Err(refusal) => return refusal,
     };
 
-    match std::fs::metadata(&located.0) {
+    match std::fs::metadata(&located.host) {
         Ok(metadata) if metadata.is_dir() => {
-            let entries = read_directory(&located.0, &located.1).unwrap_or_default();
+            let entries = read_directory(&located.root, &located.relative).unwrap_or_default();
             ok(json!(
                 entries
                     .into_iter()
@@ -661,12 +680,12 @@ async fn file(
         Err(refusal) => return refusal,
     };
 
-    match std::fs::metadata(&located.0) {
+    match std::fs::metadata(&located.host) {
         Ok(metadata) if metadata.is_dir() => refused(
             json!({ "error": "is a directory" }),
             StatusCode::BAD_REQUEST,
         ),
-        Ok(_) => match read_file_for_display(&located.0, &located.1, MAX_INLINE_BYTES) {
+        Ok(_) => match read_file_for_display(&located.root, &located.relative, MAX_INLINE_BYTES) {
             Ok(contents) => ok(json!({
                 "path": contents.path,
                 "size": contents.size,
@@ -692,12 +711,17 @@ async fn download(
         Err(refusal) => return refusal,
     };
 
-    let Ok(file) = tokio::fs::File::open(&located.0).await else {
+    let Ok(file) = paths::open_beneath(
+        &located.root,
+        &located.relative,
+        &paths::OpenOptions::read(),
+    ) else {
         return refused(json!({ "error": "no such file" }), StatusCode::NOT_FOUND);
     };
+    let file = tokio::fs::File::from_std(file);
 
     let name = located
-        .1
+        .relative
         .rsplit('/')
         .next()
         .unwrap_or("file")

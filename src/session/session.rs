@@ -355,12 +355,15 @@ impl Sources for SessionSources {
         &self.project_root
     }
 
+    /// The path arrives already checked for spelling, and is resolved again
+    /// here so a link planted between the two reads nothing.
     #[expect(
         clippy::unused_async_trait_impl,
         reason = "the trait's signature is async; reading a small file needs no await"
     )]
     async fn read_file(&self, path: &str) -> std::io::Result<String> {
-        std::fs::read_to_string(path)
+        let relative = path.strip_prefix(&self.project_root).unwrap_or(path);
+        paths::read_beneath(&self.project_root, relative)
     }
 
     fn output_of(&self, call_id: &str) -> Option<String> {
@@ -376,12 +379,11 @@ impl Sources for SessionSources {
     fn attachment(&self, name: &str) -> Option<String> {
         // Held to the same containment as everything else, so a name that
         // climbs out of the attachments directory reads nothing.
-        let path = paths::host_path_under(
-            &self.project_path,
+        paths::read_beneath(
             &self.project_path,
             &format!("{}/{}", attachments::ATTACHMENTS_DIR, name),
-        )?;
-        std::fs::read_to_string(path).ok()
+        )
+        .ok()
     }
 }
 

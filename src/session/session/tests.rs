@@ -2359,3 +2359,45 @@ async fn an_unreachable_copy_does_not_cost_the_session() {
     })
     .await;
 }
+
+/// The daemon reads a session's project from outside the sandbox, so a link
+/// planted inside it must not be a way to reach the host's own files. The
+/// spelling check alone cannot see a link, and between the check and the open
+/// a plain file can become one.
+#[tokio::test]
+async fn a_link_planted_in_the_project_reads_nothing_through_cat() {
+    let outside = tempfile::tempdir().expect("a temporary directory");
+    let secret = outside.path().join("id_ed25519");
+    std::fs::write(&secret, "the host's own key").expect("written");
+
+    with_session(SessionTestCase::default(), |harness| {
+        let secret = secret.clone();
+        Box::pin(async move {
+            let project = harness.session.project().path.clone();
+            std::fs::write(std::path::Path::new(&project).join("ordinary"), "mine")
+                .expect("written");
+            std::os::unix::fs::symlink(&secret, std::path::Path::new(&project).join("escape"))
+                .expect("linked");
+
+            harness
+                .session
+                .handle(message_from("!cat ordinary", OWNER, "m2"))
+                .await;
+            assert!(
+                harness.thread.everything().contains("mine"),
+                "an ordinary file still reads"
+            );
+
+            harness
+                .session
+                .handle(message_from("!cat escape", OWNER, "m3"))
+                .await;
+            let said = harness.thread.everything();
+            assert!(
+                !said.contains("the host's own key"),
+                "the link must not read the host's file: {said}"
+            );
+        })
+    })
+    .await;
+}

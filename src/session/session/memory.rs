@@ -12,6 +12,7 @@ use crate::memory::store::{
     Scope, memory_instructions, parse_notes,
 };
 use crate::sandbox::backend::STATE_PATH;
+use crate::sandbox::paths;
 use crate::session::commands::parse_user_id;
 use crate::session::event::ReactionOutcome;
 use crate::session::github::review_instructions;
@@ -168,9 +169,7 @@ impl Running {
         user_scope: bool,
         subject: &str,
     ) -> usize {
-        let Ok(contents) =
-            std::fs::read_to_string(std::path::Path::new(&self.options.state_dir).join(filename))
-        else {
+        let Ok(contents) = paths::read_beneath(&self.options.state_dir, filename) else {
             return 0;
         };
 
@@ -190,10 +189,7 @@ impl Running {
         }
         // A fact offered again is deduplicated, so a failure to empty the
         // file is not worth failing on.
-        let _ = std::fs::write(
-            std::path::Path::new(&self.options.state_dir).join(filename),
-            "",
-        );
+        let _ = paths::truncate_beneath(&self.options.state_dir, filename);
         stored
     }
 

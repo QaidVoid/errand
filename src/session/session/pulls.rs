@@ -6,6 +6,7 @@
 use super::{Asked, IncomingMessage, Running, reason};
 use crate::chat::render::connection_line;
 use crate::log::{LogValue, fields};
+use crate::sandbox::paths;
 use crate::session::event::ReactionOutcome;
 use crate::session::github::{
     ASKED_FILENAME, REQUEST_FILENAME, SessionLinks, thread_link, transcript_link,
@@ -99,7 +100,7 @@ impl Running {
     /// Opens the pull request the agent asked for, if it asked for one.
     pub(super) async fn open_requested_pull_request(&mut self) {
         let path = std::path::Path::new(&self.options.state_dir).join(REQUEST_FILENAME);
-        let Ok(contents) = std::fs::read_to_string(&path) else {
+        let Ok(contents) = paths::read_beneath(&self.options.state_dir, REQUEST_FILENAME) else {
             return;
         };
 

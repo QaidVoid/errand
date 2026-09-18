@@ -20,6 +20,7 @@ use crate::agent::delegation::Sources;
 use crate::agent::requests::DELEGATE_DIR;
 use crate::log::{LogValue, Logger, fields};
 use crate::provider::ask::Sender;
+use crate::sandbox::paths;
 
 /// How often the directory is looked at while a session is running.
 pub const POLL_MS: u64 = 200;
@@ -105,7 +106,7 @@ impl Delegating {
         let id = name.strip_suffix(".request").unwrap_or(name).to_owned();
         let path = self.directory.join(name);
 
-        let raw = std::fs::read_to_string(&path)
+        let raw = paths::read_beneath(&self.directory.to_string_lossy(), name)
             .map_err(|error| error.to_string())
             .and_then(|text| {
                 serde_json::from_str::<Value>(&text).map_err(|error| error.to_string())
