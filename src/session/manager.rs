@@ -360,6 +360,9 @@ impl SessionManager {
         let message = IncomingMessage {
             id: format!("web-{token}"),
             author_id: request.owner_id.clone(),
+            // The interface is not a channel, so there is nowhere to answer
+            // but the thread this is about to open.
+            channel_id: String::new(),
             author_name: request.owner_name.clone(),
             content: request.prompt.clone(),
             attachments: Vec::new(),

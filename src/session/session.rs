@@ -67,6 +67,12 @@ pub struct IncomingMessage {
     pub id: String,
     /// Who sent it.
     pub author_id: String,
+    /// The channel or thread it was posted in, when the surface named one.
+    ///
+    /// Where an answer belongs: a question asked in a thread is answered in
+    /// that thread, not in the channel the thread hangs off. Empty where
+    /// there is no such place, as for a message from the interface.
+    pub channel_id: String,
     /// Display name, when the service gave one.
     pub author_name: Option<String>,
     /// What was said, which may be empty when only files were sent.

@@ -398,6 +398,7 @@ async fn started_session(harness: &Harness, _client: &reqwest::Client) {
         .start(IncomingMessage {
             id: "m1".to_owned(),
             author_id: OWNER.to_owned(),
+            channel_id: String::new(),
             author_name: Some("amelia".to_owned()),
             content: "demo: go".to_owned(),
             attachments: Vec::new(),

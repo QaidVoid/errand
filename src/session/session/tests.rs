@@ -580,6 +580,7 @@ fn message_from(content: &str, from: &str, id: &str) -> IncomingMessage {
     IncomingMessage {
         id: id.to_owned(),
         author_id: from.to_owned(),
+        channel_id: String::new(),
         author_name: if from == OWNER {
             Some("amelia".to_owned())
         } else {

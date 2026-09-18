@@ -334,9 +334,32 @@ fn raw_with(content: &str, id: &str, author_id: &str) -> RawMessage {
 struct Harness {
     daemon: Daemon,
     threads: Arc<FakeThreads>,
-    replies: Arc<Mutex<Vec<String>>>,
+    replies: Arc<Mutex<Vec<(String, String)>>>,
     lines: Arc<Mutex<Vec<(LogLevel, String)>>>,
     _root: tempfile::TempDir,
+}
+
+impl Harness {
+    /// Everything the daemon answered, run together.
+    fn said(&self) -> String {
+        self.replies
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Where each answer was aimed, in the order they were given.
+    fn replied_in(&self) -> Vec<String> {
+        self.replies
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(channel, _)| channel.clone())
+            .collect()
+    }
 }
 
 struct DaemonCase {
@@ -401,9 +424,9 @@ async fn with_daemon(
         },
         reply_in_channel: {
             let replies = Arc::clone(&replies);
-            Arc::new(move |_message: IncomingMessage, text: String| {
+            Arc::new(move |message: IncomingMessage, text: String| {
                 let replies = Arc::clone(&replies);
-                Box::pin(async move { replies.lock().unwrap().push(text) })
+                Box::pin(async move { replies.lock().unwrap().push((message.channel_id, text)) })
             })
         },
         memory: case.memory.clone(),
@@ -537,7 +560,7 @@ async fn help_in_the_channel_is_answered_without_starting_anything() {
                 .await;
 
             assert!(created(&harness.threads).is_empty());
-            assert!(harness.replies.lock().unwrap()[0].contains("!steer"));
+            assert!(harness.replies.lock().unwrap()[0].1.contains("!steer"));
         })
     })
     .await;
@@ -582,7 +605,11 @@ async fn a_refusal_to_start_is_said_in_the_channel_where_it_was_asked() {
                 )
                 .await;
 
-            assert!(harness.replies.lock().unwrap()[0].contains("already has a live session"));
+            assert!(
+                harness.replies.lock().unwrap()[0]
+                    .1
+                    .contains("already has a live session")
+            );
         })
     })
     .await;
@@ -675,6 +702,7 @@ async fn a_message_in_a_thread_that_is_over_says_where_to_start_a_new_one() {
 
             assert!(
                 harness.replies.lock().unwrap()[0]
+                    .1
                     .contains("post in the channel to start a new one")
             );
         })
@@ -711,7 +739,11 @@ async fn nobody_powers_off_the_host_unless_the_daemons_own_list_says_so() {
                 .handle(raw("!shutdown"), InboundDecision::Start)
                 .await;
 
-            assert!(harness.replies.lock().unwrap()[0].contains("nobody may power off this host"));
+            assert!(
+                harness.replies.lock().unwrap()[0]
+                    .1
+                    .contains("nobody may power off this host")
+            );
             assert!(created(&harness.threads).is_empty());
         })
     })
@@ -732,7 +764,11 @@ async fn an_account_not_on_the_shutdown_list_is_refused() {
                     .handle(raw_with("!shutdown", "m1", "999"), InboundDecision::Start)
                     .await;
 
-                assert!(harness.replies.lock().unwrap()[0].contains("not on the list"));
+                assert!(
+                    harness.replies.lock().unwrap()[0]
+                        .1
+                        .contains("not on the list")
+                );
             })
         },
     )
@@ -757,7 +793,11 @@ async fn an_account_on_the_list_powers_the_host_off() {
                     .handle(raw("!shutdown"), InboundDecision::Start)
                     .await;
 
-                assert!(harness.replies.lock().unwrap()[0].contains("powering off now"));
+                assert!(
+                    harness.replies.lock().unwrap()[0]
+                        .1
+                        .contains("powering off now")
+                );
                 let logged = harness
                     .lines
                     .lock()
@@ -791,7 +831,11 @@ async fn a_power_off_that_fails_says_what_went_wrong() {
                     .handle(raw("!shutdown"), InboundDecision::Start)
                     .await;
 
-                assert!(harness.replies.lock().unwrap()[0].contains("systemctl refused"));
+                assert!(
+                    harness.replies.lock().unwrap()[0]
+                        .1
+                        .contains("systemctl refused")
+                );
             })
         },
     )
@@ -1108,6 +1152,7 @@ async fn the_usage_window_is_reported_wherever_it_is_asked_about() {
 
                 assert!(
                     harness.replies.lock().unwrap()[0]
+                        .1
                         .contains("58% of the provider's usage window is left")
                 );
                 assert!(created(&harness.threads).is_empty());
@@ -1121,7 +1166,7 @@ async fn the_usage_window_is_reported_wherever_it_is_asked_about() {
                             content: "!usage".to_owned(),
                         })
                         .await,
-                    harness.replies.lock().unwrap()[0].clone()
+                    harness.replies.lock().unwrap()[0].1.clone()
                 );
             })
         },
@@ -1138,7 +1183,11 @@ async fn a_provider_that_meters_nothing_says_so_rather_than_inventing_a_number()
                 .handle(raw("!usage"), InboundDecision::Start)
                 .await;
 
-            assert!(harness.replies.lock().unwrap()[0].contains("does not report a usage window"));
+            assert!(
+                harness.replies.lock().unwrap()[0]
+                    .1
+                    .contains("does not report a usage window")
+            );
         })
     })
     .await;
@@ -1165,14 +1214,7 @@ async fn facts_is_answered_in_the_channel_with_no_session_running() {
                     .handle(raw("!facts"), InboundDecision::Start)
                     .await;
 
-                assert!(
-                    harness
-                        .replies
-                        .lock()
-                        .unwrap()
-                        .join("\n")
-                        .contains("prefers jj over git")
-                );
+                assert!(harness.said().contains("prefers jj over git"));
                 // Answered outright: no thread was opened and no session
                 // started.
                 assert!(created(&harness.threads).is_empty());
@@ -1196,14 +1238,7 @@ async fn a_project_is_a_threads_own_so_the_channel_says_to_ask_there() {
                     .daemon
                     .handle(raw("!facts project"), InboundDecision::Start)
                     .await;
-                assert!(
-                    harness
-                        .replies
-                        .lock()
-                        .unwrap()
-                        .join("\n")
-                        .contains("ask in one")
-                );
+                assert!(harness.said().contains("ask in one"));
             })
         },
     )
@@ -1230,14 +1265,7 @@ async fn forget_in_the_channel_is_refused_to_anyone_but_an_operator() {
                     .handle(raw(&format!("!forget <@{OWNER}>")), InboundDecision::Start)
                     .await;
 
-                assert!(
-                    harness
-                        .replies
-                        .lock()
-                        .unwrap()
-                        .join("\n")
-                        .contains("only an operator")
-                );
+                assert!(harness.said().contains("only an operator"));
                 assert_eq!(memory.facts_for(Scope::User, OWNER, 100).unwrap().len(), 1);
             })
         },
@@ -1271,14 +1299,7 @@ async fn in_a_thread_the_daemon_leaves_memory_to_the_session() {
                     .await;
                 // Not answered here, so it falls through to whatever the
                 // thread holds.
-                assert!(
-                    !harness
-                        .replies
-                        .lock()
-                        .unwrap()
-                        .join("\n")
-                        .contains("prefers jj over git")
-                );
+                assert!(!harness.said().contains("prefers jj over git"));
             })
         },
     )
@@ -1312,14 +1333,7 @@ async fn an_operator_may_forget_from_the_channel_and_is_told_what_went() {
                     .handle(raw(&format!("!forget <@{OWNER}>")), InboundDecision::Start)
                     .await;
 
-                assert!(
-                    harness
-                        .replies
-                        .lock()
-                        .unwrap()
-                        .join("\n")
-                        .contains("forgot 1 fact about")
-                );
+                assert!(harness.said().contains("forgot 1 fact about"));
                 assert_eq!(memory.facts_for(Scope::User, OWNER, 100).unwrap().len(), 0);
             })
         },
@@ -1345,4 +1359,93 @@ fn create_sandbox_names_the_configured_backend() {
     }));
     let sandbox = create_sandbox(&config, silent(), None, None);
     assert!(matches!(sandbox, Backend::Podman(_)));
+}
+
+/// A question asked in a thread is answered in that thread. Answering in the
+/// channel says "this session has ended" to everybody except the person who
+/// asked, somewhere the sentence makes no sense.
+#[tokio::test]
+async fn a_dead_thread_is_answered_in_the_thread_not_the_channel() {
+    with_daemon(DaemonCase::default(), |harness| {
+        Box::pin(async move {
+            harness
+                .daemon
+                .handle(raw("demo: go"), InboundDecision::Start)
+                .await;
+            harness
+                .daemon
+                .sessions()
+                .end_thread("thread-1", EndReason::Stopped)
+                .await;
+
+            let mut sent = raw_with("still there?", "m2", OWNER);
+            sent.channel_id = "thread-1".to_owned();
+            sent.parent_channel_id = Some("chan".to_owned());
+            harness
+                .daemon
+                .handle(
+                    sent,
+                    InboundDecision::Thread {
+                        thread_id: "thread-1".to_owned(),
+                    },
+                )
+                .await;
+
+            assert!(
+                harness
+                    .said()
+                    .contains("post in the channel to start a new one"),
+                "got {}",
+                harness.said()
+            );
+            assert_eq!(
+                harness.replied_in(),
+                ["thread-1"],
+                "the answer belongs where it was asked"
+            );
+        })
+    })
+    .await;
+}
+
+/// `!usage` is answered wherever it was asked, thread included.
+#[tokio::test]
+async fn a_command_asked_in_a_thread_is_answered_there() {
+    with_daemon(
+        DaemonCase {
+            describe_usage: Some(Arc::new(|| {
+                Box::pin(async { "58% of the provider's usage window is left".to_owned() })
+            })),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("demo: go"), InboundDecision::Start)
+                    .await;
+
+                let mut sent = raw_with("!usage", "m2", OWNER);
+                sent.channel_id = "thread-1".to_owned();
+                sent.parent_channel_id = Some("chan".to_owned());
+                harness
+                    .daemon
+                    .handle(
+                        sent,
+                        InboundDecision::Thread {
+                            thread_id: "thread-1".to_owned(),
+                        },
+                    )
+                    .await;
+
+                assert!(
+                    harness
+                        .said()
+                        .contains("58% of the provider's usage window")
+                );
+                assert_eq!(harness.replied_in(), ["thread-1"]);
+            })
+        },
+    )
+    .await;
 }

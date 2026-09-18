@@ -547,6 +547,7 @@ async fn send(
             IncomingMessage {
                 id: format!("web-{}", now_ms()),
                 author_id: WEB_ACTOR.to_owned(),
+                channel_id: String::new(),
                 author_name: Some("the interface".to_owned()),
                 content: text,
                 attachments: Vec::new(),

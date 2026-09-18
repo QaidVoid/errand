@@ -370,6 +370,7 @@ fn message(content: &str, id: &str) -> IncomingMessage {
     IncomingMessage {
         id: id.to_owned(),
         author_id: OWNER.to_owned(),
+        channel_id: String::new(),
         author_name: Some("amelia".to_owned()),
         content: content.to_owned(),
         attachments: Vec::new(),
@@ -850,6 +851,7 @@ async fn who_was_invited_survives_the_session_ending_and_coming_back() {
                 .handle(IncomingMessage {
                     id: "m2".to_owned(),
                     author_id: OWNER.to_owned(),
+                    channel_id: String::new(),
                     author_name: None,
                     content: "!allow <@200000000000000002>".to_owned(),
                     attachments: Vec::new(),

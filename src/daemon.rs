@@ -500,6 +500,7 @@ impl Daemon {
         let message = IncomingMessage {
             id: raw.id,
             author_id: raw.author_id,
+            channel_id: raw.channel_id,
             author_name: raw.author_name,
             content: raw.content,
             attachments: raw
@@ -625,6 +626,7 @@ impl Daemon {
                 IncomingMessage {
                     id: format!("slash-{thread_id}"),
                     author_id: command.user_id.clone(),
+                    channel_id: thread_id.clone(),
                     author_name: Some(command.user_name.clone()),
                     content: command.content.clone(),
                     attachments: Vec::new(),

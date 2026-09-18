@@ -1100,8 +1100,26 @@ fn host_environment() -> Environment {
     std::env::vars().collect::<BTreeMap<_, _>>()
 }
 
+/// Where an answer belongs: the thread it was asked in, or the served channel.
+///
+/// A message from somewhere with no channel of its own, the interface among
+/// them, names none, and the served channel is the only place left.
+fn answer_in(asked_in: &str, served: ChannelId) -> ChannelId {
+    asked_in
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id != 0)
+        .map_or(served, ChannelId::new)
+}
+
 /// Says the refusal where it was asked, redacted, in pieces the service
 /// takes.
+///
+/// Where it was asked means the thread, when it was asked in one. Answering
+/// in the channel instead put `!usage` and "this session has ended" in front
+/// of everybody except the person who asked, in a place where neither made
+/// any sense. The served channel is only the fallback, for a message from
+/// somewhere that has no channel of its own.
 ///
 /// Every step here used to fail into silence, so an answer the daemon had
 /// already worked out simply never arrived and nothing said why. A reply
@@ -1111,10 +1129,14 @@ async fn reply_in_channel(
     http: &serenity::http::Http,
     log: &Logger,
     secrets: &[String],
-    channel_id: ChannelId,
+    served: ChannelId,
     message: &IncomingMessage,
     text: &str,
 ) {
+    let channel_id = answer_in(&message.channel_id, served);
+    // A thread cannot hang a thread off itself, so a long answer is only
+    // moved out of the way when the answer is going to the channel.
+    let may_open_thread = channel_id == served;
     let starter = channel_id
         .message(
             http,
@@ -1152,6 +1174,16 @@ async fn reply_in_channel(
         return;
     }
 
+    if !may_open_thread {
+        for chunk in chunks {
+            let _ = channel_id
+                .send_message(http, plain(&chunk))
+                .await
+                .map_err(said);
+        }
+        return;
+    }
+
     // A long answer goes in a thread of its own rather than filling the
     // channel with it.
     let thread = channel_id
@@ -1177,3 +1209,6 @@ async fn wait_for_signal() {
         _ = sigterm.recv() => {}
     }
 }
+
+#[cfg(test)]
+mod tests;
