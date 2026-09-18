@@ -247,7 +247,7 @@ fn no_file_beside_the_configuration_means_no_rules_and_is_not_a_refusal() {
 
 /// The report has to name the places actually searched. Computing it from a
 /// blank environment describes a search that did not happen: it ignores
-/// ERRAND_CONFIG and shows paths relative to a HOME that was never read.
+/// `ERRAND_CONFIG` and shows paths relative to a `HOME` that was never read.
 #[test]
 fn the_places_it_looked_are_the_places_it_looked() {
     let env = Environment::from([("HOME".to_owned(), "/home/somebody".to_owned())]);

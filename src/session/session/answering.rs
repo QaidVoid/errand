@@ -6,11 +6,82 @@
 use super::{Attached, IncomingMessage, Running, SessionTimer, display_name, end_reason_name};
 use crate::chat::render::{bytes as byte_count, compaction_line, connection_line};
 use crate::log::{LogValue, fields};
+use crate::provider::models::AvailableModel;
 use crate::session::commands::{
     COMMANDS, CommandAccess, Standing, help_text, may_run, parse_user_id,
 };
 use crate::session::event::{EndReason, ReactionOutcome, SessionEvent};
 use crate::session::model::expand_alias;
+
+/// Which model a name picked out, when a name can pick out more than one.
+pub(super) enum Chosen {
+    /// Exactly one model answers to the name.
+    One(AvailableModel),
+    /// Nothing the host lists answers to it.
+    None,
+    /// Several providers serve a model of that name, qualified for reply.
+    Several(Vec<String>),
+}
+
+/// Finds the model a name asks for, and the provider that serves it.
+///
+/// A bare id is looked for on the session's own provider first, because
+/// staying where you are is the common case and needs no qualification. Only
+/// when it is not there does the name range over every other provider, and a
+/// name that several serve is refused rather than guessed at.
+pub(super) fn choose(available: &[AvailableModel], wanted: &str, current: &str) -> Chosen {
+    if available.is_empty() {
+        return Chosen::One(AvailableModel {
+            provider: current.to_owned(),
+            id: wanted.to_owned(),
+        });
+    }
+
+    if let Some((provider, id)) = wanted.split_once('/')
+        && let Some(found) = available
+            .iter()
+            .find(|model| model.provider == provider && model.id == id)
+    {
+        return Chosen::One(found.clone());
+    }
+
+    if let Some(found) = available
+        .iter()
+        .find(|model| model.provider == current && model.id == wanted)
+    {
+        return Chosen::One(found.clone());
+    }
+
+    let elsewhere: Vec<&AvailableModel> = available
+        .iter()
+        .filter(|model| model.id == wanted)
+        .collect();
+    match elsewhere.as_slice() {
+        [] => Chosen::None,
+        [only] => Chosen::One((*only).clone()),
+        several => Chosen::Several(several.iter().map(|model| model.qualified()).collect()),
+    }
+}
+
+/// Every model, under a heading per provider, the session's own first.
+pub(super) fn grouped_by_provider(available: &[AvailableModel], current: &str) -> Vec<String> {
+    let mut providers: Vec<&str> = Vec::new();
+    for model in available {
+        if !providers.contains(&model.provider.as_str()) {
+            providers.push(&model.provider);
+        }
+    }
+    providers.sort_by_key(|provider| (*provider != current, *provider));
+
+    let mut lines = Vec::new();
+    for provider in providers {
+        lines.push(format!("  {provider}"));
+        for model in available.iter().filter(|model| model.provider == provider) {
+            lines.push(format!("    {}", model.id));
+        }
+    }
+    lines
+}
 
 impl Running {
     pub(super) async fn run_command(&mut self, word: &str, rest: &str, message: IncomingMessage) {
@@ -210,7 +281,7 @@ impl Running {
                 let mut lines = vec![format!(
                     "this session runs on `{running}`. Switch with `!model <name>`:"
                 )];
-                lines.extend(available.iter().map(|model| format!("  {model}")));
+                lines.extend(grouped_by_provider(available, &self.provider()));
                 lines.join("\n")
             })
             .await;
@@ -226,19 +297,37 @@ impl Running {
 
         // Refused rather than passed through, so a typo becomes a message
         // here instead of a turn that fails against the provider later.
-        if !available.is_empty() && !available.contains(&wanted) {
-            self.say(&format!(
-                "this host does not list a model called `{wanted}`"
-            ))
-            .await;
-            self.react(&message.id, ReactionOutcome::Failed).await;
-            return;
-        }
+        //
+        // The provider comes from the model rather than from whatever the
+        // session is on: a model belongs to one provider, and sending its
+        // name to a different one is how switching back used to fail.
+        let chosen = match choose(available, &wanted, &self.provider()) {
+            Chosen::One(model) => model,
+            Chosen::None => {
+                self.say(&format!(
+                    "this host does not list a model called `{wanted}`"
+                ))
+                .await;
+                self.react(&message.id, ReactionOutcome::Failed).await;
+                return;
+            }
+            Chosen::Several(options) => {
+                let mut lines = vec![format!(
+                    "more than one provider serves `{wanted}`. Name one of these instead:"
+                )];
+                lines.extend(options.iter().map(|model| format!("  {model}")));
+                self.say(&lines.join("\n")).await;
+                self.react(&message.id, ReactionOutcome::Failed).await;
+                return;
+            }
+        };
+        let wanted = chosen.id;
+        let provider = chosen.provider;
 
         let sent = self
             .client
             .as_ref()
-            .is_some_and(|client| client.set_model(&self.provider(), &wanted));
+            .is_some_and(|client| client.set_model(&provider, &wanted));
         if !sent {
             self.say("the agent is not accepting anything further; this session has ended")
                 .await;
@@ -246,7 +335,6 @@ impl Running {
             return;
         }
 
-        let provider = self.provider();
         self.switched = Some((provider.clone(), wanted.clone()));
         if let Some(changed) = &self.options.on_model_changed {
             changed(&provider, &wanted);

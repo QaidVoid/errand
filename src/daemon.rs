@@ -16,6 +16,7 @@ use crate::config::schema::defaults::IMAGE;
 use crate::config::schema::{ALLOW_EVERY_USER, ChatConfig, Config, SandboxBackend};
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::{MemoryStore, Scope};
+use crate::provider::models::AvailableModel;
 use crate::sandbox::Backend;
 use crate::sandbox::backend::{CapabilityReport, SandboxUnavailableError};
 use crate::sandbox::bailey::BaileyOptions;
@@ -215,7 +216,7 @@ pub struct DaemonOptions {
     /// Where the interface is published, when it is.
     pub public_url: Option<String>,
     /// Models this host knows the provider serves, for `!model`.
-    pub available_models: Vec<String>,
+    pub available_models: Vec<AvailableModel>,
     /// Where a delegated question is sent, read from the host's model store.
     pub delegate_base_url: Option<String>,
     /// Who may control any session, beyond the configured list.

@@ -16,6 +16,7 @@ use crate::config::schema::Config;
 use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
+use crate::provider::models::AvailableModel;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
@@ -164,7 +165,7 @@ pub struct ManagerOptions {
     /// Where the interface is published, when it is.
     pub public_url: Option<String>,
     /// Models this host knows the provider serves, for `!model`.
-    pub available_models: Vec<String>,
+    pub available_models: Vec<AvailableModel>,
     /// Where a delegated question is sent, read from the host's model store.
     pub delegate_base_url: Option<String>,
     /// Injected so record timestamps are predictable in tests.
@@ -181,7 +182,7 @@ struct Shared {
     memory: Option<Arc<MemoryStore>>,
     describe_images: Option<DescribeImages>,
     public_url: Option<String>,
-    available_models: Vec<String>,
+    available_models: Vec<AvailableModel>,
     delegate_base_url: Option<String>,
     unavailable: Option<Unavailable>,
     launcher: Launcher,

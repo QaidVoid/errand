@@ -18,6 +18,7 @@ use crate::config::schema::Config;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
 use crate::memory::store::{MemoryStore, Scope};
+use crate::provider::models::AvailableModel;
 use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 use crate::session::attachments::RawAttachment;
@@ -2466,4 +2467,90 @@ async fn a_stranger_answers_no_dialog_and_leaves_no_file_behind() {
         })
     })
     .await;
+}
+
+/// A model id is unique only within its provider. Sending one to whatever
+/// provider the session happens to be on is why switching away and back used
+/// to fail: the second switch named a model the new provider never had.
+#[test]
+fn a_model_carries_the_provider_that_serves_it() {
+    let available = vec![
+        AvailableModel {
+            provider: "zai".to_owned(),
+            id: "glm-5.3".to_owned(),
+        },
+        AvailableModel {
+            provider: "muse".to_owned(),
+            id: "musecringe".to_owned(),
+        },
+    ];
+
+    // Away from the configured provider.
+    let away = super::answering::choose(&available, "musecringe", "zai");
+    assert!(matches!(&away, super::answering::Chosen::One(m) if m.provider == "muse"));
+
+    // And back again, from the provider we switched to.
+    let back = super::answering::choose(&available, "glm-5.3", "muse");
+    assert!(
+        matches!(&back, super::answering::Chosen::One(m) if m.provider == "zai" && m.id == "glm-5.3"),
+        "switching back must go to the provider that serves it"
+    );
+}
+
+/// A name several providers serve is refused with the qualified options
+/// rather than sent to whichever was looked at first.
+#[test]
+fn a_name_two_providers_serve_is_not_guessed_at() {
+    let available = vec![
+        AvailableModel {
+            provider: "alpha".to_owned(),
+            id: "shared".to_owned(),
+        },
+        AvailableModel {
+            provider: "beta".to_owned(),
+            id: "shared".to_owned(),
+        },
+    ];
+
+    match super::answering::choose(&available, "shared", "gamma") {
+        super::answering::Chosen::Several(options) => {
+            assert_eq!(options, ["alpha/shared", "beta/shared"]);
+        }
+        other => panic!(
+            "expected the ambiguity to be reported, got {:?}",
+            matches!(other, super::answering::Chosen::None)
+        ),
+    }
+
+    // Naming the provider settles it.
+    assert!(matches!(
+        super::answering::choose(&available, "beta/shared", "gamma"),
+        super::answering::Chosen::One(m) if m.provider == "beta"
+    ));
+
+    // And the session's own provider wins a bare name without asking.
+    assert!(matches!(
+        super::answering::choose(&available, "shared", "beta"),
+        super::answering::Chosen::One(m) if m.provider == "beta"
+    ));
+}
+
+/// The listing is grouped, and the session's own provider comes first so the
+/// models it can switch to without qualifying are the ones at the top.
+#[test]
+fn the_listing_puts_this_sessions_provider_first() {
+    let available = vec![
+        AvailableModel {
+            provider: "openrouter".to_owned(),
+            id: "a".to_owned(),
+        },
+        AvailableModel {
+            provider: "zai".to_owned(),
+            id: "glm".to_owned(),
+        },
+    ];
+
+    let lines = super::answering::grouped_by_provider(&available, "zai");
+
+    assert_eq!(lines, ["  zai", "    glm", "  openrouter", "    a"]);
 }

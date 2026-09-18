@@ -417,3 +417,41 @@ fn an_entry_that_is_not_a_model_is_skipped_and_counted() {
     );
     assert_eq!(read.skipped, 2);
 }
+
+/// A session can only run a model on a provider its agent has a credential
+/// for: the configured one, and each one the operator defined. Offering a
+/// model from anywhere else only moves the failure into the turn.
+#[test]
+fn the_models_offered_are_the_ones_the_agent_can_reach() {
+    let (_dir, path) = with_store(&json!({
+        "zai-coding-cn": { "models": [{ "id": "glm-5.3" }, { "id": "glm-5.3-flash" }] },
+        // In the host's store, but the sandboxed agent has no credential for
+        // it and its own store never holds it.
+        "openrouter": { "models": [{ "id": "some/other-model" }] },
+    }));
+    let mut agent = agent();
+    agent.providers = serde_json::Map::from_iter([(
+        "ajamxhacker".to_owned(),
+        json!({
+            "baseUrl": "https://meta.example/v1",
+            "credential": "secret",
+            "models": [{ "id": "musecringe", "reasoning": true }],
+        }),
+    )]);
+
+    let offered = crate::provider::models::available_models(&agent, Some(&path));
+    let named: Vec<String> = offered
+        .iter()
+        .map(super::super::models::AvailableModel::qualified)
+        .collect();
+
+    assert_eq!(
+        named,
+        [
+            "zai-coding-cn/glm-5.3",
+            "zai-coding-cn/glm-5.3-flash",
+            "ajamxhacker/musecringe",
+        ],
+        "the defined provider's model is offered and the unreachable one is not"
+    );
+}

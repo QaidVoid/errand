@@ -11,6 +11,7 @@
 use serde_json::Value;
 
 use crate::config::load::Environment;
+use crate::config::schema::AgentConfig;
 
 /// The model store, inside the agent's configuration directory.
 pub const STORE_FILENAME: &str = "models-store.json";
@@ -68,6 +69,66 @@ pub fn agent_directory(env: &Environment) -> Option<String> {
 /// Whether a model can be shown an image.
 pub fn sees_images(model: Option<&ModelInfo>) -> bool {
     model.is_some_and(|model| model.input.iter().any(|kind| kind == "image"))
+}
+
+/// A model this host can run, and the provider that serves it.
+///
+/// A model id is only unique within its provider, so the pair travels
+/// together: a switch that carried the id alone would be sent to whichever
+/// provider happened to be current, which is not where the model lives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvailableModel {
+    /// The provider that serves it.
+    pub provider: String,
+    /// The model id, as the agent should be given it.
+    pub id: String,
+}
+
+impl AvailableModel {
+    /// How somebody names it unambiguously, as `provider/id`.
+    pub fn qualified(&self) -> String {
+        format!("{}/{}", self.provider, self.id)
+    }
+}
+
+/// Every model a session can actually be switched to.
+///
+/// Not every model the host's store lists. A session runs in a sandbox whose
+/// agent is given a credential for the configured provider and for each one
+/// the operator defined, and for nothing else: its store holds the configured
+/// provider alone, and the defined providers arrive as an override beside it.
+/// A model on a provider the agent cannot authenticate to is not a model it
+/// can run, and offering one only moves the failure into the turn.
+///
+/// So the providers the operator configured are the source of truth, and the
+/// models are read where each provider's models are written: the host store
+/// for the configured one, and the definition itself for the rest.
+pub fn available_models(agent: &AgentConfig, directory: Option<&str>) -> Vec<AvailableModel> {
+    let mut found: Vec<AvailableModel> = read_models(directory, &agent.provider)
+        .into_iter()
+        .map(|model| AvailableModel {
+            provider: agent.provider.clone(),
+            id: model.id,
+        })
+        .collect();
+
+    for (provider, definition) in &agent.providers {
+        let listed = definition
+            .get("models")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        found.extend(
+            listed
+                .iter()
+                .filter_map(|model| model.get("id").and_then(Value::as_str))
+                .map(|id| AvailableModel {
+                    provider: provider.clone(),
+                    id: id.to_owned(),
+                }),
+        );
+    }
+    found
 }
 
 /// What reading the store found, and what it could not read.

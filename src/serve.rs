@@ -36,7 +36,9 @@ use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::gateway::{GATEWAY_USAGE, fetch_gateway_usage};
-use crate::provider::models::{agent_directory, model_by_id, read_models, read_store};
+use crate::provider::models::{
+    agent_directory, available_models, model_by_id, read_models, read_store,
+};
 use crate::provider::usage::Fetch;
 use crate::provider::usage::HttpRequest;
 use crate::provider::usage::HttpResponse;
@@ -917,7 +919,7 @@ async fn run(
         }),
         public_url: config.web.as_ref().and_then(|web| web.public_url.clone()),
         operator_ids: Some(operator_ids),
-        available_models: models.iter().map(|model| model.id.clone()).collect(),
+        available_models: available_models(&config.agent, store.as_deref()),
         delegate_base_url,
         unavailable,
     }));

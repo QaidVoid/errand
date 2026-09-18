@@ -35,6 +35,7 @@ use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::ask::{Endpoint, HttpSender};
+use crate::provider::models::AvailableModel;
 use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 use crate::session::attachments::{self, RawAttachment, is_image, receive};
@@ -316,7 +317,7 @@ pub struct SessionOptions {
     pub public_url: Option<String>,
     /// Models this host knows this provider serves, for switching between
     /// them.
-    pub available_models: Vec<String>,
+    pub available_models: Vec<AvailableModel>,
     /// Where the provider is reached for a delegated question.
     pub delegate_base_url: Option<String>,
     /// Why nothing can run yet, or none when it can.
