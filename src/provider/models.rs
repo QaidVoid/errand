@@ -89,6 +89,14 @@ impl AvailableModel {
     pub fn qualified(&self) -> String {
         format!("{}/{}", self.provider, self.id)
     }
+
+    /// The id to give the agent, with the level somebody asked for on it.
+    pub fn with_level(&self, asked: &str) -> String {
+        if asked.is_empty() {
+            return self.id.clone();
+        }
+        format!("{}{asked}", self.id)
+    }
 }
 
 /// Every model a session can actually be switched to.

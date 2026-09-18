@@ -11,7 +11,7 @@ use crate::session::commands::{
     COMMANDS, CommandAccess, Standing, help_text, may_run, parse_user_id,
 };
 use crate::session::event::{EndReason, ReactionOutcome, SessionEvent};
-use crate::session::model::expand_alias;
+use crate::session::model::{expand_alias, split_level};
 
 /// Which model a name picked out, when a name can pick out more than one.
 pub(super) enum Chosen {
@@ -265,7 +265,11 @@ impl Running {
     pub(super) async fn switch_model(&mut self, rest: &str, message: &IncomingMessage) {
         // A short name is what somebody types here too, so it stands for the
         // same model it would have at the start of a session.
-        let wanted = expand_alias(rest.trim(), &self.options.config.agent.aliases);
+        let expanded = expand_alias(rest.trim(), &self.options.config.agent.aliases);
+        // The level is taken off before the name is looked up and put back
+        // after: an alias may carry one, and `musecringe:max` is not the name
+        // of anything the host lists.
+        let (wanted, asked_level) = split_level(&expanded);
         let available = &self.options.available_models;
 
         if wanted.is_empty() {
@@ -321,7 +325,7 @@ impl Running {
                 return;
             }
         };
-        let wanted = chosen.id;
+        let wanted = chosen.with_level(&asked_level);
         let provider = chosen.provider;
 
         let sent = self

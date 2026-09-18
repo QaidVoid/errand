@@ -2555,3 +2555,32 @@ fn the_listing_puts_this_sessions_provider_first() {
 
     assert_eq!(lines, ["  zai", "    glm", "  openrouter", "    a"]);
 }
+
+/// An alias may carry a level, and `musecringe:max` is not the name of
+/// anything the host lists. The level comes off before the lookup and goes
+/// back on after, or `!model muse` is refused for a model that is right there.
+#[test]
+fn an_alias_carrying_a_level_still_finds_its_model() {
+    let aliases = std::collections::BTreeMap::from([(
+        "muse".to_owned(),
+        "ajamxhacker/musecringe:max".to_owned(),
+    )]);
+    let available = vec![AvailableModel {
+        provider: "ajamxhacker".to_owned(),
+        id: "musecringe".to_owned(),
+    }];
+
+    let expanded = crate::session::model::expand_alias("muse", &aliases);
+    let (bare, level) = crate::session::model::split_level(&expanded);
+    assert_eq!(
+        (bare.as_str(), level.as_str()),
+        ("ajamxhacker/musecringe", ":max")
+    );
+
+    match super::answering::choose(&available, &bare, "zai") {
+        super::answering::Chosen::One(model) => {
+            assert_eq!(model.with_level(&level), "musecringe:max");
+        }
+        _ => panic!("the alias must find its model"),
+    }
+}

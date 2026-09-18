@@ -109,7 +109,10 @@ pub fn resolve_model(value: &str, known: &[&str]) -> ChosenModel {
 const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// Splits a trailing `:level` from a model, when the suffix really is one.
-fn split_level(value: &str) -> (String, String) {
+///
+/// Returned with its colon still on, so putting the two back together is
+/// concatenation and a model with no level rejoins to itself.
+pub fn split_level(value: &str) -> (String, String) {
     let Some(colon) = value.rfind(':') else {
         return (value.to_owned(), String::new());
     };
