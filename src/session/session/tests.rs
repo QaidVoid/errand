@@ -2543,7 +2543,7 @@ fn a_name_two_providers_serve_is_not_guessed_at() {
 /// The listing is grouped, and the session's own provider comes first so the
 /// models it can switch to without qualifying are the ones at the top.
 #[test]
-fn the_listing_puts_this_sessions_provider_first() {
+fn the_listing_says_what_somebody_can_type_back() {
     let available = vec![
         AvailableModel {
             provider: "openrouter".to_owned(),
@@ -2552,14 +2552,24 @@ fn the_listing_puts_this_sessions_provider_first() {
         },
         AvailableModel {
             provider: "zai".to_owned(),
-            id: "glm".to_owned(),
-            default_level: None,
+            id: "glm-5.3".to_owned(),
+            default_level: Some(":high".to_owned()),
         },
     ];
+    let aliases =
+        std::collections::BTreeMap::from([("glm".to_owned(), "zai/glm-5.3:max".to_owned())]);
 
-    let lines = super::answering::grouped_by_provider(&available, "zai");
+    let lines = super::answering::grouped_by_provider(&available, "zai", "glm-5.3", &aliases);
 
-    assert_eq!(lines, ["  zai", "    glm", "  openrouter", "    a"]);
+    assert_eq!(
+        lines,
+        [
+            "**zai**",
+            "  `glm-5.3`  (running, `glm`, thinks high)",
+            "**openrouter**",
+            "  `a`",
+        ]
+    );
 }
 
 /// An alias may carry a level, and `musecringe:max` is not the name of

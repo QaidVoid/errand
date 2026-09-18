@@ -6,6 +6,8 @@
 use super::{Attached, IncomingMessage, Running, SessionTimer, display_name, end_reason_name};
 use crate::chat::render::{bytes as byte_count, compaction_line, connection_line};
 use crate::log::{LogValue, fields};
+use std::collections::BTreeMap;
+
 use crate::provider::models::AvailableModel;
 use crate::session::commands::{
     COMMANDS, CommandAccess, Standing, help_text, may_run, parse_user_id,
@@ -65,23 +67,59 @@ pub(super) fn choose(available: &[AvailableModel], wanted: &str, current: &str) 
 }
 
 /// Every model, under a heading per provider, the session's own first.
-pub(super) fn grouped_by_provider(available: &[AvailableModel], current: &str) -> Vec<String> {
+///
+/// A name somebody can type back is the point, so a short name is shown
+/// beside the model it stands for, the one running is marked, and a level
+/// that applies without being asked for is spelled out: a list that never
+/// says `muse` cannot be used without reading the configuration first.
+pub(super) fn grouped_by_provider(
+    available: &[AvailableModel],
+    current_provider: &str,
+    current_model: &str,
+    aliases: &BTreeMap<String, String>,
+) -> Vec<String> {
     let mut providers: Vec<&str> = Vec::new();
     for model in available {
         if !providers.contains(&model.provider.as_str()) {
             providers.push(&model.provider);
         }
     }
-    providers.sort_by_key(|provider| (*provider != current, *provider));
+    providers.sort_by_key(|provider| (*provider != current_provider, *provider));
 
     let mut lines = Vec::new();
     for provider in providers {
-        lines.push(format!("  {provider}"));
+        lines.push(format!("**{provider}**"));
         for model in available.iter().filter(|model| model.provider == provider) {
-            lines.push(format!("    {}", model.id));
+            let mut notes = Vec::new();
+            if provider == current_provider && model.id == current_model {
+                notes.push("running".to_owned());
+            }
+            notes.extend(short_names(aliases, model));
+            if let Some(level) = &model.default_level {
+                notes.push(format!("thinks {}", level.trim_start_matches(':')));
+            }
+            let said = if notes.is_empty() {
+                String::new()
+            } else {
+                format!("  ({})", notes.join(", "))
+            };
+            lines.push(format!("  `{}`{said}", model.id));
         }
     }
     lines
+}
+
+/// The short names that stand for one model, in the order they were written.
+fn short_names(aliases: &BTreeMap<String, String>, model: &AvailableModel) -> Vec<String> {
+    let qualified = model.qualified();
+    aliases
+        .iter()
+        .filter(|(_, target)| {
+            let bare = split_level(target).0;
+            bare == qualified || bare == model.id
+        })
+        .map(|(short, _)| format!("`{short}`"))
+        .collect()
 }
 
 impl Running {
@@ -286,7 +324,12 @@ impl Running {
                 let mut lines = vec![format!(
                     "this session runs on `{running}`. Switch with `!model <name>`:"
                 )];
-                lines.extend(grouped_by_provider(available, &self.provider()));
+                lines.extend(grouped_by_provider(
+                    available,
+                    &self.provider(),
+                    &split_level(&running).0,
+                    &self.options.config.agent.aliases,
+                ));
                 lines.join("\n")
             })
             .await;
