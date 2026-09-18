@@ -54,17 +54,14 @@ impl Clock for SystemClock {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| {
-                #[expect(clippy::cast_possible_truncation)]
-                let millis = since.as_millis() as i64;
-                millis
+                i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
             })
     }
 
     fn set_timeout(&self, action: Timer, ms: i64) -> u64 {
         let on_fire = Arc::clone(&self.on_fire);
         tokio::spawn(async move {
-            #[expect(clippy::cast_sign_loss)]
-            let ms = ms.max(0) as u64;
+            let ms = u64::try_from(ms).unwrap_or(0);
             tokio::time::sleep(Duration::from_millis(ms)).await;
             on_fire(action);
         });

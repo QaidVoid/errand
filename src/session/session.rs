@@ -2330,8 +2330,7 @@ impl Running {
             self.log.info(
                 "recorded facts from a turn",
                 &fields([
-                    #[expect(clippy::cast_possible_wrap)]
-                    ("stored", LogValue::from(stored as i64)),
+                    ("stored", LogValue::from(stored)),
                     ("about", LogValue::from(about.as_str())),
                 ]),
             );
@@ -2955,8 +2954,7 @@ impl Running {
     /// than continuing until the disk is full.
     #[expect(
         clippy::cast_precision_loss,
-        clippy::cast_possible_wrap,
-        reason = "byte counts sit far below f64's exact range, and the log fields hold them as milliseconds-epoch-sized integers"
+        reason = "byte counts sit far below f64's exact range"
     )]
     async fn check_disk(&mut self) {
         if self.ended {
@@ -2974,8 +2972,8 @@ impl Running {
                 self.log.warn(
                     "session stopped for writing past its disk budget",
                     &fields([
-                        ("written", LogValue::from(written as i64)),
-                        ("budget", LogValue::from(budget as i64)),
+                        ("written", LogValue::from(written)),
+                        ("budget", LogValue::from(budget)),
                     ]),
                 );
                 self.end_because(

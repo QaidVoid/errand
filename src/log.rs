@@ -57,10 +57,19 @@ impl From<i64> for LogValue {
     }
 }
 
+impl From<u64> for LogValue {
+    /// A count past `i64::MAX` is not a count anything here produces, and a
+    /// log line is not worth failing over, so it is pinned rather than wrapped.
+    fn from(value: u64) -> Self {
+        LogValue::Number(i64::try_from(value).unwrap_or(i64::MAX))
+    }
+}
+
 impl From<usize> for LogValue {
-    #[expect(clippy::cast_possible_wrap)]
+    /// A count past `i64::MAX` is not a count anything here produces, and a
+    /// log line is not worth failing over, so it is pinned rather than wrapped.
     fn from(value: usize) -> Self {
-        LogValue::Number(value as i64)
+        LogValue::Number(i64::try_from(value).unwrap_or(i64::MAX))
     }
 }
 
@@ -216,9 +225,7 @@ pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| {
-            #[expect(clippy::cast_possible_truncation)]
-            let millis = since.as_millis() as i64;
-            millis
+            i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
         })
 }
 

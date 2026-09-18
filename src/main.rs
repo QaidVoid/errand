@@ -173,7 +173,7 @@ async fn run(env: &Vars) -> i32 {
             return 1;
         }
     };
-    serve(config, log).await
+    serve(config, log).await.code()
 }
 
 fn main() -> std::process::ExitCode {

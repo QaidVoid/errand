@@ -225,26 +225,50 @@ fn host_of(base_url: &str) -> Option<String> {
     (!host.is_empty()).then_some(host)
 }
 
+/// What the daemon reports when it stops.
+///
+/// These are a contract with whoever runs the daemon: the table in
+/// `docs/start.md` names them, so a service can tell a refusal from a crash.
+/// The numbers are chosen rather than incidental.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum Exit {
+    /// Served, and stopped when it was asked to.
+    Served = 0,
+    /// Something failed while running that was not a refusal.
+    Failed = 1,
+    /// The configuration, the sandbox backend, or the token was refused.
+    Refused = 2,
+    /// The backend cannot enforce a guarantee the configuration demands.
+    EnforcementGap = 3,
+    /// Another daemon already holds this state directory.
+    AlreadyRunning = 4,
+}
+
+impl Exit {
+    /// The number the process exits with.
+    pub fn code(self) -> i32 {
+        self as i32
+    }
+}
+
 /// Runs the daemon until it is told to stop.
 ///
 /// Serving is the steady state, so this returns only on a signal or when the
 /// connection has been lost for good.
-pub async fn serve(config: Config, log: Logger) -> i32 {
+pub async fn serve(config: Config, log: Logger) -> Exit {
     let secrets = secret_values(&config);
 
     // Taken before anything connects or spawns, so a second daemon fails fast
     // instead of racing the first one for every message that arrives.
     let _ = std::fs::create_dir_all(&config.state_dir);
-    #[expect(
-        clippy::cast_possible_wrap,
-        reason = "a pid fits an i32 everywhere the daemon runs, so this cannot wrap"
-    )]
-    let pid = std::process::id() as i32;
+    let pid =
+        i32::try_from(std::process::id()).expect("a pid fits an i32 everywhere the daemon runs");
     let mut lock = match acquire_lock(&config.state_dir, pid) {
         Ok(lock) => lock,
         Err(error) => {
             log.error(&error.to_string(), &fields([]));
-            return 4;
+            return Exit::AlreadyRunning;
         }
     };
 
@@ -263,7 +287,7 @@ pub async fn serve(config: Config, log: Logger) -> i32 {
 /// configured house rules believes every session carries them, and a typo that
 /// only ever showed up as a line in a log would leave that belief standing
 /// while no session actually got them.
-fn check_house_rules(config: &Config, log: &Logger) -> Result<(), i32> {
+fn check_house_rules(config: &Config, log: &Logger) -> Result<(), Exit> {
     let Some(rules_path) = &config.agent.rules_path else {
         return Ok(());
     };
@@ -281,7 +305,7 @@ fn check_house_rules(config: &Config, log: &Logger) -> Result<(), i32> {
                 &fields([]),
             );
             log.error(&error.to_string(), &fields([]));
-            Err(2)
+            Err(Exit::Refused)
         }
     }
 }
@@ -349,7 +373,7 @@ struct Brokered {
 ///
 /// Returns nothing when the mode asks for no broker, and an exit code when
 /// one was asked for and could not be had.
-async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>, i32> {
+async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>, Exit> {
     if config.sandbox.egress.mode != EgressMode::Proxy {
         return Ok(None);
     }
@@ -371,7 +395,7 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
             "egress.mode is proxy but no host is allowed: name the provider host or set egress.allow",
             &fields([]),
         );
-        return Err(2);
+        return Err(Exit::Refused);
     }
     // The credential is held back from the session and put on here
     // instead, so what a sandbox carries is a nonce that is worth nothing
@@ -431,7 +455,7 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
                 &format!("the egress broker could not be started: {error}"),
                 &fields([]),
             );
-            return Err(2);
+            return Err(Exit::Refused);
         }
     };
     if routes.is_empty() {
@@ -463,7 +487,7 @@ async fn run(
     secrets: &[String],
     lock: &mut DaemonLock,
     served_channel: &mut ChannelId,
-) -> i32 {
+) -> Exit {
     if let Err(code) = check_house_rules(config, log) {
         return code;
     }
@@ -492,8 +516,8 @@ async fn run(
         Err(error) => {
             log.error(&error.to_string(), &fields([]));
             return match error {
-                StartError::Unavailable(_) => 2,
-                StartError::EnforcementGap(_) => 3,
+                StartError::Unavailable(_) => Exit::Refused,
+                StartError::EnforcementGap(_) => Exit::EnforcementGap,
             };
         }
     };
@@ -621,13 +645,13 @@ async fn run(
                     "the chat service rejected the bot token or the intents; set chat.token and enable the Message Content intent",
                     &fields([]),
                 );
-                return 2;
+                return Exit::Refused;
             }
             log.error(
                 "the daemon failed to start",
                 &fields([("detail", LogValue::from(error.to_string()))]),
             );
-            return 1;
+            return Exit::Failed;
         }
     };
     let http = Arc::clone(&client.http);
@@ -642,7 +666,7 @@ async fn run(
             &format!("{error}; the chat service did not answer"),
             &fields([]),
         );
-        return 2;
+        return Exit::Refused;
     }
 
     let thread_factory = Arc::new(ChatThreadFactory::new(
@@ -856,7 +880,7 @@ async fn run(
     *sessions_holder.lock().await = Some(Arc::clone(&daemon));
 
     if daemon.start(Some(report)).await.is_err() {
-        return 1;
+        return Exit::Failed;
     }
 
     // Registered after startup, so a bot invited without the commands scope
@@ -945,7 +969,7 @@ async fn run(
     }
     daemon.shutdown().await;
     lock.release();
-    0
+    Exit::Served
 }
 
 use crate::chat::commands::TranslatedCommand;
