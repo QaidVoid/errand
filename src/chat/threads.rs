@@ -255,7 +255,11 @@ impl ThreadTransport for SerenityThread {
         let thread_id = self.thread_id;
         let http = Arc::clone(&self.http);
         Box::pin(async move {
-            thread_id.start_typing(&http);
+            // Not `start_typing`: that returns a guard which stops the
+            // indicator when it is dropped, so a caller that wants one
+            // moment of typing and repeats it gets none at all. This posts
+            // the one moment, which the service expires on its own.
+            http.broadcast_typing(thread_id).await?;
             Ok(())
         })
     }
