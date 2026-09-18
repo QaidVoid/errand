@@ -257,6 +257,201 @@ pub async fn serve(config: Config, log: Logger) -> i32 {
     code
 }
 
+/// Refuses to start when house rules were named but cannot be read.
+///
+/// Named but unreadable is a refusal, not a warning. An operator who
+/// configured house rules believes every session carries them, and a typo that
+/// only ever showed up as a line in a log would leave that belief standing
+/// while no session actually got them.
+fn check_house_rules(config: &Config, log: &Logger) -> Result<(), i32> {
+    let Some(rules_path) = &config.agent.rules_path else {
+        return Ok(());
+    };
+    match std::fs::read_to_string(rules_path) {
+        Ok(_) => {
+            log.info(
+                "house rules will be given to every session",
+                &fields([("path", LogValue::from(rules_path.as_str()))]),
+            );
+            Ok(())
+        }
+        Err(error) => {
+            log.error(
+                &format!("agent.rulesPath cannot be read: {rules_path}"),
+                &fields([]),
+            );
+            log.error(&error.to_string(), &fields([]));
+            Err(2)
+        }
+    }
+}
+
+/// Keeps the usage window shown under the bot's name up to date.
+///
+/// A reconnect resets the presence, so the status is put back by the same call
+/// that first set it rather than only at startup. The gate holds its answer
+/// for `QUOTA_TTL_MS` and stops asking entirely once the window is spent, so
+/// refreshing on that same interval adds no requests the daemon was not
+/// already making. A window that cannot be read clears the status rather than
+/// leaving a stale number under the bot's name.
+fn refresh_presence(
+    sources: &Arc<tokio::sync::Mutex<Vec<UsageSource<BoxedGateRead>>>>,
+    gateway: &Arc<Gateway>,
+) {
+    let status_sources = Arc::clone(sources);
+    let status_gateway = Arc::clone(gateway);
+    tokio::spawn(async move {
+        loop {
+            let mut windows = Vec::new();
+            {
+                let mut sources = status_sources.lock().await;
+                for source in sources.iter_mut() {
+                    let quota = source.gate.current().await;
+                    windows.push(quota.map(|quota| {
+                        let relative = quota.resets_at.map(|at| when_relative_plain(at, now_ms()));
+                        Window {
+                            provider: source.provider.clone(),
+                            quota,
+                            relative,
+                        }
+                    }));
+                }
+            }
+            if let Some(status) = usage_status(&windows.into_iter().flatten().collect::<Vec<_>>()) {
+                status_gateway.set_status(Some(&status));
+            } else {
+                status_gateway.set_status(None);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(QUOTA_TTL_MS as u64)).await;
+        }
+    });
+}
+
+/// The broker a session's egress is forced through, when one is asked for.
+///
+/// Nothing here is set under any other egress mode, so the three travel
+/// together rather than as three options the caller has to keep in step.
+struct Brokered {
+    /// The running broker, held so shutdown can close it.
+    broker: Broker,
+    /// The loopback port the sandbox reaches it on.
+    proxy_port: u16,
+    /// What stands in for each provider credential inside a sandbox.
+    brokering: Option<ProviderBrokering>,
+}
+
+/// Starts the egress broker and works out what a sandbox is told about it.
+///
+/// Under `egress.mode = proxy` every session's outbound is forced through one
+/// broker the daemon runs here on the host. Its allowlist is the provider,
+/// which a session cannot work without, plus whatever the operator named. The
+/// provider host is read from the model store the agent would reach it at.
+///
+/// Returns nothing when the mode asks for no broker, and an exit code when
+/// one was asked for and could not be had.
+async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>, i32> {
+    if config.sandbox.egress.mode != EgressMode::Proxy {
+        return Ok(None);
+    }
+    let env = host_environment();
+    let store = agent_directory(&env);
+    let provider_base = model_by_id(
+        &read_models(store.as_deref(), config.agent.provider.as_str()),
+        config.agent.model.as_deref(),
+    )
+    .and_then(|model| model.base_url.clone());
+    let provider_host = provider_base.as_deref().and_then(host_of);
+    let mut allow: Vec<String> = provider_host
+        .as_ref()
+        .map(|host| vec![host.clone()])
+        .unwrap_or_default();
+    allow.extend(config.sandbox.egress.allow.iter().cloned());
+    if allow.is_empty() {
+        log.error(
+            "egress.mode is proxy but no host is allowed: name the provider host or set egress.allow",
+            &fields([]),
+        );
+        return Err(2);
+    }
+    // The credential is held back from the session and put on here
+    // instead, so what a sandbox carries is a nonce that is worth nothing
+    // anywhere else. One route per provider whose upstream and credential
+    // the daemon knows, each with a nonce of its own.
+    let mut nonces = BTreeMap::new();
+    let mut routes: Vec<ProviderRoute> = Vec::new();
+    if let Some(provider_base) = &provider_base {
+        let nonce = provider_nonce();
+        nonces.insert(config.agent.provider.clone(), nonce.clone());
+        routes.push(ProviderRoute {
+            prefix: provider_prefix(&config.agent.provider),
+            upstream: provider_base.clone(),
+            nonce,
+            credential: config.agent.credential.clone(),
+        });
+    }
+    for (name, upstream, credential) in brokerable_providers(&config.agent.providers) {
+        let nonce = provider_nonce();
+        nonces.insert(name.clone(), nonce.clone());
+        routes.push(ProviderRoute {
+            prefix: provider_prefix(&name),
+            upstream,
+            nonce,
+            credential,
+        });
+    }
+    let brokering = (!nonces.is_empty()).then(|| ProviderBrokering {
+        credential_name: config.agent.credential_name.clone(),
+        provider: config.agent.provider.clone(),
+        nonces,
+    });
+    let mut broker_instance = Broker::new(
+        allow.clone(),
+        log.clone(),
+        routes.clone(),
+        config.sandbox.egress.allow_internal,
+    );
+    // The listener sits on loopback; 169.254.169.1 is only what bailey
+    // tells the sandbox to dial, mapped back to this host from inside.
+    let proxy_port = match broker_instance.listen("127.0.0.1").await {
+        Ok(port) => {
+            log.info(
+                "egress is brokered",
+                &fields([
+                    (
+                        "via",
+                        LogValue::from(format!("{EGRESS_MAP_ADDRESS}:{port}")),
+                    ),
+                    ("allow", LogValue::from(allow.join(", "))),
+                ]),
+            );
+            port
+        }
+        Err(error) => {
+            log.error(
+                &format!("the egress broker could not be started: {error}"),
+                &fields([]),
+            );
+            return Err(2);
+        }
+    };
+    if routes.is_empty() {
+        log.warn(
+            "the model store does not say where the provider is, so the credential is given to the session",
+            &fields([]),
+        );
+    } else {
+        log.info(
+            "provider credentials stay outside the sandbox",
+            &fields([("providers", LogValue::from(routes.len()))]),
+        );
+    }
+    Ok(Some(Brokered {
+        broker: broker_instance,
+        proxy_port,
+        brokering,
+    }))
+}
+
 /// Everything between taking the lock and giving it back.
 ///
 /// Wiring is linear and each piece names itself, so the length is the
@@ -269,133 +464,19 @@ async fn run(
     lock: &mut DaemonLock,
     served_channel: &mut ChannelId,
 ) -> i32 {
-    // Named but unreadable is a refusal, not a warning. An operator who
-    // configured house rules believes every session carries them, and a typo
-    // that only ever showed up as a line in a log would leave that belief
-    // standing while no session actually got them.
-    if let Some(rules_path) = &config.agent.rules_path {
-        match std::fs::read_to_string(rules_path) {
-            Ok(_) => log.info(
-                "house rules will be given to every session",
-                &fields([("path", LogValue::from(rules_path.as_str()))]),
-            ),
-            Err(error) => {
-                log.error(
-                    &format!("agent.rulesPath cannot be read: {rules_path}"),
-                    &fields([]),
-                );
-                log.error(&error.to_string(), &fields([]));
-                return 2;
-            }
-        }
+    if let Err(code) = check_house_rules(config, log) {
+        return code;
     }
 
-    // Under `egress.mode = proxy` every session's outbound is forced through
-    // one broker the daemon runs here on the host. Its allowlist is the
-    // provider, which a session cannot work without, plus whatever the
-    // operator named. The provider host is read from the model store the
-    // agent would reach it at.
-    let mut broker: Option<Broker> = None;
-
-    let mut egress_proxy_port: Option<u16> = None;
-    let mut brokering: Option<ProviderBrokering> = None;
-    if config.sandbox.egress.mode == EgressMode::Proxy {
-        let env = host_environment();
-        let store = agent_directory(&env);
-        let provider_base = model_by_id(
-            &read_models(store.as_deref(), config.agent.provider.as_str()),
-            config.agent.model.as_deref(),
-        )
-        .and_then(|model| model.base_url.clone());
-        let provider_host = provider_base.as_deref().and_then(host_of);
-        let mut allow: Vec<String> = provider_host
-            .as_ref()
-            .map(|host| vec![host.clone()])
-            .unwrap_or_default();
-        allow.extend(config.sandbox.egress.allow.iter().cloned());
-        if allow.is_empty() {
-            log.error(
-                "egress.mode is proxy but no host is allowed: name the provider host or set egress.allow",
-                &fields([]),
-            );
-            return 2;
-        }
-        // The credential is held back from the session and put on here
-        // instead, so what a sandbox carries is a nonce that is worth nothing
-        // anywhere else. One route per provider whose upstream and credential
-        // the daemon knows, each with a nonce of its own.
-        let mut nonces = BTreeMap::new();
-        let mut routes: Vec<ProviderRoute> = Vec::new();
-        if let Some(provider_base) = &provider_base {
-            let nonce = provider_nonce();
-            nonces.insert(config.agent.provider.clone(), nonce.clone());
-            routes.push(ProviderRoute {
-                prefix: provider_prefix(&config.agent.provider),
-                upstream: provider_base.clone(),
-                nonce,
-                credential: config.agent.credential.clone(),
-            });
-        }
-        for (name, upstream, credential) in brokerable_providers(&config.agent.providers) {
-            let nonce = provider_nonce();
-            nonces.insert(name.clone(), nonce.clone());
-            routes.push(ProviderRoute {
-                prefix: provider_prefix(&name),
-                upstream,
-                nonce,
-                credential,
-            });
-        }
-        if !nonces.is_empty() {
-            brokering = Some(ProviderBrokering {
-                credential_name: config.agent.credential_name.clone(),
-                provider: config.agent.provider.clone(),
-                nonces,
-            });
-        }
-        let mut broker_instance = Broker::new(
-            allow.clone(),
-            log.clone(),
-            routes.clone(),
-            config.sandbox.egress.allow_internal,
-        );
-        // The listener sits on loopback; 169.254.169.1 is only what bailey
-        // tells the sandbox to dial, mapped back to this host from inside.
-        match broker_instance.listen("127.0.0.1").await {
-            Ok(port) => {
-                log.info(
-                    "egress is brokered",
-                    &fields([
-                        (
-                            "via",
-                            LogValue::from(format!("{EGRESS_MAP_ADDRESS}:{port}")),
-                        ),
-                        ("allow", LogValue::from(allow.join(", "))),
-                    ]),
-                );
-                egress_proxy_port = Some(port);
-            }
-            Err(error) => {
-                log.error(
-                    &format!("the egress broker could not be started: {error}"),
-                    &fields([]),
-                );
-                return 2;
-            }
-        }
-        if routes.is_empty() {
-            log.warn(
-                "the model store does not say where the provider is, so the credential is given to the session",
-                &fields([]),
-            );
-        } else {
-            log.info(
-                "provider credentials stay outside the sandbox",
-                &fields([("providers", LogValue::from(routes.len()))]),
-            );
-        }
-        broker = Some(broker_instance);
-    }
+    let brokered = match start_broker(config, log).await {
+        Ok(brokered) => brokered,
+        Err(code) => return code,
+    };
+    let egress_proxy_port = brokered.as_ref().map(|brokered| brokered.proxy_port);
+    let brokering = brokered
+        .as_ref()
+        .and_then(|brokered| brokered.brokering.clone());
+    let mut broker = brokered.map(|brokered| brokered.broker);
 
     // The sandbox is checked before the chat service is touched, so a missing
     // image or an unenforceable guarantee fails immediately rather than after
@@ -581,43 +662,8 @@ async fn run(
     // to start wants to know which one has room.
     let sources = usage_sources(config);
     let sources = Arc::new(tokio::sync::Mutex::new(sources));
-    // A reconnect resets the presence, so the status is put back by the same
-    // call that first set it rather than only at startup. The gate holds its
-    // answer for QUOTA_TTL_MS and stops asking entirely once the window is
-    // spent, so refreshing on that same interval adds no requests the daemon
-    // was not already making. A window that cannot be read clears the status
-    // rather than leaving a stale number under the bot's name.
     if !sources.lock().await.is_empty() {
-        let status_sources = Arc::clone(&sources);
-        let status_gateway = Arc::clone(&gateway);
-        tokio::spawn(async move {
-            loop {
-                let mut windows = Vec::new();
-                {
-                    let mut sources = status_sources.lock().await;
-                    for source in sources.iter_mut() {
-                        let quota = source.gate.current().await;
-                        windows.push(quota.map(|quota| {
-                            let relative =
-                                quota.resets_at.map(|at| when_relative_plain(at, now_ms()));
-                            Window {
-                                provider: source.provider.clone(),
-                                quota,
-                                relative,
-                            }
-                        }));
-                    }
-                }
-                if let Some(status) =
-                    usage_status(&windows.into_iter().flatten().collect::<Vec<_>>())
-                {
-                    status_gateway.set_status(Some(&status));
-                } else {
-                    status_gateway.set_status(None);
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(QUOTA_TTL_MS as u64)).await;
-            }
-        });
+        refresh_presence(&sources, &gateway);
     }
 
     let env = host_environment();
