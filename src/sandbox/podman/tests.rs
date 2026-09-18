@@ -4,6 +4,15 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use super::{PodmanSandbox, RESTRICTED_NETWORK, podman_args};
+use tempfile::TempDir;
+
+use crate::config::schema::{
+    EgressConfig, EgressMode, NetworkMode, SandboxBackend, SandboxConfig, defaults,
+};
+use crate::config::size::parse_size;
+use crate::log::{LogFields, Logger};
+use crate::sandbox::Run;
+use crate::sandbox::backend::{SYSTEM_LABEL, SandboxLaunch};
 
 /// Flags that would undo the isolation this backend exists to provide.
 const FORBIDDEN_ARGS: [&str; 8] = [
@@ -16,14 +25,6 @@ const FORBIDDEN_ARGS: [&str; 8] = [
     "docker.sock",
     "podman.sock",
 ];
-use crate::config::schema::{
-    EgressConfig, EgressMode, NetworkMode, SandboxBackend, SandboxConfig, defaults,
-};
-use crate::config::size::parse_size;
-use crate::log::{LogFields, Logger};
-use crate::sandbox::Run;
-use crate::sandbox::backend::{SYSTEM_LABEL, SandboxLaunch};
-use tempfile::TempDir;
 
 fn config() -> SandboxConfig {
     SandboxConfig {

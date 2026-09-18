@@ -10,38 +10,59 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use serenity::client::Context;
+use serenity::client::EventHandler as SerenityEventHandler;
+use serenity::model::application::Interaction;
 use serenity::model::channel::Channel;
 use serenity::model::id::ChannelId;
 
 use crate::agent::protocol::AgentImage;
+use crate::chat::commands::TranslatedCommand;
 use crate::chat::commands::{acknowledge, register_commands};
 use crate::chat::gateway::{Gateway, GatewayHandlers};
 use crate::chat::render::{MESSAGE_LIMIT, split_message, when_relative, when_relative_plain};
 use crate::chat::threads::ChatThreadFactory;
+use crate::chat::threads::plain;
 use crate::config::load::Environment;
 use crate::config::redact::{redact_text, secret_values};
 use crate::config::schema::{Config, EgressMode};
+use crate::daemon::SlashCommand;
+use crate::daemon::StartError;
 use crate::daemon::{Daemon, DaemonOptions};
 use crate::daemon::{create_sandbox, probe_sandbox};
+use crate::lock::DaemonLock;
 use crate::lock::acquire_lock;
+use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::gateway::{GATEWAY_USAGE, fetch_gateway_usage};
 use crate::provider::models::{agent_directory, model_by_id, read_models};
+use crate::provider::usage::Fetch;
+use crate::provider::usage::HttpRequest;
+use crate::provider::usage::HttpResponse;
+use crate::provider::usage::QUOTA_TTL_MS;
+use crate::provider::usage::Quota;
+use crate::provider::usage::Window;
 use crate::provider::usage::{
     FetchError, QuotaGate, UNKNOWN_QUOTA, UsageSource, is_spent, quota_message, spent_message,
     usage_status,
 };
+use crate::provider::vision::HttpPost;
 use crate::provider::vision::image_describer;
 use crate::provider::zai::{fetch_quota, meters_usage};
+use crate::sandbox::bailey::ProviderBrokering;
 use crate::sandbox::bailey::{EGRESS_MAP_ADDRESS, provider_prefix};
 use crate::sandbox::broker::Broker;
 use crate::sandbox::broker::ProviderRoute;
-use crate::session::session::DescribeImages;
-
+use crate::sandbox::paths;
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
+use crate::session::session::DescribeImages;
 use crate::session::session::IncomingMessage;
+use crate::session::session::Unavailable;
 use crate::session::views::SessionView;
+use crate::web::server::WEB_ACTOR;
+use crate::web::server::WebServer;
+use crate::web::view::NameLookup;
 
 /// Filename of the memory database inside the state directory.
 pub const MEMORY_FILENAME: &str = "memory.db";
@@ -488,6 +509,17 @@ async fn run(
     lock: &mut DaemonLock,
     served_channel: &mut ChannelId,
 ) -> Exit {
+    // Asked before anything starts: without it the daemon runs but cannot
+    // read a session's own files, which is a puzzle rather than a failure.
+    if !paths::containment_is_enforced() {
+        log.error(
+            "this kernel does not support openat2, which is how a session's files are kept \
+             inside its project; Linux 5.6 or newer is required",
+            &fields([]),
+        );
+        return Exit::Refused;
+    }
+
     if let Err(code) = check_house_rules(config, log) {
         return code;
     }
@@ -971,28 +1003,6 @@ async fn run(
     lock.release();
     Exit::Served
 }
-
-use crate::chat::commands::TranslatedCommand;
-use crate::chat::threads::plain;
-use crate::daemon::SlashCommand;
-use crate::daemon::StartError;
-use crate::lock::DaemonLock;
-use crate::log::now_ms;
-use crate::provider::usage::Fetch;
-use crate::provider::usage::HttpRequest;
-use crate::provider::usage::HttpResponse;
-use crate::provider::usage::QUOTA_TTL_MS;
-use crate::provider::usage::Quota;
-use crate::provider::usage::Window;
-use crate::provider::vision::HttpPost;
-use crate::sandbox::bailey::ProviderBrokering;
-use crate::session::session::Unavailable;
-use crate::web::server::WEB_ACTOR;
-use crate::web::server::WebServer;
-use crate::web::view::NameLookup;
-use serenity::client::Context;
-use serenity::client::EventHandler as SerenityEventHandler;
-use serenity::model::application::Interaction;
 
 /// Hands the gateway to the chat library, which holds handlers behind an Arc
 /// of its own.

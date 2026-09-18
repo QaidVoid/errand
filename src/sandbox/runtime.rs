@@ -11,6 +11,7 @@
 //! of these.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// The PATH a target is given when the policy sets none.
 pub const SANDBOX_PATH: [&str; 3] = ["/usr/local/bin", "/usr/bin", "/bin"];
@@ -26,8 +27,6 @@ pub struct AgentRuntime {
 
 /// Looks a program up the way a shell would. Injected so tests need no host.
 pub type Lookup = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
-
-use std::sync::Arc;
 
 /// Whether a path is a file this user can execute.
 fn is_executable(path: &str) -> bool {

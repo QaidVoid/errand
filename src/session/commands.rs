@@ -5,6 +5,9 @@
 //! lifecycle. Everything here is pure, so the access rule can be tested
 //! against every command without a session, a sandbox, or a connection.
 
+use CommandAccess::{Anyone, Guest, Host, Owner};
+use CommandGroup::{People, Project, Session, You};
+
 /// Who may run a command.
 ///
 /// `anyone` is any permitted account. `guest` adds the owner, the operators,
@@ -51,9 +54,6 @@ pub struct CommandMeta {
     /// The argument, as a person would write it. None when it takes none.
     pub argument: Option<&'static str>,
 }
-
-use CommandAccess::{Anyone, Guest, Host, Owner};
-use CommandGroup::{People, Project, Session, You};
 
 /// Every in-thread command, and who may run it.
 pub static COMMANDS: &[(&str, CommandMeta)] = &[

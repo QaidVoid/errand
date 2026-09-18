@@ -71,19 +71,20 @@ pub struct Entry {
 /// One order for every surface: a thread and an interface listing the same
 /// directory differently is a bug report waiting to happen.
 pub fn read_directory(root: &str, relative: &str) -> std::io::Result<Vec<Entry>> {
-    // Resolved beneath the root before it is walked, so a link standing in
-    // for a directory lists nothing rather than listing somewhere else.
-    let opened = paths::open_beneath(root, relative, &paths::OpenOptions::read())?;
-    drop(opened);
-    let host_path =
-        paths::within(root, relative).ok_or_else(|| std::io::Error::other("outside the root"))?;
+    // Opened beneath the root and then walked through the open directory
+    // itself, rather than by name a second time. Resolving the name again
+    // would let a component become a link between the check and the walk,
+    // which is the whole reason the first resolution is done by the kernel.
+    let directory = paths::open_beneath(root, relative, &paths::OpenOptions::read())?;
     let mut entries = Vec::new();
-    for found in std::fs::read_dir(&host_path)? {
+    for found in std::fs::read_dir(paths::pinned_path(&directory))? {
         let found = found?;
         let file_type = found.file_type()?;
         let mut size = 0;
         if file_type.is_file() {
-            size = found.metadata().map_or(0, |meta| meta.len());
+            // Never follows: a name that became a link between the two calls
+            // reports the link, not what it points at.
+            size = found.path().symlink_metadata().map_or(0, |meta| meta.len());
         }
         let name = found.file_name().to_string_lossy().into_owned();
         let path = if relative.is_empty() {

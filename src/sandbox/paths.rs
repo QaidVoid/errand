@@ -146,6 +146,30 @@ pub fn open_beneath(root: &str, relative: &str, options: &OpenOptions) -> std::i
     }
 }
 
+/// Whether this host's kernel enforces containment during path resolution.
+///
+/// `openat2` arrived in Linux 5.6. Without it every read the daemon makes on a
+/// session's behalf fails, which would show up as a session that cannot read
+/// its own project and notes that are never harvested. Asked once at startup
+/// so the answer is a refusal to start rather than a puzzle.
+pub fn containment_is_enforced() -> bool {
+    !matches!(
+        open_beneath("/", ".", &OpenOptions::read()),
+        Err(error) if error.raw_os_error() == Some(nix::errno::Errno::ENOSYS as i32)
+    )
+}
+
+/// Names an already-open file by its descriptor, so it can be reached again
+/// without resolving its path a second time.
+///
+/// The descriptor is pinned to one file for as long as it is held, whatever
+/// happens to the name it was opened under. Reading the name again is what
+/// this exists to avoid.
+pub fn pinned_path(file: &File) -> String {
+    use std::os::fd::AsRawFd;
+    format!("/proc/self/fd/{}", file.as_raw_fd())
+}
+
 /// How [`open_beneath`] should open the file.
 ///
 /// A narrow stand-in for [`std::fs::OpenOptions`], which cannot describe an

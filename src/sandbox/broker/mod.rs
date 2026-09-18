@@ -16,10 +16,15 @@
 //! listener; this file is the gate.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::net::Ipv4Addr;
+use std::pin::Pin;
 use std::sync::Arc;
 
+pub use server::Broker;
+
 use crate::log::Logger;
+use crate::log::fields;
 
 /// Whether `host` is permitted by an allowlist of names and `*.` wildcards.
 ///
@@ -518,10 +523,6 @@ fn stream_answer(answered: reqwest::Response) -> axum::response::Response {
 /// Where a resolved name comes back as.
 pub(crate) type ResolveFuture = Pin<Box<dyn Future<Output = Vec<String>> + Send>>;
 
-use crate::log::fields;
-use std::future::Future;
-use std::pin::Pin;
-
 /// The host of a URL, without pulling in a full URL parser for one field.
 fn url_host(target: &str) -> Option<String> {
     let rest = target
@@ -538,8 +539,6 @@ fn url_host(target: &str) -> Option<String> {
 
 /// The listener that admits a session's connections and tunnels them.
 pub(crate) mod server;
-
-pub use server::Broker;
 
 #[cfg(test)]
 mod tests;

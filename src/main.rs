@@ -6,6 +6,24 @@
 //! managing what it left on disk is an operator's job and belongs where an
 //! operator already is.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use crate::cli::threads::Deps;
+use crate::cli::threads::Project;
+use crate::cli::threads::run_threads;
+use crate::config::load::{config_path, file_exists, load_config};
+use crate::config::schema::Config;
+use crate::config::schema::ConfigError;
+use crate::log::logger;
+use crate::log::now_ms;
+use crate::log::{LogValue, fields};
+use crate::sandbox::policy::POLICY_FILENAME;
+use crate::serve::serve;
+use crate::session::disk::tree_bytes;
+use crate::session::record::record_dir;
+use crate::session::registry::ThreadRegistry;
+
 mod admission;
 mod agent;
 mod chat;
@@ -25,24 +43,6 @@ mod web;
 mod docs;
 #[cfg(test)]
 mod test_util;
-
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
-
-use crate::cli::threads::Deps;
-use crate::cli::threads::Project;
-use crate::cli::threads::run_threads;
-use crate::config::load::{config_path, file_exists, load_config};
-use crate::config::schema::Config;
-use crate::config::schema::ConfigError;
-use crate::log::logger;
-use crate::log::now_ms;
-use crate::log::{LogValue, fields};
-use crate::sandbox::policy::POLICY_FILENAME;
-use crate::serve::serve;
-use crate::session::disk::tree_bytes;
-use crate::session::record::record_dir;
-use crate::session::registry::ThreadRegistry;
 
 /// The environment an operator's shell hands over.
 type Vars = BTreeMap<String, String>;
