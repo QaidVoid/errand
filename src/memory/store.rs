@@ -57,8 +57,15 @@ pub struct Fact {
 /// Longest single fact kept. Anything longer is a note, not a fact.
 pub const MAX_FACT_LENGTH: usize = 300;
 
-/// Default ceiling on the memory block injected into a session.
-pub const DEFAULT_MEMORY_BUDGET: usize = 2_000;
+/// Default ceiling, in characters, on each section of the memory block.
+///
+/// A standing cost paid on every turn, so it is bounded rather than unbounded.
+/// The old ceiling of 2000 was sized for one-line facts, but agents write
+/// facts up to [`MAX_FACT_LENGTH`], so it held only a handful and a session
+/// looked amnesiac. This holds the most relevant twenty-odd; the long tail is
+/// reached with the recall command rather than by carrying all of it every
+/// turn.
+pub const DEFAULT_MEMORY_BUDGET: usize = 6_000;
 
 /// Facts kept for a project before the oldest are dropped.
 pub const MAX_PROJECT_FACTS: i64 = 500;
@@ -350,6 +357,12 @@ pub const BLOCK_FILENAME: &str = "memory.md";
 
 /// The instructions appended to the agent's system prompt.
 ///
+/// Recall and remembering are separate directions, and the agent kept
+/// conflating them: it read the two write-only notes files to recall and
+/// found them empty, because a turn's harvest empties them. So the split is
+/// spelled out. What was recalled is already in this prompt, above; the notes
+/// files are outboxes, never a place to read from.
+///
 /// The agent cannot call back into the daemon, by design, so remembering
 /// something is writing a line to a file in its own state directory. The
 /// daemon reads that file after each turn.
@@ -357,9 +370,18 @@ pub fn memory_instructions(notes_path: &str, project_notes_path: &str) -> String
     [
         String::new(),
         String::new(),
-        "You have two kinds of memory, both carried between separate conversations.".to_owned(),
-        "One fact per line in either. Never record secrets, credentials, or anything".to_owned(),
-        "you were told in confidence.".to_owned(),
+        "# Memory".to_owned(),
+        String::new(),
+        "What earlier conversations recorded is already above, in this prompt. That is".to_owned(),
+        "your memory; you do not fetch it from anywhere. It is the most relevant part,".to_owned(),
+        "not all of it, so if you need something you were clearly told before and do".to_owned(),
+        "not see it here, say so rather than assume it was never recorded.".to_owned(),
+        String::new(),
+        "To remember something new, append one fact per line to the files below. They".to_owned(),
+        "are write-only outboxes: each starts empty and is cleared after every turn as".to_owned(),
+        "the daemon files what you wrote. Never read them back to recall; they hold".to_owned(),
+        "nothing, and what you know is above, not in them. Never record secrets,".to_owned(),
+        "credentials, or anything you were told in confidence.".to_owned(),
         String::new(),
         format!("About the person speaking: append to {notes_path}. Their preferences, how"),
         "they want things done, what they are working on. More than one person may".to_owned(),

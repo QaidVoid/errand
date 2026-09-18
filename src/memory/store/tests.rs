@@ -343,6 +343,10 @@ fn the_instructions_name_both_files_and_refuse_secrets() {
     assert!(instructions.contains("/state/remember.md"));
     assert!(instructions.contains("/state/project-notes.md"));
     assert!(instructions.contains("Never record secrets"));
+    // The whole point of the rewrite: the agent must not read the notes files
+    // back to recall, and must know its memory is already in the prompt.
+    assert!(instructions.contains("write-only"));
+    assert!(instructions.contains("already above"));
 }
 
 /// Memory outlives the process, so it has to survive being reopened.
