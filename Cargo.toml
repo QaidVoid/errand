@@ -1,5 +1,5 @@
 [package]
-name = "errand"
+name = "errand-bot"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
@@ -10,7 +10,11 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["agent", "chat", "sandbox", "daemon", "discord"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = ["docs", "web", "packaging", "openspec", "dist", "test", "tests"]
+exclude = ["/docs", "/web", "/packaging", "/test"]
+
+[[bin]]
+name = "errand"
+path = "src/main.rs"
 
 [dependencies]
 axum = "0.8.9"
@@ -36,11 +40,6 @@ warnings = "deny"
 [lints.clippy]
 pedantic = "deny"
 
-# The daemon runs on a host beside the sandboxes it supervises, so the binary
-# is worth keeping small. It is bound by the chat service, the provider and
-# the agent process rather than by its own arithmetic, which is what makes
-# optimising for size rather than speed the right trade here. 29.4 MB to
-# 10.7 MB.
 [profile.release]
 opt-level = "z"
 lto = true

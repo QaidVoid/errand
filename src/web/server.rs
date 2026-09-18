@@ -8,7 +8,6 @@
 //! control, and it is checked before anything is served.
 
 use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path as PathParam, Query, State};
@@ -84,32 +83,49 @@ fn refused(body: Value, status: StatusCode) -> Response {
     json(body, status)
 }
 
-/// Resolves a request path inside the assets root, refusing any escape.
-fn normalize_under(root: &Path, wanted: &str) -> Option<PathBuf> {
-    // A request path always names something under the root; the leading
-    // slash is the URL's, not the start of an absolute host path.
-    let wanted = wanted.trim_start_matches('/');
-    let mut resolved = root.to_path_buf();
-    for component in Path::new(wanted).components() {
+include!(concat!(env!("OUT_DIR"), "/interface.rs"));
+
+/// The built interface, as a table of paths and bytes.
+///
+/// Compiled in rather than read from disk, so the binary is the whole daemon
+/// wherever it is put. Injected so a test decides what the interface holds,
+/// and so a build made without one is the same shape as a build with one.
+pub type Assets = &'static [(&'static str, &'static [u8])];
+
+/// What this build carries, which is empty when it was built without one.
+pub const BUILT_INTERFACE: Assets = BUNDLED;
+
+/// One file of the interface, or nothing when the bundle does not hold it.
+fn bundled(assets: Assets, name: &str) -> Option<&'static [u8]> {
+    let wanted = name.trim_start_matches('/');
+    assets
+        .iter()
+        .find(|(path, _)| *path == wanted)
+        .map(|(_, bytes)| *bytes)
+}
+
+/// Reduces a request path to the name the bundle would hold it under.
+///
+/// Normalised rather than searched for: a request that climbs above the
+/// bundle names nothing in it, and one that merely spells a name oddly should
+/// still find it.
+fn normalize_request(wanted: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for component in wanted.trim_start_matches('/').split('/') {
         match component {
-            Component::CurDir => {}
-            Component::Normal(part) => resolved.push(part),
-            // Absolute or prefix-bearing requests leave the root by
-            // construction, and a parent that escapes it is refused below.
-            Component::ParentDir => {
-                resolved.pop();
-            }
-            _ => return None,
+            "" | "." => {}
+            ".." => return None,
+            part => parts.push(part),
         }
     }
-    resolved.starts_with(root).then_some(resolved)
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// The interface, bound to one address.
 pub struct WebServer {
     config: WebConfig,
     sessions: Arc<SessionManager>,
-    assets: PathBuf,
+    assets: Assets,
     log: Logger,
     guild_id: Option<String>,
     names: Option<NameLookup>,
@@ -176,7 +192,7 @@ impl WebServer {
     pub fn new(
         config: WebConfig,
         sessions: Arc<SessionManager>,
-        assets: PathBuf,
+        assets: Assets,
         log: Logger,
         guild_id: Option<String>,
         names: Option<NameLookup>,
@@ -229,12 +245,12 @@ impl WebServer {
             )));
         }
 
-        if !self.assets.join("index.html").exists() {
-            return Err(WebInterfaceError(format!(
-                "the interface is not built. Run `cd web && deno run -A --node-modules-dir \
-                 npm:vite build .` to produce {}.",
-                self.assets.display()
-            )));
+        if bundled(self.assets, "index.html").is_none() {
+            return Err(WebInterfaceError(
+                "this build carries no interface. Build it with `cd web && bun install && bun \
+                 run build`, then build the daemon again."
+                    .to_owned(),
+            ));
         }
 
         let app = self.router();
@@ -764,23 +780,18 @@ async fn serve_asset(
         return refused(json!({ "error": "no such route" }), StatusCode::NOT_FOUND);
     }
     let wanted = if wanted == "/" { "/index.html" } else { wanted };
-    let Some(resolved) = normalize_under(&server.assets, wanted) else {
+    // Normalised before it is looked up, so a traversal cannot name a file
+    // the bundle does not offer under a path that reads as though it does.
+    let Some(resolved) = normalize_request(wanted) else {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
 
-    match tokio::fs::read(&resolved).await {
-        Ok(bytes) => (
-            [(
-                header::CONTENT_TYPE,
-                content_type(&resolved.to_string_lossy()),
-            )],
-            bytes,
-        )
-            .into_response(),
-        Err(_) => match tokio::fs::read(server.assets.join("index.html")).await {
-            Ok(bytes) => ([(header::CONTENT_TYPE, TYPES[0].1)], bytes).into_response(),
-            Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
-        },
+    if let Some(bytes) = bundled(server.assets, &resolved) {
+        return ([(header::CONTENT_TYPE, content_type(&resolved))], bytes).into_response();
+    }
+    match bundled(server.assets, "index.html") {
+        Some(bytes) => ([(header::CONTENT_TYPE, TYPES[0].1)], bytes).into_response(),
+        None => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }
 

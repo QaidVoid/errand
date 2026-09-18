@@ -1,0 +1,56 @@
+[workspace]
+allow_dirty = false
+changelog_update = true
+dependencies_update = false
+git_release_enable = true
+git_tag_name = "v{{ version }}"
+pr_labels = ["release"]
+semver_check = true
+
+[[package]]
+name = "errand-bot"
+changelog_path = "./CHANGELOG.md"
+
+[changelog]
+header = """
+# Changelog
+
+What changed in each release, from the commit messages.
+"""
+body = """
+{% macro commit(commit) -%}
+- {% if commit.scope %}({{ commit.scope }}) {% endif %}\
+{% if commit.breaking %}[breaking] {% endif %}\
+{{ commit.message | upper_first }} \
+([{{ commit.id | truncate(length=7, end="") }}]({{ remote.link }}/commit/{{ commit.id }}))
+{%- endmacro -%}
+
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## Unreleased
+{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits | filter(attribute="scope") | sort(attribute="scope") %}\
+{{ self::commit(commit=commit) }}
+{% endfor %}\
+{% for commit in commits %}{% if not commit.scope %}\
+{{ self::commit(commit=commit) }}
+{% endif %}{% endfor %}\
+{% endfor %}
+"""
+trim = true
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^refactor", group = "<!-- 3 -->Refactoring" },
+  { message = "^docs", group = "<!-- 4 -->Documentation" },
+  { message = "^test", group = "<!-- 5 -->Tests" },
+  { message = "^build|^ci", group = "<!-- 6 -->Build" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore\\(deps", skip = true },
+  { message = "^chore", group = "<!-- 7 -->Chores" },
+  { message = "^revert", group = "<!-- 8 -->Reverts" },
+]

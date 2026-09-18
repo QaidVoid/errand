@@ -944,7 +944,6 @@ async fn run(
     // session the daemon is not yet ready to act on.
     let mut web: Option<Arc<WebServer>> = None;
     if let Some(web_config) = config.web.clone() {
-        let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("dist/web");
         // Resolved lazily per name, so a mention reads as the person it names.
         let memory_for_names = Arc::clone(&memory);
         let names: NameLookup =
@@ -952,7 +951,7 @@ async fn run(
         let web_server = WebServer::new(
             web_config,
             daemon.sessions(),
-            assets,
+            crate::web::server::BUILT_INTERFACE,
             log.clone(),
             guild_id.map(|guild| guild.get().to_string()),
             Some(names),

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
-use super::WebServer;
+use super::{Assets, WebServer};
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
 use crate::config::schema::SandboxBackend;
@@ -264,23 +264,21 @@ struct Harness {
     base: String,
 }
 
+/// Stands in for the built interface, with the two files a test asks for.
+static BUILT_FOR_TESTS: Assets = &[
+    ("app.js", b"export const ready = true;\n"),
+    ("index.html", b"<!doctype html><title>errand</title>"),
+];
+
 async fn with_server_where(
     observer: bool,
     assets: bool,
     run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>,
 ) {
     let root = tempfile::tempdir().expect("a temp directory");
-    let assets_dir = root.path().join("assets");
-    if assets {
-        std::fs::create_dir_all(&assets_dir).expect("the assets directory");
-        std::fs::write(
-            assets_dir.join("index.html"),
-            "<!doctype html><title>errand</title>",
-        )
-        .expect("the index page");
-        std::fs::write(assets_dir.join("app.js"), "export const ready = true;\n")
-            .expect("the script");
-    }
+    // The interface a test serves, so what is asserted does not depend on
+    // whether the real bundle happened to be built on this machine.
+    let bundle: Assets = if assets { BUILT_FOR_TESTS } else { &[] };
 
     // A port nothing else is likely to be on, reserved and then released.
     let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("a probe port");
@@ -349,7 +347,7 @@ async fn with_server_where(
     let server = WebServer::new(
         web_config,
         Arc::clone(&manager),
-        assets_dir,
+        bundle,
         silent(),
         Some("guild-1".to_owned()),
         Some(Arc::new(|id: &str| {
@@ -860,7 +858,7 @@ async fn an_interface_that_was_never_built_refuses_to_serve() {
     with_server_where(false, false, |harness| {
         Box::pin(async move {
             let error = harness.server.start().await.unwrap_err();
-            assert!(error.to_string().contains("not built"));
+            assert!(error.to_string().contains("carries no interface"));
         })
     })
     .await;
@@ -925,7 +923,7 @@ async fn an_interface_asked_to_bind_publicly_refuses_to_start() {
             public_url: None,
         },
         manager,
-        root.path().to_path_buf(),
+        &[],
         silent(),
         None,
         None,

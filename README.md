@@ -95,7 +95,7 @@ out. To have the cheaper model do the work rather than describe it, use
 An optional local web interface reads a session as it happens, browses the
 project, and starts new ones. It has no login: the address it binds to is the
 access control, and a public bind is refused rather than warned about. Build it
-once (`cd web && deno run -A --node-modules-dir npm:vite build .`, then
+once (`cd web && bun install && bun run build`, then
 `cargo build --release`), then add a `web` section to the configuration:
 
 ```json
@@ -140,7 +140,7 @@ cargo build --release   # the daemon binary, into target/release/
 builds out of `web` into `dist/web`:
 
 ```sh
-cd web && deno run -A --node-modules-dir npm:vite build .
+cd web && bun install && bun run build
 ```
 
 The reference pages are generated from the schema, the command table, and the
@@ -148,7 +148,11 @@ character table; `cargo test` fails when what is committed no longer matches,
 and `cargo test regenerate_the_reference_pages -- --ignored` brings them back
 in step.
 
-The documentation site builds with VitePress from `docs`.
+The documentation site builds with VitePress from `docs`, with bun:
+
+```
+cd docs && bun install && bun run build
+```
 
 Project rules are in [AGENTS.md](AGENTS.md).
 
