@@ -19,6 +19,12 @@ pub const DELEGATE_DIR: &str = "delegations";
 /// Name of the command the agent runs.
 pub const DELEGATE_COMMAND: &str = "delegate";
 
+/// The directory recall requests and answers are exchanged in.
+pub const RECALL_DIR: &str = "recalls";
+
+/// Name of the command the agent runs to search its own memory.
+pub const RECALL_COMMAND: &str = "recall";
+
 /// The command put on the agent's PATH.
 ///
 /// Written in shell so it needs nothing installed beyond what a sandbox
@@ -126,6 +132,84 @@ pub fn delegate_instructions(model: &str, per_turn: usize) -> String {
         String::new(),
         format!("You may ask {per_turn} times per turn. When it refuses, or you need to be"),
         "certain, read the thing yourself.".to_owned(),
+    ]
+    .join("\n")
+}
+
+/// The `recall` command, written into the agent's PATH.
+///
+/// The rendered memory block holds only the newest facts that fit the budget.
+/// This reaches the rest: it writes a query beside the session, waits for the
+/// daemon to search the store, and prints what matched. Same file exchange as
+/// a delegation, and a short wait because a local query is not a model call.
+pub fn recall_command_contents() -> String {
+    // A local search is quick, so the wait is short. In tenths of a second.
+    let wait_tenths = 100;
+    format!(
+        r#"#!/bin/sh
+# Generated per session by errand. Do not edit.
+set -e
+
+usage() {{
+  echo "usage: {RECALL_COMMAND} <words>" >&2
+  echo "Searches your durable memory for facts matching every word given." >&2
+  echo "Your recent memory is already in your prompt; this reaches the rest." >&2
+  exit 2
+}}
+
+query="$*"
+[ -n "${{query}}" ] || usage
+
+dir={STATE_PATH}/{RECALL_DIR}
+mkdir -p "${{dir}}"
+id="$$-$(date +%s%N 2>/dev/null || date +%s)"
+
+escape() {{
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '
+'
+}}
+
+printf '{{"query":"%%s"}}' "$(escape "${{query}}")" > "${{dir}}/${{id}}.writing"
+mv "${{dir}}/${{id}}.writing" "${{dir}}/${{id}}.request"
+
+waited=0
+while [ "${{waited}}" -lt {wait_tenths} ]; do
+  if [ -f "${{dir}}/${{id}}.answer" ]; then
+    cat "${{dir}}/${{id}}.answer"
+    rm -f "${{dir}}/${{id}}.answer"
+    exit 0
+  fi
+  sleep 0.1
+  waited=$((waited + 1))
+done
+
+rm -f "${{dir}}/${{id}}.request"
+echo "recall did not answer in time; what you have is in your prompt" >&2
+exit 1
+"#,
+    )
+}
+
+/// What the agent is told about the recall command.
+///
+/// Appended only when memory is on. Sits next to the memory instructions,
+/// which have already said the recent facts are in the prompt; this is how the
+/// agent reaches the older ones without carrying all of them every turn.
+pub fn recall_instructions() -> String {
+    [
+        String::new(),
+        String::new(),
+        format!("`{RECALL_COMMAND} <words>` searches everything earlier conversations recorded"),
+        "about this project and about the people here, not only the recent facts".to_owned(),
+        "above. Every word must appear in a fact, so add words to narrow. Use it when".to_owned(),
+        "you were clearly told something before and do not see it in your prompt.".to_owned(),
+        String::new(),
+        "```".to_owned(),
+        format!("{RECALL_COMMAND} cloudflare deploy"),
+        "```".to_owned(),
+        String::new(),
+        "It reads your own memory and nothing else. An empty result means nothing".to_owned(),
+        "matching was recorded, not that it is hidden.".to_owned(),
     ]
     .join("\n")
 }

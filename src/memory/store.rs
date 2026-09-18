@@ -205,6 +205,60 @@ impl MemoryStore {
         rows.collect()
     }
 
+    /// Facts for one subject whose text matches every word of a query,
+    /// newest first.
+    ///
+    /// The recall command's half: the rendered block carries only the newest
+    /// that fit the budget, and this reaches the rest. Every word must appear,
+    /// case-folded, as a substring somewhere in the fact, so a two-word query
+    /// narrows rather than widens. A blank query matches nothing, because a
+    /// recall of everything is what the block already is.
+    pub fn search(
+        &self,
+        scope: Scope,
+        subject: &str,
+        query: &str,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<Fact>> {
+        let words: Vec<String> = query
+            .split_whitespace()
+            .map(|word| format!("%{}%", word.to_lowercase().replace(['%', '_'], "")))
+            .filter(|pattern| pattern.len() > 2)
+            .collect();
+        if words.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // One `LIKE ... ESCAPE` per word, all required. `lower()` on the
+        // column so the match is case-insensitive without a collation, and an
+        // escape so a fact holding a literal `%` cannot widen the pattern.
+        let clause = std::iter::repeat_n("lower(fact) LIKE ? ESCAPE '\\'", words.len())
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let sql = format!(
+            "SELECT id, fact, created_at FROM facts
+             WHERE scope = ? AND subject = ? AND {clause} ORDER BY id DESC LIMIT ?"
+        );
+
+        let db = self.db.lock().expect("the memory lock");
+        let mut statement = db.prepare(&sql)?;
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+            vec![Box::new(scope.as_str()), Box::new(subject.to_owned())];
+        for pattern in &words {
+            params.push(Box::new(pattern.clone()));
+        }
+        params.push(Box::new(limit));
+        let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(AsRef::as_ref).collect();
+        let rows = statement.query_map(refs.as_slice(), |row| {
+            Ok(Fact {
+                id: row.get("id")?,
+                fact: row.get("fact")?,
+                created_at: row.get("created_at")?,
+            })
+        })?;
+        rows.collect()
+    }
+
     /// Removes everything held for one subject, returning how many facts went,
     /// so somebody asking to be forgotten is told what was actually there.
     pub fn forget(&self, scope: Scope, subject: &str) -> rusqlite::Result<usize> {

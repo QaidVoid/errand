@@ -376,3 +376,54 @@ fn what_was_remembered_is_still_there_after_a_restart() {
     );
     second.close().expect("closed");
 }
+
+/// The rendered block carries only the newest facts that fit the budget;
+/// search reaches the rest by matching every word of a query against the
+/// fact text, newest first.
+#[test]
+fn search_finds_facts_beyond_the_block_by_every_word() {
+    let memory = store();
+    for fact in [
+        "the build runs with bun, not deno",
+        "the deploy target is cloudflare pages",
+        "cloudflare needs the vitepress output directory set",
+        "prefers jj over git for everything",
+    ] {
+        memory
+            .remember(Scope::Project, "demo", fact, "s1", 0)
+            .expect("stored");
+    }
+
+    let hits: Vec<String> = memory
+        .search(Scope::Project, "demo", "cloudflare", 10)
+        .expect("searched")
+        .into_iter()
+        .map(|fact| fact.fact)
+        .collect();
+    assert_eq!(hits.len(), 2, "both cloudflare facts, {hits:?}");
+    // Newest first.
+    assert!(hits[0].contains("vitepress"));
+
+    // Every word must appear, so a second word narrows.
+    let narrowed = memory
+        .search(Scope::Project, "demo", "cloudflare vitepress", 10)
+        .expect("searched");
+    assert_eq!(narrowed.len(), 1);
+
+    // A blank query matches nothing: recalling everything is what the block is.
+    assert!(
+        memory
+            .search(Scope::Project, "demo", "   ", 10)
+            .expect("searched")
+            .is_empty()
+    );
+
+    // A wildcard in the query is a literal, not a match-all.
+    assert!(
+        memory
+            .search(Scope::Project, "demo", "%%%%", 10)
+            .expect("searched")
+            .is_empty()
+    );
+    memory.close().expect("closes");
+}

@@ -6,6 +6,7 @@
 
 use super::{IncomingMessage, Running};
 use crate::agent::requests::delegate_instructions;
+use crate::agent::requests::recall_instructions;
 use crate::log::{LogValue, fields, now_ms};
 use crate::memory::store::{
     BLOCK_FILENAME, DEFAULT_MEMORY_BUDGET, MemoryStore, NOTES_FILENAME, PROJECT_NOTES_FILENAME,
@@ -58,13 +59,14 @@ impl Running {
             .unwrap_or_default();
 
         let contents = format!(
-            "{}{}{}{attribution}{delegating}",
+            "{}{}{}{}{attribution}{delegating}",
             self.house_rules().unwrap_or_default(),
             about,
             memory_instructions(
                 &format!("{STATE_PATH}/{NOTES_FILENAME}"),
                 &format!("{STATE_PATH}/{PROJECT_NOTES_FILENAME}"),
-            )
+            ),
+            recall_instructions(),
         );
 
         let path = std::path::Path::new(&self.options.state_dir).join(BLOCK_FILENAME);

@@ -24,7 +24,9 @@ use crate::agent::client::{AgentClient, AgentHandlers, AgentProcess};
 use crate::agent::delegate::{DelegationOutcome, TurnDelegations};
 use crate::agent::delegation::Sources;
 use crate::agent::protocol::{AgentImage, DialogRequest, StreamingBehavior, Usage};
-use crate::agent::requests::{DELEGATE_COMMAND, delegate_command_contents};
+use crate::agent::requests::{
+    DELEGATE_COMMAND, RECALL_COMMAND, delegate_command_contents, recall_command_contents,
+};
 use crate::chat::render::{
     bytes as byte_count, connection_line, dialog_lines, marker, question_line, tool_line, truncate,
     warning_line,
@@ -56,6 +58,7 @@ use crate::session::github::{
 use crate::session::model::ChosenModel;
 use crate::session::pr::{self, PullRequestError};
 use crate::session::projects::ProjectSelection;
+use crate::session::recalling::Recalling;
 use crate::session::record::{withdraw_from_agent_session, withdraw_from_record};
 use crate::session::redacted::Redacting;
 use crate::session::rules::rules_block;
@@ -92,6 +95,8 @@ pub enum SessionTimer {
     AbortDeadline,
     /// The delegation exchange directory is due a look.
     Delegating,
+    /// The recall exchange directory is due a look.
+    Recalling,
 }
 
 /// Sets the session's timers, so a test fires deadlines by decision.
@@ -670,6 +675,8 @@ struct Running {
     /// The delegations of the turn now running, if any.
     turn_delegations: Option<TurnDelegations<SessionSources, HttpSender>>,
     watcher: Option<Delegating>,
+    recaller: Option<Recalling>,
+    recalling_timer: Option<u64>,
     /// What delegation has cost and saved this session, for reporting it.
     delegated_asked: u64,
     delegated_answered: u64,
@@ -747,6 +754,8 @@ impl Running {
             disk_last_at: 0,
             turn_delegations: None,
             watcher: None,
+            recaller: None,
+            recalling_timer: None,
             options,
             commands,
             log,
@@ -958,6 +967,18 @@ impl Running {
                 }
                 self.schedule_delegating();
             }
+            SessionTimer::Recalling => {
+                if let Some(recaller) = &self.recaller {
+                    recaller.sweep();
+                }
+                self.schedule_recalling();
+            }
+        }
+    }
+
+    fn schedule_recalling(&mut self) {
+        if self.recaller.is_some() {
+            self.recalling_timer = Some(self.timers.set_timeout(SessionTimer::Recalling, POLL_MS));
         }
     }
 
@@ -1037,6 +1058,7 @@ impl Running {
 
         self.start_disk_watch().await;
         self.start_delegating();
+        self.start_recalling();
 
         let client = AgentClient::new(
             self.sandbox
@@ -1966,6 +1988,14 @@ impl Running {
                 )?;
                 file.write_all(gh_shim_contents().as_bytes())?;
             }
+            if self.options.memory.is_some() {
+                let mut file = paths::open_beneath(
+                    &self.options.state_dir,
+                    &format!("home/bin/{RECALL_COMMAND}"),
+                    &executable,
+                )?;
+                file.write_all(recall_command_contents().as_bytes())?;
+            }
             Ok(())
         });
         if let Err(error) = written {
@@ -2133,6 +2163,21 @@ impl Running {
         );
         self.watcher = Some(watcher);
         self.schedule_delegating();
+    }
+
+    /// Begins answering the recall requests the agent makes, when memory is on.
+    fn start_recalling(&mut self) {
+        let Some(memory) = self.options.memory.clone() else {
+            return;
+        };
+        self.recaller = Some(Recalling::new(
+            std::path::Path::new(&self.options.state_dir),
+            memory,
+            self.options.owner_id.clone(),
+            self.options.project.name.clone(),
+            self.log.clone(),
+        ));
+        self.schedule_recalling();
     }
 
     /// Reports a delegation and keeps a running total of what it bought.
@@ -2327,6 +2372,7 @@ impl Running {
             self.idle_timer.take(),
             self.disk_timer.take(),
             self.delegating_timer.take(),
+            self.recalling_timer.take(),
             self.abort_timer.take(),
         ]
         .into_iter()

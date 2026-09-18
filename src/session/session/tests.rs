@@ -1315,6 +1315,14 @@ async fn what_is_remembered_is_written_into_the_agents_own_prompt() {
                 assert!(written.contains("You are talking to amelia."));
                 assert!(written.contains("prefers jj over git"));
                 assert!(written.contains("the build is deno task check"));
+                // The block tells the agent its recall is here, not in the
+                // notes files, and how to reach the older facts.
+                assert!(written.contains("write-only"));
+                assert!(written.contains("`recall <words>`"));
+
+                // The recall command is on the agent's PATH when memory is on.
+                let recall = std::path::Path::new(&harness.state_dir).join("home/bin/recall");
+                assert!(recall.exists(), "the recall command is written");
             })
         },
     )
