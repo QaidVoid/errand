@@ -65,16 +65,17 @@ fn usage(env: &Vars) -> String {
 
 /// Reads the configuration the way every command does.
 ///
-/// The search sees the environment, but the "looked in" list a missing file
-/// reports does not: the TypeScript entry point never handed the environment
-/// to the reader, whose error path therefore describes a blank one. Kept, so
-/// an operator comparing output between the two daemons sees the same words.
+/// The environment goes to the reader as well as to the search, so the list a
+/// missing file reports names the places actually looked in. Handing it a
+/// blank one, as the TypeScript entry point did, produced a report that
+/// ignored `ERRAND_CONFIG` and showed paths relative to a `HOME` that was
+/// never read: a description of a search that did not happen.
 fn load(env: &Vars) -> Result<Config, ConfigError> {
     let path = config_path(env, file_exists);
     load_config(
         &path,
         |read| std::fs::read_to_string(read),
-        &Vars::new(),
+        env,
         file_exists,
     )
 }

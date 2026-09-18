@@ -244,3 +244,50 @@ fn no_file_beside_the_configuration_means_no_rules_and_is_not_a_refusal() {
 
     assert_eq!(config.agent.rules_path, None);
 }
+
+/// The report has to name the places actually searched. Computing it from a
+/// blank environment describes a search that did not happen: it ignores
+/// ERRAND_CONFIG and shows paths relative to a HOME that was never read.
+#[test]
+fn the_places_it_looked_are_the_places_it_looked() {
+    let env = Environment::from([("HOME".to_owned(), "/home/somebody".to_owned())]);
+
+    let refused = load_config(
+        "/home/somebody/.config/errand/config.json",
+        |_| Err(std::io::Error::new(std::io::ErrorKind::NotFound, "nothing")),
+        &env,
+        |_| false,
+    )
+    .expect_err("a missing file is refused");
+
+    let said = refused.problems.join("\n");
+    assert!(
+        said.contains("/home/somebody/.config/errand/config.json"),
+        "{said}"
+    );
+    assert!(
+        !said.contains(" .config/errand/config.json"),
+        "a path relative to a HOME nobody read: {said}"
+    );
+}
+
+/// A named file is the whole search, and the report says so.
+#[test]
+fn a_named_file_is_reported_as_the_only_place_looked() {
+    let env = Environment::from([("ERRAND_CONFIG".to_owned(), "/named/errand.json".to_owned())]);
+
+    let refused = load_config(
+        "/named/errand.json",
+        |_| Err(std::io::Error::new(std::io::ErrorKind::NotFound, "nothing")),
+        &env,
+        |_| false,
+    )
+    .expect_err("a missing file is refused");
+
+    let said = refused.problems.join("\n");
+    assert!(said.contains("/named/errand.json"), "{said}");
+    assert!(
+        !said.contains("/etc/errand"),
+        "the search was one file: {said}"
+    );
+}
