@@ -415,8 +415,21 @@ impl AgentClient {
     /// The conversation is kept: what was said stays said, and the next turn
     /// is answered by the model named here. That is the point of switching
     /// rather than starting again.
+    /// The id must be bare. The agent matches a model by exactly the id it
+    /// lists, so a `:level` written onto the name finds nothing: the level is
+    /// [`set_thinking_level`](Self::set_thinking_level), sent after this.
     pub fn set_model(&self, provider: &str, model_id: &str) -> bool {
         self.send(&json!({ "type": "set_model", "provider": provider, "modelId": model_id }))
+    }
+
+    /// Sets how hard the model thinks, named without its colon.
+    ///
+    /// Sent after a switch rather than with it: switching already moves the
+    /// level to what the new model can do, and this says what was asked for
+    /// instead. Nothing is sent when nobody asked, leaving the agent's own
+    /// choice for that model alone.
+    pub fn set_thinking_level(&self, level: &str) -> bool {
+        self.send(&json!({ "type": "set_thinking_level", "level": level }))
     }
 
     /// Asks the agent to stop the running turn.

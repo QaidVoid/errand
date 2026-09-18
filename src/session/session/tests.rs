@@ -639,6 +639,7 @@ struct SessionTestCase {
     fetch_attachment: Option<FetchAttachment>,
     open_pull_request: Option<OpenPullRequest>,
     unavailable: Option<Unavailable>,
+    available_models: Vec<AvailableModel>,
     start: bool,
 }
 
@@ -653,6 +654,7 @@ impl Default for SessionTestCase {
             fetch_attachment: None,
             open_pull_request: None,
             unavailable: None,
+            available_models: Vec::new(),
             start: true,
         }
     }
@@ -715,7 +717,7 @@ async fn with_session(
         thread_id: None,
         guild_id: None,
         public_url: None,
-        available_models: Vec::new(),
+        available_models: case.available_models.clone(),
         delegate_base_url: None,
         unavailable: case.unavailable.clone(),
         operator_ids: Vec::new(),
@@ -2621,4 +2623,70 @@ fn a_model_thinks_at_its_own_default_until_somebody_says_otherwise() {
         default_level: None,
     };
     assert_eq!(plain.with_level(""), "glm-5.3");
+}
+
+/// A level is not part of a model's name to the agent: it matches a model by
+/// exactly the id it lists, and answers `Model not found` for anything else.
+/// So a switch sends the bare id and says the level separately, while the
+/// thread and a later resume still see the name with the level on it.
+#[tokio::test]
+async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                    "ajamxhacker": { "credential": "secret" },
+                },
+                "aliases": { "muse": "ajamxhacker/musecringe:max" },
+            },
+        }))),
+        available_models: vec![AvailableModel {
+            provider: "ajamxhacker".to_owned(),
+            id: "musecringe".to_owned(),
+            default_level: None,
+        }],
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().send(&json!({ "type": "agent_settled" }));
+            settle().await;
+            let before = harness.controls().written().len();
+
+            harness
+                .session
+                .handle(message_from("!model muse", OWNER, "m2"))
+                .await;
+            settle().await;
+
+            let said: Vec<String> = harness.controls().written().split_off(before);
+            let switch = said
+                .iter()
+                .find(|line| line.contains("set_model"))
+                .expect("the switch is sent");
+            assert!(
+                switch.contains("\"modelId\":\"musecringe\""),
+                "the agent is given the bare id, got {switch}"
+            );
+            assert!(
+                said.iter()
+                    .any(|line| line.contains("\"set_thinking_level\"")
+                        && line.contains("\"level\":\"max\"")),
+                "the level is said on its own, got {said:?}"
+            );
+
+            assert!(
+                harness
+                    .thread
+                    .replies()
+                    .iter()
+                    .any(|(text, _)| text.contains("musecringe:max")),
+                "the thread is still told the name with its level"
+            );
+        })
+    })
+    .await;
 }

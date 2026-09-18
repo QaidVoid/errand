@@ -369,13 +369,21 @@ impl Running {
                 return;
             }
         };
+        // What is remembered and shown keeps the level, because resuming
+        // passes it to `--model`, which does read one. The switch itself sends
+        // the bare id and the level separately, because the agent's rpc does
+        // not.
         let wanted = chosen.with_level(&asked_level);
+        let level = split_level(&wanted).1;
         let provider = chosen.provider;
 
-        let sent = self
-            .client
-            .as_ref()
-            .is_some_and(|client| client.set_model(&provider, &wanted));
+        let sent = self.client.as_ref().is_some_and(|client| {
+            client.set_model(&provider, &chosen.id)
+                && match level.strip_prefix(':') {
+                    Some(level) => client.set_thinking_level(level),
+                    None => true,
+                }
+        });
         if !sent {
             self.say("the agent is not accepting anything further; this session has ended")
                 .await;
