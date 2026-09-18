@@ -315,5 +315,4 @@ pub enum SessionEvent {
 }
 
 #[cfg(test)]
-#[path = "event/tests.rs"]
 mod tests;

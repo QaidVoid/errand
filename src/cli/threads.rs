@@ -447,5 +447,4 @@ pub async fn run_threads(args: &[String], deps: &Deps) -> i32 {
 }
 
 #[cfg(test)]
-#[path = "threads/tests.rs"]
 mod tests;

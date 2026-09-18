@@ -325,5 +325,4 @@ pub fn wire(entry: &SessionEvent, at: i64, turn: Option<u32>, names: Option<&Nam
 }
 
 #[cfg(test)]
-#[path = "view/tests.rs"]
 mod tests;

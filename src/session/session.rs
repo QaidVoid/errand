@@ -2332,5 +2332,4 @@ mod memory;
 mod pulls;
 
 #[cfg(test)]
-#[path = "session/tests.rs"]
 mod tests;

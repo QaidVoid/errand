@@ -235,5 +235,4 @@ where
 }
 
 #[cfg(test)]
-#[path = "attachments/tests.rs"]
 mod tests;

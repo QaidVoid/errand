@@ -230,7 +230,6 @@ pub async fn acknowledge(ctx: &Context, interaction: &CommandInteraction, text: 
 }
 
 #[cfg(test)]
-#[path = "commands/tests.rs"]
 mod tests;
 
 /// Says who may run a command, exposed for the tests' sake.

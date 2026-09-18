@@ -703,5 +703,4 @@ pub fn write_pages(root: &Path) -> Vec<String> {
 }
 
 #[cfg(test)]
-#[path = "docs/tests.rs"]
 mod tests;

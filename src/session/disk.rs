@@ -140,5 +140,4 @@ pub fn next_check_ms(
 }
 
 #[cfg(test)]
-#[path = "disk/tests.rs"]
 mod tests;

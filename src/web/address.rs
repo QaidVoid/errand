@@ -154,5 +154,4 @@ pub fn check_bind_address(host: &str) -> AddressVerdict {
 }
 
 #[cfg(test)]
-#[path = "address/tests.rs"]
 mod tests;

@@ -746,5 +746,4 @@ pub fn call_api(path: String, init: ApiCall) -> Pin<Box<dyn Future<Output = ApiR
 }
 
 #[cfg(test)]
-#[path = "pr/tests.rs"]
 mod tests;

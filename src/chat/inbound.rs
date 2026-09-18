@@ -259,5 +259,4 @@ pub fn classify(
 }
 
 #[cfg(test)]
-#[path = "inbound/tests.rs"]
 mod tests;

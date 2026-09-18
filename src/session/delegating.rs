@@ -206,5 +206,4 @@ impl Delegating {
 }
 
 #[cfg(test)]
-#[path = "delegating/tests.rs"]
 mod tests;

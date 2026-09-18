@@ -130,5 +130,4 @@ pub fn acquire_lock(state_dir: &str, pid: i32) -> Result<DaemonLock, AlreadyRunn
 }
 
 #[cfg(test)]
-#[path = "lock/tests.rs"]
 mod tests;

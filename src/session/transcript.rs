@@ -181,5 +181,4 @@ impl Recorder for Transcript {
 }
 
 #[cfg(test)]
-#[path = "transcript/tests.rs"]
 mod tests;

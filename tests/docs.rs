@@ -214,3 +214,50 @@ pub fn bare() {}
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].item, "fn bare");
 }
+
+/// A test file that nothing declares is never built, so it never runs and its
+/// drift is never noticed. Two were found that way during the port: they had
+/// not compiled since they were written.
+#[test]
+fn every_test_file_is_declared_by_the_module_it_sits_beside() {
+    let root = repo_root();
+    let mut orphans = Vec::new();
+    let mut pending = vec![root.join("src")];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.file_name().unwrap_or_default() != "tests.rs" {
+                continue;
+            }
+            // `foo/tests.rs` is declared by `foo.rs` or by `foo/mod.rs`.
+            let Some(owner) = path.parent() else { continue };
+            let beside = owner.with_extension("rs");
+            let inside = owner.join("mod.rs");
+            let declared = [beside, inside].iter().any(|candidate| {
+                std::fs::read_to_string(candidate)
+                    .is_ok_and(|text| text.lines().any(|line| line.trim() == "mod tests;"))
+            });
+            if !declared {
+                orphans.push(
+                    path.strip_prefix(&root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+    orphans.sort();
+    assert!(
+        orphans.is_empty(),
+        "test file(s) nothing declares, so nothing builds them:\n  {}",
+        orphans.join("\n  ")
+    );
+}

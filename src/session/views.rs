@@ -542,5 +542,4 @@ impl Attached {
 }
 
 #[cfg(test)]
-#[path = "views/tests.rs"]
 mod tests;

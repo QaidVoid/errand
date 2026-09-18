@@ -145,5 +145,4 @@ impl Redacting {
 }
 
 #[cfg(test)]
-#[path = "redacted/tests.rs"]
 mod tests;

@@ -221,5 +221,4 @@ fn carries_withdrawn(parsed: &Value, said: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "record/tests.rs"]
 mod tests;

@@ -270,5 +270,4 @@ impl Outbox {
 }
 
 #[cfg(test)]
-#[path = "outbox/tests.rs"]
 mod tests;

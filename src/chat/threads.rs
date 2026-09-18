@@ -723,7 +723,6 @@ async fn typing_loop<T: ThreadTransport>(transport: Arc<T>) {
 }
 
 #[cfg(test)]
-#[path = "threads/tests.rs"]
 mod tests;
 
 /// Creates threads on the served channel, one per session.

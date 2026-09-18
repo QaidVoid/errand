@@ -129,7 +129,6 @@ fn attachment_of(file: &Attachment) -> RawAttachment {
 }
 
 #[cfg(test)]
-#[path = "gateway/tests.rs"]
 mod tests;
 
 /// One callback on the daemon, from the gateway.

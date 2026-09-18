@@ -241,5 +241,4 @@ pub fn review_instructions(
 }
 
 #[cfg(test)]
-#[path = "github/tests.rs"]
 mod tests;

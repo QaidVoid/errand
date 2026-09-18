@@ -760,5 +760,4 @@ async fn serve_asset(
 }
 
 #[cfg(test)]
-#[path = "server/tests.rs"]
 mod tests;

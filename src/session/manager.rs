@@ -1060,5 +1060,4 @@ fn daemon_open_pull_request() -> OpenPullRequest {
 }
 
 #[cfg(test)]
-#[path = "manager/tests.rs"]
 mod tests;

@@ -697,5 +697,4 @@ pub async fn probe_sandbox(
 }
 
 #[cfg(test)]
-#[path = "daemon/tests.rs"]
 mod tests;
