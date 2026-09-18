@@ -2814,3 +2814,48 @@ async fn the_thread_is_told_which_model_it_is_talking_to() {
     })
     .await;
 }
+
+/// A reqwest error displays only its outermost layer, so the reason a fetch
+/// failed sits unread in its source chain. `chained` joins the whole chain,
+/// which is the difference between "error sending request" and knowing it was
+/// a reset or a DNS failure.
+#[test]
+fn a_fetch_error_is_reported_with_its_whole_cause_chain() {
+    use std::error::Error;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Layer {
+        message: &'static str,
+        source: Option<Box<Layer>>,
+    }
+    impl fmt::Display for Layer {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.message)
+        }
+    }
+    impl Error for Layer {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.source
+                .as_deref()
+                .map(|inner| inner as &(dyn Error + 'static))
+        }
+    }
+
+    let error = Layer {
+        message: "error sending request for url",
+        source: Some(Box::new(Layer {
+            message: "client error (Connect)",
+            source: Some(Box::new(Layer {
+                message: "dns error: failed to lookup address",
+                source: None,
+            })),
+        })),
+    };
+
+    assert_eq!(
+        super::chained(&error),
+        "error sending request for url: client error (Connect): \
+         dns error: failed to lookup address"
+    );
+}

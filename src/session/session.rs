@@ -2461,20 +2461,76 @@ fn default_fetch_attached(url: String) -> FetchBox {
     })
 }
 
+/// How long one attempt at fetching an attachment may take.
+const FETCH_TIMEOUT_MS: u64 = 30_000;
+
+/// How many times a transport failure is retried before giving up.
+///
+/// The service hands the same signed URL to everyone, and a connect that
+/// failed a moment ago usually works on the next try: a reset, a DNS blip, a
+/// half-open pool connection. One try turned each of those into a file the
+/// agent silently never saw, so a handful of tries with a short pause between
+/// them is the difference between a blip and a lost attachment.
+const FETCH_ATTEMPTS: u32 = 3;
+
 /// Fetches an attachment the way the chat service handed it over.
+///
+/// A transport failure is retried; an HTTP status is not, because a `403` on a
+/// signed URL is an answer, not a blip, and trying again only waits to be told
+/// no twice. When every attempt fails, the last error is reported with its
+/// whole cause chain: reqwest's own `Display` says only "error sending request
+/// for url", which names the symptom and hides the reason.
 async fn default_fetch(url: &str) -> Result<Vec<u8>, String> {
-    let response = reqwest::get(url).await.map_err(|error| error.to_string())?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "the chat service answered {}",
-            response.status().as_u16()
-        ));
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("errand/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_millis(FETCH_TIMEOUT_MS))
+        .build()
+        .map_err(|error| chained(&error))?;
+
+    let mut last = String::new();
+    for attempt in 0..FETCH_ATTEMPTS {
+        match client.get(url).send().await {
+            Ok(response) => {
+                if !response.status().is_success() {
+                    return Err(format!(
+                        "the chat service answered {}",
+                        response.status().as_u16()
+                    ));
+                }
+                return response
+                    .bytes()
+                    .await
+                    .map(|bytes| bytes.to_vec())
+                    .map_err(|error| chained(&error));
+            }
+            Err(error) => {
+                last = chained(&error);
+                if attempt + 1 < FETCH_ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        250 * u64::from(attempt + 1),
+                    ))
+                    .await;
+                }
+            }
+        }
     }
-    response
-        .bytes()
-        .await
-        .map(|bytes| bytes.to_vec())
-        .map_err(|error| error.to_string())
+    Err(format!("{last} (after {FETCH_ATTEMPTS} attempts)"))
+}
+
+/// An error and everything under it, joined, so the reason is not lost.
+///
+/// A `reqwest::Error` displays only the outermost layer; the cause that
+/// actually explains the failure, a DNS error or a connection reset, sits in
+/// its `source` chain.
+fn chained(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
 }
 
 mod answering;
