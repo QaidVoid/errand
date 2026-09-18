@@ -962,6 +962,24 @@ impl Running {
         }
     }
 
+    /// What the thread is told when a session opens.
+    ///
+    /// The model is named here because it is the one thing about a session
+    /// somebody may want to change before the first turn, and the only other
+    /// way to learn it is to ask.
+    fn opening_line(&self) -> String {
+        let project = &self.options.project.name;
+        let doing = if self.options.resume {
+            format!("resumed, continuing in {project}")
+        } else {
+            format!("ready, working in {project}")
+        };
+        match self.running_model() {
+            Some(model) => format!("{doing} on `{model}`"),
+            None => doing,
+        }
+    }
+
     async fn start(&mut self, first: IncomingMessage) -> bool {
         let github = self.options.config.github.clone();
         self.write_git_config(github.as_ref());
@@ -1053,11 +1071,7 @@ impl Running {
         // tells a reader nothing they can act on, and tells anyone else what
         // to probe. The operator sees it at startup, in the log, where it
         // belongs.
-        let opening = if self.options.resume {
-            format!("resumed, continuing in {}", self.options.project.name)
-        } else {
-            format!("ready, working in {}", self.options.project.name)
-        };
+        let opening = self.opening_line();
 
         // Offered once, when the thread is new. A thread shows the
         // conversation and the interface shows the work behind it, and
@@ -1716,7 +1730,16 @@ impl Running {
                 now_ms() - started,
             )
         });
-        let summary = crate::chat::render::turn_summary(&timing, spent.as_ref());
+        // What the agent said answered the turn, rather than what the session
+        // was last asked to run: a switch the agent refused must not be
+        // reported as though it had taken.
+        let answered = self
+            .usage
+            .model
+            .clone()
+            .or_else(|| self.running_model())
+            .unwrap_or_default();
+        let summary = crate::chat::render::turn_summary(Some(&answered), &timing, spent.as_ref());
         let spent = if summary.is_empty() {
             String::new()
         } else {

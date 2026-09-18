@@ -441,9 +441,16 @@ fn a_turn_summary_groups_what_it_answers() {
     };
 
     assert_eq!(
-        turn_summary("2.4s (1.6s to first word)", Some(&usage)),
-        "2.4s (1.6s to first word) | 10.9k tokens, 30% cached, 3.3k/1.0M context (0%), $0.0003"
+        turn_summary(
+            Some("musecringe:max"),
+            "2.4s (1.6s to first word)",
+            Some(&usage)
+        ),
+        "`musecringe:max` | 2.4s (1.6s to first word) | \
+         10.9k tokens, 30% cached, 3.3k/1.0M context (0%), $0.0003"
     );
-    // A turn with no usage yet is still worth timing.
-    assert_eq!(turn_summary("2.4s", None), "2.4s");
+    // A turn with no usage yet is still worth timing, and a session that was
+    // never told which model answered says nothing about one.
+    assert_eq!(turn_summary(None, "2.4s", None), "2.4s");
+    assert_eq!(turn_summary(Some(""), "2.4s", None), "2.4s");
 }

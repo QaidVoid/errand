@@ -2747,3 +2747,61 @@ async fn a_configured_model_naming_a_provider_starts_the_session_there() {
     })
     .await;
 }
+
+/// Which model answered is worth saying where somebody is already reading:
+/// once when the session opens, and on every turn that ends. A thread that
+/// never names one leaves `!model` as the only way to find out.
+#[tokio::test]
+async fn the_thread_is_told_which_model_it_is_talking_to() {
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "model": "musecringe:max",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                },
+            },
+        }))),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            assert!(
+                harness.thread.notices()[0]
+                    .0
+                    .contains("ready, working in demo on `musecringe:max`"),
+                "got {:?}",
+                harness.thread.notices()[0].0
+            );
+
+            // The agent says what actually answered, which is what the done
+            // line reports rather than what the session asked for.
+            let controls = harness.controls();
+            controls.send(&json!({ "type": "agent_start" }));
+            controls.send(&json!({
+                "type": "message_end",
+                "message": { "role": "assistant", "content": [{ "type": "text", "text": "did it" }] },
+            }));
+            controls.send(&json!({
+                "type": "turn_end",
+                "model": "glm-5.3-flash",
+                "usage": { "input": 10, "output": 2, "cacheRead": 0, "cacheWrite": 0,
+                           "totalTokens": 12, "cost": 0.01 },
+            }));
+            controls.send(&json!({ "type": "agent_settled" }));
+            settle().await;
+
+            let done = harness
+                .thread
+                .notices()
+                .into_iter()
+                .find(|(_, level)| *level == NoticeLevel::Done)
+                .expect("the turn ends")
+                .0;
+            assert!(done.contains("`glm-5.3-flash`"), "got {done}");
+        })
+    })
+    .await;
+}

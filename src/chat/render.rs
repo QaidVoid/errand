@@ -267,15 +267,18 @@ pub fn usage_summary(usage: &Usage) -> String {
     parts.join(", ")
 }
 
-/// What a turn took and what it spent, as one line a person can scan.
+/// Which model answered, what the turn took, and what it spent.
 ///
-/// Grouped rather than run together: how long it took, what it cost in
-/// tokens, and what it cost in money are three questions, and a single comma
-/// separated run makes the reader count commas to find the one they wanted.
-/// Time comes first because it is what somebody watching the thread was
-/// waiting on.
-pub fn turn_summary(timing: &str, usage: Option<&Usage>) -> String {
+/// Grouped rather than run together: which model, how long it took, and what
+/// it cost are separate questions, and a single comma separated run makes the
+/// reader count commas to find the one they wanted. The model leads because a
+/// session can be switched from under a reader, and a turn that reads oddly
+/// is worth attributing before it is worth timing.
+pub fn turn_summary(model: Option<&str>, timing: &str, usage: Option<&Usage>) -> String {
     let mut groups = Vec::new();
+    if let Some(model) = model.filter(|model| !model.is_empty()) {
+        groups.push(format!("`{model}`"));
+    }
     if !timing.is_empty() {
         groups.push(timing.to_owned());
     }
