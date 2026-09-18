@@ -357,7 +357,7 @@ impl crate::agent::delegation::Sources for SessionSources {
         &self.project_root
     }
 
-    #[allow(
+    #[expect(
         clippy::unused_async_trait_impl,
         reason = "the trait's signature is async; reading a small file needs no await"
     )]
@@ -619,7 +619,7 @@ impl SessionHandle {
 ///
 /// The flags mirror the original's fields one for one; gathering them into
 /// sub-structures would make the port harder to check against it.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(clippy::struct_excessive_bools)]
 struct Running {
     options: SessionOptions,
     commands: mpsc::Sender<Signal>,
@@ -741,7 +741,7 @@ impl Running {
     ///
     /// One arm per signal keeps the dispatch readable; the bodies they call
     /// are the small methods below.
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     async fn run(mut self, mut commands: mpsc::Receiver<Signal>) {
         while let Some(signal) = commands.recv().await {
             match signal {
@@ -1467,7 +1467,7 @@ impl Running {
         self.apply_withdrawal(message_id).await
     }
 
-    #[allow(
+    #[expect(
         clippy::unused_async,
         clippy::unused_async_trait_impl,
         reason = "keeping the signature async keeps every caller's await uniform"
@@ -1539,7 +1539,7 @@ impl Running {
     ///
     /// The agent reports each turn's own cost. Context is the latest turn's
     /// input rather than a sum, because it is what the model is carrying now.
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "the agent reports token counts as whole numbers in float fields"
@@ -1653,7 +1653,7 @@ impl Running {
             .unwrap_or_else(|| self.options.owner_id.clone());
         let mention = format!("<@{who}> ");
         let spent = if self.usage.turns > 0 {
-            #[allow(
+            #[expect(
                 clippy::cast_precision_loss,
                 reason = "token totals sit far below f64's exact range"
             )]
@@ -2265,7 +2265,7 @@ impl Running {
                 self.say(&format!("`{wanted}` is not a file")).await;
             }
             Ok(meta) if meta.len() > MAX_UPLOAD_BYTES => {
-                #[allow(
+                #[expect(
                     clippy::cast_precision_loss,
                     clippy::cast_possible_truncation,
                     clippy::cast_sign_loss
@@ -2328,7 +2328,7 @@ impl Running {
             self.log.info(
                 "recorded facts from a turn",
                 &fields([
-                    #[allow(clippy::cast_possible_wrap)]
+                    #[expect(clippy::cast_possible_wrap)]
                     ("stored", LogValue::from(stored as i64)),
                     ("about", LogValue::from(about.as_str())),
                 ]),
@@ -2576,7 +2576,7 @@ impl Running {
             .or_else(|| self.options.config.agent.model.clone())
     }
 
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "one arm per command keeps the switch readable, as the original's switch does"
     )]
@@ -2816,7 +2816,7 @@ impl Running {
         self.react(&message.id, ReactionOutcome::Accepted).await;
     }
 
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "token totals sit far below f64's exact range"
     )]
@@ -2943,7 +2943,7 @@ impl Running {
         self.disk_timer = Some(self.timers.set_timeout(SessionTimer::Disk, MIN_CHECK_MS));
     }
 
-    #[allow(
+    #[expect(
         clippy::unused_async,
         clippy::unused_async_trait_impl,
         reason = "keeping the signature async keeps every caller's await uniform"
@@ -2960,7 +2960,7 @@ impl Running {
     /// budget between two checks, and nothing here can stop it mid-write.
     /// What it does guarantee is that a session filling a disk stops rather
     /// than continuing until the disk is full.
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_wrap,
         reason = "byte counts sit far below f64's exact range, and the log fields hold them as milliseconds-epoch-sized integers"

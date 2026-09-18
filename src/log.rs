@@ -58,7 +58,7 @@ impl From<i64> for LogValue {
 }
 
 impl From<usize> for LogValue {
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     fn from(value: usize) -> Self {
         LogValue::Number(value as i64)
     }
@@ -216,7 +216,7 @@ pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| {
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_possible_truncation)]
             let millis = since.as_millis() as i64;
             millis
         })

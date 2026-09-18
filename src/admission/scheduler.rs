@@ -54,7 +54,7 @@ impl Clock for SystemClock {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| {
-                #[allow(clippy::cast_possible_truncation)]
+                #[expect(clippy::cast_possible_truncation)]
                 let millis = since.as_millis() as i64;
                 millis
             })
@@ -63,7 +63,7 @@ impl Clock for SystemClock {
     fn set_timeout(&self, action: Timer, ms: i64) -> u64 {
         let on_fire = Arc::clone(&self.on_fire);
         tokio::spawn(async move {
-            #[allow(clippy::cast_sign_loss)]
+            #[expect(clippy::cast_sign_loss)]
             let ms = ms.max(0) as u64;
             tokio::time::sleep(Duration::from_millis(ms)).await;
             on_fire(action);
@@ -365,7 +365,7 @@ impl Scheduler {
         let expired: Vec<PendingEntry>;
         {
             let mut state = self.state.lock().expect("the scheduler lock");
-            #[allow(clippy::cast_possible_wrap)]
+            #[expect(clippy::cast_possible_wrap)]
             let wait = self.limits.max_queue_wait_ms as i64;
             let cutoff = self.clock.now() - wait;
             let due: Vec<usize> = state
@@ -484,7 +484,7 @@ impl Scheduler {
 
     fn sweep_interval(&self) -> i64 {
         {
-            #[allow(clippy::cast_possible_wrap)]
+            #[expect(clippy::cast_possible_wrap)]
             let interval = (self.limits.max_queue_wait_ms / 4) as i64;
             interval.max(1)
         }

@@ -188,7 +188,6 @@ impl PodmanStop {
             return false;
         }
 
-        #[allow(clippy::cast_sign_loss)]
         let grace_seconds = (self.grace_ms / 1000).max(1);
         let name = self.name.clone();
         let result = (self.run)(

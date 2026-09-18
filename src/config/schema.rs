@@ -251,7 +251,7 @@ pub struct WebConfig {
 }
 
 /// Bounds on how much work exists at once.
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "the names carry the configuration keys they stand for"
 )]
@@ -269,7 +269,7 @@ pub struct LimitsConfig {
 }
 
 /// Deadlines that end or unblock a session.
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "the names carry the configuration keys they stand for"
 )]

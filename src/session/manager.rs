@@ -382,7 +382,7 @@ impl SessionManager {
         }
     }
 
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "one arm per step, in the order the original refuses and reserves"
     )]
@@ -596,7 +596,7 @@ impl SessionManager {
     ///
     /// The resume mirrors the launch step for step, with the stored record in
     /// place of the opening message's choices.
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "the resume is one linear sequence; splitting it would hide the order"
     )]

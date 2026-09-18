@@ -658,7 +658,7 @@ impl BaileySandbox {
     /// The tool runs inside a PID namespace, so killing the launcher removes
     /// every process the agent started. There is nothing to reap afterwards,
     /// and a previous daemon's processes died with it.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         reason = "the signature matches the other backend's, which is the contract"
     )]
@@ -667,7 +667,7 @@ impl BaileySandbox {
     }
 
     /// Removes the named sandboxes, returning how many were removed.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         reason = "the signature matches the other backend's, which is the contract"
     )]

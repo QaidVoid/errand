@@ -232,7 +232,7 @@ pub fn tool_line(tool_name: &str, target: Option<&str>) -> String {
 /// number worth watching: it is what keeps a long session affordable.
 pub fn usage_summary(usage: &Usage) -> String {
     let sent = usage.input + usage.cache_read;
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation)]
     let cached = if sent == 0.0 {
         0
     } else {
@@ -250,7 +250,7 @@ pub fn usage_summary(usage: &Usage) -> String {
         parts.push(if usage.context_window <= 0.0 {
             format!("{} context", tokens(usage.context_tokens))
         } else {
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_possible_truncation)]
             let share = ((usage.context_tokens / usage.context_window) * 100.0).round() as i64;
             format!(
                 "{}/{} context ({share}%)",
@@ -301,7 +301,7 @@ pub fn tokens(count: f64) -> String {
         // One decimal until three digits, then none: 12.3M, but 123M.
         let digits = usize::from(scaled.abs() < 100.0);
 
-        #[allow(
+        #[expect(
             clippy::uninlined_format_args,
             reason = "rounding can push a value into the next magnitude: 999,999 would read as 1000k, which is a magnitude out. Carry it up instead"
         )]
@@ -315,7 +315,7 @@ pub fn tokens(count: f64) -> String {
             let (bigger, bigger_suffix) = MAGNITUDES[index - 1];
             return format!("{:.1}{}", count / bigger, bigger_suffix);
         }
-        #[allow(clippy::uninlined_format_args)]
+        #[expect(clippy::uninlined_format_args)]
         return format!("{scaled:.digits$}{suffix}", digits = digits);
     }
     format!("{count}")
@@ -338,11 +338,7 @@ pub fn when_relative(epoch_ms: i64) -> String {
 /// on an interval rather than per second, so a minute is the smallest unit
 /// that is still true by the time anybody reads it.
 pub fn when_relative_plain(epoch_ms: i64, now: i64) -> String {
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_precision_loss,
-        clippy::cast_sign_loss
-    )]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     let minutes = ((epoch_ms - now) as f64 / 60_000.0).ceil() as i64;
     if minutes <= 0 {
         return "now".to_owned();
@@ -467,7 +463,7 @@ pub fn delegation_line(delegated: &Delegated) -> String {
 
 /// Widens a whole count for the renderer, where a byte count beyond what an
 /// f64 carries is beyond any real file.
-#[allow(clippy::cast_precision_loss)]
+#[expect(clippy::cast_precision_loss)]
 fn widen(count: u64) -> f64 {
     count as f64
 }

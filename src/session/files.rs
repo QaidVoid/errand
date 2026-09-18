@@ -170,7 +170,7 @@ fn read_head(host_path: &str, limit: u64) -> Vec<u8> {
     let Ok(mut file) = std::fs::File::open(host_path) else {
         return Vec::new();
     };
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation)]
     let mut buffer = vec![0_u8; limit.min(usize::MAX as u64) as usize];
     let mut read = 0;
     while read < buffer.len() {

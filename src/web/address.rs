@@ -38,7 +38,7 @@ fn parse_ipv4(host: &str) -> Option<[u8; 4]> {
         if value > 255 {
             return None;
         }
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(clippy::cast_possible_truncation)]
         {
             *slot = value as u8;
         }

@@ -34,7 +34,7 @@ pub mod registry;
 /// The house rules every session is given.
 pub mod rules;
 /// One session: its turns, its commands, and its ending.
-#[allow(
+#[expect(
     clippy::module_inception,
     reason = "the session itself lives inside the session layer, as in the original tree"
 )]

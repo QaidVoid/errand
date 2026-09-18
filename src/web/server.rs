@@ -58,7 +58,7 @@ fn content_type(path: &str) -> &str {
         .map_or("application/octet-stream", |(_, kind)| kind)
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn json(body: Value, status: StatusCode) -> Response {
     (
         status,
@@ -68,12 +68,10 @@ fn json(body: Value, status: StatusCode) -> Response {
         .into_response()
 }
 
-#[allow(clippy::needless_pass_by_value)]
 fn ok(body: Value) -> Response {
     json(body, StatusCode::OK)
 }
 
-#[allow(clippy::needless_pass_by_value)]
 fn refused(body: Value, status: StatusCode) -> Response {
     json(body, status)
 }
@@ -114,7 +112,7 @@ pub struct WebServer {
 }
 
 /// What the interface lists for each session.
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn summary(
     id: &str,
     project: &str,
@@ -333,7 +331,7 @@ impl WebServer {
     ///
     /// Goes through the session so the containment is the one the sandbox
     /// applies, rather than a second implementation that could be looser.
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "the refusal is a ready response, which is the point of the shape"
     )]

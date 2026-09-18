@@ -87,7 +87,7 @@ pub fn parse_connect(request_line: &str) -> Option<ConnectTarget> {
     }
     Some(ConnectTarget {
         host: host.to_owned(),
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         port: port as u16,
     })
 }
@@ -262,7 +262,7 @@ pub fn v6_groups(address: &str) -> Option<Vec<u32>> {
 }
 
 /// Whether an IPv6 address is one the broker must not connect to.
-#[allow(clippy::many_single_char_names)]
+#[expect(clippy::many_single_char_names)]
 pub fn is_private_v6(address: &str) -> bool {
     let Some(groups) = v6_groups(address) else {
         // Not an address this can read, so not one it should dial.

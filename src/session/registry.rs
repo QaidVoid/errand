@@ -157,7 +157,6 @@ impl ThreadRegistry {
             }
         }
         if skipped > 0 {
-            #[allow(clippy::useless_conversion)]
             let skipped = i64::from(skipped);
             self.log.warn(
                 "entries in the thread index were not readable and were dropped",

@@ -109,7 +109,7 @@ impl WebView {
         self.push("entry", &entry);
     }
 
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn state(&self, state: Value) {
         self.push("state", &state);
     }

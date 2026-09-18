@@ -63,7 +63,7 @@ usage: errand threads <command>
 
 fn human_size(bytes: u64) -> String {
     let units = ["B", "K", "M", "G", "T"];
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "a directory that would lose precision past 52 bits is terabytes, and the drift is the same one the TypeScript table showed"
     )]

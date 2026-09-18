@@ -142,7 +142,7 @@ pub type OnCommand = Arc<dyn Fn(TranslatedCommand, Arc<dyn Fn(&str) + Send + Syn
 /// Every callback receives plain shapes; the chat library's types stop here.
 /// The names carry the same `on` prefix the original's handlers do, because
 /// they are read as a table rather than as individual fields.
-#[allow(clippy::struct_field_names)]
+#[expect(clippy::struct_field_names)]
 pub struct GatewayHandlers {
     /// A message was said in the served channel or one of its threads.
     pub on_message: OnMessage,

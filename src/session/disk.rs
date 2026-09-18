@@ -82,7 +82,7 @@ pub fn verdict(used: u64, budget: u64) -> Verdict {
     if used >= budget {
         return Verdict::Over;
     }
-    #[allow(clippy::cast_precision_loss)] // budgets are far below f64's exact range
+    #[expect(clippy::cast_precision_loss)] // budgets are far below f64's exact range
     let close = {
         let used = used as f64;
         let budget = budget as f64;
@@ -114,7 +114,7 @@ pub fn next_check_ms(
     since_last: u64,
     slowest: u64,
 ) -> u64 {
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "byte counts and their ratios live far below f64's exact range; only the ratio matters here, not the last bits of a petabyte-scale count"
     )]
@@ -123,14 +123,14 @@ pub fn next_check_ms(
         return slowest;
     }
 
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     let projected = {
         let per_ms = grew / since_last as f64;
         let remaining = budget.saturating_sub(written) as f64;
         (remaining / per_ms) * 0.5
     };
 
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "float to integer casts saturate, so a projection beyond every u64 lands on the slowest interval rather than wrapping"

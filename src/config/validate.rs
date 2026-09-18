@@ -222,7 +222,7 @@ impl Positive for u16 {
     fn amount(self) -> f64 {
         f64::from(self)
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn from_amount(amount: f64) -> Self {
         amount as u16
     }
@@ -232,29 +232,29 @@ impl Positive for u32 {
     fn amount(self) -> f64 {
         f64::from(self)
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn from_amount(amount: f64) -> Self {
         amount as u32
     }
 }
 
 impl Positive for u64 {
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     fn amount(self) -> f64 {
         self as f64
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn from_amount(amount: f64) -> Self {
         amount as u64
     }
 }
 
 impl Positive for usize {
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss)]
     fn amount(self) -> f64 {
         self as f64
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn from_amount(amount: f64) -> Self {
         amount as usize
     }
@@ -313,7 +313,7 @@ fn ports(
             .as_f64()
             .is_some_and(|p| p.fract() == 0.0 && (1.0..=65_535.0).contains(&p));
         if in_range {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let port = entry.as_f64().unwrap_or_default() as u16;
             found.push(port);
         } else {

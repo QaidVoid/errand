@@ -42,7 +42,7 @@ pub fn parse_size(text: &str) -> Option<u64> {
     if !amount.is_finite() {
         return None;
     }
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,

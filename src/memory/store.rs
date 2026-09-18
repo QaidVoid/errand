@@ -40,7 +40,7 @@ impl Scope {
 }
 
 /// One remembered fact, as the store holds it.
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "`fact` is what the field is called in the store and in every message that carries one"
 )]

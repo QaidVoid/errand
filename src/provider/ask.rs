@@ -20,7 +20,7 @@ pub struct Endpoint {
 }
 
 /// What the model was asked, and what it was shown.
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "`question` is what the field is called wherever an ask travels"
 )]

@@ -71,7 +71,7 @@ pub type Callback<A = ()> = Option<Box<dyn Fn(A) + Send + Sync>>;
 ///
 /// The `on_` prefix is what every handler is called in the protocol's own
 /// vocabulary; renaming the fields would not make them fields.
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "the prefix is the protocol's own vocabulary"
 )]
@@ -769,7 +769,7 @@ impl Shared {
         true
     }
 
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "one table of the protocol's event kinds; splitting it would scatter the dispatch the tests read as a whole"
     )]

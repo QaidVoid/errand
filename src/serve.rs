@@ -248,7 +248,7 @@ pub async fn serve(config: Config, log: Logger) -> i32 {
     // Taken before anything connects or spawns, so a second daemon fails fast
     // instead of racing the first one for every message that arrives.
     let _ = std::fs::create_dir_all(&config.state_dir);
-    #[allow(
+    #[expect(
         clippy::cast_possible_wrap,
         reason = "a pid fits an i32 everywhere the daemon runs, so this cannot wrap"
     )]
@@ -274,7 +274,7 @@ pub async fn serve(config: Config, log: Logger) -> i32 {
 ///
 /// Wiring is linear and each piece names itself, so the length is the
 /// startup order, not a tangle; splitting it would hide that order.
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 async fn run(
     config: &Config,
     log: &Logger,
