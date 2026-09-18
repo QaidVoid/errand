@@ -32,8 +32,12 @@ Write `~/.config/errand/config.json`. The smallest file that starts:
   },
   "agent": {
     "provider": "anthropic",
-    "credentialName": "ANTHROPIC_API_KEY",
-    "credential": "the provider key"
+    "providers": {
+      "anthropic": {
+        "credentialName": "ANTHROPIC_API_KEY",
+        "credential": "the provider key"
+      }
+    }
   },
   "projectRoot": "/srv/errand/projects",
   "stateDir": "/var/lib/errand"

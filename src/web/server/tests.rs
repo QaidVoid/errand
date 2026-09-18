@@ -293,8 +293,9 @@ async fn with_server_where(
         },
         "agent": {
             "provider": "anthropic",
-            "credentialName": "ANTHROPIC_API_KEY",
-            "credential": "secret",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+            },
         },
         "projectRoot": root.path().join("projects").display().to_string(),
         "stateDir": root.path().join("state").display().to_string(),
@@ -877,8 +878,9 @@ async fn an_interface_asked_to_bind_publicly_refuses_to_start() {
         },
         "agent": {
             "provider": "anthropic",
-            "credentialName": "ANTHROPIC_API_KEY",
-            "credential": "secret",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+            },
         },
         "projectRoot": root.path().join("projects").display().to_string(),
         "stateDir": root.path().join("state").display().to_string(),

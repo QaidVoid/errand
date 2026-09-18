@@ -216,7 +216,7 @@ pub fn image_describer<P: Post>(
     let describer = Describer {
         base_url: chosen.base_url.clone()?,
         model: chosen.id.clone(),
-        credential: agent.credential.clone(),
+        credential: agent.credential().to_owned(),
     };
     Some(ImageDescriber {
         model: chosen.id,

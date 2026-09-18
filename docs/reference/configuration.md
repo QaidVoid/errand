@@ -57,10 +57,8 @@ Which model the agent talks to, and the credential it reaches it with.
 | `provider` | `string` | required | Provider id, such as `anthropic` or `zai-coding-cn`. |
 | `model` | `string or undefined` | none | Model pattern or id. Omitted to use the provider's default. |
 | `visionModel` | `string or undefined` | none | Model an image is shown to when the working model cannot see one. |
-| `credentialName` | `string` | required | Environment variable the agent reads, such as `ANTHROPIC_API_KEY`. |
-| `credential` | `string` | required | The credential value. Secret. |
 | `rulesPath` | `string or undefined` | none | File of standing instructions given to every session, or none. |
-| `providers` | `Map<String, serde_json::Value` | none | Providers the operator defines, beyond the ones the agent knows.  Written into the agent's own configuration verbatim, in the shape that configuration uses, because the schema belongs to the agent. |
+| `providers` | `Map<String, serde_json::Value` | none | Every provider, the one a session starts on included.  Each entry carries the credential errand reaches that provider with, optionally the `credentialName` the agent reads it from, and whatever else the agent's own configuration takes: `baseUrl`, `api`, `models`. Written into the agent's configuration verbatim apart from the credential, because that schema belongs to the agent. |
 | `aliases` | `BTreeMap<String, String` | none | Short names for models, so a session is started without spelling one. |
 
 ## agent.delegate

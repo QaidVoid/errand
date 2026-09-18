@@ -223,8 +223,9 @@ pub fn provider_config(
 /// honours.
 #[derive(Debug, Clone)]
 pub struct ProviderBrokering {
-    /// The variable the agent reads the default provider's key from.
-    pub credential_name: String,
+    /// The variable the agent reads the default provider's key from, when
+    /// one is named. A provider the agent already knows needs none.
+    pub credential_name: Option<String>,
     /// The default provider, whose key that variable holds.
     pub provider: String,
     /// What stands in for each provider's credential, by provider name.
@@ -349,7 +350,9 @@ impl BaileySandbox {
             None => env.clone(),
             Some(nonce) => {
                 let mut env = env.clone();
-                env.insert(brokering.credential_name.clone(), nonce.clone());
+                if let Some(name) = &brokering.credential_name {
+                    env.insert(name.clone(), nonce.clone());
+                }
                 env
             }
         }

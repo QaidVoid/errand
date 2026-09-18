@@ -296,8 +296,9 @@ fn config_with(overrides: &serde_json::Value) -> Config {
         },
         "agent": {
             "provider": "anthropic",
-            "credentialName": "ANTHROPIC_API_KEY",
-            "credential": "secret",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+            },
         },
         "projectRoot": "/tmp/errand-projects",
         "stateDir": "/tmp/errand-state",

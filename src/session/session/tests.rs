@@ -557,8 +557,9 @@ fn config_with(overrides: &Value) -> Arc<Config> {
         },
         "agent": {
             "provider": "anthropic",
-            "credentialName": "ANTHROPIC_API_KEY",
-            "credential": "secret",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+            },
         },
         "projectRoot": "/tmp/errand-projects",
         "stateDir": "/tmp/errand-state",

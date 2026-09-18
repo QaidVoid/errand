@@ -138,7 +138,7 @@ type BoxedGateRead =
 fn usage_sources(config: &Config) -> Vec<UsageSource<BoxedGateRead>> {
     let mut sources = Vec::new();
     if meters_usage(&config.agent.provider) {
-        let credential = config.agent.credential.clone();
+        let credential = config.agent.credential().to_owned();
         sources.push(UsageSource {
             provider: config.agent.provider.clone(),
             gate: QuotaGate::new(
@@ -433,7 +433,7 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
             prefix: provider_prefix(&config.agent.provider),
             upstream: provider_base.clone(),
             nonce,
-            credential: config.agent.credential.clone(),
+            credential: config.agent.credential().to_owned(),
         });
     }
     for (name, upstream, credential) in brokerable_providers(&config.agent.providers) {
@@ -447,7 +447,10 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
         });
     }
     let brokering = (!nonces.is_empty()).then(|| ProviderBrokering {
-        credential_name: config.agent.credential_name.clone(),
+        credential_name: config
+            .agent
+            .credential_name_of(&config.agent.provider)
+            .map(str::to_owned),
         provider: config.agent.provider.clone(),
         nonces,
     });

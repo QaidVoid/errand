@@ -17,8 +17,12 @@ fn environment(entries: &[(&str, &str)]) -> Environment {
 fn valid_text() -> String {
     json!({
         "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
-        "agent": { "provider": "anthropic", "credentialName": "ANTHROPIC_API_KEY",
-                   "credential": "k" },
+        "agent": {
+            "provider": "anthropic",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "k" },
+            },
+        },
         "projectRoot": "/tmp/errand/projects",
         "stateDir": "/tmp/errand/state",
     })
@@ -141,7 +145,10 @@ fn comments_and_trailing_commas_are_read_so_a_config_can_be_annotated() {
     let jsonc = r#"{
         // who drives the bot
         "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
-        "agent": { "provider": "anthropic", "credentialName": "K", "credential": "k" },
+        "agent": {
+            "provider": "anthropic",
+            "providers": { "anthropic": { "credentialName": "K", "credential": "k" } },
+        },
         "projectRoot": "/tmp/errand/projects",
         "stateDir": "/tmp/errand/state", // note the trailing comma
     }"#;
@@ -210,8 +217,9 @@ fn a_named_rules_path_wins_over_the_file_beside_the_configuration() {
             "agent".to_owned(),
             json!({
                 "provider": "anthropic",
-                "credentialName": "ANTHROPIC_API_KEY",
-                "credential": "k",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "k" },
+                },
                 "rulesPath": "/somewhere/else/RULES.md",
             }),
         );

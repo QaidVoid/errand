@@ -48,12 +48,14 @@ const KNOWN_AGENT: [&str; 9] = [
     "provider",
     "model",
     "visionModel",
-    "credentialName",
-    "credential",
     "delegate",
     "rulesPath",
     "providers",
     "aliases",
+    // Known so that finding one is answered with where it went, rather than
+    // with the spelling check an actual typo gets.
+    "credential",
+    "credentialName",
 ];
 const KNOWN_DELEGATE: [&str; 4] = ["model", "perTurn", "deadlineMs", "baseUrl"];
 const KNOWN_GITHUB: [&str; 3] = ["token", "userName", "userEmail"];
@@ -574,17 +576,65 @@ fn validate_agent(raw: &Map<String, Value>, problems: &mut Problems) -> AgentCon
     let source = section(raw, "agent");
     reject_unknown(&source, &KNOWN_AGENT, "agent", problems);
 
-    AgentConfig {
+    // Said before the unknown-key refusal would call them typos: they were
+    // real keys until a provider became one thing described in one place.
+    for moved in ["credential", "credentialName"] {
+        if source.contains_key(moved) {
+            let provider = source
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or("<provider>");
+            problems.add(format!(
+                "agent.{moved} has moved into the provider it belongs to. Write it as \
+                 agent.providers.{provider}.{moved} instead"
+            ));
+        }
+    }
+
+    let agent = AgentConfig {
         provider: required_string(&source, "provider", "agent", problems),
         model: optional_string(&source, "model", "agent", problems),
         vision_model: optional_string(&source, "visionModel", "agent", problems),
-        credential_name: required_string(&source, "credentialName", "agent", problems),
-        credential: required_string(&source, "credential", "agent", problems),
         delegate: validate_delegate(&source, problems),
         rules_path: optional_absolute_path(&source, "rulesPath", "agent", problems),
         providers: validate_providers(&source, problems),
         aliases: validate_aliases(&source, problems),
+    };
+
+    // A provider a session starts on that nothing describes is a session that
+    // cannot reach a model, which is worth saying here rather than at launch.
+    if !agent.provider.is_empty() && !agent.providers.contains_key(&agent.provider) {
+        let named = agent
+            .providers
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        problems.add(if named.is_empty() {
+            format!(
+                "agent.provider is {} but agent.providers describes none",
+                agent.provider
+            )
+        } else {
+            format!(
+                "agent.provider is {} but agent.providers describes only {named}",
+                agent.provider
+            )
+        });
     }
+    // Only the one a session starts on has to be reachable. Another may be
+    // described without a credential: the agent is given the description and
+    // no route, which is the operator's business rather than a refusal.
+    if !agent.provider.is_empty()
+        && agent.providers.contains_key(&agent.provider)
+        && agent.credential_of(&agent.provider).is_none()
+    {
+        problems.add(format!(
+            "agent.providers.{}.credential is required: it is the provider a session starts on",
+            agent.provider
+        ));
+    }
+    agent
 }
 
 /// Reads the delegation settings, which the whole section may omit.
@@ -1056,15 +1106,14 @@ pub fn validate_config(parsed: &Value) -> Result<Config, ConfigError> {
 
     // Asked once both sections are read, since the name is the operator's own.
     // Shadowing it would authenticate the agent with whatever was set here.
-    if sandbox
-        .env
-        .as_ref()
-        .is_some_and(|env| env.contains_key(agent.credential_name.as_str()))
-    {
-        problems.add(format!(
-            "sandbox.env must not set {}, which carries the provider credential",
-            agent.credential_name
-        ));
+    if let Some(env) = sandbox.env.as_ref() {
+        for name in agent.credential_names() {
+            if env.contains_key(name) {
+                problems.add(format!(
+                    "sandbox.env must not set {name}, which carries a provider credential"
+                ));
+            }
+        }
     }
 
     if !project_root.is_empty() && !state_dir.is_empty() && nests(&project_root, &state_dir) {

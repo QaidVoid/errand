@@ -113,21 +113,56 @@ pub struct AgentConfig {
     pub model: Option<String>,
     /// Model an image is shown to when the working model cannot see one.
     pub vision_model: Option<String>,
-    /// Environment variable the agent reads, such as `ANTHROPIC_API_KEY`.
-    pub credential_name: String,
-    /// The credential value. Secret.
-    pub credential: String,
     /// A cheaper model to ask about one artefact, or none.
     pub delegate: Option<DelegateConfig>,
     /// File of standing instructions given to every session, or none.
     pub rules_path: Option<String>,
-    /// Providers the operator defines, beyond the ones the agent knows.
+    /// Every provider, the one a session starts on included.
     ///
-    /// Written into the agent's own configuration verbatim, in the shape that
-    /// configuration uses, because the schema belongs to the agent.
+    /// Each entry carries the credential errand reaches that provider with,
+    /// optionally the `credentialName` the agent reads it from, and whatever
+    /// else the agent's own configuration takes: `baseUrl`, `api`, `models`.
+    /// Written into the agent's configuration verbatim apart from the
+    /// credential, because that schema belongs to the agent.
     pub providers: Map<String, serde_json::Value>,
     /// Short names for models, so a session is started without spelling one.
     pub aliases: BTreeMap<String, String>,
+}
+
+impl AgentConfig {
+    /// What one provider is reached with, or nothing when it is not defined.
+    pub fn credential_of(&self, provider: &str) -> Option<&str> {
+        self.providers
+            .get(provider)?
+            .get("credential")?
+            .as_str()
+            .filter(|credential| !credential.trim().is_empty())
+    }
+
+    /// The variable the agent reads a provider's key from, when one is named.
+    ///
+    /// A provider the agent already knows needs no variable: it is reached
+    /// through the base URL and key in the configuration errand writes.
+    pub fn credential_name_of(&self, provider: &str) -> Option<&str> {
+        self.providers
+            .get(provider)?
+            .get("credentialName")?
+            .as_str()
+            .filter(|name| !name.trim().is_empty())
+    }
+
+    /// What the provider a session starts on is reached with.
+    pub fn credential(&self) -> &str {
+        self.credential_of(&self.provider).unwrap_or_default()
+    }
+
+    /// Every variable a provider's key is read from, across all of them.
+    pub fn credential_names(&self) -> Vec<&str> {
+        self.providers
+            .keys()
+            .filter_map(|provider| self.credential_name_of(provider))
+            .collect()
+    }
 }
 
 /// The GitHub identity a session works with, when one is configured.
@@ -325,7 +360,7 @@ pub struct Config {
 pub const ALLOW_EVERY_USER: &str = "*";
 
 /// Field paths whose values must never be logged, posted, or reported.
-pub const SECRET_PATHS: [&str; 3] = ["chat.token", "agent.credential", "github.token"];
+pub const SECRET_PATHS: [&str; 2] = ["chat.token", "github.token"];
 
 /// Values used for any optional field the configuration file omits.
 pub mod defaults {

@@ -19,13 +19,16 @@ fn config() -> Config {
         |_| {
             Ok(json!({
                 "chat": { "token": TOKEN, "channelId": "c", "allowedUserIds": ["u"] },
-                "agent": { "provider": "anthropic",
-                           "credentialName": "ANTHROPIC_API_KEY", "credential": CREDENTIAL,
-                           "providers": {
-                               "zai": { "credential": PROVIDER_KEY,
-                                        "options": { "baseURL": "https://api.example/v1" } },
-                               "muse": { "credential": SECOND_KEY },
-                           } },
+                "agent": {
+                    "provider": "anthropic",
+                    "providers": {
+                        "anthropic": { "credentialName": "ANTHROPIC_API_KEY",
+                                       "credential": CREDENTIAL },
+                        "zai": { "credential": PROVIDER_KEY,
+                                 "options": { "baseURL": "https://api.example/v1" } },
+                        "muse": { "credential": SECOND_KEY },
+                    },
+                },
                 "github": { "token": GITHUB_TOKEN, "userName": "errand-bot",
                             "userEmail": "bot@example.com" },
                 "projectRoot": "/tmp/errand/projects",
@@ -56,7 +59,7 @@ fn the_configuration_can_be_logged_with_every_secret_field_blanked() {
         !shown.contains(SECOND_KEY),
         "a second provider's key: {shown}"
     );
-    assert_eq!(shown.matches(REDACTION).count(), SECRET_PATHS.len() + 2);
+    assert_eq!(shown.matches(REDACTION).count(), SECRET_PATHS.len() + 3);
     // What is not a secret is still there to read.
     assert!(shown.contains("https://api.example/v1"));
 }
@@ -159,10 +162,11 @@ fn a_defined_providers_credential_is_scrubbed_too() {
         "chat": { "token": "chat-token-value", "channelId": "c", "allowedUserIds": ["u"] },
         "agent": {
             "provider": "zai",
-            "credentialName": "K",
-            "credential": "the-default-key",
-            "providers": { "meta": { "baseUrl": "https://api.meta.example/v1",
-                                     "credential": "the-meta-key" } },
+            "providers": {
+                "zai": { "credentialName": "K", "credential": "the-default-key" },
+                "meta": { "baseUrl": "https://api.meta.example/v1",
+                                     "credential": "the-meta-key" },
+            },
         },
         "projectRoot": "/tmp/p",
         "stateDir": "/tmp/s",

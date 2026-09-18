@@ -55,8 +55,12 @@ The configuration file is read from `~/.config/errand/config.json`, then
   },
   "agent": {
     "provider": "anthropic",
-    "credentialName": "ANTHROPIC_API_KEY",
-    "credential": "the provider key"
+    "providers": {
+      "anthropic": {
+        "credentialName": "ANTHROPIC_API_KEY",
+        "credential": "the provider key"
+      }
+    }
   },
   "projectRoot": "/srv/errand/projects",
   "stateDir": "/var/lib/errand"

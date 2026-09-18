@@ -954,10 +954,10 @@ impl Running {
         let system_prompt_path = self.write_memory_block();
 
         let mut env = BTreeMap::new();
-        env.insert(
-            self.options.config.agent.credential_name.clone(),
-            self.options.config.agent.credential.clone(),
-        );
+        let agent = &self.options.config.agent;
+        if let Some(name) = agent.credential_name_of(&agent.provider) {
+            env.insert(name.to_owned(), agent.credential().to_owned());
+        }
         if let Some(github) = &github {
             // The GitHub token crosses too. Reading issues and leaving
             // comments is most of working on somebody's repository, and none
@@ -1972,7 +1972,7 @@ impl Running {
             Endpoint {
                 base_url,
                 model: delegate.model.clone(),
-                credential: self.options.config.agent.credential.clone(),
+                credential: self.options.config.agent.credential().to_owned(),
             },
             scheduler,
             Arc::new(SessionSources {

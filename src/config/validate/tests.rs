@@ -15,8 +15,9 @@ fn valid(overrides: Value) -> Value {
         },
         "agent": {
             "provider": "anthropic",
-            "credentialName": "ANTHROPIC_API_KEY",
-            "credential": "secret-value",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+            },
         },
         "projectRoot": "/tmp/errand/projects",
         "stateDir": "/tmp/errand/state",
@@ -442,7 +443,7 @@ fn a_variable_the_policy_sets_itself_is_refused() {
 fn the_variable_carrying_the_credential_is_refused() {
     assert!(problems_contain(
         &valid(json!({ "sandbox": { "env": { "ANTHROPIC_API_KEY": "not-the-real-one" } } })),
-        "carries the provider credential"
+        "carries a provider credential"
     ));
 }
 
@@ -543,8 +544,9 @@ fn an_absolute_rules_path_is_kept_and_absent_stays_absent() {
     let with_rules = validate_config(&valid(json!({
         "agent": {
             "provider": "anthropic",
-            "credentialName": "ANTHROPIC_API_KEY",
-            "credential": "secret-value",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+            },
             "rulesPath": "/etc/errand/AGENTS.md",
         },
     })))
@@ -566,8 +568,9 @@ fn a_relative_rules_path_is_refused_rather_than_resolved_against_the_daemons_cwd
         &valid(json!({
             "agent": {
                 "provider": "anthropic",
-                "credentialName": "ANTHROPIC_API_KEY",
-                "credential": "secret-value",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+                },
                 "rulesPath": "AGENTS.md",
             },
         })),
@@ -581,8 +584,9 @@ fn a_rules_path_that_is_not_a_path_at_all_is_refused() {
         &valid(json!({
             "agent": {
                 "provider": "anthropic",
-                "credentialName": "ANTHROPIC_API_KEY",
-                "credential": "secret-value",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+                },
                 "rulesPath": "",
             },
         })),
@@ -667,10 +671,10 @@ fn provider_definitions_are_passed_through_and_their_shape_is_checked() {
     let config = validate_config(&valid(json!({
         "agent": {
             "provider": "meta",
-            "credentialName": "META_API_KEY",
-            "credential": "k",
             "providers": {
                 "meta": {
+                    "credentialName": "META_API_KEY",
+                    "credential": "k",
                     "baseUrl": "https://api.meta.example/v1",
                     "api": "openai-completions",
                     "models": [{ "id": "muse-spark-1.3-contributor", "reasoning": true }],
@@ -701,12 +705,71 @@ fn a_provider_definition_that_is_not_an_object_is_refused() {
     let problems = problems_of(&valid(json!({
         "agent": {
             "provider": "p",
-            "credentialName": "K",
-            "credential": "k",
-            "providers": { "meta": "https://api.meta.example/v1" },
+            "providers": {
+                "p": { "credentialName": "K", "credential": "k" },
+                "meta": "https://api.meta.example/v1",
+            },
         },
     })))
     .join("\n");
 
     assert!(problems.contains("agent.providers.meta"));
+}
+
+/// The credential moved into the provider it belongs to. An operator meeting
+/// this has a working configuration in front of them, so the refusal names
+/// the block to write rather than calling the key unknown.
+#[test]
+fn a_credential_at_the_old_place_is_refused_with_the_new_one() {
+    let problems = problems_of(&valid(json!({
+        "agent": {
+            "provider": "anthropic",
+            "credentialName": "ANTHROPIC_API_KEY",
+            "credential": "secret",
+            "providers": { "anthropic": { "credential": "secret" } },
+        },
+    })));
+
+    let said = problems.join("\n");
+    assert!(
+        said.contains("agent.providers.anthropic.credential instead"),
+        "{said}"
+    );
+    assert!(
+        said.contains("agent.providers.anthropic.credentialName instead"),
+        "{said}"
+    );
+}
+
+/// A session starting on a provider nothing describes cannot reach a model,
+/// which is worth saying before a sandbox is built rather than after.
+#[test]
+fn a_starting_provider_nothing_describes_is_refused() {
+    assert!(problems_contain(
+        &valid(json!({
+            "agent": {
+                "provider": "somewhere-else",
+                "providers": { "anthropic": { "credential": "secret" } },
+            },
+        })),
+        "agent.provider is somewhere-else but agent.providers describes only anthropic"
+    ));
+}
+
+/// Every provider's variable is checked, not just the one a session starts on.
+#[test]
+fn a_shadowed_credential_variable_is_refused_for_any_provider() {
+    assert!(problems_contain(
+        &valid(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "a" },
+                    "meta": { "credentialName": "META_API_KEY", "credential": "b" },
+                },
+            },
+            "sandbox": { "env": { "META_API_KEY": "not-the-real-one" } },
+        })),
+        "sandbox.env must not set META_API_KEY"
+    ));
 }

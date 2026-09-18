@@ -59,7 +59,6 @@ pub fn secret_values(config: &Config) -> Vec<String> {
         }
     };
     hold(Some(&config.chat.token));
-    hold(Some(&config.agent.credential));
     if let Some(github) = &config.github {
         hold(Some(&github.token));
     }

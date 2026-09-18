@@ -41,11 +41,15 @@ fn agent() -> AgentConfig {
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
         vision_model: None,
-        credential_name: "ZAI_CODING_CN_API_KEY".to_owned(),
-        credential: "secret-key".to_owned(),
         delegate: None,
         rules_path: None,
-        providers: serde_json::Map::new(),
+        providers: serde_json::Map::from_iter([(
+            "zai-coding-cn".to_owned(),
+            json!({
+                "credentialName": "ZAI_CODING_CN_API_KEY",
+                "credential": "secret-key",
+            }),
+        )]),
         aliases: BTreeMap::new(),
     }
 }

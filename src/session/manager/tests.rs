@@ -393,8 +393,9 @@ fn config_with(root: &std::path::Path, overrides: &serde_json::Value) -> Config 
         },
         "agent": {
             "provider": "anthropic",
-            "credentialName": "ANTHROPIC_API_KEY",
-            "credential": "secret",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+            },
         },
         "projectRoot": root.join("projects").display().to_string(),
         "stateDir": root.join("state").display().to_string(),
@@ -1105,9 +1106,10 @@ async fn a_known_provider_in_front_of_the_model_switches_provider_too() {
         &json!({
             "agent": {
                 "provider": "anthropic",
-                "credentialName": "ANTHROPIC_API_KEY",
-                "credential": "secret",
-                "providers": { "meta": { "baseUrl": "https://api.meta.example/v1" } },
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "meta": { "baseUrl": "https://api.meta.example/v1" },
+                },
             },
         }),
         None,
@@ -1162,9 +1164,10 @@ async fn a_resumed_thread_comes_back_on_the_model_it_was_started_with() {
         &json!({
             "agent": {
                 "provider": "anthropic",
-                "credentialName": "ANTHROPIC_API_KEY",
-                "credential": "secret",
-                "providers": { "meta": { "baseUrl": "https://api.meta.example/v1" } },
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "meta": { "baseUrl": "https://api.meta.example/v1" },
+                },
             },
         }),
         None,
@@ -1235,9 +1238,10 @@ async fn a_short_name_starts_the_session_on_the_model_it_stands_for() {
         &json!({
             "agent": {
                 "provider": "anthropic",
-                "credentialName": "ANTHROPIC_API_KEY",
-                "credential": "secret",
-                "providers": { "meta": { "baseUrl": "https://api.meta.example/v1" } },
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "meta": { "baseUrl": "https://api.meta.example/v1" },
+                },
                 "aliases": { "muse": "meta/muse-spark-1.3-contributor" },
             },
         }),
@@ -1319,9 +1323,10 @@ async fn a_model_switch_inside_a_resumed_thread_is_remembered_too() {
         &json!({
             "agent": {
                 "provider": "anthropic",
-                "credentialName": "ANTHROPIC_API_KEY",
-                "credential": "secret",
-                "providers": { "meta": { "baseUrl": "https://api.meta.example/v1" } },
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "meta": { "baseUrl": "https://api.meta.example/v1" },
+                },
             },
         }),
         None,
@@ -1397,9 +1402,10 @@ async fn a_spent_default_provider_does_not_refuse_another_provider() {
         &json!({
             "agent": {
                 "provider": "anthropic",
-                "credentialName": "ANTHROPIC_API_KEY",
-                "credential": "secret",
-                "providers": { "meta": { "baseUrl": "https://api.meta.example/v1" } },
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "meta": { "baseUrl": "https://api.meta.example/v1" },
+                },
             },
         }),
         Some(Arc::new(|provider: &str| {
@@ -1430,9 +1436,10 @@ async fn a_spent_provider_still_refuses_a_prompt_that_would_use_it() {
         &json!({
             "agent": {
                 "provider": "anthropic",
-                "credentialName": "ANTHROPIC_API_KEY",
-                "credential": "secret",
-                "providers": { "meta": { "baseUrl": "https://api.meta.example/v1" } },
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "meta": { "baseUrl": "https://api.meta.example/v1" },
+                },
             },
         }),
         Some(Arc::new(|provider: &str| {

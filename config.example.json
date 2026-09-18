@@ -13,8 +13,12 @@
   "agent": {
     "provider": "zai-coding-cn",
     "model": "glm-5.3",
-    "credentialName": "ZAI_CODING_CN_API_KEY",
-    "credential": "PUT THE PROVIDER KEY HERE",
+    "providers": {
+      "zai-coding-cn": {
+        "credentialName": "ZAI_CODING_CN_API_KEY",
+        "credential": "PUT THE PROVIDER KEY HERE"
+      }
+    },
     "delegate": {
       "model": "glm-5.3-flash",
       "perTurn": 8,
