@@ -424,7 +424,7 @@ pub(crate) async fn serve_provider_request(
     if internal {
         state.log.warn(
             "a provider is configured at a host-internal address",
-            &crate::log::fields([("provider", route.prefix.as_str().into())]),
+            &fields([("provider", route.prefix.as_str().into())]),
         );
         return (
             axum::http::StatusCode::BAD_GATEWAY,
@@ -439,7 +439,7 @@ pub(crate) async fn serve_provider_request(
         Err(error) => {
             state.log.warn(
                 "the provider could not be reached",
-                &crate::log::fields([("detail", error.to_string().into())]),
+                &fields([("detail", error.to_string().into())]),
             );
             (
                 axum::http::StatusCode::BAD_GATEWAY,
@@ -505,6 +505,7 @@ fn stream_answer(answered: reqwest::Response) -> axum::response::Response {
 /// Where a resolved name comes back as.
 pub(crate) type ResolveFuture = Pin<Box<dyn Future<Output = Vec<String>> + Send>>;
 
+use crate::log::fields;
 use std::future::Future;
 use std::pin::Pin;
 

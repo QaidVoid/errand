@@ -13,6 +13,8 @@ use super::{
 };
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
+use crate::config::schema::Config;
+use crate::config::schema::SandboxBackend;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
 use crate::sandbox::backend::{
@@ -20,8 +22,10 @@ use crate::sandbox::backend::{
 };
 use crate::sandbox::paths;
 use crate::session::event::EndReason;
+use crate::session::event::SessionEvent;
 use crate::session::record::record_dir;
 use crate::session::registry::ThreadRegistry;
+use crate::session::session::Unavailable;
 use crate::session::session::{IncomingMessage, RunningBox, SessionHandle};
 use crate::session::transcript::TRANSCRIPT_FILENAME;
 use crate::session::views::{SessionView, ViewError};
@@ -204,7 +208,7 @@ impl SandboxPool for FakeSandbox {
     {
         Box::pin(async move {
             Ok(CapabilityReport {
-                backend: crate::config::schema::SandboxBackend::Bailey,
+                backend: SandboxBackend::Bailey,
                 gaps: Vec::new(),
                 notes: Vec::new(),
             })
@@ -291,10 +295,10 @@ struct QuietView {
 impl SessionView for QuietView {
     fn observe<'a>(
         &'a self,
-        event: &'a crate::session::event::SessionEvent,
+        event: &'a SessionEvent,
     ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
         Box::pin(async move {
-            if let crate::session::event::SessionEvent::Close { reason } = event {
+            if let SessionEvent::Close { reason } = event {
                 self.closed.lock().unwrap().push(*reason);
             }
             Ok(())
@@ -379,10 +383,7 @@ struct Harness {
     root: tempfile::TempDir,
 }
 
-fn config_with(
-    root: &std::path::Path,
-    overrides: &serde_json::Value,
-) -> crate::config::schema::Config {
+fn config_with(root: &std::path::Path, overrides: &serde_json::Value) -> Config {
     let mut base = json!({
         "chat": {
             "token": "a.token.value",
@@ -411,7 +412,7 @@ async fn with_manager(run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = 
 
 async fn with_manager_options(
     overrides: &serde_json::Value,
-    unavailable: Option<crate::session::session::Unavailable>,
+    unavailable: Option<Unavailable>,
     run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + '_>>,
 ) {
     let root = tempfile::tempdir().expect("a temp directory");
@@ -419,9 +420,7 @@ async fn with_manager_options(
     let sandbox = FakeSandbox::new();
     let threads = FakeThreads::new();
     let registry = Arc::new(Mutex::new(ThreadRegistry::new(
-        crate::session::registry::ThreadRegistry::path_for(
-            root.path().display().to_string().as_str(),
-        ),
+        ThreadRegistry::path_for(root.path().display().to_string().as_str()),
         silent(),
     )));
     let scheduler = Scheduler::start(

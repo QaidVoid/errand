@@ -24,11 +24,16 @@ use serenity::model::id::{ChannelId, MessageId};
 use tokio::sync::watch;
 
 use crate::chat::chars::reaction;
+use crate::chat::diff::FileDiff;
 use crate::chat::diff::render_diff;
 use crate::chat::outbox::{DEFAULT_MAX_BUFFERED, Outbox, TaskError};
 use crate::chat::render::{MESSAGE_LIMIT, delegation_line, split_message};
 use crate::log::{LogValue, Logger, fields};
+use crate::session::event::Delegated;
+use crate::session::event::ToolResult;
 use crate::session::event::{EndReason, ReactionOutcome, SessionEvent};
+use crate::session::views::SessionView;
+use crate::session::views::ViewError;
 
 /// The service expires a typing indicator after about ten seconds.
 pub const TYPING_REFRESH_MS: u64 = 8_000;
@@ -371,7 +376,7 @@ impl<T: ThreadTransport> ChatThread<T> {
             clippy::cast_possible_truncation,
             reason = "diff line counts sit far below any pointer-width limit"
         )]
-        let diff = crate::chat::diff::FileDiff {
+        let diff = FileDiff {
             empty: false,
             added: added as usize,
             removed: removed as usize,
@@ -385,7 +390,7 @@ impl<T: ThreadTransport> ChatThread<T> {
     /// One line, not the answer: the answer goes to the agent, and what a
     /// reader needs is that part of this turn was not the session's own
     /// model.
-    pub fn note_delegation(&self, delegated: &crate::session::event::Delegated) {
+    pub fn note_delegation(&self, delegated: &Delegated) {
         self.post(&delegation_line(delegated));
     }
 
@@ -395,7 +400,7 @@ impl<T: ThreadTransport> ChatThread<T> {
     /// A thread cannot attach output to the call above it, so forwarding is
     /// the only way to show it there, and it stays off by default because it
     /// is a lot of text in a conversation.
-    pub fn note_tool_result(&self, result: &crate::session::event::ToolResult) {
+    pub fn note_tool_result(&self, result: &ToolResult) {
         if !self.forward_tool_output {
             return;
         }
@@ -648,12 +653,11 @@ impl<T: ThreadTransport> ChatThread<T> {
     }
 }
 
-impl<T: ThreadTransport> crate::session::views::SessionView for ChatThread<T> {
+impl<T: ThreadTransport> SessionView for ChatThread<T> {
     fn observe<'a>(
         &'a self,
         event: &'a SessionEvent,
-    ) -> Pin<Box<dyn Future<Output = Result<(), crate::session::views::ViewError>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
         Box::pin(async move {
             match event {
                 // A thread has one voice, so a notice is posted like

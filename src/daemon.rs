@@ -12,13 +12,24 @@ use std::sync::{Arc, Mutex};
 use crate::admission::scheduler::{Scheduler, SystemClock};
 use crate::chat::inbound::{InboundDecision, RawMessage};
 use crate::config::redact::redact_config;
+use crate::config::schema::defaults::IMAGE;
 use crate::config::schema::{ALLOW_EVERY_USER, ChatConfig, Config, SandboxBackend};
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::{MemoryStore, Scope};
+use crate::sandbox::Backend;
 use crate::sandbox::backend::{CapabilityReport, SandboxUnavailableError};
+use crate::sandbox::bailey::BaileyOptions;
+use crate::sandbox::bailey::BaileySandbox;
+use crate::sandbox::bailey::ProviderBrokering;
+use crate::sandbox::bailey::run_bailey_arc;
+use crate::sandbox::podman::PodmanSandbox;
+use crate::sandbox::podman::run_podman_arc;
+use crate::session::attachments::RawAttachment;
 use crate::session::commands::{
     answer_without_session, first_word, is_addressed_to_bot, is_aside, parse_user_id,
 };
+use crate::session::event::EndReason;
+use crate::session::manager::SandboxPool;
 use crate::session::manager::{
     ManagerOptions, SessionManager, StartOutcome, ThreadFactory, Unavailable,
 };
@@ -58,29 +69,25 @@ pub fn create_sandbox(
     config: &Config,
     log: Logger,
     egress_proxy_port: Option<u16>,
-    brokering: Option<crate::sandbox::bailey::ProviderBrokering>,
-) -> crate::sandbox::Backend {
+    brokering: Option<ProviderBrokering>,
+) -> Backend {
     match config.sandbox.backend {
-        SandboxBackend::Podman => {
-            crate::sandbox::Backend::Podman(Arc::new(crate::sandbox::podman::PodmanSandbox::new(
-                config.sandbox.clone(),
-                log,
-                crate::sandbox::podman::run_podman_arc(),
-            )))
-        }
-        SandboxBackend::Bailey => {
-            crate::sandbox::Backend::Bailey(Arc::new(crate::sandbox::bailey::BaileySandbox::new(
-                config.sandbox.clone(),
-                log,
-                config.state_dir.clone(),
-                crate::sandbox::bailey::run_bailey_arc(),
-                crate::sandbox::bailey::BaileyOptions {
-                    egress_proxy_port,
-                    brokering,
-                    ..Default::default()
-                },
-            )))
-        }
+        SandboxBackend::Podman => Backend::Podman(Arc::new(PodmanSandbox::new(
+            config.sandbox.clone(),
+            log,
+            run_podman_arc(),
+        ))),
+        SandboxBackend::Bailey => Backend::Bailey(Arc::new(BaileySandbox::new(
+            config.sandbox.clone(),
+            log,
+            config.state_dir.clone(),
+            run_bailey_arc(),
+            BaileyOptions {
+                egress_proxy_port,
+                brokering,
+                ..Default::default()
+            },
+        ))),
     }
 }
 
@@ -90,10 +97,10 @@ pub fn create_sandbox(
 /// effective. Only a value that differs from the default counts, since that
 /// is the only evidence available that somebody chose it deliberately.
 pub fn inert_settings(config: &Config) -> Vec<String> {
-    if config.sandbox.backend != crate::config::schema::SandboxBackend::Bailey {
+    if config.sandbox.backend != SandboxBackend::Bailey {
         return Vec::new();
     }
-    if config.sandbox.image == crate::config::schema::defaults::IMAGE {
+    if config.sandbox.image == IMAGE {
         return Vec::new();
     }
     vec!["sandbox.image is set but only the podman backend uses it".to_owned()]
@@ -189,7 +196,7 @@ pub struct DaemonOptions {
     /// The configuration every session is started from.
     pub config: Config,
     /// The backend sessions are confined by.
-    pub sandbox: Arc<dyn crate::session::manager::SandboxPool>,
+    pub sandbox: Arc<dyn SandboxPool>,
     /// What makes a thread for a new session.
     pub threads: Arc<dyn ThreadFactory>,
     /// Where the daemon says what it is doing.
@@ -502,7 +509,7 @@ impl Daemon {
             attachments: raw
                 .attachments
                 .into_iter()
-                .map(|file| crate::session::attachments::RawAttachment {
+                .map(|file| RawAttachment {
                     id: file.id,
                     name: file.name,
                     url: file.url,
@@ -584,7 +591,7 @@ impl Daemon {
         }
 
         let outcome = self.sessions.start(message.clone()).await;
-        if let crate::session::manager::StartOutcome::Refused { reason } = outcome {
+        if let StartOutcome::Refused { reason } = outcome {
             (self.options.reply_in_channel)(message, reason).await;
         }
     }
@@ -647,7 +654,7 @@ impl Daemon {
     /// Ends the session bound to a thread that was closed from outside.
     pub async fn thread_closed(&self, thread_id: &str) {
         self.sessions
-            .end_thread(thread_id, crate::session::event::EndReason::ThreadArchived)
+            .end_thread(thread_id, EndReason::ThreadArchived)
             .await;
     }
 
@@ -677,7 +684,7 @@ impl Daemon {
 /// an unenforceable guarantee should fail immediately, not after a login
 /// round trip.
 pub async fn probe_sandbox(
-    sandbox: &dyn crate::session::manager::SandboxPool,
+    sandbox: &dyn SandboxPool,
     config: &Config,
     log: &Logger,
 ) -> Result<CapabilityReport, StartError> {

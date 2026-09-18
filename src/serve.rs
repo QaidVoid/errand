@@ -52,12 +52,8 @@ const READY_TIMEOUT_MS: u64 = 30_000;
 /// The one real fetch of a provider endpoint, over HTTPS.
 struct HttpFetch;
 
-impl crate::provider::usage::Fetch for HttpFetch {
-    async fn fetch(
-        &self,
-        url: String,
-        request: crate::provider::usage::HttpRequest,
-    ) -> Result<crate::provider::usage::HttpResponse, FetchError> {
+impl Fetch for HttpFetch {
+    async fn fetch(&self, url: String, request: HttpRequest) -> Result<HttpResponse, FetchError> {
         let client = reqwest::Client::new();
         let mut sent = client.get(&url);
         for (name, value) in &request.headers {
@@ -70,7 +66,7 @@ impl crate::provider::usage::Fetch for HttpFetch {
             .map_err(|error| FetchError(error.to_string()))?;
         let status = answer.status().as_u16();
         let body = answer.json::<serde_json::Value>().await.ok();
-        Ok(crate::provider::usage::HttpResponse { status, body })
+        Ok(HttpResponse { status, body })
     }
 }
 
@@ -113,11 +109,8 @@ fn when(at: Option<i64>, render: fn(i64) -> String) -> Option<String> {
 /// the bot's name. A defined provider is asked only where it says it serves a
 /// usage endpoint: a base URL that does not is simply not asked, rather than
 /// probed.
-type BoxedGateRead = Box<
-    dyn Fn() -> Pin<Box<dyn Future<Output = Option<crate::provider::usage::Quota>> + Send>>
-        + Send
-        + Sync,
->;
+type BoxedGateRead =
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Option<Quota>> + Send>> + Send + Sync>;
 
 fn usage_sources(config: &Config) -> Vec<UsageSource<BoxedGateRead>> {
     let mut sources = Vec::new();
@@ -131,12 +124,9 @@ fn usage_sources(config: &Config) -> Vec<UsageSource<BoxedGateRead>> {
                     Box::pin(async move {
                         let fetch = HttpFetch;
                         fetch_quota(&credential, &fetch, 10_000).await
-                    })
-                        as Pin<
-                            Box<dyn Future<Output = Option<crate::provider::usage::Quota>> + Send>,
-                        >
+                    }) as Pin<Box<dyn Future<Output = Option<Quota>> + Send>>
                 }) as BoxedGateRead,
-                crate::log::now_ms,
+                now_ms,
             ),
         });
     }
@@ -165,12 +155,9 @@ fn usage_sources(config: &Config) -> Vec<UsageSource<BoxedGateRead>> {
                     Box::pin(async move {
                         let fetch = HttpFetch;
                         fetch_gateway_usage(&base_url, &credential, &fetch, 10_000).await
-                    })
-                        as Pin<
-                            Box<dyn Future<Output = Option<crate::provider::usage::Quota>> + Send>,
-                        >
+                    }) as Pin<Box<dyn Future<Output = Option<Quota>> + Send>>
                 }) as BoxedGateRead,
-                crate::log::now_ms,
+                now_ms,
             ),
         });
     }
@@ -279,7 +266,7 @@ async fn run(
     config: &Config,
     log: &Logger,
     secrets: &[String],
-    lock: &mut crate::lock::DaemonLock,
+    lock: &mut DaemonLock,
     served_channel: &mut ChannelId,
 ) -> i32 {
     // Named but unreadable is a refusal, not a warning. An operator who
@@ -311,7 +298,7 @@ async fn run(
     let mut broker: Option<Broker> = None;
 
     let mut egress_proxy_port: Option<u16> = None;
-    let mut brokering: Option<crate::sandbox::bailey::ProviderBrokering> = None;
+    let mut brokering: Option<ProviderBrokering> = None;
     if config.sandbox.egress.mode == EgressMode::Proxy {
         let env = host_environment();
         let store = agent_directory(&env);
@@ -360,7 +347,7 @@ async fn run(
             });
         }
         if !nonces.is_empty() {
-            brokering = Some(crate::sandbox::bailey::ProviderBrokering {
+            brokering = Some(ProviderBrokering {
                 credential_name: config.agent.credential_name.clone(),
                 provider: config.agent.provider.clone(),
                 nonces,
@@ -424,8 +411,8 @@ async fn run(
         Err(error) => {
             log.error(&error.to_string(), &fields([]));
             return match error {
-                crate::daemon::StartError::Unavailable(_) => 2,
-                crate::daemon::StartError::EnforcementGap(_) => 3,
+                StartError::Unavailable(_) => 2,
+                StartError::EnforcementGap(_) => 3,
             };
         }
     };
@@ -461,14 +448,13 @@ async fn run(
             on_command: {
                 let holder = Arc::clone(&sessions_holder);
                 Arc::new(
-                    move |command: crate::chat::commands::TranslatedCommand,
-                          ack: Arc<dyn Fn(&str) + Send + Sync>| {
+                    move |command: TranslatedCommand, ack: Arc<dyn Fn(&str) + Send + Sync>| {
                         let holder = Arc::clone(&holder);
                         tokio::spawn(async move {
                             let answer = match guard_sessions(&holder).await {
                                 Some(daemon) => {
                                     daemon
-                                        .run_command(&crate::daemon::SlashCommand {
+                                        .run_command(&SlashCommand {
                                             thread_id: command.thread_id.clone(),
                                             user_id: command.user_id.clone(),
                                             user_name: command.user_name.clone(),
@@ -549,7 +535,7 @@ async fn run(
     {
         Ok(client) => client,
         Err(error) => {
-            if crate::chat::gateway::Gateway::login_is_permanent(&error) {
+            if Gateway::login_is_permanent(&error) {
                 log.error(
                     "the chat service rejected the bot token or the intents; set chat.token and enable the Message Content intent",
                     &fields([]),
@@ -612,10 +598,9 @@ async fn run(
                     for source in sources.iter_mut() {
                         let quota = source.gate.current().await;
                         windows.push(quota.map(|quota| {
-                            let relative = quota
-                                .resets_at
-                                .map(|at| when_relative_plain(at, crate::log::now_ms()));
-                            crate::provider::usage::Window {
+                            let relative =
+                                quota.resets_at.map(|at| when_relative_plain(at, now_ms()));
+                            Window {
                                 provider: source.provider.clone(),
                                 quota,
                                 relative,
@@ -630,10 +615,7 @@ async fn run(
                 } else {
                     status_gateway.set_status(None);
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(
-                    crate::provider::usage::QUOTA_TTL_MS as u64,
-                ))
-                .await;
+                tokio::time::sleep(std::time::Duration::from_millis(QUOTA_TTL_MS as u64)).await;
             }
         });
     }
@@ -665,11 +647,7 @@ async fn run(
         );
     }
 
-    let describer = image_describer(
-        &config.agent,
-        store.as_deref(),
-        crate::provider::vision::HttpPost,
-    );
+    let describer = image_describer(&config.agent, store.as_deref(), HttpPost);
     if let Some(describer) = &describer {
         log.info(
             "images will be described for this model",
@@ -689,39 +667,38 @@ async fn run(
     let web_operates = config.web.as_ref().is_some_and(|web| !web.observer);
     let mut operator_ids = config.chat.operator_user_ids.clone();
     if web_operates {
-        operator_ids.push(crate::web::server::WEB_ACTOR.to_owned());
+        operator_ids.push(WEB_ACTOR.to_owned());
     }
 
-    let unavailable: Option<crate::session::session::Unavailable> =
-        if sources.lock().await.is_empty() {
-            None
-        } else {
+    let unavailable: Option<Unavailable> = if sources.lock().await.is_empty() {
+        None
+    } else {
+        let sources = Arc::clone(&sources);
+        // Wrapping gates in Arc needs interior mutability per gate; the gates
+        // are per provider and their caching is internal, so they are driven
+        // through a mutex.
+        Some(Arc::new(move |provider: &str| {
             let sources = Arc::clone(&sources);
-            // Wrapping gates in Arc needs interior mutability per gate; the gates
-            // are per provider and their caching is internal, so they are driven
-            // through a mutex.
-            Some(Arc::new(move |provider: &str| {
-                let sources = Arc::clone(&sources);
-                let provider = provider.to_owned();
-                Box::pin(async move {
-                    let mut sources = sources.lock().await;
-                    let source = sources
-                        .iter_mut()
-                        .find(|candidate| candidate.provider == provider)?;
-                    let window = source.gate.current().await;
-                    window.filter(is_spent).map(|window| {
-                        spent_message(&provider, when(window.resets_at, when_relative).as_deref())
-                    })
+            let provider = provider.to_owned();
+            Box::pin(async move {
+                let mut sources = sources.lock().await;
+                let source = sources
+                    .iter_mut()
+                    .find(|candidate| candidate.provider == provider)?;
+                let window = source.gate.current().await;
+                window.filter(is_spent).map(|window| {
+                    spent_message(&provider, when(window.resets_at, when_relative).as_deref())
                 })
-            }))
-        };
+            })
+        }))
+    };
 
     let daemon = Arc::new(Daemon::new(DaemonOptions {
         config: config.clone(),
         sandbox,
         threads: {
             struct FactoryAdapter(Arc<ChatThreadFactory>);
-            impl crate::session::manager::ThreadFactory for FactoryAdapter {
+            impl ThreadFactory for FactoryAdapter {
                 fn create(
                     self: Arc<Self>,
                     message: IncomingMessage,
@@ -863,14 +840,14 @@ async fn run(
 
     // Started after the daemon is accepting, so the interface never lists a
     // session the daemon is not yet ready to act on.
-    let mut web: Option<Arc<crate::web::server::WebServer>> = None;
+    let mut web: Option<Arc<WebServer>> = None;
     if let Some(web_config) = config.web.clone() {
         let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("dist/web");
         // Resolved lazily per name, so a mention reads as the person it names.
         let memory_for_names = Arc::clone(&memory);
-        let names: crate::web::view::NameLookup =
+        let names: NameLookup =
             Arc::new(move |id| memory_for_names.display_name(id).ok().flatten());
-        let web_server = crate::web::server::WebServer::new(
+        let web_server = WebServer::new(
             web_config,
             daemon.sessions(),
             assets,
@@ -925,6 +902,24 @@ async fn run(
     0
 }
 
+use crate::chat::commands::TranslatedCommand;
+use crate::chat::threads::plain;
+use crate::daemon::SlashCommand;
+use crate::daemon::StartError;
+use crate::lock::DaemonLock;
+use crate::log::now_ms;
+use crate::provider::usage::Fetch;
+use crate::provider::usage::HttpRequest;
+use crate::provider::usage::HttpResponse;
+use crate::provider::usage::QUOTA_TTL_MS;
+use crate::provider::usage::Quota;
+use crate::provider::usage::Window;
+use crate::provider::vision::HttpPost;
+use crate::sandbox::bailey::ProviderBrokering;
+use crate::session::session::Unavailable;
+use crate::web::server::WEB_ACTOR;
+use crate::web::server::WebServer;
+use crate::web::view::NameLookup;
 use serenity::client::Context;
 use serenity::client::EventHandler as SerenityEventHandler;
 use serenity::model::application::Interaction;
@@ -1035,7 +1030,7 @@ async fn reply_in_channel(
         // matters more than what it is attached to.
         for chunk in chunks {
             let _ = channel_id
-                .send_message(http, crate::chat::threads::plain(&chunk))
+                .send_message(http, plain(&chunk))
                 .await
                 .map_err(said);
         }
@@ -1043,7 +1038,7 @@ async fn reply_in_channel(
     };
 
     if chunks.len() == 1 {
-        let reply = crate::chat::threads::plain(&chunks[0]).reference_message(&starter);
+        let reply = plain(&chunks[0]).reference_message(&starter);
         let _ = channel_id.send_message(http, reply).await.map_err(said);
         return;
     }
@@ -1060,10 +1055,7 @@ async fn reply_in_channel(
         .map_err(said);
     let Ok(thread) = thread else { return };
     for chunk in chunks {
-        let _ = thread
-            .send_message(http, crate::chat::threads::plain(&chunk))
-            .await
-            .map_err(said);
+        let _ = thread.send_message(http, plain(&chunk)).await.map_err(said);
     }
 }
 

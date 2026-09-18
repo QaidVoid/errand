@@ -23,6 +23,7 @@ use crate::agent::protocol::{
     usage_of,
 };
 use crate::log::Logger;
+use crate::log::fields;
 
 /// Where the agent is in its life.
 ///
@@ -573,7 +574,7 @@ impl AgentClient {
         if lifecycle == AgentState::Ended {
             self.inner.log.warn(
                 "dropped a command for an agent that has ended",
-                &crate::log::fields([(
+                &fields([(
                     "command",
                     command
                         .get("type")
@@ -594,7 +595,7 @@ impl AgentClient {
                 self.inner.state.lock().expect("the client lock").lifecycle = AgentState::Ended;
                 self.inner.log.warn(
                     "writing to the agent failed",
-                    &crate::log::fields([("detail", error.to_string().into())]),
+                    &fields([("detail", error.to_string().into())]),
                 );
                 false
             }
@@ -643,10 +644,8 @@ impl Shared {
             if text.is_empty() {
                 continue;
             }
-            self.log.warn(
-                "agent stderr",
-                &crate::log::fields([("detail", text.clone().into())]),
-            );
+            self.log
+                .warn("agent stderr", &fields([("detail", text.clone().into())]));
             let mut state = self.state.lock().expect("the client lock");
             state.last_words = format!("{}\n{text}", state.last_words);
             let kept_from = state
@@ -672,7 +671,7 @@ impl Shared {
             Err(error) => {
                 self.log.warn(
                     "agent sent an unparseable line",
-                    &crate::log::fields([
+                    &fields([
                         ("detail", error.to_string().into()),
                         ("length", line.len().into()),
                     ]),

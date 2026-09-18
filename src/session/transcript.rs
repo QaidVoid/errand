@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::log::fields;
 use crate::log::{Logger, now_ms};
 use crate::session::event::SessionEvent;
 use crate::session::views::Recorder;
@@ -102,7 +103,7 @@ impl Transcript {
         {
             log.warn(
                 "a transcript entry could not be written",
-                &crate::log::fields([("detail", error.to_string().into())]),
+                &fields([("detail", error.to_string().into())]),
             );
         }
     }

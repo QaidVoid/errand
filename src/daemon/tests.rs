@@ -14,17 +14,23 @@ use super::{
 };
 use crate::agent::client::AgentProcess;
 use crate::chat::inbound::{InboundDecision, RawMessage};
+use crate::config::schema::Config;
 use crate::config::schema::SandboxBackend;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, LogLevel, Logger};
 use crate::memory::store::{MemoryStore, Scope};
+use crate::sandbox::Backend;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
 use crate::sandbox::paths;
+use crate::session::event::EndReason;
+use crate::session::event::SessionEvent;
 use crate::session::manager::{CreatedThread, FoundView, MadeThread, SandboxPool, ThreadFactory};
 use crate::session::session::IncomingMessage;
+use crate::session::session::RunningBox;
 use crate::session::views::SessionView;
+use crate::session::views::ViewError;
 
 const OWNER: &str = "100000000000000001";
 
@@ -180,18 +186,13 @@ impl SandboxPool for FakeSandbox {
     fn launch(
         self: Arc<Self>,
         launch: SandboxLaunch,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<crate::session::session::RunningBox, SandboxLaunchError>>
-                + Send,
-        >,
-    > {
+    ) -> Pin<Box<dyn Future<Output = Result<RunningBox, SandboxLaunchError>> + Send>> {
         Box::pin(async move {
             let (agent, controls) = QuietAgent::new();
             self.agents.lock().unwrap().push(controls.clone());
             self.launched.lock().unwrap().push(launch.clone());
             let project_path = launch.project_path.clone();
-            Ok(crate::session::session::RunningBox {
+            Ok(RunningBox {
                 process: agent,
                 to_host_path: Arc::new(move |path: &str| {
                     paths::host_path_under("/workspace", &project_path, path)
@@ -219,7 +220,7 @@ impl SandboxPool for FakeSandbox {
 /// A thread factory that answers silently, recording what it made.
 struct FakeThreads {
     created: Mutex<Vec<String>>,
-    closed: Arc<Mutex<Vec<crate::session::event::EndReason>>>,
+    closed: Arc<Mutex<Vec<EndReason>>>,
     next: Mutex<u32>,
 }
 
@@ -269,17 +270,16 @@ impl FakeThreads {
 
 /// A view that records only that its session ended.
 struct QuietView {
-    closed: Arc<Mutex<Vec<crate::session::event::EndReason>>>,
+    closed: Arc<Mutex<Vec<EndReason>>>,
 }
 
 impl SessionView for QuietView {
     fn observe<'a>(
         &'a self,
-        event: &'a crate::session::event::SessionEvent,
-    ) -> Pin<Box<dyn Future<Output = Result<(), crate::session::views::ViewError>> + Send + 'a>>
-    {
+        event: &'a SessionEvent,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
         Box::pin(async move {
-            if let crate::session::event::SessionEvent::Close { reason } = event {
+            if let SessionEvent::Close { reason } = event {
                 self.closed.lock().unwrap().push(*reason);
             }
             Ok(())
@@ -287,7 +287,7 @@ impl SessionView for QuietView {
     }
 }
 
-fn config_with(overrides: &serde_json::Value) -> crate::config::schema::Config {
+fn config_with(overrides: &serde_json::Value) -> Config {
     let mut base = json!({
         "chat": {
             "token": "a.token.value",
@@ -628,7 +628,7 @@ async fn a_message_in_a_sleeping_thread_wakes_the_session() {
             harness
                 .daemon
                 .sessions()
-                .end_thread("thread-1", crate::session::event::EndReason::Idle)
+                .end_thread("thread-1", EndReason::Idle)
                 .await;
             assert_eq!(harness.daemon.sessions().sessions().len(), 0);
 
@@ -659,7 +659,7 @@ async fn a_message_in_a_thread_that_is_over_says_where_to_start_a_new_one() {
             harness
                 .daemon
                 .sessions()
-                .end_thread("thread-1", crate::session::event::EndReason::Stopped)
+                .end_thread("thread-1", EndReason::Stopped)
                 .await;
 
             harness
@@ -902,7 +902,7 @@ async fn a_slash_command_in_a_sleeping_thread_says_to_wake_it_first() {
             harness
                 .daemon
                 .sessions()
-                .end_thread("thread-1", crate::session::event::EndReason::Idle)
+                .end_thread("thread-1", EndReason::Idle)
                 .await;
 
             let answer = harness
@@ -936,7 +936,7 @@ async fn shutting_down_ends_every_session_and_stops_accepting() {
             assert!(harness.daemon.sessions().sessions().is_empty());
             assert_eq!(
                 *harness.threads.closed.lock().unwrap(),
-                [crate::session::event::EndReason::Shutdown]
+                [EndReason::Shutdown]
             );
         })
     })
@@ -1335,7 +1335,7 @@ fn create_sandbox_names_the_configured_backend() {
         "stateDir": root.path().join("state").display().to_string(),
     }));
     let sandbox = create_sandbox(&config, silent(), None, None);
-    assert!(matches!(sandbox, crate::sandbox::Backend::Bailey(_)));
+    assert!(matches!(sandbox, Backend::Bailey(_)));
 
     let config = config_with(&json!({
         "projectRoot": root.path().join("projects").display().to_string(),
@@ -1343,5 +1343,5 @@ fn create_sandbox_names_the_configured_backend() {
         "sandbox": { "backend": "podman" },
     }));
     let sandbox = create_sandbox(&config, silent(), None, None);
-    assert!(matches!(sandbox, crate::sandbox::Backend::Podman(_)));
+    assert!(matches!(sandbox, Backend::Podman(_)));
 }

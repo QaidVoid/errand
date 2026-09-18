@@ -4,6 +4,7 @@ use super::{
     characters_page, commands_page, config_schema, pages, read_schema, required_fields,
     stale_pages, write_pages,
 };
+use crate::chat::chars::all_chars;
 use crate::session::commands::COMMANDS;
 
 /// The real schema, as the generator reads it.
@@ -53,7 +54,7 @@ fn every_command_appears_in_the_command_page() {
 fn every_character_appears_in_the_characters_page() {
     let page = characters_page();
 
-    for character in crate::chat::chars::all_chars() {
+    for character in all_chars() {
         assert!(
             page.contains(character.name),
             "{} is missing",

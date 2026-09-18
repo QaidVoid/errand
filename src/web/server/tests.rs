@@ -10,6 +10,8 @@ use tokio::sync::watch;
 use super::WebServer;
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
+use crate::config::schema::SandboxBackend;
+use crate::config::schema::WebConfig;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
 use crate::sandbox::backend::{
@@ -17,6 +19,7 @@ use crate::sandbox::backend::{
 };
 use crate::sandbox::paths;
 use crate::session::event::EndReason;
+use crate::session::event::SessionEvent;
 use crate::session::manager::{
     CreatedThread, FoundView, MadeThread, ManagerOptions, SandboxPool, SessionManager,
     ThreadFactory,
@@ -142,7 +145,7 @@ impl SandboxPool for FakeSandbox {
     {
         Box::pin(async move {
             Ok(CapabilityReport {
-                backend: crate::config::schema::SandboxBackend::Bailey,
+                backend: SandboxBackend::Bailey,
                 gaps: Vec::new(),
                 notes: Vec::new(),
             })
@@ -186,7 +189,7 @@ struct QuietThreadView;
 impl SessionView for QuietThreadView {
     fn observe<'a>(
         &'a self,
-        _event: &'a crate::session::event::SessionEvent,
+        _event: &'a SessionEvent,
     ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -915,7 +918,7 @@ async fn an_interface_asked_to_bind_publicly_refuses_to_start() {
     }));
 
     let server = WebServer::new(
-        crate::config::schema::WebConfig {
+        WebConfig {
             host: "0.0.0.0".to_owned(),
             port: 39_999,
             observer: false,

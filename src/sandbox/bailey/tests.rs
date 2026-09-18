@@ -9,6 +9,8 @@ use super::{
     BaileyOptions, BaileySandbox, ProviderBrokering, bailey_args, egress_proxy_endpoint,
     egress_proxy_url, parse_doctor, provider_config, session_environment,
 };
+use crate::config::schema::NetworkMode;
+use crate::config::schema::PolicyExtraConfig;
 use crate::config::schema::{EgressConfig, EgressMode, SandboxBackend, SandboxConfig, defaults};
 use crate::log::{LogFields, Logger};
 use crate::sandbox::Run;
@@ -29,7 +31,7 @@ fn defaults_only() -> SandboxConfig {
     SandboxConfig {
         backend: SandboxBackend::Bailey,
         require_full_enforcement: defaults::REQUIRE_FULL_ENFORCEMENT,
-        network: crate::config::schema::NetworkMode::Restricted,
+        network: NetworkMode::Restricted,
         egress_ports: vec![443],
         egress: EgressConfig {
             mode: EgressMode::Proxy,
@@ -248,7 +250,7 @@ fn hiding_the_host_address_asks_the_backend_for_a_private_namespace() {
 #[test]
 fn a_session_with_no_network_runs_under_the_offline_profile() {
     let mut offline = config();
-    offline.network = crate::config::schema::NetworkMode::None;
+    offline.network = NetworkMode::None;
     let args = bailey_args(&offline, &launch(), "/p.toml", None);
     assert!(args.join(" ").contains("--profile untrusted"));
 }
@@ -334,7 +336,7 @@ async fn extra_grants_are_named_in_what_the_backend_reports() {
     let root = TempDir::new().expect("a temporary directory");
     let (run, _calls) = fake_run(BTreeMap::new());
     let mut config = config();
-    config.policy_extra = Some(crate::config::schema::PolicyExtraConfig {
+    config.policy_extra = Some(PolicyExtraConfig {
         read: vec!["/opt/toolchains".to_owned()],
         write: vec!["/srv/output".to_owned()],
         execute: Vec::new(),

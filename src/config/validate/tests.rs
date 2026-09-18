@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 
 use super::validate_config;
+use crate::config::schema::EgressMode;
 use crate::config::schema::{ConfigError, defaults};
 
 fn valid(overrides: Value) -> Value {
@@ -575,10 +576,7 @@ fn a_rules_path_that_is_not_a_path_at_all_is_refused() {
 #[test]
 fn egress_defaults_to_a_brokered_pass_through() {
     let config = validate_config(&valid(json!({}))).expect("resolves");
-    assert_eq!(
-        config.sandbox.egress.mode,
-        crate::config::schema::EgressMode::Proxy
-    );
+    assert_eq!(config.sandbox.egress.mode, EgressMode::Proxy);
     assert_eq!(config.sandbox.egress.allow, vec!["*"]);
 }
 

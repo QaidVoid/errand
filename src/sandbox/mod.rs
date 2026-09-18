@@ -6,7 +6,15 @@ use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::agent::client::AgentProcess;
 use crate::log::Logger;
+use crate::log::fields;
+use crate::sandbox::backend::CapabilityReport;
+use crate::sandbox::backend::SandboxLaunch;
+use crate::sandbox::backend::SandboxLaunchError;
+use crate::sandbox::backend::SandboxUnavailableError;
+use crate::session::manager::SandboxPool;
+use crate::session::session::RunningBox;
 
 /// What a backend must offer, and what it reports it enforces.
 pub mod backend;
@@ -113,7 +121,7 @@ impl SandboxHandle {
     }
 
     /// The agent process inside, for the protocol client to drive.
-    pub fn process(&self) -> Arc<dyn crate::agent::client::AgentProcess> {
+    pub fn process(&self) -> Arc<dyn AgentProcess> {
         match self {
             SandboxHandle::Bailey(stop) => Arc::clone(&stop.spawned.process),
             SandboxHandle::Podman(stop) => Arc::clone(&stop.spawned.process),
@@ -160,7 +168,7 @@ impl BaileyStop {
                 killed = true;
                 self.log.warn(
                     "confined process did not stop and was killed",
-                    &crate::log::fields([
+                    &fields([
                         ("session", self.session_id.as_str().into()),
                         ("name", self.name.as_str().into()),
                     ]),
@@ -218,7 +226,7 @@ impl PodmanStop {
         self.spawned.kill(nix::sys::signal::Signal::SIGKILL);
         self.log.warn(
             "container did not stop and was killed",
-            &crate::log::fields([
+            &fields([
                 ("session", self.session_id.as_str().into()),
                 ("name", self.name.as_str().into()),
             ]),
@@ -313,40 +321,22 @@ pub(crate) fn resolve_root(path: &str) -> String {
 }
 
 /// The real backend, offered to the session manager through its trait.
-impl crate::session::manager::SandboxPool for Backend {
+impl SandboxPool for Backend {
     fn probe(
         &self,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        crate::sandbox::backend::CapabilityReport,
-                        crate::sandbox::backend::SandboxUnavailableError,
-                    >,
-                > + Send
-                + '_,
-        >,
-    > {
+    ) -> Pin<Box<dyn Future<Output = Result<CapabilityReport, SandboxUnavailableError>> + Send + '_>>
+    {
         Box::pin(self.probe())
     }
 
     fn launch(
         self: Arc<Self>,
-        launch: crate::sandbox::backend::SandboxLaunch,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        crate::session::session::RunningBox,
-                        crate::sandbox::backend::SandboxLaunchError,
-                    >,
-                > + Send,
-        >,
-    > {
+        launch: SandboxLaunch,
+    ) -> Pin<Box<dyn Future<Output = Result<RunningBox, SandboxLaunchError>> + Send>> {
         let launch = launch;
         Box::pin(async move {
             let handle = std::sync::Arc::new(Self::launch(&self, &launch).await?);
-            Ok(crate::session::session::RunningBox {
+            Ok(RunningBox {
                 process: handle.process(),
                 to_host_path: Arc::new({
                     let handle = std::sync::Arc::clone(&handle);

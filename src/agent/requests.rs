@@ -11,6 +11,8 @@
 //! it means the request shape is written down in one place instead of being
 //! described in a prompt and hoped for.
 
+use crate::sandbox::backend::STATE_PATH;
+
 /// The directory requests and answers are exchanged in.
 pub const DELEGATE_DIR: &str = "delegations";
 
@@ -58,7 +60,7 @@ question="$*"
 [ -n "${{what}}" ] || usage
 [ -n "${{question}}" ] || usage
 
-dir={STATE}/{DIR}
+dir={STATE_PATH}/{DELEGATE_DIR}
 mkdir -p "${{dir}}"
 id="$$-$(date +%s%N 2>/dev/null || date +%s)"
 
@@ -73,7 +75,7 @@ printf '{{"question":"%%s","%%s":"%%s"}}' "$(escape "${{question}}")" "${{kind}}
 mv "${{dir}}/${{id}}.writing" "${{dir}}/${{id}}.request"
 
 waited=0
-while [ "${{waited}}" -lt {WAIT} ]; do
+while [ "${{waited}}" -lt {wait_tenths} ]; do
   if [ -f "${{dir}}/${{id}}.answer" ]; then
     cat "${{dir}}/${{id}}.answer"
     rm -f "${{dir}}/${{id}}.answer"
@@ -92,9 +94,6 @@ rm -f "${{dir}}/${{id}}.request"
 echo "the delegation was not answered in time; carry on yourself" >&2
 exit 1
 "#,
-        STATE = crate::sandbox::backend::STATE_PATH,
-        DIR = DELEGATE_DIR,
-        WAIT = wait_tenths,
     )
 }
 

@@ -16,6 +16,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::log::fields;
 use crate::log::{LogValue, Logger};
 
 /// Filename of the index inside the daemon's state directory.
@@ -126,7 +127,7 @@ impl ThreadRegistry {
                 if error.kind() != std::io::ErrorKind::NotFound {
                     self.log.error(
                         "the thread index could not be read, so no thread can be resumed",
-                        &crate::log::fields([
+                        &fields([
                             ("path", self.path.as_str().into()),
                             ("detail", error.to_string().into()),
                         ]),
@@ -160,7 +161,7 @@ impl ThreadRegistry {
             let skipped = i64::from(skipped);
             self.log.warn(
                 "entries in the thread index were not readable and were dropped",
-                &crate::log::fields([("skipped", LogValue::from(skipped))]),
+                &fields([("skipped", LogValue::from(skipped))]),
             );
         }
     }
@@ -254,7 +255,7 @@ impl ThreadRegistry {
             // time the threads are gone and nothing says why.
             self.log.error(
                 "the thread index could not be written, so a restart will forget threads",
-                &crate::log::fields([
+                &fields([
                     ("path", self.path.as_str().into()),
                     ("detail", error.to_string().into()),
                 ]),
@@ -283,11 +284,11 @@ impl ThreadRegistry {
         match std::fs::rename(&self.path, &kept) {
             Ok(()) => self.log.error(
                 "the thread index was unreadable and was kept aside; no thread can resume",
-                &crate::log::fields([("kept", kept.as_str().into()), ("detail", reason.into())]),
+                &fields([("kept", kept.as_str().into()), ("detail", reason.into())]),
             ),
             Err(error) => self.log.error(
                 "the thread index was unreadable and could not be kept aside",
-                &crate::log::fields([
+                &fields([
                     ("path", self.path.as_str().into()),
                     ("detail", error.to_string().into()),
                 ]),

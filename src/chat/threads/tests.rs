@@ -3,6 +3,11 @@
 use std::sync::{Arc, Mutex};
 
 use super::{ChatThread, MessageHandle, ServiceCall, ThreadTransport};
+use crate::log::LogFields;
+use crate::log::Logger;
+use crate::session::event::EndReason;
+use crate::session::event::ReactionOutcome;
+use crate::session::event::ToolResult;
 
 /// One message the thread sent, and whatever it was later edited to.
 #[derive(Default, Clone)]
@@ -142,7 +147,7 @@ fn thread(forward_tool_output: bool) -> (ChatThread<FakeChannel>, Arc<FakeChanne
     let channel = FakeChannel::new();
     let port = ChatThread::new(
         Arc::clone(&channel),
-        crate::log::Logger::new(crate::log::LogFields::new(), Arc::new(|_level, _line| {})),
+        Logger::new(LogFields::new(), Arc::new(|_level, _line| {})),
         forward_tool_output,
     );
     (port, channel)
@@ -255,10 +260,8 @@ async fn a_reaction_replaces_the_one_before_it() {
     let records = channel.records();
     let target = records[0].lock().unwrap().id.clone();
 
-    port.set_reaction(&target, crate::session::event::ReactionOutcome::Accepted)
-        .await;
-    port.set_reaction(&target, crate::session::event::ReactionOutcome::Succeeded)
-        .await;
+    port.set_reaction(&target, ReactionOutcome::Accepted).await;
+    port.set_reaction(&target, ReactionOutcome::Succeeded).await;
 
     let record = records[0].lock().unwrap();
     assert_eq!(record.reactions.len(), 2);
@@ -274,10 +277,8 @@ async fn the_same_reaction_twice_is_not_set_twice() {
     let records = channel.records();
     let target = records[0].lock().unwrap().id.clone();
 
-    port.set_reaction(&target, crate::session::event::ReactionOutcome::Accepted)
-        .await;
-    port.set_reaction(&target, crate::session::event::ReactionOutcome::Accepted)
-        .await;
+    port.set_reaction(&target, ReactionOutcome::Accepted).await;
+    port.set_reaction(&target, ReactionOutcome::Accepted).await;
 
     assert_eq!(records[0].lock().unwrap().reactions.len(), 1);
 }
@@ -287,18 +288,15 @@ async fn the_same_reaction_twice_is_not_set_twice() {
 async fn a_reaction_on_a_message_that_is_gone_is_not_an_error() {
     let (port, _channel) = thread(false);
 
-    port.set_reaction(
-        "no-such-message",
-        crate::session::event::ReactionOutcome::Failed,
-    )
-    .await;
+    port.set_reaction("no-such-message", ReactionOutcome::Failed)
+        .await;
 }
 
 #[tokio::test]
 async fn tool_output_is_kept_out_of_the_thread_unless_it_was_asked_for() {
     let (quiet, quiet_channel) = thread(false);
     let (loud, loud_channel) = thread(true);
-    let result = crate::session::event::ToolResult {
+    let result = ToolResult {
         id: "t1".to_owned(),
         name: "bash".to_owned(),
         failed: false,
@@ -318,7 +316,7 @@ async fn tool_output_is_kept_out_of_the_thread_unless_it_was_asked_for() {
 async fn an_empty_tool_result_is_not_posted_even_when_output_is_forwarded() {
     let (port, channel) = thread(true);
 
-    port.note_tool_result(&crate::session::event::ToolResult {
+    port.note_tool_result(&ToolResult {
         id: "t1".to_owned(),
         name: "bash".to_owned(),
         failed: false,
@@ -335,7 +333,7 @@ async fn an_empty_tool_result_is_not_posted_even_when_output_is_forwarded() {
 async fn a_session_that_idled_out_leaves_the_thread_open() {
     let (port, channel) = thread(false);
 
-    port.close(crate::session::event::EndReason::Idle).await;
+    port.close(EndReason::Idle).await;
 
     assert!(!channel.is_archived());
     assert!(port.is_closed());
@@ -346,12 +344,8 @@ async fn only_a_deliberate_stop_archives_the_thread() {
     let (stopped, stopped_channel) = thread(false);
     let (crashed, crashed_channel) = thread(false);
 
-    stopped
-        .close(crate::session::event::EndReason::Stopped)
-        .await;
-    crashed
-        .close(crate::session::event::EndReason::Crashed)
-        .await;
+    stopped.close(EndReason::Stopped).await;
+    crashed.close(EndReason::Crashed).await;
 
     assert!(stopped_channel.is_archived());
     assert!(!crashed_channel.is_archived());
@@ -363,7 +357,7 @@ async fn closing_sends_what_is_still_queued_first() {
     let (port, channel) = thread(false);
 
     port.post("the last thing I said");
-    port.close(crate::session::event::EndReason::Stopped).await;
+    port.close(EndReason::Stopped).await;
 
     assert!(
         channel
@@ -377,7 +371,7 @@ async fn closing_sends_what_is_still_queued_first() {
 async fn a_closed_thread_accepts_nothing_more() {
     let (port, channel) = thread(false);
 
-    port.close(crate::session::event::EndReason::Stopped).await;
+    port.close(EndReason::Stopped).await;
     port.post("too late");
     port.flush().await;
 

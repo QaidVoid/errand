@@ -18,11 +18,18 @@ use axum::routing::{get, post};
 use serde_json::{Value, json};
 
 use crate::config::schema::WebConfig;
+use crate::log::LogValue;
 use crate::log::Logger;
+use crate::log::fields;
+use crate::log::now_ms;
 use crate::sandbox::paths::host_path_under;
+use crate::session::event::SessionEvent;
+use crate::session::files::MAX_INLINE_BYTES;
 use crate::session::files::{read_directory, read_file_for_display};
+use crate::session::manager::StartOutcome;
 use crate::session::manager::{DetachedRequest, SessionManager};
 use crate::session::record::transcript_path;
+use crate::session::session::IncomingMessage;
 use crate::session::transcript::Transcript;
 use crate::web::address::check_bind_address;
 use crate::web::view::{NameLookup, WebView, wire};
@@ -252,9 +259,9 @@ impl WebServer {
         tokio::spawn(async move {
             log.info(
                 "web interface listening",
-                &crate::log::fields([
-                    ("url", crate::log::LogValue::from(url)),
-                    ("observer", crate::log::LogValue::from(observer)),
+                &fields([
+                    ("url", LogValue::from(url)),
+                    ("observer", LogValue::from(observer)),
                 ]),
             );
             let serving = axum::serve(listener, app).with_graceful_shutdown(async {
@@ -263,10 +270,7 @@ impl WebServer {
             if let Err(error) = serving.await {
                 log.error(
                     "the web interface stopped",
-                    &crate::log::fields([(
-                        "detail",
-                        crate::log::LogValue::from(error.to_string()),
-                    )]),
+                    &fields([("detail", LogValue::from(error.to_string()))]),
                 );
             }
         });
@@ -395,7 +399,7 @@ async fn list_sessions(State(server): State<ServerState>) -> Response {
         let ended = session.is_ended().await;
         let started_at = {
             let mut started = server.started.lock().expect("the started lock");
-            *started.entry(id.clone()).or_insert_with(crate::log::now_ms)
+            *started.entry(id.clone()).or_insert_with(now_ms)
         };
         let opening = session.opening();
         listed.push(summary(
@@ -467,10 +471,8 @@ async fn start_session(
         .await;
 
     match outcome {
-        crate::session::manager::StartOutcome::Started { session } => {
-            ok(json!({ "id": session.id() }))
-        }
-        crate::session::manager::StartOutcome::Refused { reason } => {
+        StartOutcome::Started { session } => ok(json!({ "id": session.id() })),
+        StartOutcome::Refused { reason } => {
             refused(json!({ "error": reason }), StatusCode::CONFLICT)
         }
     }
@@ -506,8 +508,8 @@ async fn send(
         .sessions
         .deliver_to_session(
             &id,
-            crate::session::session::IncomingMessage {
-                id: format!("web-{}", crate::log::now_ms()),
+            IncomingMessage {
+                id: format!("web-{}", now_ms()),
                 author_id: WEB_ACTOR.to_owned(),
                 author_name: Some("the interface".to_owned()),
                 content: text,
@@ -595,7 +597,7 @@ async fn transcript(
         // Usage is state rather than an item in the conversation, so only the
         // latest is reported, through the same field a live session uses. A
         // stopped session has no other way to say what it cost.
-        if let crate::session::event::SessionEvent::Usage { usage: latest } = &held.entry {
+        if let SessionEvent::Usage { usage: latest } = &held.entry {
             usage = Some(serde_json::to_value(latest).unwrap_or(Value::Null));
             continue;
         }
@@ -664,11 +666,7 @@ async fn file(
             json!({ "error": "is a directory" }),
             StatusCode::BAD_REQUEST,
         ),
-        Ok(_) => match read_file_for_display(
-            &located.0,
-            &located.1,
-            crate::session::files::MAX_INLINE_BYTES,
-        ) {
+        Ok(_) => match read_file_for_display(&located.0, &located.1, MAX_INLINE_BYTES) {
             Ok(contents) => ok(json!({
                 "path": contents.path,
                 "size": contents.size,

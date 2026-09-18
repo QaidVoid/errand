@@ -20,8 +20,10 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::admission::scheduler::{QueueEntry, Scheduler, SubmitOutcome, Ticket};
+use crate::agent::client::AnswerOutcome;
 use crate::agent::client::{AgentClient, AgentHandlers, AgentProcess};
 use crate::agent::delegate::{DelegationOutcome, TurnDelegations};
+use crate::agent::delegation::Sources;
 use crate::agent::protocol::{AgentImage, DialogRequest, StreamingBehavior, Usage};
 use crate::agent::requests::{DELEGATE_COMMAND, delegate_command_contents, delegate_instructions};
 use crate::chat::diff::file_diff;
@@ -31,17 +33,27 @@ use crate::chat::render::{
 };
 use crate::config::schema::{Config, GithubConfig};
 use crate::config::size::parse_size;
+use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
+use crate::memory::store::BLOCK_FILENAME;
+use crate::memory::store::NOTES_FILENAME;
+use crate::memory::store::PROJECT_NOTES_FILENAME;
+use crate::memory::store::Scope;
 use crate::memory::store::{DEFAULT_MEMORY_BUDGET, MemoryStore, memory_instructions, parse_notes};
 use crate::provider::ask::{Endpoint, HttpSender};
+use crate::sandbox::backend::STATE_PATH;
 use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 use crate::session::attachments::{self, RawAttachment, is_image, receive};
+use crate::session::commands::COMMANDS;
+use crate::session::commands::CommandAccess;
+use crate::session::commands::Standing;
 use crate::session::commands::{
     ASIDE, asks_for_pull_request, help_text, is_addressed_to_bot, is_aside, is_command, may_run,
     parse_user_id,
 };
 use crate::session::delegating::{Delegating, POLL_MS, Reported};
+use crate::session::disk::Verdict;
 use crate::session::disk::{MIN_CHECK_MS, next_check_ms, tree_bytes, verdict};
 use crate::session::event::{
     Delegated, EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage, ToolActivity,
@@ -352,7 +364,7 @@ struct SessionSources {
     project_path: String,
 }
 
-impl crate::agent::delegation::Sources for SessionSources {
+impl Sources for SessionSources {
     fn project_root(&self) -> &str {
         &self.project_root
     }
@@ -699,7 +711,7 @@ impl Running {
             switched: None,
             last_speaker_id: None,
             ended: false,
-            last_active: crate::log::now_ms(),
+            last_active: now_ms(),
             replying_to: None,
             usage: SessionUsage {
                 input: 0,
@@ -1242,10 +1254,10 @@ impl Running {
         let outcome = self
             .client
             .as_ref()
-            .map_or(crate::agent::client::AnswerOutcome::Unknown, |client| {
+            .map_or(AnswerOutcome::Unknown, |client| {
                 client.answer_dialog(&dialog.id, content)
             });
-        if outcome == crate::agent::client::AnswerOutcome::Accepted {
+        if outcome == AnswerOutcome::Accepted {
             // Recorded like any other prompt. It is what the agent was
             // waiting for, and a transcript without it shows a question that
             // answered itself.
@@ -1973,10 +1985,9 @@ impl Running {
     fn write_memory_block(&self) -> Option<String> {
         let memory = self.options.memory.as_ref()?;
 
-        let notes_path = std::path::Path::new(&self.options.state_dir)
-            .join(crate::memory::store::NOTES_FILENAME);
-        let project_notes_path = std::path::Path::new(&self.options.state_dir)
-            .join(crate::memory::store::PROJECT_NOTES_FILENAME);
+        let notes_path = std::path::Path::new(&self.options.state_dir).join(NOTES_FILENAME);
+        let project_notes_path =
+            std::path::Path::new(&self.options.state_dir).join(PROJECT_NOTES_FILENAME);
 
         let about = [
             memory
@@ -2016,21 +2027,12 @@ impl Running {
             self.house_rules().unwrap_or_default(),
             about,
             memory_instructions(
-                &format!(
-                    "{}/{}",
-                    crate::sandbox::backend::STATE_PATH,
-                    crate::memory::store::NOTES_FILENAME
-                ),
-                &format!(
-                    "{}/{}",
-                    crate::sandbox::backend::STATE_PATH,
-                    crate::memory::store::PROJECT_NOTES_FILENAME
-                ),
+                &format!("{STATE_PATH}/{NOTES_FILENAME}"),
+                &format!("{STATE_PATH}/{PROJECT_NOTES_FILENAME}"),
             )
         );
 
-        let path = std::path::Path::new(&self.options.state_dir)
-            .join(crate::memory::store::BLOCK_FILENAME);
+        let path = std::path::Path::new(&self.options.state_dir).join(BLOCK_FILENAME);
         // Written before the sandbox is launched, so nothing else has had
         // reason to create the directory yet. The notes files are created
         // empty so the agent appends to a file it can see exists.
@@ -2085,7 +2087,7 @@ impl Running {
 
         self.introduced.insert(message.author_id.clone());
         if let Some(name) = &message.author_name {
-            let _ = memory.remember_user(&message.author_id, name, crate::log::now_ms());
+            let _ = memory.remember_user(&message.author_id, name, now_ms());
         }
 
         // The owner was already introduced through the system prompt.
@@ -2316,10 +2318,10 @@ impl Running {
             .last_speaker_id
             .clone()
             .unwrap_or_else(|| self.options.owner_id.clone());
-        let stored = self.harvest(&memory, crate::memory::store::NOTES_FILENAME, true, &about)
+        let stored = self.harvest(&memory, NOTES_FILENAME, true, &about)
             + self.harvest(
                 &memory,
-                crate::memory::store::PROJECT_NOTES_FILENAME,
+                PROJECT_NOTES_FILENAME,
                 false,
                 &self.options.project.name,
             );
@@ -2357,18 +2359,12 @@ impl Running {
         let mut stored = 0;
         for fact in parse_notes(&contents) {
             let scope = if user_scope {
-                crate::memory::store::Scope::User
+                Scope::User
             } else {
-                crate::memory::store::Scope::Project
+                Scope::Project
             };
             if memory
-                .remember(
-                    scope,
-                    subject,
-                    &fact,
-                    &self.options.id,
-                    crate::log::now_ms(),
-                )
+                .remember(scope, subject, &fact, &self.options.id, now_ms())
                 .unwrap_or(false)
             {
                 stored += 1;
@@ -2482,9 +2478,9 @@ impl Running {
         };
 
         let scope = if user_scope {
-            crate::memory::store::Scope::User
+            Scope::User
         } else {
-            crate::memory::store::Scope::Project
+            Scope::Project
         };
         let facts = memory
             .facts_for(scope, &subject, i64::MAX)
@@ -2530,9 +2526,9 @@ impl Running {
         };
 
         let scope = if user_scope {
-            crate::memory::store::Scope::User
+            Scope::User
         } else {
-            crate::memory::store::Scope::Project
+            Scope::Project
         };
         let gone = memory.forget(scope, &subject).unwrap_or(0);
         self.react(&message.id, ReactionOutcome::Accepted).await;
@@ -2581,19 +2577,16 @@ impl Running {
         reason = "one arm per command keeps the switch readable, as the original's switch does"
     )]
     async fn answer_command(&mut self, word: &str, rest: &str, message: &IncomingMessage) {
-        let access = crate::session::commands::COMMANDS
+        let access = COMMANDS
             .iter()
             .find(|(name, _)| *name == word)
-            .map_or(
-                crate::session::commands::CommandAccess::Owner,
-                |(_, meta)| meta.access,
-            );
-        let standing = crate::session::commands::Standing {
+            .map_or(CommandAccess::Owner, |(_, meta)| meta.access);
+        let standing = Standing {
             is_owner: self.may_control(&message.author_id),
             is_guest: self.guests.contains(&message.author_id),
         };
         if !may_run(access, standing) {
-            let why = if access == crate::session::commands::CommandAccess::Owner {
+            let why = if access == CommandAccess::Owner {
                 format!(
                     "only <@{}>, who started this session, can use {word}",
                     self.options.owner_id
@@ -2935,7 +2928,7 @@ impl Running {
         if self.ended {
             return;
         }
-        self.disk_last_at = crate::log::now_ms();
+        self.disk_last_at = now_ms();
         // The first interval is short on purpose: nothing has been observed
         // yet, so there is no rate to pace against, and waiting the
         // configured interval is exactly the window a fast writer would use
@@ -2977,7 +2970,7 @@ impl Running {
         }
 
         match verdict(written, budget) {
-            crate::session::disk::Verdict::Over => {
+            Verdict::Over => {
                 self.log.warn(
                     "session stopped for writing past its disk budget",
                     &fields([
@@ -2996,7 +2989,7 @@ impl Running {
                 .await;
                 return;
             }
-            crate::session::disk::Verdict::Close if !self.disk_warned => {
+            Verdict::Close if !self.disk_warned => {
                 self.disk_warned = true;
                 self.views
                     .send(SessionEvent::Notice {
@@ -3012,7 +3005,7 @@ impl Running {
             _ => {}
         }
 
-        let now = crate::log::now_ms();
+        let now = now_ms();
         let next = next_check_ms(
             written,
             self.disk_last_written,
@@ -3214,7 +3207,7 @@ impl Running {
     }
 
     fn reset_idle_timer(&mut self) {
-        self.last_active = crate::log::now_ms();
+        self.last_active = now_ms();
         if let Some(handle) = self.idle_timer.take() {
             self.timers.clear_timeout(handle);
         }

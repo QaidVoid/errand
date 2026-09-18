@@ -21,6 +21,7 @@ use serenity::model::gateway::Ready;
 use serenity::model::id::ChannelId;
 
 use crate::chat::commands::{TranslatedCommand, acknowledge, translate};
+use crate::chat::inbound::DeletionDecision;
 use crate::chat::inbound::{
     InboundDecision, RawAttachment, RawDeletion, RawMessage, classify, classify_deletion,
     is_permitted, without_bot_mention,
@@ -132,7 +133,7 @@ fn attachment_of(file: &Attachment) -> RawAttachment {
 mod tests;
 
 /// One callback on the daemon, from the gateway.
-pub type OnMessage = Arc<dyn Fn(RawMessage, crate::chat::inbound::InboundDecision) + Send + Sync>;
+pub type OnMessage = Arc<dyn Fn(RawMessage, InboundDecision) + Send + Sync>;
 
 /// One callback on the daemon, from the gateway.
 pub type OnCommand = Arc<dyn Fn(TranslatedCommand, Arc<dyn Fn(&str) + Send + Sync>) + Send + Sync>;
@@ -238,7 +239,7 @@ impl EventHandler for Gateway {
             // The mention summoned the bot; it is not part of what was asked.
             // Taken out here, where the bot's own name is known, so nothing
             // downstream has to know it has one.
-            let asked = if decision == crate::chat::inbound::InboundDecision::Start
+            let asked = if decision == InboundDecision::Start
                 && self.config.start_on_mention
                 && let Some(own) = &own
             {
@@ -329,8 +330,8 @@ impl EventHandler for Gateway {
             &self.config,
         );
         match decision {
-            crate::chat::inbound::DeletionDecision::Ignore { .. } => {}
-            crate::chat::inbound::DeletionDecision::Withdraw {
+            DeletionDecision::Ignore { .. } => {}
+            DeletionDecision::Withdraw {
                 message_id,
                 thread_id,
             } => {

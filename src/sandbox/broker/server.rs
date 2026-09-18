@@ -14,6 +14,7 @@ use super::{
     public_address,
 };
 use crate::log::Logger;
+use crate::log::fields;
 
 /// A running CONNECT proxy that admits only allowlisted hosts.
 pub struct Broker {
@@ -155,7 +156,7 @@ async fn handle(stream: TcpStream, state: Arc<ProviderState>) {
     if !ALLOWED_UPSTREAM_PORTS.contains(&target.port) || !host_allowed(&target.host, &state.allow) {
         state.log.info(
             "egress refused",
-            &crate::log::fields([
+            &fields([
                 ("host", target.host.as_str().into()),
                 ("port", i64::from(target.port).into()),
             ]),
@@ -171,7 +172,7 @@ async fn handle(stream: TcpStream, state: Arc<ProviderState>) {
     let Some(address) = address else {
         state.log.warn(
             "egress refused a host-internal target",
-            &crate::log::fields([("host", target.host.as_str().into())]),
+            &fields([("host", target.host.as_str().into())]),
         );
         let _ = refuse(&mut writer, 403, "not a public host").await;
         return;
@@ -189,7 +190,7 @@ async fn handle(stream: TcpStream, state: Arc<ProviderState>) {
             }
             state.log.info(
                 "egress allowed",
-                &crate::log::fields([
+                &fields([
                     ("host", target.host.as_str().into()),
                     ("port", i64::from(target.port).into()),
                 ]),
@@ -203,7 +204,7 @@ async fn handle(stream: TcpStream, state: Arc<ProviderState>) {
             let _ = refuse(&mut writer, 502, "upstream unreachable").await;
             state.log.warn(
                 "upstream connect failed",
-                &crate::log::fields([
+                &fields([
                     ("host", target.host.as_str().into()),
                     ("detail", error.to_string().into()),
                 ]),

@@ -10,8 +10,14 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
+use crate::config::schema::EgressMode;
+use crate::config::schema::NetworkMode;
+use crate::config::schema::SandboxBackend;
 use crate::config::schema::SandboxConfig;
+use crate::log::fields;
 use crate::log::{LogValue, Logger};
+use crate::sandbox::BaileyStop;
+use crate::sandbox::SandboxHandle;
 use crate::sandbox::backend::{
     AGENT_SESSIONS, AgentCommand, CapabilityReport, SandboxLaunch, SandboxLaunchError,
     SandboxUnavailableError, agent_command, placed_prompt_path, sandbox_name,
@@ -20,6 +26,7 @@ use crate::sandbox::policy::{
     AGENT_PROFILE, OFFLINE_PROFILE, PolicyOptions, RESOLV_CONF, RESOLV_FILENAME, policy_contents,
     policy_path,
 };
+use crate::sandbox::runtime::which;
 use crate::sandbox::runtime::{AgentRuntime, Lookup, agent_runtime};
 use crate::sandbox::spawn::spawn_agent;
 
@@ -255,8 +262,7 @@ pub fn bailey_args(
     policy: &str,
     egress_proxy_port: Option<u16>,
 ) -> Vec<String> {
-    let brokered = config.egress.mode == crate::config::schema::EgressMode::Proxy
-        && egress_proxy_port.is_some();
+    let brokered = config.egress.mode == EgressMode::Proxy && egress_proxy_port.is_some();
     let mut args: Vec<String> = vec!["run".to_owned(), "--isolate".to_owned()];
     if brokered {
         if let Some(port) = egress_proxy_port {
@@ -269,7 +275,7 @@ pub fn bailey_args(
     args.push("--config".to_owned());
     args.push(policy.to_owned());
     args.push("--profile".to_owned());
-    let profile = if config.network == crate::config::schema::NetworkMode::None {
+    let profile = if config.network == NetworkMode::None {
         OFFLINE_PROFILE
     } else {
         AGENT_PROFILE
@@ -402,7 +408,7 @@ impl BaileySandbox {
     /// this is the operator env unchanged.
     fn egress_env(&self) -> Option<BTreeMap<String, String>> {
         let mut base = self.config.env.clone().unwrap_or_default();
-        if self.config.egress.mode != crate::config::schema::EgressMode::Proxy {
+        if self.config.egress.mode != EgressMode::Proxy {
             return if base.is_empty() { None } else { Some(base) };
         }
         let Some(port) = self.options.egress_proxy_port else {
@@ -433,7 +439,7 @@ impl BaileySandbox {
         let doctor = self.call(&["doctor"]).await;
         if doctor.code != 0 {
             return Err(SandboxUnavailableError {
-                backend: crate::config::schema::SandboxBackend::Bailey,
+                backend: SandboxBackend::Bailey,
                 reasons: vec!["bailey is not installed, or `bailey doctor` failed".to_owned()],
             });
         }
@@ -442,7 +448,7 @@ impl BaileySandbox {
         let (gaps, unavailable) = parse_doctor(&combined);
         if !unavailable.is_empty() {
             return Err(SandboxUnavailableError {
-                backend: crate::config::schema::SandboxBackend::Bailey,
+                backend: SandboxBackend::Bailey,
                 reasons: unavailable,
             });
         }
@@ -452,7 +458,7 @@ impl BaileySandbox {
         // it is actionable.
         if !self.accepts_generated_policy().await {
             return Err(SandboxUnavailableError {
-                backend: crate::config::schema::SandboxBackend::Bailey,
+                backend: SandboxBackend::Bailey,
                 reasons: vec![
                     "the installed bailey does not accept the policy this backend writes, which \
                      needs resources.file_max and relocatable grants; update bailey"
@@ -467,7 +473,7 @@ impl BaileySandbox {
         let lookup = self.lookup();
         if agent_runtime(&lookup).is_none() {
             return Err(SandboxUnavailableError {
-                backend: crate::config::schema::SandboxBackend::Bailey,
+                backend: SandboxBackend::Bailey,
                 reasons: vec![
                     "the pi agent is not on PATH, and this backend runs the host's own \
                      installation"
@@ -491,7 +497,7 @@ impl BaileySandbox {
                  enforced",
                 self.config.disk
             ),
-            if self.config.network == crate::config::schema::NetworkMode::None {
+            if self.config.network == NetworkMode::None {
                 "sessions have no network, so the agent cannot reach a model provider".to_owned()
             } else {
                 "sessions reach the model provider over TCP 443, and outbound access is not \
@@ -539,7 +545,7 @@ impl BaileySandbox {
         }
 
         Ok(CapabilityReport {
-            backend: crate::config::schema::SandboxBackend::Bailey,
+            backend: SandboxBackend::Bailey,
             gaps,
             notes,
         })
@@ -549,14 +555,14 @@ impl BaileySandbox {
         self.options
             .lookup
             .clone()
-            .unwrap_or_else(|| Arc::new(crate::sandbox::runtime::which))
+            .unwrap_or_else(|| Arc::new(which))
     }
 
     /// Starts one session's sandbox.
     pub async fn launch(
         self: &Arc<Self>,
         launch: &SandboxLaunch,
-    ) -> Result<crate::sandbox::SandboxHandle, SandboxLaunchError> {
+    ) -> Result<SandboxHandle, SandboxLaunchError> {
         let lookup = self.lookup();
         let Some(runtime) = agent_runtime(&lookup) else {
             return Err(SandboxLaunchError(
@@ -631,26 +637,24 @@ impl BaileySandbox {
 
         self.log.info(
             "confined process started",
-            &crate::log::fields([
+            &fields([
                 ("session", launch.session_id.as_str().into()),
                 ("name", name.as_str().into()),
                 ("pid", LogValue::Number(i64::from(spawned.pid))),
             ]),
         );
 
-        Ok(crate::sandbox::SandboxHandle::Bailey(Box::new(
-            crate::sandbox::BaileyStop {
-                session_id: launch.session_id.clone(),
-                name,
-                project_path: launch.project_path.clone(),
-                spawned,
-                policy,
-                run,
-                grace_ms: self.config.grace_period_ms,
-                log: self.log.clone(),
-                stopped: std::sync::atomic::AtomicBool::new(false),
-            },
-        )))
+        Ok(SandboxHandle::Bailey(Box::new(BaileyStop {
+            session_id: launch.session_id.clone(),
+            name,
+            project_path: launch.project_path.clone(),
+            spawned,
+            policy,
+            run,
+            grace_ms: self.config.grace_period_ms,
+            log: self.log.clone(),
+            stopped: std::sync::atomic::AtomicBool::new(false),
+        })))
     }
 
     /// Names of sandboxes this system owns that no live session claims.
@@ -755,7 +759,7 @@ impl BaileySandbox {
     /// that case becomes a launch failure rather than a silently unconfined
     /// session.
     async fn verify_policy_applies(&self, policy: &str) -> Result<(), SandboxLaunchError> {
-        let profile = if self.config.network == crate::config::schema::NetworkMode::None {
+        let profile = if self.config.network == NetworkMode::None {
             OFFLINE_PROFILE
         } else {
             AGENT_PROFILE

@@ -8,6 +8,8 @@
 //! file is itself ASCII and needs no exception from the rule. An editor or a
 //! terminal that cannot render an emoji therefore cannot silently corrupt one.
 
+use crate::session::event::ReactionOutcome;
+
 /// One enumerated character: how it is spelled, and the single state it means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChatChar {
@@ -197,13 +199,13 @@ pub fn prefixed(key: PrefixKey, text: &str) -> String {
 mod tests;
 
 /// The glyph a reported outcome is shown with, one to one.
-impl From<crate::session::event::ReactionOutcome> for ReactionKey {
-    fn from(outcome: crate::session::event::ReactionOutcome) -> Self {
+impl From<ReactionOutcome> for ReactionKey {
+    fn from(outcome: ReactionOutcome) -> Self {
         match outcome {
-            crate::session::event::ReactionOutcome::Accepted => ReactionKey::Accepted,
-            crate::session::event::ReactionOutcome::Succeeded => ReactionKey::Succeeded,
-            crate::session::event::ReactionOutcome::Failed => ReactionKey::Failed,
-            crate::session::event::ReactionOutcome::Interrupted => ReactionKey::Interrupted,
+            ReactionOutcome::Accepted => ReactionKey::Accepted,
+            ReactionOutcome::Succeeded => ReactionKey::Succeeded,
+            ReactionOutcome::Failed => ReactionKey::Failed,
+            ReactionOutcome::Interrupted => ReactionKey::Interrupted,
         }
     }
 }

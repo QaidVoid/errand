@@ -30,9 +30,18 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use crate::cli::threads::Deps;
+use crate::cli::threads::Project;
+use crate::cli::threads::run_threads;
 use crate::config::load::{config_path, file_exists, load_config};
+use crate::config::schema::Config;
 use crate::config::schema::ConfigError;
+use crate::log::logger;
+use crate::log::now_ms;
 use crate::log::{LogValue, fields};
+use crate::sandbox::policy::POLICY_FILENAME;
+use crate::serve::serve;
+use crate::session::disk::tree_bytes;
+use crate::session::record::record_dir;
 use crate::session::registry::ThreadRegistry;
 
 /// The environment an operator's shell hands over.
@@ -60,7 +69,7 @@ fn usage(env: &Vars) -> String {
 /// reports does not: the TypeScript entry point never handed the environment
 /// to the reader, whose error path therefore describes a blank one. Kept, so
 /// an operator comparing output between the two daemons sees the same words.
-fn load(env: &Vars) -> Result<crate::config::schema::Config, ConfigError> {
+fn load(env: &Vars) -> Result<Config, ConfigError> {
     let path = config_path(env, file_exists);
     load_config(
         &path,
@@ -104,35 +113,31 @@ fn workspace_grant(policy: &str) -> Option<String> {
 /// is the one thing on disk that still says where the work was. Nothing is
 /// guessed at: a policy that does not say returns nothing, and the caller
 /// refuses.
-fn project_of(state_dir: &str) -> Option<crate::cli::threads::Project> {
-    let policy = std::fs::read_to_string(
-        std::path::Path::new(state_dir).join(crate::sandbox::policy::POLICY_FILENAME),
-    )
-    .ok()?;
+fn project_of(state_dir: &str) -> Option<Project> {
+    let policy =
+        std::fs::read_to_string(std::path::Path::new(state_dir).join(POLICY_FILENAME)).ok()?;
     let path = workspace_grant(&policy)?;
     let name = std::path::Path::new(&path)
         .file_name()?
         .to_string_lossy()
         .into_owned();
-    Some(crate::cli::threads::Project { name, path })
+    Some(Project { name, path })
 }
 
 async fn threads(args: &[String], env: &Vars) -> Result<i32, ConfigError> {
     let config = load(env)?;
-    let log = crate::log::logger();
+    let log = logger();
     let registry = Arc::new(Mutex::new(ThreadRegistry::new(
         ThreadRegistry::path_for(&config.state_dir),
         log,
     )));
     registry.lock().unwrap().load();
 
-    Ok(crate::cli::threads::run_threads(
+    Ok(run_threads(
         args,
         &Deps {
             registry,
-            size_of: Arc::new(|state_dir| {
-                Box::pin(async move { crate::session::disk::tree_bytes(&state_dir) })
-            }),
+            size_of: Arc::new(|state_dir| Box::pin(async move { tree_bytes(&state_dir) })),
             remove: Arc::new(|state_dir| {
                 Box::pin(async move {
                     // The record sits beside the state directory, so removing
@@ -141,16 +146,14 @@ async fn threads(args: &[String], env: &Vars) -> Result<i32, ConfigError> {
                     tokio::fs::remove_dir_all(&state_dir)
                         .await
                         .map_err(|error| error.to_string())?;
-                    let _ =
-                        tokio::fs::remove_dir_all(crate::session::record::record_dir(&state_dir))
-                            .await;
+                    let _ = tokio::fs::remove_dir_all(record_dir(&state_dir)).await;
                     Ok(())
                 })
             }),
             state_root: config.state_dir,
             project_of: Arc::new(|state_dir| Box::pin(async move { project_of(&state_dir) })),
             write: Arc::new(|line| println!("{line}")),
-            now: Arc::new(crate::log::now_ms),
+            now: Arc::new(now_ms),
         },
     )
     .await)
@@ -159,7 +162,7 @@ async fn threads(args: &[String], env: &Vars) -> Result<i32, ConfigError> {
 /// Runs the daemon, turning the failures an operator can act on into an exit
 /// code and one line rather than a stack trace.
 async fn run(env: &Vars) -> i32 {
-    let log = crate::log::logger();
+    let log = logger();
     let config = match load(env) {
         Ok(config) => config,
         Err(error) => {
@@ -170,7 +173,7 @@ async fn run(env: &Vars) -> i32 {
             return 1;
         }
     };
-    crate::serve::serve(config, log).await
+    serve(config, log).await
 }
 
 fn main() -> std::process::ExitCode {

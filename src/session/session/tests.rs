@@ -14,14 +14,18 @@ use super::{
 };
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
+use crate::config::schema::Config;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
 use crate::memory::store::{MemoryStore, Scope};
 use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 use crate::session::attachments::RawAttachment;
+use crate::session::event::ToolResult;
 use crate::session::event::{EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage};
 use crate::session::pr::{self, PullRequestError};
+use crate::session::projects::ProjectSelection;
+use crate::session::record::record_dir;
 use crate::session::redacted::Redacting;
 use crate::session::views::{SessionView, ViewError, ViewFanOut};
 
@@ -306,7 +310,7 @@ impl FakeThread {
         })
     }
 
-    fn results(&self) -> Vec<crate::session::event::ToolResult> {
+    fn results(&self) -> Vec<ToolResult> {
         self.pick(|event| match event {
             SessionEvent::ToolResult { result } => Some(result.clone()),
             _ => None,
@@ -543,7 +547,7 @@ impl Clock for NoClock {
     fn clear_timeout(&self, _handle: u64) {}
 }
 
-fn config_with(overrides: &Value) -> Arc<crate::config::schema::Config> {
+fn config_with(overrides: &Value) -> Arc<Config> {
     let mut base = json!({
         "chat": {
             "token": "a.token.value",
@@ -625,7 +629,7 @@ impl Harness {
 }
 
 struct SessionTestCase {
-    config: Option<Arc<crate::config::schema::Config>>,
+    config: Option<Arc<Config>>,
     first: Option<String>,
     guest_ids: Vec<String>,
     memory: Option<Arc<MemoryStore>>,
@@ -688,7 +692,7 @@ async fn with_session(
 
     let session = SessionHandle::spawn(SessionOptions {
         id: "s1".to_owned(),
-        project: crate::session::projects::ProjectSelection {
+        project: ProjectSelection {
             name: "demo".to_owned(),
             path: project.display().to_string(),
             prompt: "do the thing".to_owned(),
@@ -2232,7 +2236,7 @@ async fn an_interruption_the_agent_confirms_does_not_force_stop() {
 
 /// What a session's record holds, as the daemon writes it.
 fn seed_withdrawn_record(harness: &Harness, said: &str) {
-    let record = crate::session::record::record_dir(&harness.state_dir);
+    let record = record_dir(&harness.state_dir);
     std::fs::create_dir_all(&record).expect("the record directory is made");
     std::fs::write(
         std::path::Path::new(&record).join(TRANSCRIPT_NAME),
@@ -2280,7 +2284,7 @@ async fn a_live_session_is_told_of_a_withdrawal() {
                     .contains("has been withdrawn by the person who sent it")
             );
             // The record keeps the turn and loses the words.
-            let record = crate::session::record::record_dir(&harness.state_dir);
+            let record = record_dir(&harness.state_dir);
             let transcript =
                 std::fs::read_to_string(std::path::Path::new(&record).join(TRANSCRIPT_NAME))
                     .unwrap();

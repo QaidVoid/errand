@@ -1,12 +1,13 @@
 //! Tests for the diff renderer, ported from `diff_test.ts`.
 
 use super::{CONTEXT_LINES, MAX_DIFF_LINES, file_diff, render_diff};
+use crate::chat::diff::FileDiff;
 
 #[test]
 fn a_file_that_did_not_change_has_nothing_to_show() {
     assert_eq!(
         file_diff("same\ntext", "same\ntext"),
-        crate::chat::diff::FileDiff {
+        FileDiff {
             empty: true,
             added: 0,
             removed: 0,

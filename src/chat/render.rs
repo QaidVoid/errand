@@ -7,9 +7,11 @@
 
 use serde_json::Value;
 
+use crate::agent::protocol::DialogMethod;
 use crate::agent::protocol::DialogRequest;
 use crate::chat::chars::{PrefixKey, prefixed};
 use crate::session::event::Delegated;
+use crate::session::files::Entry;
 use crate::session::files::{FileContents, MAX_INLINE_BYTES};
 
 /// The service's per-message character limit.
@@ -414,13 +416,13 @@ pub fn dialog_lines(request: &DialogRequest) -> String {
     }
 
     match (request.method, &request.options) {
-        (crate::agent::protocol::DialogMethod::Select, Some(options)) => {
+        (DialogMethod::Select, Some(options)) => {
             for (index, option) in options.iter().enumerate() {
                 lines.push(format!("{}. {option}", index + 1));
             }
             lines.push("reply with a number or the option text".to_owned());
         }
-        (crate::agent::protocol::DialogMethod::Confirm, _) => {
+        (DialogMethod::Confirm, _) => {
             lines.push("reply yes or no".to_owned());
         }
         _ => lines.push("reply with your answer".to_owned()),
@@ -490,7 +492,7 @@ pub fn bytes(count: f64) -> String {
 ///
 /// A fence is shown in a monospaced font, which is the only way the sizes line
 /// up for every reader.
-pub fn directory_listing(entries: &[crate::session::files::Entry], display_path: &str) -> String {
+pub fn directory_listing(entries: &[Entry], display_path: &str) -> String {
     if entries.is_empty() {
         return format!("`{display_path}/` is empty");
     }

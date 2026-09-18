@@ -12,10 +12,14 @@
 
 use std::sync::Arc;
 
+use crate::config::schema::NetworkMode;
+use crate::config::schema::SandboxBackend;
 use crate::config::schema::SandboxConfig;
 use crate::config::size::parse_size;
 use crate::log::Logger;
+use crate::log::fields;
 use crate::sandbox::SandboxHandle;
+use crate::sandbox::backend::placed_prompt_path;
 use crate::sandbox::backend::{
     AGENT_HOME, AGENT_SESSIONS, AgentCommand, CapabilityReport, SESSION_LABEL, STATE_PATH,
     SYSTEM_LABEL, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError, WORKSPACE_PATH,
@@ -36,7 +40,7 @@ pub const RESTRICTED_NETWORK: &str = "pasta:--map-host-loopback,none,--map-guest
 /// Pure, so a test can assert the exact flags without starting a container.
 pub fn podman_args(config: &SandboxConfig, launch: &SandboxLaunch) -> Vec<String> {
     let name = sandbox_name(&launch.session_id);
-    let network = if config.network == crate::config::schema::NetworkMode::None {
+    let network = if config.network == NetworkMode::None {
         "none"
     } else {
         RESTRICTED_NETWORK
@@ -107,9 +111,7 @@ pub fn podman_args(config: &SandboxConfig, launch: &SandboxLaunch) -> Vec<String
         session_dir: AGENT_SESSIONS.to_owned(),
         provider: launch.provider.clone(),
         model: launch.model.clone(),
-        system_prompt_path: crate::sandbox::backend::placed_prompt_path(
-            launch.system_prompt_path.as_ref(),
-        ),
+        system_prompt_path: placed_prompt_path(launch.system_prompt_path.as_ref()),
         resume: launch.resume,
     }));
     args
@@ -193,7 +195,7 @@ impl PodmanSandbox {
 
         if !reasons.is_empty() {
             return Err(SandboxUnavailableError {
-                backend: crate::config::schema::SandboxBackend::Podman,
+                backend: SandboxBackend::Podman,
                 reasons,
             });
         }
@@ -203,7 +205,7 @@ impl PodmanSandbox {
                 "sessions run in rootless containers from {}",
                 self.config.image
             ),
-            if self.config.network == crate::config::schema::NetworkMode::None {
+            if self.config.network == NetworkMode::None {
                 "sessions have no network, so the agent cannot reach a model provider".to_owned()
             } else {
                 "sessions reach the model provider, and host services are unreachable".to_owned()
@@ -227,7 +229,7 @@ impl PodmanSandbox {
         ];
 
         Ok(CapabilityReport {
-            backend: crate::config::schema::SandboxBackend::Podman,
+            backend: SandboxBackend::Podman,
             gaps: Vec::new(),
             notes,
         })
@@ -242,7 +244,7 @@ impl PodmanSandbox {
         let spawned = Arc::new(spawned);
         self.log.info(
             "container started",
-            &crate::log::fields([
+            &fields([
                 ("session", launch.session_id.as_str().into()),
                 ("name", name.as_str().into()),
             ]),
@@ -296,7 +298,7 @@ impl PodmanSandbox {
             } else {
                 self.log.warn(
                     "could not remove a leftover container",
-                    &crate::log::fields([("name", name.as_str().into())]),
+                    &fields([("name", name.as_str().into())]),
                 );
             }
         }

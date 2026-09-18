@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::{AgentClient, AgentHandlers, AgentProcess, AnswerOutcome};
+use crate::agent::protocol::DialogRequest;
+use crate::agent::protocol::Usage;
 use crate::log::{LogFields, Logger};
 
 /// A process a test writes records into, standing in for the agent.
@@ -403,7 +405,7 @@ async fn usage_is_reported_when_a_turn_ends() {
     let usage_models = Arc::clone(&models);
     let setup = client(
         AgentHandlers {
-            on_usage: Some(Box::new(move |usage: crate::agent::protocol::Usage| {
+            on_usage: Some(Box::new(move |usage: Usage| {
                 usage_models
                     .lock()
                     .unwrap()
@@ -545,11 +547,9 @@ async fn a_dialog_nobody_answers_is_cancelled_and_the_caller_told() {
     let timeout_seen = Arc::clone(&timed_out);
     let setup = client(
         AgentHandlers {
-            on_dialog_timeout: Some(Box::new(
-                move |request: crate::agent::protocol::DialogRequest| {
-                    timeout_seen.lock().unwrap().push(request.id);
-                },
-            )),
+            on_dialog_timeout: Some(Box::new(move |request: DialogRequest| {
+                timeout_seen.lock().unwrap().push(request.id);
+            })),
             ..AgentHandlers::default()
         },
         10,
@@ -576,11 +576,9 @@ async fn an_informational_request_is_neither_answered_nor_reported() {
     let dialog_seen = Arc::clone(&seen);
     let setup = client(
         AgentHandlers {
-            on_dialog: Some(Box::new(
-                move |request: crate::agent::protocol::DialogRequest| {
-                    dialog_seen.lock().unwrap().push(request.id);
-                },
-            )),
+            on_dialog: Some(Box::new(move |request: DialogRequest| {
+                dialog_seen.lock().unwrap().push(request.id);
+            })),
             ..AgentHandlers::default()
         },
         300_000,

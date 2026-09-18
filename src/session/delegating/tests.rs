@@ -5,8 +5,11 @@ use serde_json::{Value, json};
 
 use super::{Delegating, Reported, labelled};
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
+use crate::agent::delegate::Answer;
+use crate::agent::delegate::DelegationOutcome;
 use crate::agent::delegate::TurnDelegations;
 use crate::agent::delegation::Sources;
+use crate::agent::requests::DELEGATE_DIR;
 use crate::config::schema::LimitsConfig;
 use crate::log::{LogFields, Logger};
 use crate::provider::ask::{Endpoint, SendRequest, Sender};
@@ -99,7 +102,7 @@ struct Harness {
 fn with_watcher(_per_turn: usize, answer: Value) -> Harness {
     let root = tempfile::tempdir().expect("a temp directory");
     let root_path = root.path();
-    let directory = root_path.join(crate::agent::requests::DELEGATE_DIR);
+    let directory = root_path.join(DELEGATE_DIR);
     std::fs::create_dir_all(&directory).expect("the exchange directory is made");
     let project = root_path.join("project");
     std::fs::create_dir_all(&project).expect("the project is made");
@@ -436,7 +439,7 @@ async fn what_happened_is_reported_with_what_it_cost_and_saved() {
     let reported = harness.reported.lock().unwrap();
     assert_eq!(reported.len(), 1);
     assert_eq!(reported[0].asked, "what failed?");
-    let crate::agent::delegate::DelegationOutcome::Ready(answer) = &reported[0].outcome else {
+    let DelegationOutcome::Ready(answer) = &reported[0].outcome else {
         panic!("the delegation was answered");
     };
     assert_eq!(answer.model, "flash");
@@ -446,7 +449,7 @@ async fn what_happened_is_reported_with_what_it_cost_and_saved() {
 /// An agent that forgets it did not read the thing asserts a description.
 #[test]
 fn an_answer_says_which_model_produced_it_and_that_it_is_a_description() {
-    let said = labelled(&crate::agent::delegate::Answer {
+    let said = labelled(&Answer {
         text: "the log shows a failed write".to_owned(),
         model: "glm-5.3-flash".to_owned(),
         describes: "the output of call t1".to_owned(),

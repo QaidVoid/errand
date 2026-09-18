@@ -13,6 +13,7 @@ use crate::admission::scheduler::Scheduler;
 use crate::chat::render::thread_name;
 use crate::config::redact::secret_values;
 use crate::config::schema::Config;
+use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::sandbox::backend::{
@@ -762,7 +763,7 @@ impl SessionManager {
     fn now_ms(&self) -> i64 {
         match &self.options.now {
             Some(now) => now(),
-            None => crate::log::now_ms(),
+            None => now_ms(),
         }
     }
 

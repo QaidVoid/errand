@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+use crate::log::now_ms;
 use crate::session::event::SessionEvent;
 use crate::session::views::{SessionView, ViewError};
 
@@ -125,7 +126,7 @@ impl SessionView for WebView {
         event: &'a SessionEvent,
     ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
         Box::pin(async move {
-            let at = crate::log::now_ms();
+            let at = now_ms();
             match event {
                 SessionEvent::BeginTurn { turn } => {
                     *self.turn.lock().expect("the view turn lock") = Some(*turn);

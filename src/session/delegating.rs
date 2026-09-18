@@ -16,6 +16,7 @@ use serde_json::Value;
 
 use crate::agent::delegate::{Answer, DelegationOutcome, TurnDelegations};
 use crate::agent::delegation::Refused;
+use crate::agent::delegation::Sources;
 use crate::agent::requests::DELEGATE_DIR;
 use crate::log::{LogValue, Logger, fields};
 use crate::provider::ask::Sender;
@@ -76,7 +77,7 @@ impl Delegating {
     /// is running and with a refusal when there is none.
     pub async fn sweep<S, P>(&self, mut turn: Option<&mut TurnDelegations<S, P>>)
     where
-        S: crate::agent::delegation::Sources + 'static,
+        S: Sources + 'static,
         P: Sender,
     {
         let Ok(entries) = std::fs::read_dir(&self.directory) else {
@@ -98,7 +99,7 @@ impl Delegating {
 
     async fn answer<S, P>(&self, name: &str, turn: Option<&mut TurnDelegations<S, P>>)
     where
-        S: crate::agent::delegation::Sources + 'static,
+        S: Sources + 'static,
         P: Sender,
     {
         let id = name.strip_suffix(".request").unwrap_or(name).to_owned();
