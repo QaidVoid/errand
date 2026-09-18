@@ -340,6 +340,30 @@ fn host_internal_addresses_are_refused_whatever_the_allowlist_says() {
     for address in ["::1", "fe80::1", "fd00::1", "::ffff:127.0.0.1"] {
         assert!(is_private_address(address), "{address}");
     }
+    // The whole of `this network`, multicast, and everything reserved above
+    // it, none of which is the internet a session is allowed out to.
+    for address in [
+        "0.0.0.0",
+        "0.1.2.3",
+        "224.0.0.1",
+        "240.0.0.1",
+        "255.255.255.255",
+    ] {
+        assert!(is_private_address(address), "{address}");
+    }
+    // Not an address the broker can read, so not one it should dial. A
+    // spelling with a leading zero is read as octal by some resolvers and as
+    // decimal by others, which is reason enough to refuse it.
+    for address in [
+        "",
+        "1.2.3",
+        "1.2.3.4.5",
+        "256.0.0.1",
+        "1.2.3.04",
+        "not-an-address",
+    ] {
+        assert!(is_private_address(address), "{address}");
+    }
 }
 
 /// A name on the allowlist that points at the host is still refused.

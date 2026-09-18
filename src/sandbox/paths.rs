@@ -71,11 +71,11 @@ fn normalize(path: &str) -> String {
 pub fn within(root: &str, wanted: &str) -> Option<String> {
     let base = super::resolve_root(root);
     let target = resolve_against(Path::new(&base), &normalize(wanted));
-    let target = target.to_string_lossy().into_owned();
-    if target == base {
-        return Some(target);
-    }
-    target.starts_with(&format!("{base}/")).then_some(target)
+    // Compared by component rather than by prefix, so `/srv/projects-old`
+    // does not read as being inside `/srv/projects`.
+    target
+        .starts_with(&base)
+        .then(|| target.to_string_lossy().into_owned())
 }
 
 /// Translates a path as the agent sees it into a path on the host.

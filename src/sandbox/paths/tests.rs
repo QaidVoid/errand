@@ -81,3 +81,12 @@ fn a_path_that_climbs_out_of_the_project_has_no_host_path() {
     assert_eq!(host_path_under("/workspace", ROOT, "../secrets"), None);
     assert_eq!(host_path_under("/workspace", ROOT, "   "), None);
 }
+
+/// A sibling whose name merely starts with the root's is not inside it.
+#[test]
+fn a_root_is_matched_by_component_not_by_prefix() {
+    assert_eq!(within("/srv/project", "."), Some("/srv/project".to_owned()));
+    // `/srv/project-old` shares the root's spelling but not its path.
+    assert_eq!(within("/srv/project", "/srv/project-old/secret"), None);
+    assert_eq!(within("/srv/project", "../project-old/secret"), None);
+}

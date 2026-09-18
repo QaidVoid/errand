@@ -16,6 +16,7 @@
 //! listener; this file is the gate.
 
 use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use crate::log::Logger;
@@ -151,42 +152,23 @@ fn same_secret(a: &str, b: &str) -> bool {
 /// would be a way back into the host that the network namespace was built to
 /// close.
 pub fn is_private_v4(address: &str) -> bool {
-    let parts: Vec<Option<i64>> = address.split('.').map(|part| part.parse().ok()).collect();
-    let read = |index: usize| -> Option<i64> { parts.get(index).copied().flatten() };
-    let Some(a) = read(0) else {
-        // Not a dotted quad. Treated as private, because an address the broker
-        // cannot read is not one it should dial.
+    // An address the broker cannot read is not one it should dial, so a
+    // spelling the parser refuses counts as internal rather than as public.
+    let Ok(address) = address.parse::<Ipv4Addr>() else {
         return true;
     };
-    let Some(b) = read(1) else {
-        return true;
-    };
-    let valid = parts.len() == 4
-        && parts
-            .iter()
-            .all(|part| part.is_some_and(|n| (0..=255).contains(&n)));
-    if !valid {
-        return true;
-    }
-    if matches!(a, 0 | 127 | 10 | 255) {
-        return true; // this host, loopback, private, broadcast
-    }
-    if a == 169 && b == 254 {
-        return true; // link-local, which is the metadata address
-    }
-    if a == 172 && (16..=31).contains(&b) {
-        return true; // private
-    }
-    if a == 192 && b == 168 {
-        return true; // private
-    }
-    if a == 100 && (64..=127).contains(&b) {
-        return true; // carrier-grade NAT
-    }
-    if a >= 224 {
-        return true; // multicast and reserved
-    }
-    false
+    let [first, second, ..] = address.octets();
+    address.is_loopback()
+        || address.is_private()
+        || address.is_link_local()
+        || address.is_multicast()
+        // `this network`, which std has no stable name for.
+        || first == 0
+        // Carrier-grade NAT, 100.64.0.0/10, likewise unnamed on stable.
+        || (first == 100 && (64..=127).contains(&second))
+        // Everything above multicast is reserved, and the last of it is the
+        // broadcast address.
+        || first >= 240
 }
 
 /// The eight groups of an IPv6 address, or nothing when it is not one.
