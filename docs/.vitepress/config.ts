@@ -13,7 +13,6 @@ export default defineConfig({
   lang: "en-GB",
   cleanUrls: true,
   lastUpdated: false,
-  outDir: "../dist/docs",
   head: [["link", { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" }]],
 
   themeConfig: {
