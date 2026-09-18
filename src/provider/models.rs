@@ -70,18 +70,40 @@ pub fn sees_images(model: Option<&ModelInfo>) -> bool {
     model.is_some_and(|model| model.input.iter().any(|kind| kind == "image"))
 }
 
+/// What reading the store found, and what it could not read.
+pub struct StoreContents {
+    /// Every model the store lists for the provider.
+    pub models: Vec<ModelInfo>,
+    /// Entries that were not models, which an operator may want to know about.
+    pub skipped: usize,
+}
+
 /// Everything the store lists for one provider, or nothing at all.
 pub fn read_models(directory: Option<&str>, provider: &str) -> Vec<ModelInfo> {
+    read_store(directory, provider).models
+}
+
+/// Everything the store lists, with a count of what it could not read.
+///
+/// An entry that is not an object is skipped rather than fatal. A store is
+/// written by something other than errand, and a daemon that will not start
+/// because one line of it is wrong is a worse answer than a daemon that
+/// starts and says which line.
+pub fn read_store(directory: Option<&str>, provider: &str) -> StoreContents {
+    let nothing = || StoreContents {
+        models: Vec::new(),
+        skipped: 0,
+    };
     let Some(directory) = directory else {
-        return Vec::new();
+        return nothing();
     };
     let Ok(text) = std::fs::read_to_string(std::path::Path::new(directory).join(STORE_FILENAME))
     else {
-        return Vec::new();
+        return nothing();
     };
     let parsed: Value = match serde_json::from_str(&text) {
         Ok(parsed) => parsed,
-        Err(_) => return Vec::new(),
+        Err(_) => return nothing(),
     };
 
     let models = parsed
@@ -89,19 +111,14 @@ pub fn read_models(directory: Option<&str>, provider: &str) -> Vec<ModelInfo> {
         .and_then(|entry| entry.get("models"))
         .and_then(Value::as_array);
     let Some(models) = models else {
-        return Vec::new();
+        return nothing();
     };
 
     let mut found = Vec::new();
+    let mut skipped = 0;
     for raw in models {
         let Some(model) = raw.as_object() else {
-            // A null where a model was expected crashes the TypeScript reader,
-            // which is its behaviour against a store written wrong; this
-            // reproduces it rather than quietly reading nothing.
-            assert!(
-                !raw.is_null(),
-                "the model store holds a null entry where a model was expected"
-            );
+            skipped += 1;
             continue;
         };
         let Some(Value::String(id)) = model.get("id") else {
@@ -128,7 +145,10 @@ pub fn read_models(directory: Option<&str>, provider: &str) -> Vec<ModelInfo> {
                 .unwrap_or(f64::INFINITY),
         });
     }
-    found
+    StoreContents {
+        models: found,
+        skipped,
+    }
 }
 
 /// One model by id, when the store lists it.

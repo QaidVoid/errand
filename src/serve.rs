@@ -36,7 +36,7 @@ use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::gateway::{GATEWAY_USAGE, fetch_gateway_usage};
-use crate::provider::models::{agent_directory, model_by_id, read_models};
+use crate::provider::models::{agent_directory, model_by_id, read_models, read_store};
 use crate::provider::usage::Fetch;
 use crate::provider::usage::HttpRequest;
 use crate::provider::usage::HttpResponse;
@@ -724,7 +724,19 @@ async fn run(
 
     let env = host_environment();
     let store = agent_directory(&env);
-    let models = read_models(store.as_deref(), config.agent.provider.as_str());
+    let read = read_store(store.as_deref(), config.agent.provider.as_str());
+    if read.skipped > 0 {
+        // Said once, at startup: the store is written by something other than
+        // errand, and an operator can only fix what they are told about.
+        log.warn(
+            "the model store holds entries that are not models, and they were skipped",
+            &fields([
+                ("provider", LogValue::from(config.agent.provider.as_str())),
+                ("skipped", LogValue::from(read.skipped)),
+            ]),
+        );
+    }
+    let models = read.models;
 
     let delegate = config.agent.delegate.clone();
     let delegate_base_url = delegate.as_ref().and_then(|delegate| {

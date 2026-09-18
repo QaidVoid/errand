@@ -8,7 +8,9 @@ use serde_json::{Value, json};
 use super::{Post, PostRequest, PostResponse, describe_images, described_block, image_describer};
 use crate::agent::protocol::AgentImage;
 use crate::config::schema::AgentConfig;
-use crate::provider::models::{agent_directory, read_models, sees_images, vision_model};
+use crate::provider::models::{
+    agent_directory, read_models, read_store, sees_images, vision_model,
+};
 use tempfile::TempDir;
 
 fn image() -> AgentImage {
@@ -385,4 +387,33 @@ fn the_agent_directory_is_found_by_override_then_by_convention() {
     .into_iter()
     .collect();
     assert_eq!(agent_directory(&empty_override), None);
+}
+
+/// The store is written by something other than errand, so a line of it being
+/// wrong must not be the reason the daemon will not start.
+#[test]
+fn an_entry_that_is_not_a_model_is_skipped_and_counted() {
+    let (_dir, path) = with_store(&json!({
+        "zai-coding-cn": {
+            "models": [
+                { "id": "glm-5.3", "baseUrl": "https://api.example/v1", "input": ["text"] },
+                null,
+                "not-a-model",
+                { "id": "glm-5.3-flash", "baseUrl": "https://api.example/v1",
+                  "input": ["text", "image"] },
+            ],
+        },
+    }));
+
+    let read = read_store(Some(&path), "zai-coding-cn");
+
+    assert_eq!(
+        read.models
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect::<Vec<_>>(),
+        ["glm-5.3", "glm-5.3-flash"],
+        "the models either side of the bad entries are still read"
+    );
+    assert_eq!(read.skipped, 2);
 }
