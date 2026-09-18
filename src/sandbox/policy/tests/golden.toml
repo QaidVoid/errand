@@ -1,0 +1,16 @@
+# Generated per session by errand. Do not edit.
+[filesystem]
+reset = true
+read = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/proc", "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d", "/etc/ssl", "/etc/ca-certificates.conf", "/etc/ca-certificates", "/var/lib/ca-certificates", "/etc/pki", "/etc/nsswitch.conf", "/etc/services", "/etc/protocols", { path = "/var/lib/errand/resolv.conf", at = "/etc/resolv.conf" }, { path = "/home/operator/code/demo", at = "/workspace" }, { path = "/home/operator/.local/state/errand/s-1", at = "/state" }, "/opt/agent/bin", "/opt/agent/lib/pi"]
+write = [{ path = "/home/operator/code/demo", at = "/workspace" }, { path = "/home/operator/.local/state/errand/s-1", at = "/state" }]
+execute = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/state/home/bin", "/opt/agent/bin", "/opt/agent/lib/pi"]
+
+[env]
+pass = ["ZAI_API_KEY"]
+set = { PATH = "/state/home/bin:/opt/agent/bin:/usr/local/bin:/usr/bin:/bin", HOME = "/state/home" }
+
+[resources]
+file_max = "1g"
+
+[network]
+egress_allow = [{ host = "*", port = 443 }]

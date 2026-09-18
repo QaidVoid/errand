@@ -13,21 +13,24 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: denoland/setup-deno@667a34cdef165d8d2b2e98dde39547c9daac7282 # v2.0.4
-        with:
-          deno-version: v2.x
+      - name: Install the Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
 
-      - name: Cache Deno deps
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      - name: Cache cargo build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.cache/deno
-            ~/.deno
-          key: deno-${{ runner.os }}-${{ hashFiles('deno.lock', 'deno.json') }}
+            ~/.cargo/bin
+            ~/.cargo/registry
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            deno-${{ runner.os }}-
+            cargo-${{ runner.os }}-
 
-      - name: Format, lint, typecheck, test, docs, interface
-        run: deno task check
+      - name: Format, lint, test
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test

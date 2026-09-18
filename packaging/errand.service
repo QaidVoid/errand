@@ -6,7 +6,7 @@
 # started as that account too, so files it writes in a project belong to the
 # person whose project it is.
 #
-# It runs the single binary that `deno task build` produces, which carries the
+# It runs the single binary that `cargo build --release` produces, which carries the
 # interface and its own runtime, so the host needs neither a checkout nor deno.
 
 [Unit]

@@ -11,10 +11,10 @@ files an agent writes in a project belong to the person whose project it is.
 # The account the daemon runs as, with somewhere to keep its state.
 useradd --system --home-dir /var/lib/errand --create-home errand
 
-# The binary, built anywhere deno is installed. It carries the interface and
+# The binary, built anywhere a Rust toolchain is installed. It carries the interface and
 # its own runtime, so the host that runs it needs neither.
 git clone https://github.com/QaidVoid/errand
-cd errand && deno task build
+cd errand && cargo build --release
 install -m 0755 dist/errand /usr/local/bin/errand
 
 # Its configuration, which holds the bot token, so it is readable by nobody

@@ -12,7 +12,7 @@ writes in a project belong to the person whose project it is.
 useradd --system --home-dir /var/lib/errand --create-home errand
 
 git clone https://github.com/QaidVoid/errand
-cd errand && deno task build
+cd errand && cargo build --release
 install -m 0755 dist/errand /usr/local/bin/errand
 
 install -o errand -g errand -m 0700 -d /var/lib/errand/.config/errand

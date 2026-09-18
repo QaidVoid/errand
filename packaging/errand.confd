@@ -12,8 +12,8 @@ errand_group="errand"
 # run, so this is set here rather than inherited.
 errand_home="/var/lib/errand"
 
-# The binary `deno task build` produces. It carries the interface and its own
-# runtime, so the host needs neither a checkout nor deno.
+# The binary `cargo build --release` produces. It carries the interface and its own
+# runtime, so a host that runs it needs neither a checkout nor a toolchain.
 errand_binary="/usr/local/bin/errand"
 
 # Where the daemon runs from. Nothing is read from here; it is simply somewhere

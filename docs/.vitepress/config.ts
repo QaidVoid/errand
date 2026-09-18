@@ -3,9 +3,9 @@ import { defineConfig } from "vitepress";
 /**
  * The documentation site.
  *
- * The reference pages under `reference/` are generated from the code by
- * `deno task docs`, and `deno task check` fails when they drift. Everything
- * else is written by hand, because it is judgement rather than a list.
+ * The reference pages under `reference/` are generated from the code, and
+ * `cargo test` fails when they drift. Everything else is written by hand,
+ * because it is judgement rather than a list.
  */
 export default defineConfig({
   title: "errand",
