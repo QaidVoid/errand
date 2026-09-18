@@ -17,6 +17,7 @@ use crate::config::schema::Config;
 use crate::config::schema::SandboxBackend;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
+use crate::memory::store::MemoryStore;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
@@ -410,9 +411,25 @@ async fn with_manager(run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = 
     with_manager_options(&json!({}), None, run).await;
 }
 
+/// A manager that remembers, which is what puts a system prompt on a launch.
+async fn with_remembering_manager(
+    run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + '_>>,
+) {
+    with_everything(&json!({}), None, true, run).await;
+}
+
 async fn with_manager_options(
     overrides: &serde_json::Value,
     unavailable: Option<Unavailable>,
+    run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + '_>>,
+) {
+    with_everything(overrides, unavailable, false, run).await;
+}
+
+async fn with_everything(
+    overrides: &serde_json::Value,
+    unavailable: Option<Unavailable>,
+    remembering: bool,
     run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + '_>>,
 ) {
     let root = tempfile::tempdir().expect("a temp directory");
@@ -446,7 +463,9 @@ async fn with_manager_options(
         })),
         unavailable,
         operator_ids: None,
-        memory: None,
+        memory: remembering.then(|| {
+            Arc::new(MemoryStore::open(root.path().join("memory.db")).expect("the store opens"))
+        }),
         describe_images: None,
         public_url: None,
         available_models: Vec::new(),
@@ -1492,6 +1511,42 @@ async fn a_withdrawal_nobody_holds_reports_nothing() {
 
             assert!(!harness.manager.withdraw("not-a-message", "thread-1").await);
             assert!(!harness.manager.withdraw("m1", "thread-404").await);
+        })
+    })
+    .await;
+}
+
+/// The notes files already exist on a resume, and treating that as a failure
+/// loses the whole system prompt with it: the house rules, the memory block,
+/// the attribution instructions and the delegate instructions all vanish.
+#[tokio::test]
+async fn a_resumed_session_is_still_given_its_system_prompt() {
+    with_remembering_manager(|harness| {
+        Box::pin(async move {
+            harness.manager.start(message("demo: go", "m1")).await;
+            settle().await;
+            let first = harness.sandbox.launched.lock().unwrap()[0]
+                .system_prompt_path
+                .clone();
+            assert!(first.is_some(), "the first launch has one");
+
+            harness
+                .manager
+                .end_thread("thread-1", EndReason::Idle)
+                .await;
+            settle().await;
+            harness
+                .manager
+                .resume("thread-1", message("carry on", "m2"))
+                .await;
+            settle().await;
+
+            let launched = harness.sandbox.launched.lock().unwrap();
+            let resumed = launched.last().expect("a second launch");
+            assert_eq!(
+                resumed.system_prompt_path, first,
+                "a resumed session keeps the system prompt it was started with"
+            );
         })
     })
     .await;

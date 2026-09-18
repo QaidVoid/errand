@@ -197,6 +197,16 @@ impl OpenOptions {
         }
     }
 
+    /// Opens for writing as [`truncate`] does, with the given permissions.
+    ///
+    /// [`truncate`]: OpenOptions::truncate
+    pub fn truncate_mode(mode: u32) -> Self {
+        Self {
+            flags: (OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC).bits(),
+            mode: Some(Mode::from_bits_truncate(mode)),
+        }
+    }
+
     /// Creates a file, failing when anything is already at the name.
     ///
     /// `O_EXCL` refuses a name that is already taken, including one taken by
@@ -220,6 +230,17 @@ pub fn read_beneath(root: &str, relative: &str) -> std::io::Result<String> {
 /// Empties a file beneath `root`, following no symlink to get there.
 pub fn truncate_beneath(root: &str, relative: &str) -> std::io::Result<()> {
     open_beneath(root, relative, &OpenOptions::truncate()).map(|_| ())
+}
+
+/// Writes `bytes` to a file beneath `root`, replacing what was there.
+///
+/// The daemon writes into trees a session can also write, so the name is
+/// resolved by the kernel rather than trusted: a link planted at it redirects
+/// nothing.
+pub fn write_beneath(root: &str, relative: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = open_beneath(root, relative, &OpenOptions::truncate())?;
+    file.write_all(bytes)
 }
 
 #[cfg(test)]

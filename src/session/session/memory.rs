@@ -24,10 +24,6 @@ impl Running {
     pub(super) fn write_memory_block(&self) -> Option<String> {
         let memory = self.options.memory.as_ref()?;
 
-        let notes_path = std::path::Path::new(&self.options.state_dir).join(NOTES_FILENAME);
-        let project_notes_path =
-            std::path::Path::new(&self.options.state_dir).join(PROJECT_NOTES_FILENAME);
-
         let about = [
             memory
                 .render(&self.options.owner_id, DEFAULT_MEMORY_BUDGET)
@@ -76,13 +72,30 @@ impl Running {
         // reason to create the directory yet. The notes files are created
         // empty so the agent appends to a file it can see exists.
         let written = std::fs::create_dir_all(&self.options.state_dir)
-            .and_then(|()| std::fs::write(&path, format!("{contents}\n")))
             .and_then(|()| {
-                for notes in [&notes_path, &project_notes_path] {
-                    std::fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(notes)?;
+                // Through the state directory rather than at it: a session
+                // writes this tree, so the name can have become a link.
+                paths::write_beneath(
+                    &self.options.state_dir,
+                    BLOCK_FILENAME,
+                    format!("{contents}\n").as_bytes(),
+                )
+            })
+            .and_then(|()| {
+                for notes in [NOTES_FILENAME, PROJECT_NOTES_FILENAME] {
+                    match paths::open_beneath(
+                        &self.options.state_dir,
+                        notes,
+                        &paths::OpenOptions::create_new(),
+                    ) {
+                        Ok(_) => {}
+                        // Already there is the ordinary state of a resumed
+                        // session: the file was made when it first started.
+                        // Treating it as a failure loses the whole block,
+                        // and with it the house rules and the memory.
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                        Err(error) => return Err(error),
+                    }
                 }
                 Ok(())
             });

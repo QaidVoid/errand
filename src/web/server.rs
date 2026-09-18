@@ -231,7 +231,8 @@ impl WebServer {
 
         if !self.assets.join("index.html").exists() {
             return Err(WebInterfaceError(format!(
-                "the interface is not built. Run `deno task build:web` to produce {}.",
+                "the interface is not built. Run `cd web && deno run -A --node-modules-dir \
+                 npm:vite build .` to produce {}.",
                 self.assets.display()
             )));
         }

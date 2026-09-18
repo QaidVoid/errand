@@ -12,7 +12,6 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
-use std::os::unix::fs::OpenOptionsExt;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
@@ -1852,17 +1851,15 @@ impl Running {
     fn write_git_config(&self, github: Option<&GithubConfig>) {
         let Some(github) = github else { return };
         let home = std::path::Path::new(&self.options.state_dir).join("home");
+        // Through the state directory, which a session also writes: a link
+        // planted at one of these names would otherwise have the daemon
+        // truncate whatever it points at.
         let written = std::fs::create_dir_all(&home).and_then(|()| {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(home.join(GITCONFIG_FILENAME))
-                .and_then(|mut file| {
-                    use std::io::Write;
-                    file.write_all(git_config_contents(github).as_bytes())
-                })
+            paths::write_beneath(
+                &self.options.state_dir,
+                &format!("home/{GITCONFIG_FILENAME}"),
+                git_config_contents(github).as_bytes(),
+            )
         });
         if let Err(error) = written {
             self.log.warn(
@@ -1879,29 +1876,25 @@ impl Running {
             .join("bin");
         let delegate = self.options.config.agent.delegate.as_ref();
         let written = std::fs::create_dir_all(&bin).and_then(|()| {
+            // As with the git configuration: resolved by the kernel, because
+            // a session can write this tree and these names are predictable.
+            use std::io::Write;
+            let executable = paths::OpenOptions::truncate_mode(0o755);
             if let Some(delegate) = delegate {
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(true)
-                    .mode(0o755)
-                    .open(bin.join(DELEGATE_COMMAND))
-                    .and_then(|mut file| {
-                        use std::io::Write;
-                        file.write_all(delegate_command_contents(delegate.deadline_ms).as_bytes())
-                    })?;
+                let mut file = paths::open_beneath(
+                    &self.options.state_dir,
+                    &format!("home/bin/{DELEGATE_COMMAND}"),
+                    &executable,
+                )?;
+                file.write_all(delegate_command_contents(delegate.deadline_ms).as_bytes())?;
             }
-            if let Some(_github) = github {
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(true)
-                    .mode(0o755)
-                    .open(bin.join(GH_SHIM_FILENAME))
-                    .and_then(|mut file| {
-                        use std::io::Write;
-                        file.write_all(gh_shim_contents().as_bytes())
-                    })?;
+            if github.is_some() {
+                let mut file = paths::open_beneath(
+                    &self.options.state_dir,
+                    &format!("home/bin/{GH_SHIM_FILENAME}"),
+                    &executable,
+                )?;
+                file.write_all(gh_shim_contents().as_bytes())?;
             }
             Ok(())
         });
