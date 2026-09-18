@@ -2558,8 +2558,11 @@ fn the_listing_says_what_somebody_can_type_back() {
             default_level: Some(":high".to_owned()),
         },
     ];
-    let aliases =
-        std::collections::BTreeMap::from([("glm".to_owned(), "zai/glm-5.3:max".to_owned())]);
+    let aliases = std::collections::BTreeMap::from([
+        ("glm".to_owned(), "zai/glm-5.3:max".to_owned()),
+        // A short name spelled the same as the model teaches nobody anything.
+        ("glm-5.3".to_owned(), "zai/glm-5.3".to_owned()),
+    ]);
 
     let lines = super::answering::grouped_by_provider(&available, "zai", "glm-5.3", &aliases);
 
@@ -2685,6 +2688,26 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
                     .iter()
                     .any(|(text, _)| text.contains("musecringe:max")),
                 "the thread is still told the name with its level"
+            );
+
+            // A switch is the last thing anybody said about which model runs,
+            // and no turn has reported one since. Asking now must not answer
+            // with the model the session started on.
+            harness
+                .session
+                .handle(message_from("!model", OWNER, "m3"))
+                .await;
+            settle().await;
+
+            let said = harness.thread.replies();
+            let listing = &said.last().expect("a listing").0;
+            assert!(
+                listing.contains("this session runs on `musecringe:max`"),
+                "got {listing}"
+            );
+            assert!(
+                listing.contains("`musecringe`  (running, `muse`)"),
+                "the model it was switched to is the one marked, got {listing}"
             );
         })
     })

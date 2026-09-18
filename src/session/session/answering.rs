@@ -110,13 +110,16 @@ pub(super) fn grouped_by_provider(
 }
 
 /// The short names that stand for one model, in the order they were written.
+///
+/// A short name spelled the same as the model teaches nobody anything, so it
+/// is left out rather than shown beside the name it repeats.
 fn short_names(aliases: &BTreeMap<String, String>, model: &AvailableModel) -> Vec<String> {
     let qualified = model.qualified();
     aliases
         .iter()
-        .filter(|(_, target)| {
+        .filter(|(short, target)| {
             let bare = split_level(target).0;
-            bare == qualified || bare == model.id
+            (bare == qualified || bare == model.id) && **short != model.id
         })
         .map(|(short, _)| format!("`{short}`"))
         .collect()
@@ -313,10 +316,7 @@ impl Running {
 
         if wanted.is_empty() {
             let running = self
-                .usage
-                .model
-                .clone()
-                .or_else(|| self.options.config.agent.model.clone())
+                .running_model()
                 .unwrap_or_else(|| "the provider default".to_owned());
             self.say(&if available.is_empty() {
                 format!("this session runs on `{running}`; the host lists no others to switch to")

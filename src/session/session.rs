@@ -2042,6 +2042,20 @@ impl Running {
             .unwrap_or_else(|| self.options.config.agent.provider.clone())
     }
 
+    /// The model this session runs on, as a name to show somebody.
+    ///
+    /// A switch is the most recent thing anyone said about it, so it is read
+    /// first. Only after that is what the agent last reported, which settles
+    /// a pattern into the model it actually picked but says nothing about a
+    /// switch made since the last turn.
+    fn running_model(&self) -> Option<String> {
+        self.switched
+            .as_ref()
+            .map(|(_, model)| model.clone())
+            .or_else(|| self.usage.model.clone())
+            .or_else(|| self.options.config.agent.model.clone())
+    }
+
     /// The model this session runs on, on that provider.
     fn model(&self) -> Option<String> {
         self.switched
