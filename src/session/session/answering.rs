@@ -1,0 +1,375 @@
+//! What a `!` command does to the session it was typed in.
+//!
+//! The table of commands, who may run each, and what they say is
+//! `crate::session::commands`. This is the half that acts on one.
+
+use super::{Attached, IncomingMessage, Running, SessionTimer, display_name, end_reason_name};
+use crate::chat::render::{bytes as byte_count, compaction_line, connection_line};
+use crate::log::{LogValue, fields};
+use crate::session::commands::{
+    COMMANDS, CommandAccess, Standing, help_text, may_run, parse_user_id,
+};
+use crate::session::event::{EndReason, ReactionOutcome, SessionEvent};
+use crate::session::model::expand_alias;
+
+impl Running {
+    pub(super) async fn run_command(&mut self, word: &str, rest: &str, message: IncomingMessage) {
+        self.replying_to = Some(word.to_owned());
+        self.answer_command(word, rest, &message).await;
+        self.replying_to = None;
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per command keeps the switch readable, as the original's switch does"
+    )]
+    pub(super) async fn answer_command(
+        &mut self,
+        word: &str,
+        rest: &str,
+        message: &IncomingMessage,
+    ) {
+        let access = COMMANDS
+            .iter()
+            .find(|(name, _)| *name == word)
+            .map_or(CommandAccess::Owner, |(_, meta)| meta.access);
+        let standing = Standing {
+            is_owner: self.may_control(&message.author_id),
+            is_guest: self.guests.contains(&message.author_id),
+        };
+        if !may_run(access, standing) {
+            let why = if access == CommandAccess::Owner {
+                format!(
+                    "only <@{}>, who started this session, can use {word}",
+                    self.options.owner_id
+                )
+            } else {
+                self.not_invited()
+            };
+            self.refuse(message, &why).await;
+            return;
+        }
+
+        match word {
+            "!stop" => {
+                self.react(&message.id, ReactionOutcome::Accepted).await;
+                self.note_command(message, "!stop").await;
+                self.end_because(
+                    EndReason::Stopped,
+                    &format!(
+                        "this session ended ({})",
+                        end_reason_name(EndReason::Stopped)
+                    ),
+                )
+                .await;
+            }
+            "!interrupt" => {
+                if self.ticket.is_none() {
+                    self.say("there is nothing running to interrupt").await;
+                    return;
+                }
+                // Asking twice is asking for the same thing. Each ask used to
+                // start its own wait, and the first of them to run out force
+                // stopped the session, so hurrying it along was what ended it.
+                if self.abort_in_flight {
+                    self.react(&message.id, ReactionOutcome::Accepted).await;
+                    self.say(
+                        "already interrupting; waiting for the agent to confirm. `!stop` ends the session",
+                    )
+                    .await;
+                    return;
+                }
+                self.aborting = true;
+                self.react(&message.id, ReactionOutcome::Accepted).await;
+                self.note_command(message, "!interrupt").await;
+                self.abort();
+            }
+            "!allow" | "!deny" => {
+                let target = parse_user_id(rest);
+                let Some(target) = target else {
+                    self.say(&format!("say who, as `{word} @user`")).await;
+                    return;
+                };
+                if target == self.options.owner_id {
+                    self.say("the owner already takes part in their own thread")
+                        .await;
+                    return;
+                }
+
+                if word == "!allow" {
+                    self.guests.insert(target.clone());
+                } else {
+                    self.guests.remove(&target);
+                }
+                if let Some(changed) = &self.options.on_guests_changed {
+                    let list = self.guests.iter().cloned().collect::<Vec<_>>();
+                    changed(&list);
+                }
+
+                self.react(&message.id, ReactionOutcome::Accepted).await;
+                self.say(&if word == "!allow" {
+                    format!("<@{target}> can now prompt this session and read its project")
+                } else {
+                    format!("<@{target}> can no longer take part in this thread")
+                })
+                .await;
+            }
+            "!guests" => {
+                let guests = self.guests.iter().cloned().collect::<Vec<_>>();
+                self.say(&if guests.is_empty() {
+                    format!(
+                        "only <@{}> takes part in this thread",
+                        self.options.owner_id
+                    )
+                } else {
+                    format!(
+                        "taking part: <@{}> and {}",
+                        self.options.owner_id,
+                        guests
+                            .iter()
+                            .map(|id| format!("<@{id}>"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })
+                .await;
+            }
+            "!facts" => self.report_facts(rest, message).await,
+            "!forget" => self.forget_facts(rest, message).await,
+            "!pwd" => {
+                self.say(&format!(
+                    "`{}` at `{}`",
+                    self.options.project.name, self.options.project.path
+                ))
+                .await;
+            }
+            "!ls" | "!cat" => self.read_path(rest).await,
+            "!file" => {
+                self.react(&message.id, ReactionOutcome::Accepted).await;
+                self.upload_file(rest).await;
+            }
+            "!pr" => {
+                self.note_pull_request_asked(message);
+                self.open_pull_request_command(rest, message).await;
+            }
+            "!compact" => self.compact_conversation(message).await,
+            "!model" => self.switch_model(rest, message).await,
+            "!help" => self.say(&help_text()).await,
+            "!then" => {
+                if rest.trim().is_empty() {
+                    self.say("say what to hold, as `!then <instruction>`").await;
+                    return;
+                }
+                // With nothing running there is nothing to wait for, so it
+                // starts a turn rather than being refused for asking at the
+                // wrong moment.
+                self.submit_prompt(rest, message.clone(), true, Attached::default())
+                    .await;
+            }
+            "!steer" => {
+                if rest.trim().is_empty() {
+                    self.say("say what to steer towards, as `!steer <instruction>`")
+                        .await;
+                    return;
+                }
+                if self.ticket.is_none() {
+                    self.say("there is no running turn to steer; send it as an ordinary message")
+                        .await;
+                    return;
+                }
+                self.note_command(message, &format!("!steer {rest}")).await;
+                if let Some(client) = &self.client {
+                    client.steer(rest, None);
+                }
+                self.react(&message.id, ReactionOutcome::Accepted).await;
+            }
+            _ => {
+                let said = self.describe_status();
+                self.say(&said).await;
+            }
+        }
+    }
+
+    /// Shows which models this session can run on, or moves it to one.
+    pub(super) async fn switch_model(&mut self, rest: &str, message: &IncomingMessage) {
+        // A short name is what somebody types here too, so it stands for the
+        // same model it would have at the start of a session.
+        let wanted = expand_alias(rest.trim(), &self.options.config.agent.aliases);
+        let available = &self.options.available_models;
+
+        if wanted.is_empty() {
+            let running = self
+                .usage
+                .model
+                .clone()
+                .or_else(|| self.options.config.agent.model.clone())
+                .unwrap_or_else(|| "the provider default".to_owned());
+            self.say(&if available.is_empty() {
+                format!("this session runs on `{running}`; the host lists no others to switch to")
+            } else {
+                let mut lines = vec![format!(
+                    "this session runs on `{running}`. Switch with `!model <name>`:"
+                )];
+                lines.extend(available.iter().map(|model| format!("  {model}")));
+                lines.join("\n")
+            })
+            .await;
+            return;
+        }
+
+        if self.ticket.is_some() {
+            self.say("a turn is running; wait for it, or stop it with `!interrupt`")
+                .await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
+            return;
+        }
+
+        // Refused rather than passed through, so a typo becomes a message
+        // here instead of a turn that fails against the provider later.
+        if !available.is_empty() && !available.contains(&wanted) {
+            self.say(&format!(
+                "this host does not list a model called `{wanted}`"
+            ))
+            .await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
+            return;
+        }
+
+        let sent = self
+            .client
+            .as_ref()
+            .is_some_and(|client| client.set_model(&self.provider(), &wanted));
+        if !sent {
+            self.say("the agent is not accepting anything further; this session has ended")
+                .await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
+            return;
+        }
+
+        let provider = self.provider();
+        self.switched = Some((provider.clone(), wanted.clone()));
+        if let Some(changed) = &self.options.on_model_changed {
+            changed(&provider, &wanted);
+        }
+
+        self.note_command(message, &format!("!model {wanted}"))
+            .await;
+        self.say(&connection_line(&format!(
+            "this session now runs on `{wanted}`, keeping what was said"
+        )))
+        .await;
+        self.react(&message.id, ReactionOutcome::Accepted).await;
+    }
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "token totals sit far below f64's exact range"
+    )]
+    pub(super) fn describe_status(&self) -> String {
+        let mut lines = vec![
+            format!("project: {}", self.options.project.name),
+            format!(
+                "state: {}",
+                if self.ticket.is_some() {
+                    "running a turn"
+                } else {
+                    "idle"
+                }
+            ),
+            format!(
+                "turns in flight across all sessions: {}",
+                self.options.scheduler.turns_in_flight()
+            ),
+            format!("prompts waiting: {}", self.options.scheduler.queue_length()),
+        ];
+
+        if self.delegated_asked > 0 {
+            lines.push(format!(
+                "delegated: {} of {} asked, {} token(s) spent, {} kept out of this conversation",
+                self.delegated_answered,
+                self.delegated_asked,
+                self.delegated_tokens,
+                byte_count(self.delegated_kept_out as f64),
+            ));
+        }
+        lines.join("\n")
+    }
+
+    /// Aborts the running turn, force stopping if the agent will not confirm.
+    pub(super) fn abort(&mut self) {
+        self.abort_in_flight = true;
+        if let Some(client) = &self.client {
+            client.abort();
+        }
+        self.abort_timer = Some(self.timers.set_timeout(
+            SessionTimer::AbortDeadline,
+            self.options.config.timeouts.abort_ms,
+        ));
+    }
+
+    /// Records a command that changed the agent's course.
+    pub(super) async fn note_command(&self, message: &IncomingMessage, text: &str) {
+        self.note_prompt(&display_name(message), text, None).await;
+    }
+
+    /// Summarises the conversation so far, freeing context to carry on in.
+    ///
+    /// Refused while a turn is running: compacting underneath a turn would
+    /// change the conversation the agent is part way through answering about.
+    pub(super) async fn compact_conversation(&mut self, message: &IncomingMessage) {
+        if self.ticket.is_some() {
+            self.say("a turn is running; wait for it, or stop it with `!interrupt`")
+                .await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
+            return;
+        }
+
+        let Some(client) = self.client.clone() else {
+            self.say("this session has no agent to compact").await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
+            return;
+        };
+
+        self.react(&message.id, ReactionOutcome::Accepted).await;
+        self.note_command(message, "!compact").await;
+        match client
+            .compact(self.options.config.timeouts.question_ms)
+            .await
+        {
+            Ok(answer) => {
+                self.say(&compaction_line(&answer)).await;
+                self.react(&message.id, ReactionOutcome::Succeeded).await;
+            }
+            Err(error) => {
+                self.log.warn(
+                    "compaction failed",
+                    &fields([("detail", LogValue::from(error.clone()))]),
+                );
+                self.say(&format!("compaction did not finish: {error}"))
+                    .await;
+                self.react(&message.id, ReactionOutcome::Failed).await;
+            }
+        }
+    }
+
+    /// Turns a message down, explaining the first time and reacting every
+    /// time.
+    ///
+    /// Answered as a reply rather than said: a refusal is addressed to the
+    /// person who tripped it, not to the session. Posting it would record it
+    /// and show it in an interface as though the agent had said it, which is
+    /// both untrue and noise in a conversation the refused message never
+    /// joined.
+    pub(super) async fn refuse(&mut self, message: &IncomingMessage, why: &str) {
+        if !self.explained.contains(&message.author_id) {
+            self.explained.insert(message.author_id.clone());
+            self.views
+                .send(SessionEvent::Reply {
+                    text: why.to_owned(),
+                    command: "refused".to_owned(),
+                })
+                .await;
+        }
+        self.react(&message.id, ReactionOutcome::Failed).await;
+    }
+}
