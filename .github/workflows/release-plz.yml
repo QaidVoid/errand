@@ -34,7 +34,6 @@ jobs:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   # Publishes whatever the merged release pull request left on main, and tags
   # it. The interface is built first: the binary carries it, and a release
@@ -44,6 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Trusted publishing: the registry token is minted from this job's own
+      # identity and lasts minutes, so nothing long-lived is stored here.
+      id-token: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -59,10 +61,14 @@ jobs:
       - name: Build the interface
         run: cd web && bun install && bun run build
 
+      - name: Mint a registry token for this run
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
       - name: Publish and tag
         uses: release-plz/action@v0.5
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
