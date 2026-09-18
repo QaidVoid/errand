@@ -15,7 +15,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use serenity::builder::{CreateAttachment, CreateMessage, EditMessage, EditThread};
+use serenity::builder::{
+    CreateAllowedMentions, CreateAttachment, CreateMessage, EditMessage, EditThread,
+};
 use serenity::model::channel::Channel;
 use serenity::model::channel::ChannelType;
 use serenity::model::channel::MessageFlags;
@@ -86,14 +88,29 @@ pub trait ThreadTransport: Send + Sync + 'static {
     fn send_typing(&self) -> ServiceCall<()>;
 }
 
+/// Who a message the daemon posts may notify.
+///
+/// The daemon addresses a person on purpose, to say a turn they asked for has
+/// settled, so user mentions are parsed. Nothing it posts ever means to reach
+/// everyone or a role, and most of what it posts is the agent's words or a
+/// person's own: without this, text that merely happens to contain the
+/// everyone or a role syntax would notify them.
+fn addressed_to_people() -> CreateAllowedMentions {
+    CreateAllowedMentions::new()
+        .all_users(true)
+        .all_roles(false)
+        .everyone(false)
+}
+
 /// The message options for the production transport.
 ///
-/// The one way a message is built, so the suppress-embeds flag cannot be
-/// lost at a new call site.
+/// The one way a message is built, so neither the suppress-embeds flag nor
+/// the mention rule can be lost at a new call site.
 pub fn plain(content: &str) -> CreateMessage {
     CreateMessage::new()
         .content(content.to_owned())
         .flags(MessageFlags::SUPPRESS_EMBEDS)
+        .allowed_mentions(addressed_to_people())
 }
 
 /// Parses one message id and one reaction glyph, or fails trying.
@@ -155,7 +172,8 @@ impl ThreadTransport for SerenityThread {
         Box::pin(async move {
             let edited = EditMessage::new()
                 .content(content)
-                .flags(MessageFlags::SUPPRESS_EMBEDS);
+                .flags(MessageFlags::SUPPRESS_EMBEDS)
+                .allowed_mentions(addressed_to_people());
             thread_id
                 .edit_message(&http, MessageId::new(id), edited)
                 .await?;

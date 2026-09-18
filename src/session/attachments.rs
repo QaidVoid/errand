@@ -11,8 +11,6 @@
 //! called README.md must not sit on top of the project's own.
 
 use std::future::Future;
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::{Path, PathBuf};
 
 use crate::sandbox::paths;
 
@@ -100,30 +98,52 @@ fn safe_name(name: &str) -> String {
     }
 }
 
-fn exists(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
-}
-
-/// A path that is free, by adding a number rather than replacing what is
-/// there.
+/// Writes the bytes under the first free name, and returns the name used.
 ///
-/// An attachment silently overwriting a file would be the worst outcome of
-/// somebody being helpful.
-fn free_path(directory: &Path, name: &str) -> PathBuf {
+/// A number is added rather than what is there replaced: an attachment
+/// silently overwriting a file would be the worst outcome of somebody being
+/// helpful.
+///
+/// The name is not chosen and then opened: each candidate is opened with
+/// `O_EXCL` and the next is tried when it is taken. Asking first and opening
+/// afterwards leaves a window in which the answer changes, and the agent
+/// writes this directory, so the answer can be changed on purpose.
+fn write_new(project_path: &str, name: &str, bytes: &[u8]) -> std::io::Result<String> {
     let dot = name.rfind('.');
     let extension = match dot {
         Some(at) if at > 0 => &name[at..],
         _ => "",
     };
     let stem = &name[..name.len() - extension.len()];
-    let mut attempt = directory.join(name);
-    let mut next = 2;
-    while exists(&attempt) {
-        attempt = directory.join(format!("{stem}-{next}{extension}"));
-        next += 1;
+
+    for next in 1..=MAX_NAME_ATTEMPTS {
+        let candidate = if next == 1 {
+            name.to_owned()
+        } else {
+            format!("{stem}-{next}{extension}")
+        };
+        let opened = paths::open_beneath(
+            project_path,
+            &format!("{ATTACHMENTS_DIR}/{candidate}"),
+            &paths::OpenOptions::create_new(),
+        );
+        match opened {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(bytes)?;
+                return Ok(candidate);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
     }
-    attempt
+    Err(std::io::Error::other(
+        "no free name is left in the attachments directory",
+    ))
 }
+
+/// How many names are tried before a file is refused a place.
+const MAX_NAME_ATTEMPTS: usize = 512;
 
 /// Whether a file is one the model could be asked to look at.
 pub fn is_image(content_type: Option<&str>, name: &str) -> bool {
@@ -201,23 +221,10 @@ where
             continue;
         };
 
-        let saved = std::fs::create_dir_all(&directory).and_then(|()| {
-            let target = free_path(Path::new(&directory), &safe_name(&file.name));
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&target)
-                .and_then(|mut file| {
-                    use std::io::Write;
-                    file.write_all(&bytes)
-                })
-                .map(|()| target)
-        });
+        let saved = std::fs::create_dir_all(&directory)
+            .and_then(|()| write_new(project_path, &safe_name(&file.name), &bytes));
         match saved {
-            Ok(target) => {
-                let name = target.display().to_string().split_off(directory.len() + 1);
+            Ok(name) => {
                 taken.push(Taken {
                     path: format!("{ATTACHMENTS_DIR}/{name}"),
                     bytes,

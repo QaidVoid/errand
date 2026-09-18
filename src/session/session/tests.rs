@@ -2401,3 +2401,69 @@ async fn a_link_planted_in_the_project_reads_nothing_through_cat() {
     })
     .await;
 }
+
+/// A message from somebody the owner never invited, carrying a file.
+fn from_stranger_with_a_file(content: &str, id: &str) -> IncomingMessage {
+    let mut sent = message_from(content, STRANGER, id);
+    sent.attachments = vec![RawAttachment {
+        id: "a1".to_owned(),
+        name: "screenshot.png".to_owned(),
+        url: "https://files.example/screenshot.png".to_owned(),
+        size: PNG.len() as u64,
+        content_type: Some("image/png".to_owned()),
+    }];
+    sent
+}
+
+/// Answering a question the agent is blocked on decides what it does next,
+/// and fetching an attachment writes bytes into the project. Both are taking
+/// part in somebody else's session.
+#[tokio::test]
+async fn a_stranger_answers_no_dialog_and_leaves_no_file_behind() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            let project = harness.session.project().path.clone();
+            harness.controls().send(&json!({
+                "type": "extension_ui_request",
+                "id": "d1",
+                "method": "select",
+                "title": "which one?",
+                "options": ["a", "b"],
+            }));
+            settle().await;
+            assert!(
+                harness.thread.everything().contains("which one?"),
+                "the agent is waiting on a question"
+            );
+
+            harness
+                .session
+                .handle(from_stranger_with_a_file("a", "m9"))
+                .await;
+
+            let said = harness.thread.everything();
+            assert!(said.contains("has not invited you"), "{said}");
+            // Nothing was fetched into the project on their say-so.
+            let attachments = std::path::Path::new(&project).join("attachments");
+            assert!(
+                !attachments.exists()
+                    || std::fs::read_dir(&attachments)
+                        .into_iter()
+                        .flatten()
+                        .count()
+                        == 0,
+                "a stranger's file reached the project"
+            );
+            // The agent is still waiting, so the dialog was not answered.
+            assert!(
+                !harness
+                    .controls()
+                    .written()
+                    .iter()
+                    .any(|line| line.contains("\"d1\"")),
+                "a stranger answered the dialog"
+            );
+        })
+    })
+    .await;
+}

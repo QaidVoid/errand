@@ -172,6 +172,17 @@ impl OpenOptions {
             mode: Some(Mode::from_bits_truncate(0o600)),
         }
     }
+
+    /// Creates a file, failing when anything is already at the name.
+    ///
+    /// `O_EXCL` refuses a name that is already taken, including one taken by
+    /// a link, so the caller never has to ask first and then hope.
+    pub fn create_new() -> Self {
+        Self {
+            flags: (OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL).bits(),
+            mode: Some(Mode::from_bits_truncate(0o600)),
+        }
+    }
 }
 
 /// Reads a file beneath `root` as text, following no symlink to get there.

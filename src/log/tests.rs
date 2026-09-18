@@ -107,3 +107,31 @@ fn field_values_render_as_the_text_they_would_have_been() {
     assert_eq!(rendered.get("number"), Some(&LogValue::Number(7)));
     assert_eq!(rendered.get("flag"), Some(&LogValue::Flag(true)));
 }
+
+/// A record is one line. A field carrying a newline would end it early, and
+/// whatever followed would read as a line the daemon wrote, chosen by whoever
+/// sent the message it describes.
+#[test]
+fn a_newline_in_a_field_cannot_forge_a_second_record() {
+    let forged = "innocent\n{\"level\":\"error\",\"message\":\"the daemon gave up\"}";
+    let line = format_line(
+        LogLevel::Info,
+        "message",
+        &fields([("said", LogValue::from(forged))]),
+        0,
+    );
+
+    assert_eq!(line.lines().count(), 1, "{line}");
+    assert!(!line.contains('\n'));
+    assert!(line.contains("\\u{000A}"), "{line}");
+}
+
+/// Carriage returns and other C0 controls travel the same way.
+#[test]
+fn every_control_character_is_escaped_not_passed_through() {
+    assert_eq!(to_ascii("a\rb"), "a\\u{000D}b");
+    assert_eq!(to_ascii("a\tb"), "a\\u{0009}b");
+    assert_eq!(to_ascii("a\u{0}b"), "a\\u{0000}b");
+    // An ordinary space is not a control character and stays as it is.
+    assert_eq!(to_ascii("a b"), "a b");
+}

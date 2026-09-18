@@ -193,3 +193,34 @@ fn an_image_is_recognised_by_what_it_says_it_is_or_by_its_name() {
     assert!(!is_image(None, "notes.txt"));
     assert!(is_image(Some("application/octet-stream"), "logo.webp"));
 }
+
+/// The agent writes the attachments directory, so a link planted at the name
+/// an attachment is about to take must not redirect the write.
+#[tokio::test]
+async fn a_link_at_the_target_name_does_not_redirect_the_write() {
+    let root = project();
+    let outside = project();
+    let target = outside.path().join("id_ed25519");
+    std::fs::write(&target, "the host's own key").expect("written");
+
+    let directory = root.path().join(ATTACHMENTS_DIR);
+    std::fs::create_dir_all(&directory).expect("made");
+    std::os::unix::fs::symlink(&target, directory.join("notes.txt")).expect("linked");
+
+    let outcome = receive(
+        &[sent("notes.txt")],
+        root.path().to_str().unwrap(),
+        LIMITS,
+        serve,
+    )
+    .await;
+
+    // The link is a name already taken, so the next one is used instead.
+    assert_eq!(outcome.taken.len(), 1);
+    assert_ne!(outcome.taken[0].path, "attachments/notes.txt");
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("read back"),
+        "the host's own key",
+        "the host's file must be untouched"
+    );
+}

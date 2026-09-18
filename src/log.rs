@@ -97,10 +97,15 @@ const MAX_ASCII: char = '\u{7f}';
 
 /// Replaces every non-ASCII character with its `\u{XXXX}` escape, so that a
 /// line describing an emoji-bearing message is still pure ASCII.
+///
+/// A control character is escaped the same way, and for a second reason. A
+/// record is one line, and a field holding a newline would end it early: the
+/// rest would read as a line the daemon wrote, which is a line anybody who can
+/// send a chat message could then choose. Escaping keeps a record a record.
 pub fn to_ascii(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for character in text.chars() {
-        if character > MAX_ASCII {
+        if character > MAX_ASCII || character.is_control() {
             out.push_str("\\u{");
             let digits = format!("{:04X}", character as u32);
             out.push_str(&digits);

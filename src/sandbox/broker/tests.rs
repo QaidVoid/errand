@@ -333,8 +333,21 @@ fn host_internal_addresses_are_refused_whatever_the_allowlist_says() {
     ] {
         assert!(is_private_address(address), "{address}");
     }
-    for address in ["8.8.8.8", "1.1.1.1", "203.0.113.9", "2606:4700:4700::1111"] {
+    for address in ["8.8.8.8", "1.1.1.1", "140.82.121.4", "2606:4700:4700::1111"] {
         assert!(!is_private_address(address), "{address}");
+    }
+    // Reserved rather than host-internal, but nothing a session legitimately
+    // talks to answers on them.
+    for address in [
+        "192.0.2.9",    // TEST-NET-1
+        "198.51.100.9", // TEST-NET-2
+        "203.0.113.9",  // TEST-NET-3
+        "192.0.0.8",    // IETF protocol assignments
+        "192.88.99.1",  // 6to4 relay anycast
+        "198.18.0.1",   // benchmarking
+        "198.19.255.1", // benchmarking, the far end
+    ] {
+        assert!(is_private_address(address), "{address}");
     }
     // Loopback and link-local in v6, and a v4 loopback wearing a v6 coat.
     for address in ["::1", "fe80::1", "fd00::1", "::ffff:127.0.0.1"] {
@@ -542,4 +555,22 @@ async fn closing_the_broker_stops_it_accepting() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     panic!("the broker kept accepting after it was closed");
+}
+
+/// A head that never ends is not a request. Handing back what accumulated
+/// would serve a client that never finished asking as though it had.
+#[tokio::test]
+async fn a_head_that_never_ends_is_refused_rather_than_cut() {
+    let endless = vec![b'x'; super::server::MAX_HEAD_BYTES + 64];
+    let mut reader: &[u8] = &endless;
+    assert_eq!(read_request_head(&mut reader).await, None);
+
+    // One that ends just inside the cap is still read whole.
+    let mut head = "CONNECT open.example.com:443 HTTP/1.1\r\nX-Pad: ".to_owned();
+    head.push_str(&"p".repeat(super::server::MAX_HEAD_BYTES - head.len() - 8));
+    head.push_str("\r\n\r\n");
+    assert!(head.len() <= super::server::MAX_HEAD_BYTES);
+    let bytes = head.clone().into_bytes();
+    let mut reader: &[u8] = &bytes;
+    assert_eq!(read_request_head(&mut reader).await, Some(head));
 }

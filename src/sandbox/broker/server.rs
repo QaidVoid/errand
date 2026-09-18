@@ -235,6 +235,12 @@ async fn serve_provider(
     Ok(())
 }
 
+/// Largest request head the broker will read before giving up on one.
+///
+/// A CONNECT head is a line and a handful of headers. Anything longer is not a
+/// client that means to tunnel.
+pub const MAX_HEAD_BYTES: usize = 8192;
+
 /// Reads the whole CONNECT request head, up to and including the blank line.
 ///
 /// Read one byte at a time so nothing past the head is consumed: what follows
@@ -244,11 +250,15 @@ async fn serve_provider(
 /// still: those leftover header bytes would then be piped to the upstream
 /// ahead of the TLS `ClientHello` and corrupt the connection. The returned text
 /// keeps CRs so the caller splits on either line ending.
+///
+/// Returns nothing when the head does not end within [`MAX_HEAD_BYTES`].
+/// Handing back what had accumulated would let a client that never sent a
+/// blank line be served as though it had, with whatever the cut left behind
+/// read as a complete request.
 pub async fn read_request_head<R: tokio::io::AsyncRead + Unpin>(conn: &mut R) -> Option<String> {
     let mut byte = [0_u8; 1];
     let mut bytes: Vec<u8> = Vec::new();
-    // A head larger than this is not one the broker will honour.
-    while bytes.len() < 8192 {
+    while bytes.len() < MAX_HEAD_BYTES {
         match conn.read(&mut byte).await {
             Ok(0) | Err(_) => return None,
             Ok(_) => bytes.push(byte[0]),
@@ -257,18 +267,18 @@ pub async fn read_request_head<R: tokio::io::AsyncRead + Unpin>(conn: &mut R) ->
         // End of head: a blank line, as CRLFCRLF or a bare LFLF.
         if bytes[len - 1] == 0x0a {
             if len >= 2 && bytes[len - 2] == 0x0a {
-                break;
+                return Some(String::from_utf8_lossy(&bytes).into_owned());
             }
             if len >= 4
                 && bytes[len - 2] == 0x0d
                 && bytes[len - 3] == 0x0a
                 && bytes[len - 4] == 0x0d
             {
-                break;
+                return Some(String::from_utf8_lossy(&bytes).into_owned());
             }
         }
     }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    None
 }
 
 /// Answers a refused connection with the reason, then closes it.

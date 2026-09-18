@@ -434,3 +434,22 @@ async fn nothing_is_sent_while_the_connection_is_down() {
     port.flush().await;
     assert_eq!(channel.records().len(), 1);
 }
+
+/// The daemon addresses a person on purpose, but most of what it posts is the
+/// agent's words or somebody else's. Text that merely contains the everyone
+/// syntax must not notify everyone.
+#[test]
+fn a_message_notifies_a_named_person_and_nobody_else() {
+    let built = serde_json::to_value(super::plain("<@1> the agent said @everyone")).expect("built");
+    let mentions = built.get("allowed_mentions").expect("a mention rule");
+
+    let parse = mentions
+        .get("parse")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let parse: Vec<&str> = parse.iter().filter_map(|value| value.as_str()).collect();
+    assert!(parse.contains(&"users"), "{mentions}");
+    assert!(!parse.contains(&"everyone"), "{mentions}");
+    assert!(!parse.contains(&"roles"), "{mentions}");
+}

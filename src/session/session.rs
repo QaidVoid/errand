@@ -1084,6 +1084,15 @@ impl Running {
             return;
         }
 
+        // Before the dialog is answered and before anything is fetched. A
+        // session is the owner's, and answering a question the agent is
+        // blocked on, or having bytes written into the project, are both
+        // taking part in it.
+        if !self.may_take_part(&message.author_id) {
+            self.refuse(&message, &self.not_invited()).await;
+            return;
+        }
+
         let pending = self.client.as_ref().and_then(AgentClient::pending_dialog);
         if let Some(dialog) = pending {
             self.answer_dialog(&dialog, &content, &message).await;

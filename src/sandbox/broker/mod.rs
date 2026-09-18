@@ -151,21 +151,34 @@ fn same_secret(a: &str, b: &str) -> bool {
 /// internet a session is allowed out to. Reaching them through the broker
 /// would be a way back into the host that the network namespace was built to
 /// close.
+///
+/// The ranges reserved for documentation, benchmarking, protocol assignments
+/// and 6to4 relaying are refused as well. They are not the host's own, but
+/// nothing a session legitimately talks to answers on them, so a name that
+/// resolves there resolved to nothing worth dialling.
 pub fn is_private_v4(address: &str) -> bool {
     // An address the broker cannot read is not one it should dial, so a
     // spelling the parser refuses counts as internal rather than as public.
     let Ok(address) = address.parse::<Ipv4Addr>() else {
         return true;
     };
-    let [first, second, ..] = address.octets();
+    let [first, second, third, _] = address.octets();
     address.is_loopback()
         || address.is_private()
         || address.is_link_local()
         || address.is_multicast()
+        // The TEST-NET ranges, which exist to appear in prose.
+        || address.is_documentation()
         // `this network`, which std has no stable name for.
         || first == 0
         // Carrier-grade NAT, 100.64.0.0/10, likewise unnamed on stable.
         || (first == 100 && (64..=127).contains(&second))
+        // IETF protocol assignments, 192.0.0.0/24.
+        || (first == 192 && second == 0 && third == 0)
+        // The 6to4 relay anycast address, 192.88.99.0/24.
+        || (first == 192 && second == 88 && third == 99)
+        // Benchmarking, 198.18.0.0/15.
+        || (first == 198 && (18..=19).contains(&second))
         // Everything above multicast is reserved, and the last of it is the
         // broadcast address.
         || first >= 240
