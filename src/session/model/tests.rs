@@ -181,6 +181,7 @@ fn the_configured_model_may_name_its_provider_too() {
             ("zai-coding-cn".to_owned(), serde_json::json!({})),
             ("ajamxhacker".to_owned(), serde_json::json!({})),
         ]),
+        extensions: Vec::new(),
         aliases: BTreeMap::new(),
     };
 

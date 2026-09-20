@@ -180,6 +180,11 @@ pub fn provider_config(
 ) -> Map<String, Value> {
     let mut providers = Map::new();
     for (name, definition) in defined {
+        // An extension registers this provider itself, so writing a second
+        // definition here would collide with the one the extension makes.
+        if definition.get("extension").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
         let mut fields = match definition {
             Value::Object(fields) => fields.clone(),
             _ => Map::new(),
@@ -214,6 +219,29 @@ pub fn provider_config(
     let mut wrapped = Map::new();
     wrapped.insert("providers".to_owned(), Value::Object(providers));
     wrapped
+}
+
+/// Copies a file or a directory tree from the host into the session.
+///
+/// Recursive and shallow-simple: pi extensions are a file or a small folder,
+/// so this walks directories and copies files, which is all one needs. A
+/// symlink is followed by the copy, which is what reading the named directory
+/// means.
+async fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    let meta = tokio::fs::metadata(from).await?;
+    if meta.is_dir() {
+        tokio::fs::create_dir_all(to).await?;
+        let mut entries = tokio::fs::read_dir(from).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            Box::pin(copy_tree(&entry.path(), &to.join(entry.file_name()))).await?;
+        }
+    } else {
+        if let Some(parent) = to.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::copy(from, to).await?;
+    }
+    Ok(())
 }
 
 /// What the daemon holds back from a session, and what it gives instead.
@@ -402,6 +430,34 @@ impl BaileySandbox {
         Ok(())
     }
 
+    /// Copies each configured pi extension into the session's agent
+    /// directory, where the sandboxed agent auto-loads it.
+    ///
+    /// The host's own pi configuration is invisible to a sandbox, so an
+    /// extension installed there is placed here instead, under the same
+    /// `extensions` directory the agent scans. A directory that cannot be read
+    /// is reported rather than skipped silently: an extension the operator
+    /// named and that never loaded is a misconfiguration worth surfacing.
+    async fn write_agent_extensions(&self, launch: &SandboxLaunch) -> std::io::Result<()> {
+        if launch.extensions.is_empty() {
+            return Ok(());
+        }
+        let root = std::path::Path::new(&launch.state_dir)
+            .join("home")
+            .join(".pi")
+            .join("agent")
+            .join("extensions");
+        tokio::fs::create_dir_all(&root).await?;
+        for source in &launch.extensions {
+            let source = std::path::Path::new(source);
+            let Some(name) = source.file_name() else {
+                continue;
+            };
+            copy_tree(source, &root.join(name)).await?;
+        }
+        Ok(())
+    }
+
     /// The operator env, with the proxy variables added under a brokered
     /// session.
     ///
@@ -578,6 +634,9 @@ impl BaileySandbox {
             .await
             .map_err(|error| SandboxLaunchError(error.to_string()))?;
         self.write_provider_override(launch)
+            .await
+            .map_err(|error| SandboxLaunchError(error.to_string()))?;
+        self.write_agent_extensions(launch)
             .await
             .map_err(|error| SandboxLaunchError(error.to_string()))?;
         let env = self.brokered_env(&launch.env);

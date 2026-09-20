@@ -773,3 +773,46 @@ fn a_shadowed_credential_variable_is_refused_for_any_provider() {
         "sandbox.env must not set META_API_KEY"
     ));
 }
+
+/// A provider a pi extension registers needs no credential: it is anonymous or
+/// carries its own, and errand does not reach it. So a session may start on
+/// one without the credential an ordinary starting provider requires.
+#[test]
+fn an_extension_provider_starts_without_a_credential() {
+    let resolved = validate_config(&valid(json!({
+        "agent": {
+            "provider": "free-models",
+            "model": "free-fast",
+            "extensions": ["/home/somebody/.pi/extensions/free-models"],
+            "providers": {
+                "free-models": {
+                    "extension": true,
+                    "models": [{ "id": "free-fast" }],
+                },
+            },
+        },
+    })));
+
+    let config = resolved.expect("an extension provider needs no credential");
+    assert_eq!(config.agent.provider, "free-models");
+    assert!(config.agent.is_extension_provider("free-models"));
+    assert_eq!(
+        config.agent.extensions,
+        ["/home/somebody/.pi/extensions/free-models"]
+    );
+}
+
+/// An ordinary starting provider still must carry a credential; the relaxation
+/// is only for the extension case.
+#[test]
+fn an_ordinary_starting_provider_still_needs_its_credential() {
+    assert!(problems_contain(
+        &valid(json!({
+            "agent": {
+                "provider": "bare",
+                "providers": { "bare": { "baseUrl": "https://api.example/v1" } },
+            },
+        })),
+        "agent.providers.bare.credential is required"
+    ));
+}

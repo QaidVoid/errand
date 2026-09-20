@@ -137,12 +137,36 @@ pub struct AgentConfig {
     /// when nobody says, and one on an entry of `models` says it for that
     /// model alone. Naming a model the host's store already lists says it for
     /// that model without listing it twice.
+    /// A provider entry may instead be marked `extension: true`, which means a
+    /// pi extension registers it. Such a provider needs no credential, is not
+    /// brokered, and is not written into the agent's configuration: the
+    /// extension owns it. Its `models` are read only so a session can list and
+    /// switch to them.
     pub providers: Map<String, serde_json::Value>,
+    /// Host directories of pi extensions, copied into every session's agent
+    /// directory so the sandboxed agent loads them.
+    ///
+    /// A session runs in a sandbox that cannot see the host's own pi
+    /// configuration, so an extension installed there is invisible to it.
+    /// Naming its directory here places a copy where the agent looks. An
+    /// extension that registers a provider is paired with an `extension: true`
+    /// entry under `providers`.
+    pub extensions: Vec<String>,
     /// Short names for models, so a session is started without spelling one.
     pub aliases: BTreeMap<String, String>,
 }
 
 impl AgentConfig {
+    /// Whether a provider is registered by an extension rather than described
+    /// here, and so needs no credential and is left out of what errand writes.
+    pub fn is_extension_provider(&self, provider: &str) -> bool {
+        self.providers
+            .get(provider)
+            .and_then(|definition| definition.get("extension"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    }
+
     /// What one provider is reached with, or nothing when it is not defined.
     pub fn credential_of(&self, provider: &str) -> Option<&str> {
         self.providers

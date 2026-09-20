@@ -50,6 +50,7 @@ fn agent() -> AgentConfig {
                 "credential": "secret-key",
             }),
         )]),
+        extensions: Vec::new(),
         aliases: BTreeMap::new(),
     }
 }

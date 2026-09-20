@@ -65,6 +65,9 @@ pub struct SandboxLaunch {
     /// Absent where the operator defined none, which is the ordinary case: the
     /// agent then knows only the providers it ships with.
     pub providers: Map<String, Value>,
+    /// Host directories of pi extensions, copied into the session so the
+    /// sandboxed agent loads them.
+    pub extensions: Vec<String>,
     /// Continue the conversation already stored in the state directory.
     pub resume: bool,
 }

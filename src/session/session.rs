@@ -1035,6 +1035,14 @@ impl Running {
             }
         }
 
+        // A fresh agent directory each session means pi's model-catalog
+        // cache never survives, so it would refetch every launch. Extensions
+        // pin their own catalog, so startup network is turned off: it stops
+        // the per-launch refresh without touching the turn's own requests.
+        if !self.options.config.agent.extensions.is_empty() {
+            env.insert("PI_OFFLINE".to_owned(), "1".to_owned());
+        }
+
         let launch = SandboxLaunch {
             session_id: self.options.id.clone(),
             project_path: self.options.project.path.clone(),
@@ -1043,6 +1051,7 @@ impl Running {
             provider: self.provider(),
             model: self.model(),
             providers: self.options.config.agent.providers.clone(),
+            extensions: self.options.config.agent.extensions.clone(),
             system_prompt_path,
             resume: self.options.resume,
         };

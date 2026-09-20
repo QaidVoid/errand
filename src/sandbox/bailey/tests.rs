@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 
 use super::{
-    BaileyOptions, BaileySandbox, ProviderBrokering, bailey_args, egress_proxy_endpoint,
+    BaileyOptions, BaileySandbox, ProviderBrokering, bailey_args, copy_tree, egress_proxy_endpoint,
     egress_proxy_url, parse_doctor, provider_config, session_environment,
 };
 use crate::config::schema::NetworkMode;
@@ -63,6 +63,7 @@ fn launch() -> SandboxLaunch {
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
         providers: serde_json::Map::new(),
+        extensions: Vec::new(),
         resume: false,
     }
 }
@@ -533,6 +534,58 @@ fn without_a_broker_the_definitions_pass_through_less_the_credential() {
     assert_eq!(
         providers.get("meta"),
         Some(&json!({ "baseUrl": "https://api.meta.example/v1" }))
+    );
+}
+
+/// An extension registers its own provider, so errand must not write a second
+/// definition for it into the agent's configuration.
+#[test]
+fn an_extension_provider_is_left_out_of_what_is_written() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "free-models".to_owned(),
+        json!({ "extension": true, "models": [{ "id": "free-fast" }] }),
+    );
+    defined.insert(
+        "meta".to_owned(),
+        json!({ "baseUrl": "https://api.meta.example/v1", "credential": "k" }),
+    );
+    let merged = provider_config(&defined, &BTreeMap::new());
+    let providers = merged
+        .get("providers")
+        .and_then(Value::as_object)
+        .expect("the providers map");
+
+    assert!(
+        !providers.contains_key("free-models"),
+        "the extension owns it"
+    );
+    assert!(
+        providers.contains_key("meta"),
+        "an ordinary provider still passes"
+    );
+}
+
+/// An extension is a directory the sandbox cannot see, so it is copied whole
+/// into the session, subdirectories and all.
+#[tokio::test]
+async fn an_extension_directory_is_copied_whole() {
+    let root = tempfile::tempdir().expect("a temp dir");
+    let from = root.path().join("free-models");
+    std::fs::create_dir_all(from.join("inner")).expect("made the source tree");
+    std::fs::write(from.join("index.ts"), b"export default () => {};").expect("wrote entry");
+    std::fs::write(from.join("inner/data.json"), b"{}").expect("wrote nested");
+
+    let to = root.path().join("placed");
+    copy_tree(&from, &to).await.expect("copied");
+
+    assert_eq!(
+        std::fs::read(to.join("index.ts")).expect("entry copied"),
+        b"export default () => {};"
+    );
+    assert!(
+        to.join("inner/data.json").exists(),
+        "the nested file came too"
     );
 }
 

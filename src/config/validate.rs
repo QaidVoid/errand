@@ -44,13 +44,14 @@ const KNOWN_CHAT: [&str; 6] = [
     "operatorUserIds",
     "startOnMention",
 ];
-const KNOWN_AGENT: [&str; 9] = [
+const KNOWN_AGENT: [&str; 10] = [
     "provider",
     "model",
     "visionModel",
     "delegate",
     "rulesPath",
     "providers",
+    "extensions",
     "aliases",
     // Known so that finding one is answered with where it went, rather than
     // with the spelling check an actual typo gets.
@@ -598,6 +599,7 @@ fn validate_agent(raw: &Map<String, Value>, problems: &mut Problems) -> AgentCon
         delegate: validate_delegate(&source, problems),
         rules_path: optional_absolute_path(&source, "rulesPath", "agent", problems),
         providers: validate_providers(&source, problems),
+        extensions: validate_extensions(&source, problems),
         aliases: validate_aliases(&source, problems),
     };
 
@@ -627,6 +629,7 @@ fn validate_agent(raw: &Map<String, Value>, problems: &mut Problems) -> AgentCon
     // no route, which is the operator's business rather than a refusal.
     if !agent.provider.is_empty()
         && agent.providers.contains_key(&agent.provider)
+        && !agent.is_extension_provider(&agent.provider)
         && agent.credential_of(&agent.provider).is_none()
     {
         problems.add(format!(
@@ -709,6 +712,18 @@ fn validate_policy_extra(
 }
 
 /// Reads the directories added to a session's PATH, if any.
+/// Reads the pi extension directories to place in every session, if any.
+///
+/// Each is an absolute host directory. A session cannot see the host's own pi
+/// configuration, so an extension is only loaded when its directory is copied
+/// into the session; naming it here is what asks for that.
+fn validate_extensions(source: &Map<String, Value>, problems: &mut Problems) -> Vec<String> {
+    if source.get("extensions").is_none() {
+        return Vec::new();
+    }
+    path_list(source, "extensions", "agent", problems)
+}
+
 fn validate_path_extra(
     source: &Map<String, Value>,
     problems: &mut Problems,
