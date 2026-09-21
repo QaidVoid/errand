@@ -1,6 +1,22 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.2.1] - 2026-09-21
+
+
+### Features
+- (agent) Load pi extensions in the sandbox, and providers they register ([816bbeb](https://github.com/QaidVoid/errand/commit/816bbeb1287276f9996ce37b3138cb38bd2e1978))
+- (memory) Let the agent recall older facts on demand ([a69829f](https://github.com/QaidVoid/errand/commit/a69829fba204c4be746b7d77d6d54793ffd5c36e))
+- (sandbox) Let a session's /tmp be backed by disk ([72dd7ab](https://github.com/QaidVoid/errand/commit/72dd7ab5d16874af0962b2dcaf96cbc8bdd6e871))
+- (sandbox) Make the private /tmp and /dev/shm sizes configurable ([011697b](https://github.com/QaidVoid/errand/commit/011697b84e93ac76edb7d4e481db740e791324eb))
+- (session) Say a resource-limited session can be continued ([e290a1c](https://github.com/QaidVoid/errand/commit/e290a1ca24abb0bebcf18429343de961111c0be2))
+
+### Fixes
+- (memory) Tell the agent its recall is in the prompt, not the files ([979c221](https://github.com/QaidVoid/errand/commit/979c221eed389a7a034a5716638529b549202181))
+- (session) Start a bare model on the provider that serves it ([65c094b](https://github.com/QaidVoid/errand/commit/65c094b0d982a73d4d071e657e2da9eba2dfb515))
+- (session) Name the sandbox scratch limits on ENOSPC ([0a77725](https://github.com/QaidVoid/errand/commit/0a77725d39e2f81c4644e6476e1dd13955d33baa))
+- (session) Retry a dropped attachment fetch and say why it failed ([10766eb](https://github.com/QaidVoid/errand/commit/10766eb9011300edefcff2772822fee1c7b5bd9f))
+
 ## [0.2.0] - 2026-09-18
 
 
