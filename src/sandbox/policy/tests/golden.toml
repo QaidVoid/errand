@@ -11,6 +11,8 @@ set = { PATH = "/state/home/bin:/opt/agent/bin:/usr/local/bin:/usr/bin:/bin", HO
 
 [resources]
 file_max = "1g"
+tmp_size = "512m"
+shm_size = "256m"
 
 [network]
 egress_allow = [{ host = "*", port = 443 }]

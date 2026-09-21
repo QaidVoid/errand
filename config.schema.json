@@ -206,6 +206,14 @@
           "type": "string",
           "description": "Largest single file a session may write, in size syntax."
         },
+        "tmpSize": {
+          "type": "string",
+          "description": "Size of a session's private `/tmp`, in size syntax such as `512m`.  Backed by memory, so it is charged against `memory` when used, not against the host disk. The backend's small default starves a build that unpacks or compiles under `/tmp`, which is most of them."
+        },
+        "shmSize": {
+          "type": "string",
+          "description": "Size of a session's private `/dev/shm`, in size syntax."
+        },
         "disk": {
           "type": "string",
           "description": "How much a session may add to its project and state together.  Measured rather than enforced, because no backend caps what a process tree writes in aggregate without root. Passing it ends the session."
@@ -251,7 +259,9 @@
         }
       },
       "required": [
-        "backend"
+        "backend",
+        "tmpSize",
+        "shmSize"
       ]
     },
     "output": {

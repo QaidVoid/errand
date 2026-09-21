@@ -99,6 +99,8 @@ What a session may consume, and what the backend enforces.
 | `cpus` | `number` | `2` | CPU ceiling per session, in cores. |
 | `pids` | `number` | `512` | Process count ceiling per session. |
 | `fileMax` | `string` | `"1g"` | Largest single file a session may write, in size syntax. |
+| `tmpSize` | `string` | none | Size of a session's private `/tmp`, in size syntax such as `512m`.  Backed by memory, so it is charged against `memory` when used, not against the host disk. The backend's small default starves a build that unpacks or compiles under `/tmp`, which is most of them. |
+| `shmSize` | `string` | none | Size of a session's private `/dev/shm`, in size syntax. |
 | `disk` | `string` | `"5g"` | How much a session may add to its project and state together.  Measured rather than enforced, because no backend caps what a process tree writes in aggregate without root. Passing it ends the session. |
 | `diskCheckMs` | `number` | `30000` | How often a session's disk use is measured, in milliseconds. |
 | `gracePeriodMs` | `number` | `10000` | How long a sandbox may take to stop before it is killed. |

@@ -38,6 +38,8 @@ struct Overrides<'a> {
     egress_ports: Option<&'a [u16]>,
     runtime: Option<&'a AgentRuntime>,
     file_max: Option<&'a str>,
+    tmp_size: Option<&'a str>,
+    shm_size: Option<&'a str>,
     resolv_conf: Option<&'a str>,
     extra: Option<&'a PolicyExtraConfig>,
     env: Option<&'a BTreeMap<String, String>>,
@@ -52,6 +54,8 @@ fn policy_bytes_with<'a>(launch: &'a SandboxLaunch, overrides: &Overrides<'a>) -
         egress_ports: overrides.egress_ports.or(Some(&[443])),
         runtime: overrides.runtime.unwrap_or(&runtime),
         file_max: overrides.file_max.unwrap_or("1g"),
+        tmp_size: overrides.tmp_size.unwrap_or("512m"),
+        shm_size: overrides.shm_size.unwrap_or("256m"),
         resolv_conf: overrides
             .resolv_conf
             .unwrap_or("/var/lib/errand/resolv.conf"),
@@ -189,6 +193,20 @@ fn a_file_size_ceiling_is_set_as_a_resource_limit() {
         })
         .contains(r#"file_max = "512m""#)
     );
+}
+
+/// The private /tmp and /dev/shm sizes reach the backend as resource limits,
+/// so a build that unpacks or compiles under /tmp is not held to the tiny
+/// default the backend would otherwise use.
+#[test]
+fn the_scratch_sizes_are_set_as_resource_limits() {
+    let policy = policy_bytes(&Overrides {
+        tmp_size: Some("512m"),
+        shm_size: Some("256m"),
+        ..overrides()
+    });
+    assert!(policy.contains(r#"tmp_size = "512m""#), "{policy}");
+    assert!(policy.contains(r#"shm_size = "256m""#), "{policy}");
 }
 
 #[test]

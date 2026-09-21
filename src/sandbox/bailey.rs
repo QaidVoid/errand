@@ -654,6 +654,8 @@ impl BaileySandbox {
                 egress_ports: Some(&self.config.egress_ports),
                 runtime: &runtime,
                 file_max: &self.config.file_max,
+                tmp_size: &self.config.tmp_size,
+                shm_size: &self.config.shm_size,
                 resolv_conf: &resolv,
                 extra: self.config.policy_extra.as_ref(),
                 env: self.egress_env().as_ref(),
@@ -790,6 +792,8 @@ impl BaileySandbox {
                 // granted.
                 runtime: &AgentRuntime::default(),
                 file_max: &self.config.file_max,
+                tmp_size: &self.config.tmp_size,
+                shm_size: &self.config.shm_size,
                 resolv_conf: &resolver,
                 extra: None,
                 env: None,

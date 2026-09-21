@@ -60,7 +60,7 @@ const KNOWN_AGENT: [&str; 10] = [
 ];
 const KNOWN_DELEGATE: [&str; 4] = ["model", "perTurn", "deadlineMs", "baseUrl"];
 const KNOWN_GITHUB: [&str; 3] = ["token", "userName", "userEmail"];
-const KNOWN_SANDBOX: [&str; 17] = [
+const KNOWN_SANDBOX: [&str; 19] = [
     "backend",
     "requireFullEnforcement",
     "network",
@@ -72,6 +72,8 @@ const KNOWN_SANDBOX: [&str; 17] = [
     "cpus",
     "pids",
     "fileMax",
+    "tmpSize",
+    "shmSize",
     "disk",
     "diskCheckMs",
     "gracePeriodMs",
@@ -837,6 +839,20 @@ fn validate_sandbox(raw: &Map<String, Value>, problems: &mut Problems) -> Sandbo
             &source,
             "fileMax",
             schema::defaults::FILE_MAX,
+            "sandbox",
+            problems,
+        ),
+        tmp_size: size(
+            &source,
+            "tmpSize",
+            schema::defaults::TMP_SIZE,
+            "sandbox",
+            problems,
+        ),
+        shm_size: size(
+            &source,
+            "shmSize",
+            schema::defaults::SHM_SIZE,
             "sandbox",
             problems,
         ),

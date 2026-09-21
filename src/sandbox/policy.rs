@@ -113,6 +113,10 @@ pub struct PolicyOptions<'a> {
     pub runtime: &'a AgentRuntime,
     /// Largest single file a session may write, in size syntax.
     pub file_max: &'a str,
+    /// Size of the session's private `/tmp`, in size syntax.
+    pub tmp_size: &'a str,
+    /// Size of the session's private `/dev/shm`, in size syntax.
+    pub shm_size: &'a str,
     /// Host path of the resolver file handed to the session.
     pub resolv_conf: &'a str,
     /// Paths the operator granted on top of these.
@@ -237,6 +241,8 @@ pub fn policy_contents(options: &PolicyOptions) -> String {
         // on.
         "[resources]".to_owned(),
         format!("file_max = {}", quoted(options.file_max)),
+        format!("tmp_size = {}", quoted(options.tmp_size)),
+        format!("shm_size = {}", quoted(options.shm_size)),
     ];
 
     if options.network != NetworkMode::None {

@@ -257,6 +257,14 @@ pub struct SandboxConfig {
     pub pids: u32,
     /// Largest single file a session may write, in size syntax.
     pub file_max: String,
+    /// Size of a session's private `/tmp`, in size syntax such as `512m`.
+    ///
+    /// Backed by memory, so it is charged against `memory` when used, not
+    /// against the host disk. The backend's small default starves a build
+    /// that unpacks or compiles under `/tmp`, which is most of them.
+    pub tmp_size: String,
+    /// Size of a session's private `/dev/shm`, in size syntax.
+    pub shm_size: String,
     /// How much a session may add to its project and state together.
     ///
     /// Measured rather than enforced, because no backend caps what a process
@@ -432,6 +440,11 @@ pub mod defaults {
     pub const PIDS: u32 = 512;
     /// The largest single file a session may write.
     pub const FILE_MAX: &str = "1g";
+    /// Default private `/tmp` size. Larger than the backend's own default, which
+    /// is too small for a build that unpacks or compiles under it.
+    pub const TMP_SIZE: &str = "512m";
+    /// Default private `/dev/shm` size.
+    pub const SHM_SIZE: &str = "256m";
     /// How much a session may add to its project and state together.
     pub const DISK: &str = "5g";
     /// How often a session's disk use is measured.
