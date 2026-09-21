@@ -182,6 +182,13 @@ const MAX_UPLOAD_BYTES: u64 = 8 * 1024 * 1024;
 /// Largest file diffed. Beyond this the change is summarised, not shown.
 const MAX_DIFFABLE_BYTES: u64 = 512 * 1024;
 
+/// Said when a session ends for a limit it could carry on past.
+///
+/// The agent's history outlives its sandbox, so posting picks the work up on
+/// a fresh sandbox, which clears a filled `/tmp` on its own. Said because the
+/// ending otherwise reads as final, and the recovery went unnoticed.
+const CONTINUE_HINT: &str = "Post here to continue on a fresh sandbox.";
+
 /// Tool outputs kept so a delegation can name one, newest first.
 const MAX_REMEMBERED_OUTPUTS: usize = 50;
 
@@ -1910,7 +1917,7 @@ impl Running {
         if let Some(named) = Self::diagnose(&words) {
             self.end_because(
                 EndReason::ResourceLimit,
-                &format!("this session stopped because {named}"),
+                &format!("this session stopped because {named}. {CONTINUE_HINT}"),
             )
             .await;
             return;
@@ -1923,7 +1930,7 @@ impl Running {
             self.end_because(
                 EndReason::ResourceLimit,
                 &format!(
-                    "the session was terminated for exceeding a configured resource limit (memory {}, cpus {}, pids {})",
+                    "the session was terminated for exceeding a configured resource limit (memory {}, cpus {}, pids {}). {CONTINUE_HINT}",
                     sandbox.memory, sandbox.cpus, sandbox.pids
                 ),
             )

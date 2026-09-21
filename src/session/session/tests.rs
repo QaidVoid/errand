@@ -1745,6 +1745,10 @@ async fn an_agent_that_died_for_want_of_disk_says_so_not_just_a_code() {
             let said = harness.thread.everything();
             assert!(said.contains("sandbox's scratch space"), "{said}");
             assert!(said.contains("sandbox.tmpSize"), "names the knob: {said}");
+            assert!(
+                said.contains("Post here to continue"),
+                "says it can be resumed"
+            );
             assert!(!said.contains("exit code 1"));
             assert_eq!(*harness.ended.lock().unwrap(), [EndReason::ResourceLimit]);
         })
