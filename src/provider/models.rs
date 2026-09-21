@@ -169,6 +169,29 @@ pub fn available_models(agent: &AgentConfig, directory: Option<&str>) -> Vec<Ava
     found
 }
 
+/// The provider that serves a bare model id, when one clearly does.
+///
+/// A model named without a provider, `-m big-pickle`, belongs to whichever
+/// provider lists it, not to the one a session would otherwise start on:
+/// sending it to the default provider's endpoint is what this exists to stop.
+/// The starting provider wins a tie, because a model two providers both serve
+/// is most naturally the one already in hand; anything more ambiguous is left
+/// for the caller to fall back on the default.
+pub fn provider_for(available: &[AvailableModel], model_id: &str, prefer: &str) -> Option<String> {
+    let serving: Vec<&str> = available
+        .iter()
+        .filter(|model| model.id == model_id)
+        .map(|model| model.provider.as_str())
+        .collect();
+    if serving.contains(&prefer) {
+        return Some(prefer.to_owned());
+    }
+    match serving.as_slice() {
+        [only] => Some((*only).to_owned()),
+        _ => None,
+    }
+}
+
 /// What reading the store found, and what it could not read.
 pub struct StoreContents {
     /// Every model the store lists for the provider.

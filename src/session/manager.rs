@@ -16,14 +16,14 @@ use crate::config::schema::Config;
 use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
-use crate::provider::models::AvailableModel;
+use crate::provider::models::{AvailableModel, provider_for};
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
 use crate::session::event::EndReason;
 use crate::session::ids::{TOKEN_LENGTH, session_id, session_token};
 use crate::session::model::{
-    ChosenModel, expand_alias, known_providers, resolve_model, select_model,
+    ChosenModel, expand_alias, known_providers, resolve_model, select_model, split_level,
 };
 use crate::session::pr;
 use crate::session::projects::{ProjectSelection, ensure_project_directory, select_project};
@@ -408,10 +408,22 @@ impl SessionManager {
         let asked = select_model(&project.prompt);
         let known = known_providers(&self.options.config.agent);
         let chosen = asked.value.as_ref().map(|value| {
-            resolve_model(
+            let mut resolved = resolve_model(
                 &expand_alias(value, &self.options.config.agent.aliases),
                 &known,
-            )
+            );
+            // A bare model id names no provider, so it would otherwise start
+            // on the default one and reach the wrong endpoint. Find which
+            // provider actually serves it.
+            if resolved.provider.is_none() {
+                let bare = split_level(&resolved.model).0;
+                resolved.provider = provider_for(
+                    &self.options.available_models,
+                    &bare,
+                    &self.options.config.agent.provider,
+                );
+            }
+            resolved
         });
         project.prompt = asked.prompt;
 

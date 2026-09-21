@@ -499,3 +499,36 @@ fn a_model_can_be_told_how_hard_to_think_by_default() {
          and a provider that names no level leaves the id alone"
     );
 }
+
+/// A bare model id belongs to whichever provider lists it, not the one a
+/// session starts on, so a model of another provider is not sent to the
+/// default provider's endpoint. A tie goes to the starting provider.
+#[test]
+fn a_bare_model_id_resolves_to_the_provider_that_serves_it() {
+    use crate::provider::models::{AvailableModel, provider_for};
+    let available = vec![
+        AvailableModel {
+            provider: "zai-coding-cn".to_owned(),
+            id: "glm-5.3".to_owned(),
+            default_level: None,
+        },
+        AvailableModel {
+            provider: "opencode".to_owned(),
+            id: "free-fast".to_owned(),
+            default_level: None,
+        },
+    ];
+
+    // Another provider's model resolves to that provider.
+    assert_eq!(
+        provider_for(&available, "free-fast", "zai-coding-cn").as_deref(),
+        Some("opencode")
+    );
+    // The starting provider's own model stays with it.
+    assert_eq!(
+        provider_for(&available, "glm-5.3", "zai-coding-cn").as_deref(),
+        Some("zai-coding-cn")
+    );
+    // Nothing lists it, so the caller falls back to the default.
+    assert_eq!(provider_for(&available, "unknown", "zai-coding-cn"), None);
+}

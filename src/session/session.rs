@@ -2140,6 +2140,12 @@ impl Running {
         self.switched
             .as_ref()
             .map(|(_, model)| model.clone())
+            .or_else(|| {
+                self.options
+                    .chosen
+                    .as_ref()
+                    .map(|chosen| chosen.model.clone())
+            })
             .or_else(|| self.usage.model.clone())
             .or_else(|| {
                 crate::session::model::configured_model(&self.options.config.agent)

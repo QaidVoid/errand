@@ -18,6 +18,7 @@ use crate::config::schema::SandboxBackend;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
 use crate::memory::store::MemoryStore;
+use crate::provider::models::AvailableModel;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
@@ -434,6 +435,16 @@ async fn with_everything(
     remembering: bool,
     run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + '_>>,
 ) {
+    with_models(overrides, unavailable, remembering, Vec::new(), run).await;
+}
+
+async fn with_models(
+    overrides: &serde_json::Value,
+    unavailable: Option<Unavailable>,
+    remembering: bool,
+    available_models: Vec<AvailableModel>,
+    run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + '_>>,
+) {
     let root = tempfile::tempdir().expect("a temp directory");
     let settings = config_with(root.path(), overrides);
     let sandbox = FakeSandbox::new();
@@ -470,7 +481,7 @@ async fn with_everything(
         }),
         describe_images: None,
         public_url: None,
-        available_models: Vec::new(),
+        available_models: available_models.clone(),
         delegate_base_url: None,
         now: Some(Arc::new(|| 1_000)),
     });
@@ -1558,5 +1569,47 @@ async fn a_resumed_session_is_still_given_its_system_prompt() {
             );
         })
     })
+    .await;
+}
+
+/// A model named without a provider in the opening message is launched under
+/// the provider that serves it, not the default one, so it does not reach the
+/// wrong endpoint.
+#[tokio::test]
+async fn a_bare_model_from_another_provider_launches_under_that_provider() {
+    let models = vec![AvailableModel {
+        provider: "other".to_owned(),
+        id: "free-fast".to_owned(),
+        default_level: None,
+    }];
+    with_models(
+        &json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                    "other": { "extension": true, "models": [{ "id": "free-fast" }] },
+                },
+            },
+        }),
+        None,
+        false,
+        models,
+        |harness| {
+            Box::pin(async move {
+                let outcome = harness
+                    .manager
+                    .start(message("demo: -m free-fast do it", "m1"))
+                    .await;
+                started(&outcome);
+                let launched = harness.sandbox.launched.lock().unwrap();
+                assert_eq!(
+                    launched[0].provider, "other",
+                    "launched under the serving provider"
+                );
+                assert_eq!(launched[0].model.as_deref(), Some("free-fast"));
+            })
+        },
+    )
     .await;
 }
