@@ -1881,7 +1881,10 @@ impl Running {
     fn diagnose(words: &str) -> Option<&'static str> {
         let lower = words.to_lowercase();
         if lower.contains("enospc") || lower.contains("no space left on device") {
-            return Some("the host it runs on has run out of disk space");
+            return Some(
+                "it ran out of the sandbox's scratch space (raise sandbox.tmpSize, \
+                 sandbox.shmSize, or sandbox.fileMax)",
+            );
         }
         if lower.contains("enomem")
             || lower.contains("out of memory")

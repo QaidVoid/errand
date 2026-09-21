@@ -1728,8 +1728,9 @@ async fn help_is_listed_without_troubling_the_agent() {
     .await;
 }
 
-/// Reported once as "exit code 1", for a host that had simply run out of
-/// space. That is a thing somebody can fix and a thing they cannot guess.
+/// ENOSPC in a sandbox is the session's own scratch, not the host disk, so
+/// the message names its limits and the knobs rather than a code, and never
+/// blames the host, which sends operators to `df` on a host with room.
 #[tokio::test]
 async fn an_agent_that_died_for_want_of_disk_says_so_not_just_a_code() {
     with_session(SessionTestCase::default(), |harness| {
@@ -1741,13 +1742,10 @@ async fn an_agent_that_died_for_want_of_disk_says_so_not_just_a_code() {
             harness.controls().end(1);
             settle().await;
 
-            assert!(
-                harness
-                    .thread
-                    .everything()
-                    .contains("run out of disk space")
-            );
-            assert!(!harness.thread.everything().contains("exit code 1"));
+            let said = harness.thread.everything();
+            assert!(said.contains("sandbox's scratch space"), "{said}");
+            assert!(said.contains("sandbox.tmpSize"), "names the knob: {said}");
+            assert!(!said.contains("exit code 1"));
             assert_eq!(*harness.ended.lock().unwrap(), [EndReason::ResourceLimit]);
         })
     })
