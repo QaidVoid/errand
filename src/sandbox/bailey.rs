@@ -633,6 +633,13 @@ impl BaileySandbox {
         tokio::fs::create_dir_all(&launch.state_dir)
             .await
             .map_err(|error| SandboxLaunchError(error.to_string()))?;
+        if self.config.disk_tmp {
+            // The grant and TMPDIR point here, so it has to exist before the
+            // policy is applied.
+            tokio::fs::create_dir_all(std::path::Path::new(&launch.state_dir).join("tmp"))
+                .await
+                .map_err(|error| SandboxLaunchError(error.to_string()))?;
+        }
         self.write_provider_override(launch)
             .await
             .map_err(|error| SandboxLaunchError(error.to_string()))?;
@@ -656,6 +663,7 @@ impl BaileySandbox {
                 file_max: &self.config.file_max,
                 tmp_size: &self.config.tmp_size,
                 shm_size: &self.config.shm_size,
+                disk_tmp: self.config.disk_tmp,
                 resolv_conf: &resolv,
                 extra: self.config.policy_extra.as_ref(),
                 env: self.egress_env().as_ref(),
@@ -794,6 +802,7 @@ impl BaileySandbox {
                 file_max: &self.config.file_max,
                 tmp_size: &self.config.tmp_size,
                 shm_size: &self.config.shm_size,
+                disk_tmp: self.config.disk_tmp,
                 resolv_conf: &resolver,
                 extra: None,
                 env: None,

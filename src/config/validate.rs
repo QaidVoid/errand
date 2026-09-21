@@ -60,7 +60,7 @@ const KNOWN_AGENT: [&str; 10] = [
 ];
 const KNOWN_DELEGATE: [&str; 4] = ["model", "perTurn", "deadlineMs", "baseUrl"];
 const KNOWN_GITHUB: [&str; 3] = ["token", "userName", "userEmail"];
-const KNOWN_SANDBOX: [&str; 19] = [
+const KNOWN_SANDBOX: [&str; 20] = [
     "backend",
     "requireFullEnforcement",
     "network",
@@ -74,6 +74,7 @@ const KNOWN_SANDBOX: [&str; 19] = [
     "fileMax",
     "tmpSize",
     "shmSize",
+    "diskTmp",
     "disk",
     "diskCheckMs",
     "gracePeriodMs",
@@ -776,6 +777,7 @@ fn validate_sandbox_env(
     Some(env)
 }
 
+#[expect(clippy::too_many_lines, reason = "one field per sandbox setting")]
 fn validate_sandbox(raw: &Map<String, Value>, problems: &mut Problems) -> SandboxConfig {
     let source = section(raw, "sandbox");
     reject_unknown(&source, &KNOWN_SANDBOX, "sandbox", problems);
@@ -853,6 +855,13 @@ fn validate_sandbox(raw: &Map<String, Value>, problems: &mut Problems) -> Sandbo
             &source,
             "shmSize",
             schema::defaults::SHM_SIZE,
+            "sandbox",
+            problems,
+        ),
+        disk_tmp: flag(
+            &source,
+            "diskTmp",
+            schema::defaults::DISK_TMP,
             "sandbox",
             problems,
         ),

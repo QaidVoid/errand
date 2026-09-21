@@ -214,6 +214,10 @@
           "type": "string",
           "description": "Size of a session's private `/dev/shm`, in size syntax."
         },
+        "diskTmp": {
+          "type": "boolean",
+          "description": "Put a session's `/tmp` on disk instead of the memory-backed tmpfs, so a build's scratch is bounded by `disk` rather than by `memory`.  The backend binds a directory under `/state` at `/tmp`, which still masks the host's `/tmp` as the tmpfs did, so the whole of `/tmp` is on disk, not only what honours `TMPDIR`. Replaces the tmpfs, so `tmpSize` has no effect while this is on."
+        },
         "disk": {
           "type": "string",
           "description": "How much a session may add to its project and state together.  Measured rather than enforced, because no backend caps what a process tree writes in aggregate without root. Passing it ends the session."
@@ -261,7 +265,8 @@
       "required": [
         "backend",
         "tmpSize",
-        "shmSize"
+        "shmSize",
+        "diskTmp"
       ]
     },
     "output": {

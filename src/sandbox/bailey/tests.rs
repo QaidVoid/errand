@@ -46,6 +46,7 @@ fn defaults_only() -> SandboxConfig {
         file_max: defaults::FILE_MAX.to_owned(),
         tmp_size: "2g".to_owned(),
         shm_size: "1g".to_owned(),
+        disk_tmp: false,
         disk: defaults::DISK.to_owned(),
         disk_check_ms: defaults::DISK_CHECK_MS,
         grace_period_ms: defaults::GRACE_PERIOD_MS,

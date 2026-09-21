@@ -117,6 +117,8 @@ pub struct PolicyOptions<'a> {
     pub tmp_size: &'a str,
     /// Size of the session's private `/dev/shm`, in size syntax.
     pub shm_size: &'a str,
+    /// Back the session's `/tmp` with a disk directory instead of a tmpfs.
+    pub disk_tmp: bool,
     /// Host path of the resolver file handed to the session.
     pub resolv_conf: &'a str,
     /// Paths the operator granted on top of these.
@@ -244,6 +246,15 @@ pub fn policy_contents(options: &PolicyOptions) -> String {
         format!("tmp_size = {}", quoted(options.tmp_size)),
         format!("shm_size = {}", quoted(options.shm_size)),
     ];
+    // A disk directory the backend binds at /tmp instead of a tmpfs, so /tmp
+    // is on disk and bounded by the disk budget. It is under the state tree,
+    // which the budget measures and the backend already relocates.
+    if options.disk_tmp {
+        lines.push(format!(
+            "tmp_dir = {}",
+            quoted(&format!("{}/tmp", launch.state_dir))
+        ));
+    }
 
     if options.network != NetworkMode::None {
         let open_ports: &[u16] = match options.egress_ports {

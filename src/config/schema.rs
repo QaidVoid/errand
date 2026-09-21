@@ -265,6 +265,14 @@ pub struct SandboxConfig {
     pub tmp_size: String,
     /// Size of a session's private `/dev/shm`, in size syntax.
     pub shm_size: String,
+    /// Put a session's `/tmp` on disk instead of the memory-backed tmpfs, so
+    /// a build's scratch is bounded by `disk` rather than by `memory`.
+    ///
+    /// The backend binds a directory under `/state` at `/tmp`, which still
+    /// masks the host's `/tmp` as the tmpfs did, so the whole of `/tmp` is on
+    /// disk, not only what honours `TMPDIR`. Replaces the tmpfs, so `tmpSize`
+    /// has no effect while this is on.
+    pub disk_tmp: bool,
     /// How much a session may add to its project and state together.
     ///
     /// Measured rather than enforced, because no backend caps what a process
@@ -445,6 +453,8 @@ pub mod defaults {
     pub const TMP_SIZE: &str = "512m";
     /// Default private `/dev/shm` size.
     pub const SHM_SIZE: &str = "256m";
+    /// Default for backing TMPDIR with disk. Off, to leave the tmpfs default.
+    pub const DISK_TMP: bool = false;
     /// How much a session may add to its project and state together.
     pub const DISK: &str = "5g";
     /// How often a session's disk use is measured.

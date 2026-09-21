@@ -40,6 +40,7 @@ struct Overrides<'a> {
     file_max: Option<&'a str>,
     tmp_size: Option<&'a str>,
     shm_size: Option<&'a str>,
+    disk_tmp: Option<bool>,
     resolv_conf: Option<&'a str>,
     extra: Option<&'a PolicyExtraConfig>,
     env: Option<&'a BTreeMap<String, String>>,
@@ -56,6 +57,7 @@ fn policy_bytes_with<'a>(launch: &'a SandboxLaunch, overrides: &Overrides<'a>) -
         file_max: overrides.file_max.unwrap_or("1g"),
         tmp_size: overrides.tmp_size.unwrap_or("512m"),
         shm_size: overrides.shm_size.unwrap_or("256m"),
+        disk_tmp: overrides.disk_tmp.unwrap_or(false),
         resolv_conf: overrides
             .resolv_conf
             .unwrap_or("/var/lib/errand/resolv.conf"),
@@ -193,6 +195,40 @@ fn a_file_size_ceiling_is_set_as_a_resource_limit() {
         })
         .contains(r#"file_max = "512m""#)
     );
+}
+
+/// With diskTmp on, the backend is handed a disk directory to bind at `/tmp`
+/// via a `tmp_dir` resource, so `/tmp` is on disk. No `/tmp` grant is written,
+/// so the backend keeps masking the host `/tmp` itself.
+#[test]
+fn disk_tmp_hands_the_backend_a_disk_directory_for_tmp() {
+    let policy = policy_bytes(&Overrides {
+        disk_tmp: Some(true),
+        ..overrides()
+    });
+    let resources = policy
+        .lines()
+        .find(|l| l.starts_with("tmp_dir = "))
+        .expect("a tmp_dir line");
+    assert!(
+        resources.ends_with(r#"/tmp""#),
+        "names the state tmp dir, {resources}"
+    );
+    // errand does not touch /tmp itself; the backend owns that mount.
+    assert!(!policy.contains("TMPDIR"), "{policy}");
+    let execute = policy
+        .lines()
+        .find(|l| l.starts_with("execute = "))
+        .unwrap();
+    assert!(!execute.contains("/tmp"), "no /tmp grant, {execute}");
+}
+
+/// Off by default, so no `tmp_dir` is written and the backend's tmpfs `/tmp`
+/// is left in place.
+#[test]
+fn without_disk_tmp_no_tmp_dir_is_written() {
+    let policy = policy_bytes(&overrides());
+    assert!(!policy.contains("tmp_dir"), "{policy}");
 }
 
 /// The private /tmp and /dev/shm sizes reach the backend as resource limits,
