@@ -56,6 +56,7 @@ fn notification(reason: &str, last_read_at: Option<&str>) -> Value {
         "id": "900",
         "reason": reason,
         "last_read_at": last_read_at,
+        "updated_at": "2026-09-24T12:30:00Z",
         "subject": { "type": "Issue", "url": format!("https://api.github.com/repos/{REPO}/issues/7") },
         "repository": { "full_name": REPO },
     })
@@ -303,4 +304,25 @@ fn an_issue_with_a_session_continues_it_and_one_without_needs_the_bot_named() {
     assert_eq!(decision, InboundDecision::Start);
 
     assert_eq!(decide(heard(false), false), None);
+}
+
+/// A notification with nothing since the daemon started holds nothing new,
+/// so it is marked read without asking what is in it.
+#[tokio::test]
+async fn a_notification_quiet_since_the_start_is_not_asked_about() {
+    let mut quiet = notification("mention", None);
+    quiet["updated_at"] = json!("2026-09-24T09:00:00Z");
+    let (api, calls) = api(BTreeMap::from([(
+        "GET /notifications?participating=true&per_page=50".to_owned(),
+        json!([quiet]),
+    )]));
+
+    assert!(poller(api).poll().await.expect("read").is_empty());
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [
+            "GET /notifications?participating=true&per_page=50".to_owned(),
+            "PATCH /notifications/threads/900".to_owned(),
+        ]
+    );
 }

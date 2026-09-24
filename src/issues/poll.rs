@@ -116,6 +116,12 @@ impl Poller {
             .as_str()
             .and_then(|at| at.parse::<jiff::Timestamp>().ok());
         let floor = last_read.map_or(self.since, |read| read.max(self.since));
+        // Nothing has happened on it since the floor, so nothing in it can be
+        // new. Not asked about, which is most of what an account that has
+        // been mentioned for a while has waiting when the daemon starts.
+        if timestamp(&notification["updated_at"]).is_ok_and(|updated| updated <= floor) {
+            return Ok(Vec::new());
+        }
 
         let issue = self.issue(repository, number, kind).await?;
         let mut said = Vec::new();
@@ -290,7 +296,15 @@ impl Poller {
         if !(200..300).contains(&answer.status) {
             self.log.warn(
                 "a GitHub notification could not be marked read, so it may be heard twice",
-                &fields([("status", LogValue::from(i64::from(answer.status)))]),
+                &fields([
+                    ("status", LogValue::from(i64::from(answer.status))),
+                    (
+                        "detail",
+                        LogValue::from(
+                            answer.body["message"].as_str().unwrap_or("no reason given"),
+                        ),
+                    ),
+                ]),
             );
         }
     }
