@@ -409,7 +409,19 @@ pub fn find_repository(
     named: Option<&str>,
 ) -> Result<String, PullRequestError> {
     if let Some(named) = named.map(str::trim).filter(|name| !name.is_empty()) {
-        return named_repository(project_path, named).map(|path| path.display().to_string());
+        return named_repository(project_path, named)
+            .map(|path| path.display().to_string())
+            .map_err(|error| {
+                let found = repositories_in(project_path);
+                if found.is_empty() {
+                    error
+                } else {
+                    PullRequestError(format!(
+                        "{error}; name one by its directory under {WORKSPACE_PATH}: {}",
+                        found.join(", ")
+                    ))
+                }
+            });
     }
 
     if is_work_tree(Path::new(project_path)) {

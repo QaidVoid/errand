@@ -215,9 +215,16 @@ pub fn review_instructions(
         "When you are asked: commit to a branch of its own, with a message saying",
         "what changed and why, then write the title you want on the first line of",
         &format!("`{STATE_PATH}/{REQUEST_FILENAME}`. If you have cloned more than one repository"),
-        &format!("into {WORKSPACE_PATH}, add a line of `repository: <path within it>`, such as"),
-        "`repository: github.com/owner/repo`, so the right one is opened. Write the file",
-        "once, when the work is finished.",
+        &format!(
+            "into {WORKSPACE_PATH}, add a line of `repository: <directory>` naming the clone's"
+        ),
+        &format!(
+            "directory under {WORKSPACE_PATH}, not its name on GitHub: a clone at \
+             `{WORKSPACE_PATH}/tools/parser`"
+        ),
+        "is `repository: tools/parser`. Nothing else in the file is read: the branch is",
+        "the one checked out, and the description is the body of its last commit",
+        "message. Write the file once, when the work is finished.",
         "",
         "**That file is a request, not the result.** The pull request is opened",
         "after your turn ends, and the thread is told whether it worked and where",

@@ -357,6 +357,24 @@ fn nested_repositories_are_named_and_picked_by_path() {
     assert!(find_repository(&project, Some("github.com/owner")).is_err());
 }
 
+/// Named as it is known on GitHub rather than where it sits, a repository is
+/// not found, and the refusal says what the ones here are called.
+#[test]
+fn a_repository_named_as_on_github_is_refused_with_the_ones_here() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("edu/playground/.git")).unwrap();
+    let project = root.path().display().to_string();
+
+    let error = find_repository(&project, Some("github.com/talaria0101/edu-playground"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("there is no repository at"), "{error}");
+    assert!(
+        error.ends_with("under /workspace: edu/playground"),
+        "{error}"
+    );
+}
+
 /// A symlink along the way could name a repository anywhere on the host, so
 /// it is neither followed in the search nor accepted in a name.
 #[test]
