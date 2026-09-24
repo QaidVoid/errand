@@ -57,3 +57,19 @@ every reply in a thread is. Commands work the same way: `!model`, `!pr`,
 One comment per turn, when it ends: what the agent said, and the line that
 closes the turn. The commands it ran, the diffs, and its reasoning stay in the
 transcript. An answer to a command is its own comment, straight away.
+
+## Trying it
+
+1. Add `trigger` with your own login and restart the daemon. The log says
+   `listening on GitHub` with the bot's login and who is heard; if the token
+   cannot say whose it is, the log says that instead and GitHub stays unheard.
+2. On an issue in a repository the bot account can see, comment
+   `@the-bot say hello in a comment and change nothing`. A public repository
+   works as it is; a private one needs the account added as a collaborator.
+3. Within about a minute the session starts. Run the daemon with `-v` to watch
+   it in the log: `starting a session`, then `launching a sandbox`.
+4. When the turn ends, the answer arrives as one comment on the issue.
+5. Comment again, without the mention, to continue. `!model` answers at once.
+
+Mentioning the bot from a login not in `allowedUsers` should do nothing at all,
+which is worth checking once too.
