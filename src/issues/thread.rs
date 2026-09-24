@@ -33,7 +33,8 @@ pub fn account_id(login: &str) -> String {
 }
 
 /// Writes every GitHub account named the way the chat names an account,
-/// `<@github:login>`, as `@login`, for a surface that cannot mention it.
+/// `<@github:login>`, as the bare login, for a surface that cannot mention
+/// it. Without the `@`, since there it would read as a mention that failed.
 pub fn logins_plainly(text: &str) -> String {
     let marker = format!("<@{PREFIX}");
     let mut plain = String::with_capacity(text.len());
@@ -44,7 +45,6 @@ pub fn logins_plainly(text: &str) -> String {
             break;
         };
         plain.push_str(&rest[..start]);
-        plain.push('@');
         plain.push_str(&after[..end]);
         rest = &after[end + 1..];
     }

@@ -382,7 +382,7 @@ impl<T: ThreadTransport> ChatThread<T> {
         // one starts a fresh block rather than being appended below prose.
         self.reset_activity();
         // A session asked for on GitHub names its owner as a GitHub account,
-        // which the chat cannot mention, so the login is written plainly.
+        // which the chat cannot mention, so the login is written bare.
         for chunk in split_message(&logins_plainly(text), MESSAGE_LIMIT) {
             let transport = Arc::clone(&self.transport);
             let chunk = chunk.clone();

@@ -20,6 +20,6 @@ fn an_issue_is_named_as_a_thread_and_read_back() {
 fn a_github_account_is_named_plainly_where_it_cannot_be_mentioned() {
     assert_eq!(
         logins_plainly("<@github:qaidvoid> done; <@12345> too, <@github:open"),
-        "@qaidvoid done; <@12345> too, <@github:open"
+        "qaidvoid done; <@12345> too, <@github:open"
     );
 }
