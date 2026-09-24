@@ -16,7 +16,7 @@ aside: everyone in the thread sees it and the agent is never told.
 | `!interrupt` | the owner and operators | abort the running turn |
 | `!steer <instruction>` | the owner and operators | redirect the running turn |
 | `!then <prompt>` | the owner and whoever they invited | hold a prompt until the running turn finishes |
-| `!pr <title>` | the owner and operators | open a pull request for the work on this branch |
+| `!pr [--repo <directory>] <title>` | the owner and operators | open a pull request for the work on this branch |
 | `!compact` | the owner and operators | summarise the conversation so far to free up context |
 | `!model [name]` | the owner and operators | show the models available, or switch to one |
 

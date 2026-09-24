@@ -2,7 +2,7 @@
 
 use super::{
     COMMANDS, CommandAccess, Standing, answer_without_session, asks_for_pull_request, help_text,
-    is_addressed_to_bot, is_aside, is_command, may_run, parse_user_id,
+    is_addressed_to_bot, is_aside, is_command, may_run, parse_user_id, pull_request_args,
 };
 
 const OWNER: Standing = Standing {
@@ -153,19 +153,37 @@ fn the_command_column_is_one_width_for_every_line() {
         .split('\n')
         .filter(|line| line.starts_with("  !"))
         .map(|line| {
-            // Two spaces, the command, optionally its argument, then the gap
-            // the summary starts after.
-            let rest = &line[2..];
-            let command_end = rest.find(' ')?;
-            let mut at = command_end;
-            if !rest[at + 1..].starts_with(|c: char| c.is_whitespace()) {
-                at += 1 + rest[at + 1..].find(' ').unwrap_or(rest.len() - at - 1);
-            }
-            let gap = rest[at..].find(|c: char| !c.is_whitespace()).unwrap_or(0);
-            Some(2 + at + gap)
+            // Where the command's own summary starts, found by its text, since
+            // an argument may hold spaces of its own.
+            COMMANDS
+                .iter()
+                .filter(|(name, _)| line[2..].starts_with(&format!("{name} ")))
+                .find_map(|(_, meta)| line.find(meta.summary))
         })
         .collect();
 
     let distinct: std::collections::HashSet<_> = summary_at.iter().collect();
     assert_eq!(distinct.len(), 1, "{summary_at:?}");
+}
+
+/// `--repo` names the clone by its directory; without it the whole of what
+/// follows is the title, a slash in its first word included.
+#[test]
+fn a_pull_request_names_its_repository_only_by_flag() {
+    assert_eq!(
+        pull_request_args(" --repo edu/playground/sub/inner  Add the proof file "),
+        (Some("edu/playground/sub/inner"), "Add the proof file")
+    );
+    assert_eq!(
+        pull_request_args("fix/parser: handle empty input"),
+        (None, "fix/parser: handle empty input")
+    );
+    assert_eq!(
+        pull_request_args("--repo tools/parser"),
+        (Some("tools/parser"), "")
+    );
+    assert_eq!(
+        pull_request_args("--repository x"),
+        (None, "--repository x")
+    );
 }

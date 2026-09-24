@@ -101,7 +101,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
             access: Owner,
             group: Session,
             summary: "open a pull request for the work on this branch",
-            argument: Some("<title>"),
+            argument: Some("[--repo <directory>] <title>"),
         },
     ),
     (
@@ -351,6 +351,24 @@ fn verb_with_requests(text: &str, verb: &str) -> bool {
         }
     }
     false
+}
+
+/// Splits `!pr [--repo <directory>] <title>` into the repository, when one
+/// is named, and the title.
+///
+/// A flag rather than a leading word, since a title may begin with anything,
+/// a word with a slash included.
+pub fn pull_request_args(rest: &str) -> (Option<&str>, &str) {
+    let rest = rest.trim();
+    let Some(after) = rest
+        .strip_prefix("--repo")
+        .filter(|after| after.starts_with(char::is_whitespace))
+    else {
+        return (None, rest);
+    };
+    let after = after.trim_start();
+    let (directory, title) = after.split_once(char::is_whitespace).unwrap_or((after, ""));
+    (Some(directory), title.trim())
 }
 
 /// Whether a message asks for a pull request.

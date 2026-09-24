@@ -8,6 +8,7 @@ use crate::chat::render::connection_line;
 use crate::log::{LogValue, fields};
 use crate::sandbox::backend::STATE_PATH;
 use crate::sandbox::paths;
+use crate::session::commands::pull_request_args;
 use crate::session::event::ReactionOutcome;
 use crate::session::github::{
     ASKED_FILENAME, REQUEST_FILENAME, SessionLinks, thread_link, transcript_link,
@@ -141,23 +142,25 @@ impl Running {
     /// Opens one on request, reporting the outcome on the message that asked.
     pub(super) async fn open_pull_request_command(
         &mut self,
-        title: &str,
+        rest: &str,
         message: &IncomingMessage,
     ) {
+        let (repository, title) = pull_request_args(rest);
         if self.options.config.github.is_none() {
             self.say("no GitHub identity is configured, so there is nowhere to open one")
                 .await;
             self.react(&message.id, ReactionOutcome::Failed).await;
             return;
         }
-        if title.trim().is_empty() {
-            self.say("say what to call it, as `!pr <title>`").await;
+        if title.is_empty() {
+            self.say("say what to call it, as `!pr [--repo <directory>] <title>`")
+                .await;
             self.react(&message.id, ReactionOutcome::Failed).await;
             return;
         }
 
         self.react(&message.id, ReactionOutcome::Accepted).await;
-        let opened = self.open_pull_request_now(title.trim(), None).await;
+        let opened = self.open_pull_request_now(title, repository).await;
         self.react(
             &message.id,
             if opened {

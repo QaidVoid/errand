@@ -1566,6 +1566,56 @@ async fn the_agent_is_told_what_came_of_its_pull_request_next_turn() {
     .await;
 }
 
+/// Somebody opening one by hand can name the clone the agent made.
+#[tokio::test]
+async fn a_pull_request_command_can_name_the_repository() {
+    let asked_for = Arc::new(Mutex::new(Vec::new()));
+    with_session(
+        SessionTestCase {
+            config: Some(config_with(&json!({
+                "github": { "token": "ghp", "userName": "errand-bot", "userEmail": "bot@example.com" },
+            }))),
+            open_pull_request: {
+                let asked_for = Arc::clone(&asked_for);
+                Some(Arc::new(move |request: pr::Request| {
+                    let asked_for = Arc::clone(&asked_for);
+                    Box::pin(async move {
+                        asked_for
+                            .lock()
+                            .unwrap()
+                            .push((request.repository.clone(), request.title.clone()));
+                        Ok::<String, PullRequestError>("https://github.com/x/y/pull/2".to_owned())
+                    })
+                        as Pin<Box<dyn Future<Output = Result<String, PullRequestError>> + Send>>
+                }) as OpenPullRequest)
+            },
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .session
+                    .handle(message_from(
+                        "!pr --repo edu/playground/sub/inner Add the proof file",
+                        OWNER,
+                        "m2",
+                    ))
+                    .await;
+
+                assert_eq!(
+                    *asked_for.lock().unwrap(),
+                    [(
+                        Some("edu/playground/sub/inner".to_owned()),
+                        "Add the proof file".to_owned()
+                    )]
+                );
+                assert!(harness.thread.everything().contains("pull/2"));
+            })
+        },
+    )
+    .await;
+}
+
 /// An unasked-for pull request spends somebody else's review time.
 #[tokio::test]
 async fn a_pull_request_nobody_asked_for_is_refused_and_cleared() {
