@@ -20,7 +20,9 @@ use crate::agent::protocol::AgentImage;
 use crate::chat::commands::TranslatedCommand;
 use crate::chat::commands::{acknowledge, register_commands};
 use crate::chat::gateway::{Gateway, GatewayHandlers};
-use crate::chat::render::{MESSAGE_LIMIT, split_message, when_relative, when_relative_plain};
+use crate::chat::render::{
+    MESSAGE_LIMIT, split_message, usage_table, when_relative, when_relative_plain,
+};
 use crate::chat::threads::ChatThreadFactory;
 use crate::chat::threads::plain;
 use crate::config::load::Environment;
@@ -47,8 +49,7 @@ use crate::provider::usage::QUOTA_TTL_MS;
 use crate::provider::usage::Quota;
 use crate::provider::usage::Window;
 use crate::provider::usage::{
-    FetchError, QuotaGate, UNKNOWN_QUOTA, UsageSource, is_spent, quota_message, spent_message,
-    usage_status,
+    FetchError, QuotaGate, UsageSource, is_spent, spent_message, usage_status,
 };
 use crate::provider::vision::HttpPost;
 use crate::provider::vision::image_describer;
@@ -910,19 +911,11 @@ async fn run(
                 let sources = Arc::clone(&sources);
                 Box::pin(async move {
                     let mut sources = sources.lock().await;
-                    let mut lines = Vec::new();
+                    let mut rows = Vec::new();
                     for source in sources.iter_mut() {
-                        let window = source.gate.current().await;
-                        lines.push(match window {
-                            None => format!("{}: {UNKNOWN_QUOTA}", source.provider),
-                            Some(window) => quota_message(
-                                &source.provider,
-                                &window,
-                                when(window.resets_at, when_relative).as_deref(),
-                            ),
-                        });
+                        rows.push((source.provider.clone(), source.gate.current().await));
                     }
-                    lines.join("\n")
+                    usage_table(&rows, now_ms())
                 })
             }))
         },

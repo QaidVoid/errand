@@ -157,26 +157,6 @@ pub fn spent_message(provider: &str, relative: Option<&str>) -> String {
     format!("{provider}'s usage window is spent, so this cannot run yet{back}")
 }
 
-/// What is said when a provider was asked and did not answer usefully.
-pub const UNKNOWN_QUOTA: &str = "the model provider did not say what is left of the usage window";
-
-/// What the window looks like, in a line somebody asked for on purpose.
-///
-/// Says what is left rather than what is spent. "58% left" is the number
-/// somebody is deciding on, where "42% used" has to be subtracted first.
-pub fn quota_message(provider: &str, quota: &Quota, relative: Option<&str>) -> String {
-    let left = (100.0 - quota.percentage).round().max(0.0);
-    let state = if is_spent(quota) {
-        format!("{provider}'s usage window is spent")
-    } else {
-        format!("{left}% of {provider}'s usage window is left")
-    };
-    match relative {
-        None => state,
-        Some(relative) => format!("{state}, and it resets {relative}"),
-    }
-}
-
 /// Longest a status may be before the service refuses it.
 ///
 /// The status is one line under the bot's name, and a refusal is silent: the

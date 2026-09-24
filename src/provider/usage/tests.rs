@@ -6,8 +6,7 @@ use std::future::Future;
 use tokio::sync::mpsc;
 
 use super::{
-    QUOTA_TTL_MS, Quota, QuotaGate, STATUS_LIMIT, Window, is_spent, quota_message, spent_message,
-    usage_status,
+    QUOTA_TTL_MS, Quota, QuotaGate, STATUS_LIMIT, Window, is_spent, spent_message, usage_status,
 };
 
 fn window(provider: &str, percentage: f64, relative: Option<&str>) -> Window {
@@ -188,37 +187,6 @@ async fn forgetting_makes_the_next_question_reach_the_provider() {
     let _ = gate.current().await;
 
     assert_eq!(seen.recv().await, Some(()));
-}
-
-/// The number somebody is deciding on is what is left, not what is spent.
-#[test]
-fn the_usage_line_says_what_is_left_and_when_it_comes_back() {
-    let line = quota_message(
-        "the provider",
-        &Quota {
-            percentage: 42.4,
-            resets_at: Some(0),
-        },
-        Some("in 2 hours"),
-    );
-
-    assert!(line.contains("58% of the provider's usage window is left"));
-    assert!(line.contains("resets in 2 hours"));
-}
-
-#[test]
-fn a_spent_window_says_so_rather_than_saying_zero_percent_is_left() {
-    let line = quota_message(
-        "the provider",
-        &Quota {
-            percentage: 100.0,
-            resets_at: Some(0),
-        },
-        Some("in 10 minutes"),
-    );
-
-    assert!(line.contains("is spent"));
-    assert!(line.contains("in 10 minutes"));
 }
 
 #[test]

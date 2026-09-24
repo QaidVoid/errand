@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::agent::protocol::DialogMethod;
 use crate::agent::protocol::DialogRequest;
 use crate::chat::chars::{PrefixKey, prefixed};
+use crate::provider::usage::{Quota, is_spent};
 use crate::session::event::Delegated;
 use crate::session::files::Entry;
 use crate::session::files::{FileContents, MAX_INLINE_BYTES};
@@ -379,6 +380,65 @@ pub fn when_relative_plain(epoch_ms: i64, now: i64) -> String {
     } else {
         format!("in {hours}h {rest}m")
     }
+}
+
+/// `!usage` as a table, in a code block so the columns line up.
+///
+/// Each row is a provider and what it said of its window, or nothing where it
+/// did not answer. A code block shows `<t:...>` verbatim, so a reset is
+/// written out twice instead: how long until it, as of `now`, and the moment
+/// itself in UTC. The number shown is what is left rather than what is spent,
+/// because that is the number somebody is deciding on.
+pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
+    let dash = || "-".to_owned();
+    let mut table = vec![[
+        "provider".to_owned(),
+        "left".to_owned(),
+        "resets".to_owned(),
+        "at (UTC)".to_owned(),
+    ]];
+    for (provider, quota) in rows {
+        let (left, resets, at) = match quota {
+            None => ("unknown".to_owned(), dash(), dash()),
+            Some(quota) => {
+                let left = if is_spent(quota) {
+                    "spent".to_owned()
+                } else {
+                    format!("{}%", (100.0 - quota.percentage).round().max(0.0))
+                };
+                match quota.resets_at {
+                    None => (left, dash(), dash()),
+                    Some(at) => (left, when_relative_plain(at, now), utc_minute(at)),
+                }
+            }
+        };
+        table.push([provider.clone(), left, resets, at]);
+    }
+
+    let widths: Vec<usize> = (0..4)
+        .map(|column| table.iter().map(|row| row[column].len()).max().unwrap_or(0))
+        .collect();
+    let lines: Vec<String> = table
+        .iter()
+        .map(|row| {
+            row.iter()
+                .zip(&widths)
+                .map(|(cell, width)| format!("{cell:<width$}"))
+                .collect::<Vec<_>>()
+                .join("  ")
+                .trim_end()
+                .to_owned()
+        })
+        .collect();
+    format!("```\n{}\n```", lines.join("\n"))
+}
+
+/// A moment as `YYYY-MM-DD HH:MM` in UTC.
+fn utc_minute(epoch_ms: i64) -> String {
+    jiff::Timestamp::from_millisecond(epoch_ms).map_or_else(
+        |_| "-".to_owned(),
+        |at| at.strftime("%Y-%m-%d %H:%M").to_string(),
+    )
 }
 
 /// How long a turn took, and how much of it was spent before it said

@@ -5,9 +5,11 @@ use serde_json::json;
 use super::{
     MAX_LISTED_ENTRIES, MESSAGE_LIMIT, THREAD_NAME_LIMIT, Usage, bytes, compaction_line,
     dialog_lines, directory_listing, duration, file_view, split_message, thread_name, tokens,
-    tool_line, truncate, turn_summary, turn_timing, usage_summary, when_relative_plain,
+    tool_line, truncate, turn_summary, turn_timing, usage_summary, usage_table,
+    when_relative_plain,
 };
 use crate::agent::protocol::{DialogMethod, DialogRequest};
+use crate::provider::usage::Quota;
 use crate::session::files::{Entry, FileContents};
 
 #[test]
@@ -453,4 +455,49 @@ fn a_turn_summary_groups_what_it_answers() {
     // never told which model answered says nothing about one.
     assert_eq!(turn_summary(None, "2.4s", None), "2.4s");
     assert_eq!(turn_summary(Some(""), "2.4s", None), "2.4s");
+}
+
+/// `!usage` lines up in a code block: what is left, when it resets as a
+/// span, and the moment in UTC, with a dash for what a provider did not say.
+#[test]
+fn usage_is_a_table_with_the_reset_in_utc() {
+    let now = 1_790_000_000_000;
+    let table = usage_table(
+        &[
+            (
+                "ajamxhacker".to_owned(),
+                Some(Quota {
+                    percentage: 42.4,
+                    resets_at: Some(now + 2 * 3_600_000 + 13 * 60_000),
+                }),
+            ),
+            (
+                "zai-coding-cn".to_owned(),
+                Some(Quota {
+                    percentage: 100.0,
+                    resets_at: Some(now + 41 * 60_000),
+                }),
+            ),
+            (
+                "fresh".to_owned(),
+                Some(Quota {
+                    percentage: 0.0,
+                    resets_at: None,
+                }),
+            ),
+            ("quiet".to_owned(), None),
+        ],
+        now,
+    );
+
+    assert_eq!(
+        table,
+        "```\n\
+provider       left     resets     at (UTC)\n\
+ajamxhacker    58%      in 2h 13m  2026-09-21 16:26\n\
+zai-coding-cn  spent    in 41m     2026-09-21 14:54\n\
+fresh          100%     -          -\n\
+quiet          unknown  -          -\n\
+```"
+    );
 }
