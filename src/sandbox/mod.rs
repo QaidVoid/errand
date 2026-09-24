@@ -266,7 +266,7 @@ impl Backend {
             // The bailey handle holds itself behind an arc for its timers, so
             // the launch is reached through the same arc.
             Backend::Bailey(bailey) => bailey.launch(launch).await,
-            Backend::Podman(podman) => podman.launch(launch),
+            Backend::Podman(podman) => podman.launch(launch).await,
         }
     }
 

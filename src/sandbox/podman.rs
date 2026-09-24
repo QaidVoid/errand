@@ -23,7 +23,7 @@ use crate::sandbox::backend::placed_prompt_path;
 use crate::sandbox::backend::{
     AGENT_HOME, AGENT_SESSIONS, AgentCommand, CapabilityReport, SESSION_LABEL, STATE_PATH,
     SYSTEM_LABEL, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError, WORKSPACE_PATH,
-    agent_command, sandbox_name,
+    agent_command, disk_tmp_dir, fresh_disk_tmp, sandbox_name,
 };
 use crate::sandbox::spawn::spawn_agent;
 
@@ -58,8 +58,6 @@ pub fn podman_args(config: &SandboxConfig, launch: &SandboxLaunch) -> Vec<String
         &format!("{SESSION_LABEL}={}", launch.session_id),
         "--userns=keep-id",
         "--read-only",
-        "--tmpfs",
-        "/tmp",
         "--volume",
         &format!("{}:{WORKSPACE_PATH}:rw,Z", launch.project_path),
         "--volume",
@@ -80,6 +78,20 @@ pub fn podman_args(config: &SandboxConfig, launch: &SandboxLaunch) -> Vec<String
 
     // The runtime takes what was written, said the way a number says itself.
     args.push(format!("{}", config.cpus));
+    // Sizes cross as bytes: the size syntax allows spellings a mount option
+    // does not.
+    if config.disk_tmp {
+        args.push("--volume".to_owned());
+        args.push(format!("{}:/tmp:rw,Z", disk_tmp_dir(&launch.state_dir)));
+    } else {
+        args.push("--tmpfs".to_owned());
+        args.push(format!(
+            "/tmp:size={},mode=1777",
+            parse_size(&config.tmp_size).unwrap_or(0)
+        ));
+    }
+    args.push("--shm-size".to_owned());
+    args.push(parse_size(&config.shm_size).unwrap_or(0).to_string());
     args.push("--pids-limit".to_owned());
     args.push(config.pids.to_string());
     // An fsize ulimit, in bytes, inherited by every process in the container.
@@ -236,7 +248,13 @@ impl PodmanSandbox {
     }
 
     /// Starts one session's sandbox.
-    pub fn launch(&self, launch: &SandboxLaunch) -> Result<SandboxHandle, SandboxLaunchError> {
+    pub async fn launch(
+        &self,
+        launch: &SandboxLaunch,
+    ) -> Result<SandboxHandle, SandboxLaunchError> {
+        if self.config.disk_tmp {
+            fresh_disk_tmp(&launch.state_dir).await?;
+        }
         let name = sandbox_name(&launch.session_id);
         let args = podman_args(&self.config, launch);
         let spawned = spawn_agent("podman", &args, None, None)

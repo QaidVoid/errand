@@ -191,6 +191,35 @@ fn the_configured_limits_reach_the_container() {
     assert!(args.contains("--pids-limit 128"));
 }
 
+#[test]
+fn scratch_is_a_sized_tmpfs_and_a_sized_shm() {
+    let mut sized = config();
+    sized.tmp_size = "1.5g".to_owned();
+    sized.shm_size = "256m".to_owned();
+    let args = podman_args(&sized, &launch()).join(" ");
+
+    assert!(args.contains(&format!(
+        "--tmpfs /tmp:size={},mode=1777",
+        parse_size("1.5g").expect("bytes")
+    )));
+    assert!(args.contains(&format!(
+        "--shm-size {}",
+        parse_size("256m").expect("bytes")
+    )));
+}
+
+/// With `diskTmp` the state's tmp directory is bound at `/tmp` in place of
+/// the tmpfs, so scratch is on disk and counted by the disk budget.
+#[test]
+fn disk_tmp_binds_the_state_tmp_directory_in_place_of_the_tmpfs() {
+    let mut disk = config();
+    disk.disk_tmp = true;
+    let args = podman_args(&disk, &launch()).join(" ");
+
+    assert!(args.contains("--volume /state/s-1/tmp:/tmp:rw,Z"));
+    assert!(!args.contains("--tmpfs"));
+}
+
 /// The runtime takes bytes, so a size that validated must convert.
 #[test]
 fn the_file_ceiling_is_passed_as_bytes_not_as_it_was_written() {
