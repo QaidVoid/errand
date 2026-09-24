@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -22,6 +22,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::config::schema::GithubConfig;
+use crate::sandbox::backend::WORKSPACE_PATH;
 use crate::session::github::{SessionLinks, attribution_footer};
 
 /// A repository on GitHub, as the API addresses it.
@@ -137,8 +138,8 @@ pub struct Request {
     /// The session's directory, which holds the repository rather than being
     /// one.
     pub project_path: String,
-    /// Which repository in it, by directory name. Only needed when it holds
-    /// several.
+    /// Which repository in it, by its path within it. Only needed when it
+    /// holds several.
     pub repository: Option<String>,
     /// Title for the pull request.
     pub title: String,
@@ -314,46 +315,101 @@ fn is_work_tree(path: &Path) -> bool {
     std::fs::symlink_metadata(path.join(".git")).is_ok_and(|meta| meta.is_dir())
 }
 
+/// How many levels below the session's directory a repository is looked for.
+///
+/// Deep enough for a clone placed the way its URL reads, as
+/// `github.com/owner/repo`, and shallow enough that a session holding a large
+/// tree is not walked whole.
+const SEARCH_DEPTH: usize = 4;
+
+/// Every working tree under the session's directory, by its path within it.
+///
+/// A tree found is not searched further, so a repository vendored inside
+/// another is not offered as a second one. A symlink is never followed, for
+/// the reason a `.git` file is refused, and a hidden directory is skipped,
+/// since that is where tool caches live.
 fn repositories_in(project_path: &str) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(project_path) else {
-        return Vec::new();
-    };
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| is_work_tree(&Path::new(project_path).join(name)))
-        .collect();
-    names.sort();
-    names
+    let mut found = Vec::new();
+    let mut unread = vec![(PathBuf::from(project_path), String::new(), 0)];
+    while let Some((directory, within, depth)) = unread.pop() {
+        if depth == SEARCH_DEPTH {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let path = entry.path();
+            let within = if within.is_empty() {
+                name
+            } else {
+                format!("{within}/{name}")
+            };
+            if is_work_tree(&path) {
+                found.push(within);
+            } else {
+                unread.push((path, within, depth + 1));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The directory a repository named by its path within the session is in.
+///
+/// Every step must be a real directory beneath the session's own, so a
+/// symlink or a `..` cannot name a repository elsewhere on the host. The path
+/// may be written as the agent sees it, under the workspace.
+fn named_repository(project_path: &str, named: &str) -> Result<PathBuf, PullRequestError> {
+    let within = named
+        .strip_prefix(&format!("{WORKSPACE_PATH}/"))
+        .unwrap_or(named)
+        .trim_end_matches('/');
+    let mut path = PathBuf::from(project_path);
+    for part in within.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return Err(PullRequestError(format!(
+                "`{named}` is not a path within this session; name a repository as \
+                 `github.com/owner/repo`, relative to the workspace"
+            )));
+        }
+        path.push(part);
+        if !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+            return Err(PullRequestError(format!(
+                "there is no repository at `{named}` in this session"
+            )));
+        }
+    }
+    if is_work_tree(&path) {
+        Ok(path)
+    } else {
+        Err(PullRequestError(format!(
+            "there is no repository at `{named}` in this session"
+        )))
+    }
 }
 
 /// Finds the working tree the pull request is for.
 ///
 /// A session's directory is not itself a repository. Whatever the agent was
-/// asked to work on is cloned into it, so the repository is normally one level
-/// down, and looking only at the top would report that there is nothing to
-/// open when there plainly is.
+/// asked to work on is cloned into it, often one level down and sometimes
+/// placed the way its URL reads, so it is looked for a few levels down, and
+/// looking only at the top would report that there is nothing to open when
+/// there plainly is.
 ///
-/// `named` picks between them, which a session reused under the same name for
-/// a while needs.
+/// `named` picks between them by path within the session, which a session
+/// reused under the same name for a while needs.
 pub fn find_repository(
     project_path: &str,
     named: Option<&str>,
 ) -> Result<String, PullRequestError> {
-    if let Some(named) = named.filter(|name| !name.is_empty()) {
-        if named.contains('/') || named == "." || named == ".." {
-            return Err(PullRequestError(format!(
-                "`{named}` is not the name of a repository in this session"
-            )));
-        }
-        let chosen = Path::new(project_path).join(named);
-        if !is_work_tree(&chosen) {
-            return Err(PullRequestError(format!(
-                "there is no repository called `{named}` in this session"
-            )));
-        }
-        return Ok(chosen.display().to_string());
+    if let Some(named) = named.map(str::trim).filter(|name| !name.is_empty()) {
+        return named_repository(project_path, named).map(|path| path.display().to_string());
     }
 
     if is_work_tree(Path::new(project_path)) {
@@ -363,10 +419,10 @@ pub fn find_repository(
     let found = repositories_in(project_path);
     match found.as_slice() {
         [one] => Ok(Path::new(project_path).join(one).display().to_string()),
-        [] => Err(PullRequestError(
-            "nothing in this session is a git repository yet, so there is nothing to open"
-                .to_owned(),
-        )),
+        [] => Err(PullRequestError(format!(
+            "nothing in this session is a git repository yet, looking {SEARCH_DEPTH} levels \
+             down, so there is nothing to open"
+        ))),
         many => Err(PullRequestError(format!(
             "this session holds several repositories ({}), so say which one to open",
             many.join(", ")

@@ -308,6 +308,80 @@ fn a_directory_whose_git_is_a_redirect_file_is_not_a_repository() {
     assert!(find_repository(&kept.project, Some("linked")).is_err());
 }
 
+/// An agent that clones the way the URL reads puts the repository three
+/// levels down, and it is found there.
+#[test]
+fn a_repository_placed_the_way_its_url_reads_is_found() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("github.com/pkgforge-dev/polyfill-glibc");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(root.path().join(".cache/deep/.git")).unwrap();
+    let project = root.path().display().to_string();
+
+    assert_eq!(
+        find_repository(&project, None).unwrap(),
+        repo.display().to_string()
+    );
+}
+
+/// Several nested clones are named by their paths, and one is picked by its
+/// path, written as the agent sees it or relative to the workspace.
+#[test]
+fn nested_repositories_are_named_and_picked_by_path() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("github.com/owner/one/.git")).unwrap();
+    std::fs::create_dir_all(root.path().join("github.com/owner/two/.git")).unwrap();
+    // Vendored inside one, so not a second repository to choose.
+    std::fs::create_dir_all(root.path().join("github.com/owner/one/vendor/lib/.git")).unwrap();
+    let project = root.path().display().to_string();
+
+    let error = find_repository(&project, None).unwrap_err().to_string();
+    assert!(
+        error.contains("(github.com/owner/one, github.com/owner/two)"),
+        "{error}"
+    );
+
+    let two = root
+        .path()
+        .join("github.com/owner/two")
+        .display()
+        .to_string();
+    assert_eq!(
+        find_repository(&project, Some("github.com/owner/two")).unwrap(),
+        two
+    );
+    assert_eq!(
+        find_repository(&project, Some("/workspace/github.com/owner/two/")).unwrap(),
+        two
+    );
+    assert!(find_repository(&project, Some("github.com/owner")).is_err());
+}
+
+/// A symlink along the way could name a repository anywhere on the host, so
+/// it is neither followed in the search nor accepted in a name.
+#[test]
+fn a_symlink_never_leads_to_a_repository() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside.path().join("repo/.git")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.path().join("hop")).unwrap();
+    let project = root.path().display().to_string();
+
+    assert!(find_repository(&project, None).is_err());
+    assert!(find_repository(&project, Some("hop/repo")).is_err());
+}
+
+#[test]
+fn a_repository_deeper_than_the_search_is_not_found() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("a/b/c/d/e/.git")).unwrap();
+    let project = root.path().display().to_string();
+
+    let error = find_repository(&project, None).unwrap_err().to_string();
+    assert!(error.contains("levels down"), "{error}");
+    assert!(find_repository(&project, Some("a/b/c/d/e")).is_ok());
+}
+
 #[test]
 fn a_name_that_is_a_path_is_not_the_name_of_a_repository() {
     let kept = with_repo();
