@@ -127,65 +127,54 @@ fn when(at: Option<i64>, render: fn(i64) -> String) -> Option<String> {
     at.map(render)
 }
 
-/// Every provider on this host whose window can be asked about.
-///
-/// The configured one first, because it is what a session runs on unless the
-/// opening message says otherwise, and so it is the one worth putting under
-/// the bot's name. A defined provider is asked only where it says it serves a
-/// usage endpoint: a base URL that does not is simply not asked, rather than
-/// probed.
+/// Reads one provider's window.
 type BoxedGateRead =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = Option<Quota>> + Send>> + Send + Sync>;
 
+/// Every provider on this host whose window can be asked about.
+///
+/// A z.ai provider is asked at z.ai's quota endpoint, whether or not it is the
+/// one sessions start on. Any other is asked only where it says it serves a
+/// gateway usage endpoint: a base URL that does not is simply not asked,
+/// rather than probed. The configured one comes first, because it is what a
+/// session runs on unless the opening message says otherwise, and so it is
+/// the one worth putting under the bot's name.
 fn usage_sources(config: &Config) -> Vec<UsageSource<BoxedGateRead>> {
     let mut sources = Vec::new();
-    if meters_usage(&config.agent.provider) {
-        let credential = config.agent.credential().to_owned();
-        sources.push(UsageSource {
-            provider: config.agent.provider.clone(),
-            gate: QuotaGate::new(
-                Box::new(move || {
-                    let credential = credential.clone();
-                    Box::pin(async move {
-                        let fetch = HttpFetch;
-                        fetch_quota(&credential, &fetch, 10_000).await
-                    }) as Pin<Box<dyn Future<Output = Option<Quota>> + Send>>
-                }) as BoxedGateRead,
-                now_ms,
-            ),
-        });
-    }
-
     for (name, definition) in &config.agent.providers {
-        let Some(fields) = definition.as_object() else {
+        let Some(credential) = config.agent.credential_of(name) else {
             continue;
         };
-        if fields.get("usage").and_then(serde_json::Value::as_str) != Some(GATEWAY_USAGE) {
-            continue;
-        }
-        let (Some(base_url), Some(credential)) = (
-            fields.get("baseUrl").and_then(serde_json::Value::as_str),
-            fields.get("credential").and_then(serde_json::Value::as_str),
-        ) else {
-            continue;
-        };
-        let base_url = base_url.to_owned();
         let credential = credential.to_owned();
+        let gateway_url = definition
+            .get("baseUrl")
+            .and_then(serde_json::Value::as_str)
+            .filter(|_| {
+                definition.get("usage").and_then(serde_json::Value::as_str) == Some(GATEWAY_USAGE)
+            })
+            .map(str::to_owned);
+        let read: BoxedGateRead = if meters_usage(name) {
+            Box::new(move || {
+                let credential = credential.clone();
+                Box::pin(async move { fetch_quota(&credential, &HttpFetch, 10_000).await })
+            })
+        } else if let Some(base_url) = gateway_url {
+            Box::new(move || {
+                let base_url = base_url.clone();
+                let credential = credential.clone();
+                Box::pin(async move {
+                    fetch_gateway_usage(&base_url, &credential, &HttpFetch, 10_000).await
+                })
+            })
+        } else {
+            continue;
+        };
         sources.push(UsageSource {
             provider: name.clone(),
-            gate: QuotaGate::new(
-                Box::new(move || {
-                    let base_url = base_url.clone();
-                    let credential = credential.clone();
-                    Box::pin(async move {
-                        let fetch = HttpFetch;
-                        fetch_gateway_usage(&base_url, &credential, &fetch, 10_000).await
-                    }) as Pin<Box<dyn Future<Output = Option<Quota>> + Send>>
-                }) as BoxedGateRead,
-                now_ms,
-            ),
+            gate: QuotaGate::new(read, now_ms),
         });
     }
+    sources.sort_by_key(|source| source.provider != config.agent.provider);
     sources
 }
 

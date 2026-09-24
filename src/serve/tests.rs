@@ -3,7 +3,7 @@
 use serde_json::json;
 use serenity::model::id::ChannelId;
 
-use super::{answer_in, brokerable_providers};
+use super::{answer_in, brokerable_providers, usage_sources};
 use crate::config::validate::validate_config;
 use crate::provider::models::STORE_FILENAME;
 
@@ -81,4 +81,34 @@ fn a_built_in_provider_is_brokered_from_the_store() {
             ),
         ]
     );
+}
+
+/// A z.ai provider is metered whether or not sessions start on it, and the
+/// one they start on is listed first.
+#[test]
+fn every_metered_provider_is_asked_the_default_first() {
+    let config = validate_config(&json!({
+        "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+        "agent": {
+            "provider": "gateway",
+            "providers": {
+                "zai-coding-cn": { "credential": "z-key" },
+                "plain": { "baseUrl": "https://plain.example/v1", "credential": "p-key" },
+                "gateway": {
+                    "baseUrl": "https://gateway.example/v1",
+                    "usage": "gateway",
+                    "credential": "g-key",
+                },
+            },
+        },
+        "projectRoot": "/tmp/p",
+        "stateDir": "/tmp/s",
+    }))
+    .expect("resolves");
+
+    let asked: Vec<String> = usage_sources(&config)
+        .into_iter()
+        .map(|source| source.provider)
+        .collect();
+    assert_eq!(asked, ["gateway", "zai-coding-cn"]);
 }
