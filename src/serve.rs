@@ -37,7 +37,7 @@ use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::gateway::{GATEWAY_USAGE, fetch_gateway_usage};
 use crate::provider::models::{
-    agent_directory, available_models, model_by_id, read_models, read_store,
+    agent_directory, available_models, common_base_url, model_by_id, read_models, read_store,
 };
 use crate::provider::usage::Fetch;
 use crate::provider::usage::HttpRequest;
@@ -188,36 +188,55 @@ fn usage_sources(config: &Config) -> Vec<UsageSource<BoxedGateRead>> {
     sources
 }
 
-/// The defined providers the daemon can stand in front of.
+/// The configured model's provider, and where the host's store says that
+/// model is reached.
 ///
-/// A definition is brokerable when it says where the provider is and what the
-/// key to it is: without the base URL there is nowhere to forward, and
-/// without the credential there is nothing to put on. One that says neither
-/// is left alone, and the agent reaches it however it would have.
-fn brokerable_providers(
-    defined: &serde_json::Map<String, serde_json::Value>,
-) -> Vec<(String, String, String)> {
-    let mut found = Vec::new();
-    for (name, definition) in defined {
-        let Some(fields) = definition.as_object() else {
-            continue;
-        };
-        let (Some(upstream), Some(credential)) = (
-            fields.get("baseUrl").and_then(serde_json::Value::as_str),
-            fields.get("credential").and_then(serde_json::Value::as_str),
-        ) else {
-            continue;
-        };
-        if upstream.trim().is_empty() || credential.trim().is_empty() {
-            continue;
-        }
-        found.push((
-            name.clone(),
-            upstream.trim().to_owned(),
-            credential.to_owned(),
-        ));
-    }
-    found
+/// The model may name its provider, so it is looked up under that one rather
+/// than the provider a session would otherwise start on. A thinking level is
+/// taken off first: it is not part of what the store calls a model.
+fn configured_base_url(agent: &AgentConfig, store: Option<&str>) -> Option<(String, String)> {
+    let configured = configured_model(agent);
+    let provider = configured
+        .as_ref()
+        .and_then(|model| model.provider.as_deref())
+        .unwrap_or(agent.provider.as_str());
+    let named = configured.as_ref().map(|model| split_level(&model.model).0);
+    let url = model_by_id(&read_models(store, provider), named.as_deref())?
+        .base_url
+        .clone()?;
+    Some((provider.to_owned(), url))
+}
+
+/// The defined providers the daemon can stand in front of, and where each is.
+///
+/// A provider is brokerable when the daemon holds its key and knows where it
+/// is: the definition's `baseUrl`, or, for a provider the agent has built in,
+/// where the host's store serves its models from. Such a provider needs no
+/// `baseUrl` in the configuration, and one left unbrokered has no key inside
+/// the sandbox, so the agent refuses to switch to it.
+fn brokerable_providers(agent: &AgentConfig, store: Option<&str>) -> Vec<(String, String, String)> {
+    let configured = configured_base_url(agent, store);
+    agent
+        .providers
+        .iter()
+        .filter_map(|(name, definition)| {
+            let credential = agent.credential_of(name)?;
+            let upstream = definition
+                .get("baseUrl")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|upstream| !upstream.is_empty())
+                .map(str::to_owned)
+                .or_else(|| {
+                    configured
+                        .as_ref()
+                        .filter(|(provider, _)| provider == name)
+                        .map(|(_, url)| url.clone())
+                })
+                .or_else(|| common_base_url(&read_models(store, name)))?;
+            Some((name.clone(), upstream, credential.to_owned()))
+        })
+        .collect()
 }
 
 /// A per-run stand-in for the provider credential.
@@ -397,30 +416,14 @@ struct Brokered {
 ///
 /// Returns nothing when the mode asks for no broker, and an exit code when
 /// one was asked for and could not be had.
-/// Where the configured model is reached, as the host's store has it.
-///
-/// The model may name its provider, so it is looked up under that one rather
-/// than the provider a session would otherwise start on. A thinking level is
-/// taken off first: it is not part of what the store calls a model.
-fn configured_base_url(agent: &AgentConfig, store: Option<&str>) -> Option<String> {
-    let configured = configured_model(agent);
-    let provider = configured
-        .as_ref()
-        .and_then(|model| model.provider.as_deref())
-        .unwrap_or(agent.provider.as_str());
-    let named = configured.as_ref().map(|model| split_level(&model.model).0);
-    model_by_id(&read_models(store, provider), named.as_deref())
-        .and_then(|model| model.base_url.clone())
-}
-
 async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>, Exit> {
     if config.sandbox.egress.mode != EgressMode::Proxy {
         return Ok(None);
     }
     let env = host_environment();
     let store = agent_directory(&env);
-    let provider_base = configured_base_url(&config.agent, store.as_deref());
-    let provider_host = provider_base.as_deref().and_then(host_of);
+    let provider_host =
+        configured_base_url(&config.agent, store.as_deref()).and_then(|(_, url)| host_of(&url));
     let mut allow: Vec<String> = provider_host
         .as_ref()
         .map(|host| vec![host.clone()])
@@ -439,17 +442,7 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
     // the daemon knows, each with a nonce of its own.
     let mut nonces = BTreeMap::new();
     let mut routes: Vec<ProviderRoute> = Vec::new();
-    if let Some(provider_base) = &provider_base {
-        let nonce = provider_nonce();
-        nonces.insert(config.agent.provider.clone(), nonce.clone());
-        routes.push(ProviderRoute {
-            prefix: provider_prefix(&config.agent.provider),
-            upstream: provider_base.clone(),
-            nonce,
-            credential: config.agent.credential().to_owned(),
-        });
-    }
-    for (name, upstream, credential) in brokerable_providers(&config.agent.providers) {
+    for (name, upstream, credential) in brokerable_providers(&config.agent, store.as_deref()) {
         let nonce = provider_nonce();
         nonces.insert(name.clone(), nonce.clone());
         routes.push(ProviderRoute {
@@ -486,6 +479,16 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
                         LogValue::from(format!("{EGRESS_MAP_ADDRESS}:{port}")),
                     ),
                     ("allow", LogValue::from(allow.join(", "))),
+                    (
+                        "providers",
+                        LogValue::from(
+                            routes
+                                .iter()
+                                .map(|route| route.prefix.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ),
+                    ),
                 ]),
             );
             port

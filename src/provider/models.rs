@@ -273,6 +273,21 @@ pub fn read_store(directory: Option<&str>, provider: &str) -> StoreContents {
     }
 }
 
+/// The base URL most of a provider's models are served from.
+///
+/// One provider may serve models from more than one URL, one per API it
+/// speaks, while a brokered provider is reached through a single one.
+pub fn common_base_url(models: &[ModelInfo]) -> Option<String> {
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for url in models.iter().filter_map(|model| model.base_url.as_deref()) {
+        *counts.entry(url).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(url, _)| url.to_owned())
+}
+
 /// One model by id, when the store lists it.
 pub fn model_by_id<'a>(models: &'a [ModelInfo], id: Option<&str>) -> Option<&'a ModelInfo> {
     let id = id?;

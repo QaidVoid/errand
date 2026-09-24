@@ -21,6 +21,10 @@ standing `agent.provider`. A leading segment counts as a provider only when it
 is one your configuration defines, which leaves a model id holding a slash of
 its own, `meta/muse-spark-1.3`, whole.
 
+A provider the agent has built in needs only its `credential` to be switched
+to. The daemon reads where it is served from the host's model store, so it
+does not have to be the provider a session started on.
+
 ## Switching the model a session runs on
 
 `!model` lists what this host knows the provider serves. `!model <name>` moves
