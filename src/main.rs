@@ -12,11 +12,12 @@ use std::sync::{Arc, Mutex};
 use crate::cli::threads::Deps;
 use crate::cli::threads::Project;
 use crate::cli::threads::run_threads;
+use crate::cli::verbosity::take_verbosity;
 use crate::config::load::{config_path, file_exists, load_config};
 use crate::config::schema::Config;
 use crate::config::schema::ConfigError;
-use crate::log::logger;
 use crate::log::now_ms;
+use crate::log::{LogLevel, logger};
 use crate::log::{LogValue, fields};
 use crate::sandbox::policy::POLICY_FILENAME;
 use crate::serve::serve;
@@ -49,11 +50,15 @@ type Vars = BTreeMap<String, String>;
 
 fn usage(env: &Vars) -> String {
     [
-        "usage: errand <command>".to_owned(),
+        "usage: errand [-v | -vv | -vvv] <command>".to_owned(),
         String::new(),
         "  run                  run the daemon until it is told to stop".to_owned(),
         "  threads [command]    manage remembered threads and their data".to_owned(),
         "  help                 this".to_owned(),
+        String::new(),
+        "  -v                   also log each decision and why".to_owned(),
+        "  -vv                  also log each step between decisions".to_owned(),
+        "  -vvv                 also log every line exchanged with the agent".to_owned(),
         String::new(),
         format!(
             "the configuration is read from {}",
@@ -125,9 +130,9 @@ fn project_of(state_dir: &str) -> Option<Project> {
     Some(Project { name, path })
 }
 
-async fn threads(args: &[String], env: &Vars) -> Result<i32, ConfigError> {
+async fn threads(args: &[String], env: &Vars, level: LogLevel) -> Result<i32, ConfigError> {
     let config = load(env)?;
-    let log = logger();
+    let log = logger(level);
     let registry = Arc::new(Mutex::new(ThreadRegistry::new(
         ThreadRegistry::path_for(&config.state_dir),
         log,
@@ -162,8 +167,8 @@ async fn threads(args: &[String], env: &Vars) -> Result<i32, ConfigError> {
 
 /// Runs the daemon, turning the failures an operator can act on into an exit
 /// code and one line rather than a stack trace.
-async fn run(env: &Vars) -> i32 {
-    let log = logger();
+async fn run(env: &Vars, level: LogLevel) -> i32 {
+    let log = logger(level);
     let config = match load(env) {
         Ok(config) => config,
         Err(error) => {
@@ -204,14 +209,15 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-async fn dispatch(args: Vec<String>, env: Vars) -> Result<i32, ConfigError> {
+async fn dispatch(mut args: Vec<String>, env: Vars) -> Result<i32, ConfigError> {
+    let level = take_verbosity(&mut args);
     let Some(command) = args.first().cloned() else {
         println!("{}", usage(&env));
         return Ok(2);
     };
     match command.as_str() {
-        "run" => Ok(run(&env).await),
-        "threads" => threads(&args[1..], &env).await,
+        "run" => Ok(run(&env, level).await),
+        "threads" => threads(&args[1..], &env, level).await,
         "help" | "--help" => {
             println!("{}", usage(&env));
             Ok(0)

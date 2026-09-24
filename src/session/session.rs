@@ -888,10 +888,21 @@ impl Running {
                 }
                 Signal::Usage(usage) => self.accrue(&usage).await,
                 Signal::Error(detail) => {
+                    self.log.warn(
+                        "the agent reported an error",
+                        &fields([("detail", LogValue::from(detail.as_str()))]),
+                    );
                     self.say(&format!("the agent reported an error: {detail}"))
                         .await;
                 }
                 Signal::CommandRejected { command, detail } => {
+                    self.log.warn(
+                        "the agent refused a command",
+                        &fields([
+                            ("command", LogValue::from(command.as_str())),
+                            ("detail", LogValue::from(detail.as_str())),
+                        ]),
+                    );
                     // The agent refused outright, so no turn follows and
                     // nothing else will ever settle this. Reporting and
                     // settling here is what keeps the thread from going quiet
@@ -1489,6 +1500,14 @@ impl Running {
         self.views.send(SessionEvent::Waiting { text: None }).await;
         self.views.send(SessionEvent::Busy { busy: true }).await;
 
+        self.log.debug(
+            "sending a prompt",
+            &fields([
+                ("message", LogValue::from(message.id.as_str())),
+                ("chars", LogValue::from(content.chars().count())),
+                ("images", LogValue::from(images.len())),
+            ]),
+        );
         let sent = self.client.as_ref().is_some_and(|client| {
             client.prompt(
                 content,
@@ -1724,6 +1743,10 @@ impl Running {
     }
 
     async fn on_settled(&mut self, produced: bool, failure: Option<&str>) {
+        self.log.debug(
+            "the turn settled",
+            &fields([("produced", LogValue::from(produced))]),
+        );
         if let Some(failure) = failure {
             self.log.warn(
                 "the turn failed",

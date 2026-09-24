@@ -522,13 +522,35 @@ pub(crate) async fn serve_provider_request(
             .into_response();
     }
 
+    let method = request.method().to_string();
+    let started = std::time::Instant::now();
     let forwarded = build_forwarded(&state, request, route, &target);
     match forwarded.send().await {
-        Ok(answered) => stream_answer(answered),
+        Ok(answered) => {
+            state.log.debug(
+                "the provider answered",
+                &fields([
+                    ("provider", route.prefix.as_str().into()),
+                    ("method", method.into()),
+                    ("path", rest.into()),
+                    ("status", i64::from(answered.status().as_u16()).into()),
+                    (
+                        "elapsed_ms",
+                        u64::try_from(started.elapsed().as_millis())
+                            .unwrap_or(u64::MAX)
+                            .into(),
+                    ),
+                ]),
+            );
+            stream_answer(answered)
+        }
         Err(error) => {
             state.log.warn(
                 "the provider could not be reached",
-                &fields([("detail", error.to_string().into())]),
+                &fields([
+                    ("provider", route.prefix.as_str().into()),
+                    ("detail", error.to_string().into()),
+                ]),
             );
             (
                 axum::http::StatusCode::BAD_GATEWAY,

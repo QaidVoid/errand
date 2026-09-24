@@ -7,23 +7,43 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// Severity of a log line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Severity of a log line, least verbose first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogLevel {
-    /// Ordinary progress.
-    Info,
-    /// Something degraded but survivable.
-    Warn,
     /// Something failed that a person should look at.
     Error,
+    /// Something degraded but survivable.
+    Warn,
+    /// Ordinary progress.
+    Info,
+    /// Each decision the daemon takes, and why. Shown with `-v`.
+    Debug,
+    /// Each step between decisions. Shown with `-vv`.
+    Trace,
+    /// What crosses a boundary, verbatim, such as every line exchanged with
+    /// the agent. Shown with `-vvv`.
+    Wire,
 }
 
 impl LogLevel {
     fn as_str(self) -> &'static str {
         match self {
-            LogLevel::Info => "info",
-            LogLevel::Warn => "warn",
             LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+            LogLevel::Wire => "wire",
+        }
+    }
+
+    /// The most verbose level shown for a count of `-v` flags.
+    pub fn from_verbosity(count: usize) -> Self {
+        match count {
+            0 => LogLevel::Info,
+            1 => LogLevel::Debug,
+            2 => LogLevel::Trace,
+            _ => LogLevel::Wire,
         }
     }
 }
@@ -178,18 +198,36 @@ pub fn stream_sink(level: LogLevel, line: &str) {
 pub struct Logger {
     base: Arc<LogFields>,
     sink: Sink,
+    max: LogLevel,
 }
 
 impl Logger {
-    /// Creates a logger, optionally carrying fields on every line it writes.
+    /// Creates a logger that writes info and above, optionally carrying fields
+    /// on every line it writes.
     pub fn new(base: LogFields, sink: Sink) -> Self {
         Self {
             base: Arc::new(base),
             sink,
+            max: LogLevel::Info,
         }
     }
 
+    /// The same logger, writing everything up to `max`.
+    pub fn up_to(mut self, max: LogLevel) -> Self {
+        self.max = max;
+        self
+    }
+
+    /// Whether a line at `level` would be written, so a caller can skip
+    /// building one that would not.
+    pub fn enabled(&self, level: LogLevel) -> bool {
+        level <= self.max
+    }
+
     fn emit(&self, level: LogLevel, message: &str, fields: &LogFields) {
+        if !self.enabled(level) {
+            return;
+        }
         let mut merged = (*self.base).clone();
         for (key, value) in fields {
             merged.insert(key.clone(), value.clone());
@@ -212,6 +250,21 @@ impl Logger {
         self.emit(LogLevel::Error, message, fields);
     }
 
+    /// Reports a decision and why it was taken.
+    pub fn debug(&self, message: &str, fields: &LogFields) {
+        self.emit(LogLevel::Debug, message, fields);
+    }
+
+    /// Reports a step between decisions.
+    pub fn trace(&self, message: &str, fields: &LogFields) {
+        self.emit(LogLevel::Trace, message, fields);
+    }
+
+    /// Reports what crossed a boundary, verbatim.
+    pub fn wire(&self, message: &str, fields: &LogFields) {
+        self.emit(LogLevel::Wire, message, fields);
+    }
+
     /// Returns a logger that adds the given fields to every line.
     pub fn with(&self, fields: LogFields) -> Logger {
         let mut merged = (*self.base).clone();
@@ -221,6 +274,7 @@ impl Logger {
         Logger {
             base: Arc::new(merged),
             sink: Arc::clone(&self.sink),
+            max: self.max,
         }
     }
 }
@@ -234,9 +288,9 @@ pub fn now_ms() -> i64 {
         })
 }
 
-/// The logger the daemon runs on, writing to the process streams.
-pub fn logger() -> Logger {
-    Logger::new(LogFields::new(), Arc::new(stream_sink))
+/// The logger the daemon runs on, writing to the process streams up to `max`.
+pub fn logger(max: LogLevel) -> Logger {
+    Logger::new(LogFields::new(), Arc::new(stream_sink)).up_to(max)
 }
 
 #[cfg(test)]

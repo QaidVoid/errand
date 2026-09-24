@@ -95,6 +95,31 @@ fn severity_reaches_the_sink_so_errors_can_go_elsewhere() {
     );
 }
 
+/// Each `-v` shows one more level, and a bound logger keeps the setting.
+#[test]
+fn verbosity_decides_which_levels_are_written() {
+    let (lines, sink) = collected();
+    let quiet = Logger::new(LogFields::new(), Arc::new(sink));
+    let chatty = quiet
+        .clone()
+        .up_to(LogLevel::from_verbosity(2))
+        .with(fields([("session", "s-1".into())]));
+
+    quiet.debug("hidden by default", &LogFields::new());
+    chatty.debug("a", &LogFields::new());
+    chatty.trace("b", &LogFields::new());
+    chatty.wire("hidden until -vvv", &LogFields::new());
+
+    let taken = lines.lock().unwrap();
+    assert_eq!(
+        taken.iter().map(|(level, _)| *level).collect::<Vec<_>>(),
+        vec![LogLevel::Debug, LogLevel::Trace]
+    );
+    assert!(taken[0].1.contains("[debug] a session=s-1"));
+    assert_eq!(LogLevel::from_verbosity(0), LogLevel::Info);
+    assert_eq!(LogLevel::from_verbosity(9), LogLevel::Wire);
+}
+
 /// The value forms a field takes; kept where a reader of the port finds them.
 #[test]
 fn field_values_render_as_the_text_they_would_have_been() {

@@ -594,6 +594,20 @@ impl AgentClient {
             return false;
         }
         let mut line = command.to_string();
+        self.inner.log.trace(
+            "sent to the agent",
+            &fields([(
+                "type",
+                command
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .into(),
+            )]),
+        );
+        self.inner
+            .log
+            .wire("to the agent", &fields([("line", line.as_str().into())]));
         line.push('\n');
         // Fire and forget: a failed write surfaces as the process ending,
         // which the client already handles.
@@ -673,6 +687,8 @@ impl Shared {
         if line.trim().is_empty() {
             return;
         }
+        self.log
+            .wire("from the agent", &fields([("line", line.into())]));
 
         let record: AgentRecord = match serde_json::from_str(line) {
             Ok(record) => record,
@@ -688,6 +704,17 @@ impl Shared {
             }
         };
 
+        self.log.trace(
+            "heard from the agent",
+            &fields([(
+                "type",
+                record
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .into(),
+            )]),
+        );
         if self.dispatch_dialog(&record) {
             return;
         }

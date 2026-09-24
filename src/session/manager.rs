@@ -228,7 +228,22 @@ impl SessionManager {
             unavailable: options.unavailable.clone(),
             launcher: {
                 let sandbox = Arc::clone(&options.sandbox);
-                Arc::new(move |launch: SandboxLaunch| Arc::clone(&sandbox).launch(launch))
+                let log = options.log.clone();
+                Arc::new(move |launch: SandboxLaunch| {
+                    log.debug(
+                        "launching a sandbox",
+                        &fields([
+                            ("session", LogValue::from(launch.session_id.as_str())),
+                            ("provider", LogValue::from(launch.provider.as_str())),
+                            (
+                                "model",
+                                LogValue::from(launch.model.as_deref().unwrap_or("")),
+                            ),
+                            ("resume", LogValue::from(launch.resume)),
+                        ]),
+                    );
+                    Arc::clone(&sandbox).launch(launch)
+                })
             },
             guild_id: Arc::new(Mutex::new(None)),
             registry: Arc::clone(&options.registry),
@@ -382,6 +397,15 @@ impl SessionManager {
         .await
     }
 
+    /// Refuses a start, saying why in the log as well as to whoever asked.
+    fn refused(&self, reason: String) -> StartOutcome {
+        self.options.log.debug(
+            "refused to start a session",
+            &fields([("reason", LogValue::from(reason.as_str()))]),
+        );
+        StartOutcome::Refused { reason }
+    }
+
     fn next_id(&self) -> String {
         match &self.options.make_id {
             Some(make) => make(),
@@ -426,6 +450,26 @@ impl SessionManager {
             resolved
         });
         project.prompt = asked.prompt;
+        self.options.log.debug(
+            "starting a session",
+            &fields([
+                ("session", LogValue::from(id.as_str())),
+                ("project", LogValue::from(project.name.as_str())),
+                (
+                    "provider",
+                    LogValue::from(
+                        chosen
+                            .as_ref()
+                            .and_then(|chosen| chosen.provider.as_deref())
+                            .unwrap_or(&self.options.config.agent.provider),
+                    ),
+                ),
+                (
+                    "model",
+                    LogValue::from(chosen.as_ref().map_or("", |chosen| chosen.model.as_str())),
+                ),
+            ]),
+        );
 
         // Before anything is reserved or created, so a window that is already
         // spent does not open a thread and start a sandbox only to fail on
@@ -435,7 +479,7 @@ impl SessionManager {
             .and_then(|chosen| chosen.provider.clone())
             .unwrap_or_else(|| self.options.config.agent.provider.clone());
         if let Some(spent) = self.unavailable(&provider_for_window).await {
-            return StartOutcome::Refused { reason: spent };
+            return self.refused(spent);
         }
 
         // Refused before anything is reserved or created, so a project only
@@ -446,19 +490,15 @@ impl SessionManager {
             .into_iter()
             .find(|other| other.project().path == project.path)
         {
-            return StartOutcome::Refused {
-                reason: format!(
-                    "{} already has a live session ({}); continue there, or stop it first",
-                    project.name,
-                    busy.id()
-                ),
-            };
+            return self.refused(format!(
+                "{} already has a live session ({}); continue there, or stop it first",
+                project.name,
+                busy.id()
+            ));
         }
 
         if self.options.scheduler.reserve_session().is_none() {
-            return StartOutcome::Refused {
-                reason: self.options.scheduler.session_refused_reason(),
-            };
+            return self.refused(self.options.scheduler.session_refused_reason());
         }
 
         let state_dir = std::path::Path::new(&self.options.config.state_dir)
@@ -501,9 +541,7 @@ impl SessionManager {
                 self.options.scheduler.release_session();
                 let _ = std::fs::remove_dir_all(&state_dir);
                 let _ = std::fs::remove_dir_all(record_dir(&state_dir));
-                return StartOutcome::Refused {
-                    reason: format!("no session was started: {error}"),
-                };
+                return self.refused(format!("no session was started: {error}"));
             }
             Ok(thread) => thread,
         };
@@ -618,9 +656,7 @@ impl SessionManager {
             .get(thread_id)
             .cloned();
         let Some(record) = record else {
-            return StartOutcome::Refused {
-                reason: "this thread is not one of mine to resume".to_owned(),
-            };
+            return self.refused("this thread is not one of mine to resume".to_owned());
         };
         if self
             .state
@@ -629,9 +665,7 @@ impl SessionManager {
             .expect("the thread map lock")
             .contains_key(thread_id)
         {
-            return StartOutcome::Refused {
-                reason: "this thread already has a live session".to_owned(),
-            };
+            return self.refused("this thread already has a live session".to_owned());
         }
 
         if let Some(busy) = self
@@ -639,19 +673,15 @@ impl SessionManager {
             .into_iter()
             .find(|other| other.project().path == record.project_path)
         {
-            return StartOutcome::Refused {
-                reason: format!(
-                    "{} already has a live session ({}); continue there, or stop it first",
-                    record.project_name,
-                    busy.id()
-                ),
-            };
+            return self.refused(format!(
+                "{} already has a live session ({}); continue there, or stop it first",
+                record.project_name,
+                busy.id()
+            ));
         }
 
         if self.options.scheduler.reserve_session().is_none() {
-            return StartOutcome::Refused {
-                reason: self.options.scheduler.session_refused_reason(),
-            };
+            return self.refused(self.options.scheduler.session_refused_reason());
         }
 
         let Some(view) = Arc::clone(&self.options.threads)
@@ -659,9 +689,7 @@ impl SessionManager {
             .await
         else {
             self.options.scheduler.release_session();
-            return StartOutcome::Refused {
-                reason: "this thread could not be reopened".to_owned(),
-            };
+            return self.refused("this thread could not be reopened".to_owned());
         };
 
         let transcript = Transcript::new(

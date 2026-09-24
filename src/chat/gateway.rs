@@ -235,6 +235,14 @@ impl EventHandler for Gateway {
         let own = self.bot_id.lock().expect("the bot id lock").clone();
         let decision = classify(&raw, &self.config, own.as_deref());
         let InboundDecision::Ignore { reason } = &decision else {
+            self.log.debug(
+                "accepted a message",
+                &fields([
+                    ("decision", LogValue::from(format!("{decision:?}"))),
+                    ("message", LogValue::from(raw.id.as_str())),
+                    ("user", LogValue::from(raw.author_id.as_str())),
+                ]),
+            );
             // The mention summoned the bot; it is not part of what was asked.
             // Taken out here, where the bot's own name is known, so nothing
             // downstream has to know it has one.

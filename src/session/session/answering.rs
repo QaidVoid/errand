@@ -377,6 +377,13 @@ impl Running {
         let level = split_level(&wanted).1;
         let provider = chosen.provider;
 
+        self.log.debug(
+            "switching the model",
+            &fields([
+                ("provider", LogValue::from(provider.as_str())),
+                ("model", LogValue::from(wanted.as_str())),
+            ]),
+        );
         let sent = self.client.as_ref().is_some_and(|client| {
             client.set_model(&provider, &chosen.id)
                 && match level.strip_prefix(':') {
