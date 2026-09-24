@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 
 use super::{
-    BaileyOptions, BaileySandbox, ProviderBrokering, bailey_args, copy_tree, egress_proxy_endpoint,
-    egress_proxy_url, parse_doctor, provider_config, session_environment,
+    BaileyOptions, BaileySandbox, ProviderBrokering, bailey_args, brokered_env, copy_tree,
+    egress_proxy_endpoint, egress_proxy_url, parse_doctor, provider_config, session_environment,
 };
 use crate::config::schema::NetworkMode;
 use crate::config::schema::PolicyExtraConfig;
@@ -539,6 +539,38 @@ fn an_unbrokered_definition_passes_through_less_the_credential() {
     assert_eq!(
         providers.get("meta"),
         Some(&json!({ "baseUrl": "https://api.meta.example/v1" }))
+    );
+}
+
+/// A session started on a provider other than the default still carries no
+/// real key under a broker: its variable holds that provider's nonce, and a
+/// provider the broker cannot route loses its variable.
+#[test]
+fn no_real_key_crosses_under_a_broker_whichever_provider_starts() {
+    let brokering = ProviderBrokering {
+        credential_names: BTreeMap::from([
+            ("default".to_owned(), "DEFAULT_KEY".to_owned()),
+            ("other".to_owned(), "OTHER_KEY".to_owned()),
+            ("unrouted".to_owned(), "UNROUTED_KEY".to_owned()),
+        ]),
+        nonces: BTreeMap::from([
+            ("default".to_owned(), "n-default".to_owned()),
+            ("other".to_owned(), "n-other".to_owned()),
+        ]),
+    };
+    let env = BTreeMap::from([
+        ("OTHER_KEY".to_owned(), "real-other".to_owned()),
+        ("UNROUTED_KEY".to_owned(), "real-unrouted".to_owned()),
+        ("GH_TOKEN".to_owned(), "gh".to_owned()),
+    ]);
+
+    assert_eq!(
+        brokered_env(&env, &brokering),
+        BTreeMap::from([
+            ("DEFAULT_KEY".to_owned(), "n-default".to_owned()),
+            ("OTHER_KEY".to_owned(), "n-other".to_owned()),
+            ("GH_TOKEN".to_owned(), "gh".to_owned()),
+        ])
     );
 }
 

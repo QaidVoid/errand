@@ -295,13 +295,32 @@ async fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Res
 /// honours.
 #[derive(Debug, Clone)]
 pub struct ProviderBrokering {
-    /// The variable the agent reads the default provider's key from, when
-    /// one is named. A provider the agent already knows needs none.
-    pub credential_name: Option<String>,
-    /// The default provider, whose key that variable holds.
-    pub provider: String,
-    /// What stands in for each provider's credential, by provider name.
+    /// The variable the agent reads each provider's key from, by provider
+    /// name, for those that name one.
+    pub credential_names: BTreeMap<String, String>,
+    /// What stands in for each brokered provider's credential, by provider
+    /// name.
     pub nonces: BTreeMap<String, String>,
+}
+
+/// A session's environment with every provider key taken out.
+///
+/// The session is handed the key of the provider it starts on, whichever that
+/// is. Under a broker that variable carries the provider's nonce instead,
+/// and a provider the broker has no route to loses the variable altogether,
+/// so no real key crosses into the sandbox.
+pub fn brokered_env(
+    env: &BTreeMap<String, String>,
+    brokering: &ProviderBrokering,
+) -> BTreeMap<String, String> {
+    let mut env = env.clone();
+    for (provider, name) in &brokering.credential_names {
+        match brokering.nonces.get(provider) {
+            Some(nonce) => env.insert(name.clone(), nonce.clone()),
+            None => env.remove(name),
+        };
+    }
+    env
 }
 
 /// Extras the daemon supplies, which a test has no need of.
@@ -404,33 +423,6 @@ impl BaileySandbox {
                 stdout: String::new(),
                 stderr: error.to_string(),
             })
-    }
-
-    /// The session's environment, with the provider credential held back.
-    ///
-    /// What a session is given is the nonce, which is worth nothing anywhere
-    /// but this daemon's broker: the credential itself stays outside the
-    /// sandbox, so reading the environment, or any process's environment,
-    /// yields nothing that can be replayed. Everything else crosses unchanged.
-    fn brokered_env(&self, env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-        let Some(brokering) = &self.options.brokering else {
-            return env.clone();
-        };
-        let Some(port) = self.options.egress_proxy_port else {
-            return env.clone();
-        };
-        let _ = port;
-        let nonce = brokering.nonces.get(&brokering.provider);
-        match nonce {
-            None => env.clone(),
-            Some(nonce) => {
-                let mut env = env.clone();
-                if let Some(name) = &brokering.credential_name {
-                    env.insert(name.clone(), nonce.clone());
-                }
-                env
-            }
-        }
     }
 
     /// Points the agent at the broker in place of the provider, or, with no
@@ -697,7 +689,10 @@ impl BaileySandbox {
         self.write_agent_extensions(launch)
             .await
             .map_err(|error| SandboxLaunchError(error.to_string()))?;
-        let env = self.brokered_env(&launch.env);
+        let env = match &self.options.brokering {
+            Some(brokering) => brokered_env(&launch.env, brokering),
+            None => launch.env.clone(),
+        };
         let launch = SandboxLaunch {
             env,
             ..launch.clone()

@@ -405,7 +405,7 @@ struct Brokered {
     /// The loopback port the sandbox reaches it on.
     proxy_port: u16,
     /// What stands in for each provider credential inside a sandbox.
-    brokering: Option<ProviderBrokering>,
+    brokering: ProviderBrokering,
 }
 
 /// Starts the egress broker and works out what a sandbox is told about it.
@@ -453,14 +453,18 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
             credential,
         });
     }
-    let brokering = (!nonces.is_empty()).then(|| ProviderBrokering {
-        credential_name: config
+    let brokering = ProviderBrokering {
+        credential_names: config
             .agent
-            .credential_name_of(&config.agent.provider)
-            .map(str::to_owned),
-        provider: config.agent.provider.clone(),
+            .providers
+            .keys()
+            .filter_map(|provider| {
+                let name = config.agent.credential_name_of(provider)?;
+                Some((provider.clone(), name.to_owned()))
+            })
+            .collect(),
         nonces,
-    });
+    };
     let mut broker_instance = Broker::new(
         allow.clone(),
         config.sandbox.egress_ports.clone(),
@@ -552,9 +556,7 @@ async fn run(
         Err(code) => return code,
     };
     let egress_proxy_port = brokered.as_ref().map(|brokered| brokered.proxy_port);
-    let brokering = brokered
-        .as_ref()
-        .and_then(|brokered| brokered.brokering.clone());
+    let brokering = brokered.as_ref().map(|brokered| brokered.brokering.clone());
     let mut broker = brokered.map(|brokered| brokered.broker);
 
     // The sandbox is checked before the chat service is touched, so a missing
