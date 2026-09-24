@@ -862,6 +862,40 @@ async fn a_turn_is_reported_priced_and_closed_by_pinging_whoever_asked() {
     .await;
 }
 
+/// A turn that spoke and then lost its provider still says why it stopped,
+/// in the provider's own words, rather than reading as done.
+#[tokio::test]
+async fn a_turn_that_failed_after_speaking_says_why() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            let controls = harness.controls();
+            controls.send(&json!({ "type": "agent_start" }));
+            controls.send(&json!({
+                "type": "message_end",
+                "message": { "role": "assistant", "content": [{ "type": "text", "text": "Looking." }] },
+            }));
+            controls.send(&json!({
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [],
+                    "stopReason": "error",
+                    "errorMessage": "429 rate limit exceeded",
+                },
+            }));
+            controls.send(&json!({ "type": "agent_settled" }));
+            settle().await;
+
+            let said = harness.thread.everything();
+            assert!(
+                said.contains("the turn failed: 429 rate limit exceeded"),
+                "{said}"
+            );
+        })
+    })
+    .await;
+}
+
 /// Saying something to a working agent redirects it: same turn, no new slot.
 #[tokio::test]
 async fn a_message_during_a_running_turn_steers_it_rather_than_queueing() {

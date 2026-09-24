@@ -207,33 +207,28 @@ fn build_response(request: &DialogRequest, reply: &str) -> Option<DialogReply> {
     Some(DialogReply::Value(trimmed.to_owned()))
 }
 
-/// Why an assistant message carries no words, when the agent says it failed.
+/// Why an assistant message failed, when the agent says it did.
 ///
-/// The agent records a stop reason on the message and an error beside it. A
-/// turn that never reached the provider has neither text nor usage, which on
-/// its own looks the same as a turn that had nothing to add.
+/// The agent records a stop reason on the message and the provider's error
+/// beside it as `errorMessage`. A turn that never reached the provider has
+/// neither text nor usage, which on its own looks the same as a turn that had
+/// nothing to add.
 fn message_failure(message: Option<&Value>) -> Option<String> {
     let message = message?;
     if message.get("stopReason").and_then(Value::as_str) != Some("error") {
         return None;
     }
-    match message.get("error") {
-        Some(Value::String(error)) if !error.trim().is_empty() => Some(error.trim().to_owned()),
-        Some(error @ Value::Object(_)) => {
-            let from_field = error
-                .get("message")
-                .and_then(Value::as_str)
-                .filter(|detail| !detail.trim().is_empty())
-                .map(str::trim)
-                .map(str::to_owned);
-            Some(from_field.unwrap_or_else(|| "the model provider did not answer".to_owned()))
-        }
-        _ => Some("the model provider did not answer".to_owned()),
-    }
+    let detail = message
+        .get("errorMessage")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|detail| !detail.is_empty())
+        .unwrap_or("the model provider did not answer");
+    Some(detail.to_owned())
 }
 
 fn detail_of(record: &Value) -> String {
-    for key in ["error", "message", "reason"] {
+    for key in ["errorMessage", "error", "message", "reason"] {
         if let Some(Value::String(detail)) = record.get(key)
             && !detail.is_empty()
         {
@@ -859,10 +854,10 @@ impl Shared {
                 // that ended in an error arrives with nothing in it, and is
                 // otherwise indistinguishable from a model that chose to say
                 // nothing.
-                let failure = message_failure(record.get("message"));
-                if let Some(failure) = failure {
-                    self.state.lock().expect("the client lock").turn_failure = Some(failure);
-                }
+                // Replaced on every reply rather than kept, so a failure the
+                // agent retried past does not outlive the retry.
+                self.state.lock().expect("the client lock").turn_failure =
+                    message_failure(record.get("message"));
                 let text = message_text(record.get("message"));
                 let text = text.trim().to_owned();
                 if text.is_empty() {

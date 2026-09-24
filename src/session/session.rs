@@ -902,6 +902,10 @@ impl Running {
                 }
                 Signal::Retry(detail) => {
                     self.options.scheduler.note_rate_limit();
+                    self.log.warn(
+                        "the agent is retrying the model provider",
+                        &fields([("detail", LogValue::from(detail.as_str()))]),
+                    );
                     self.views
                         .send(SessionEvent::Notice {
                             text: warning_line(&format!(
@@ -1720,6 +1724,12 @@ impl Running {
     }
 
     async fn on_settled(&mut self, produced: bool, failure: Option<&str>) {
+        if let Some(failure) = failure {
+            self.log.warn(
+                "the turn failed",
+                &fields([("detail", LogValue::from(failure))]),
+            );
+        }
         self.options.scheduler.note_success();
         self.harvest_memory();
         self.open_requested_pull_request().await;
@@ -1791,15 +1801,15 @@ impl Running {
         };
 
         let ending = match (produced, failure) {
-            (true, _) => format!("{}{spent}", marker("done")),
+            (_, Some(failure)) => {
+                format!("{} the turn failed: {failure}{spent}", marker("failed"))
+            }
+            (true, None) => format!("{}{spent}", marker("done")),
             (false, None) => {
                 format!(
                     "{} the turn finished without producing any output{spent}",
                     marker("done")
                 )
-            }
-            (false, Some(failure)) => {
-                format!("{} the turn failed: {failure}{spent}", marker("failed"))
             }
         };
         // A warning rather than a done: the session is still alive and the

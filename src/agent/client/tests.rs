@@ -683,3 +683,81 @@ async fn a_request_outstanding_when_the_agent_dies_is_failed_not_left_hanging() 
     };
     assert!(failed);
 }
+
+/// Handlers that record each settled turn's failure, and where they go.
+fn settled_failures() -> (AgentHandlers, Arc<Mutex<Vec<Option<String>>>>) {
+    let seen: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&seen);
+    let handlers = AgentHandlers {
+        on_turn_settled: Some(Box::new(move |(_, failure): (bool, Option<String>)| {
+            recorded.lock().unwrap().push(failure);
+        })),
+        ..AgentHandlers::default()
+    };
+    (handlers, seen)
+}
+
+fn failed_reply(detail: &str) -> Value {
+    json!({
+        "type": "message_end",
+        "message": {
+            "role": "assistant",
+            "content": [],
+            "stopReason": "error",
+            "errorMessage": detail,
+        },
+    })
+}
+
+/// The provider's own words reach whoever is told the turn failed.
+#[tokio::test]
+async fn a_failed_turn_carries_the_providers_error() {
+    let (handlers, seen) = settled_failures();
+    let setup = client(handlers, 300_000);
+
+    setup.controls.send(&json!({ "type": "agent_start" }));
+    setup.controls.send(&failed_reply("401 invalid x-api-key"));
+    setup.controls.send(&json!({ "type": "agent_settled" }));
+    settle().await;
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![Some("401 invalid x-api-key".to_owned())]
+    );
+    setup.finish().await;
+}
+
+/// A failure the agent retried past is not the turn's outcome.
+#[tokio::test]
+async fn a_failure_retried_past_does_not_fail_the_turn() {
+    let (mut handlers, seen) = settled_failures();
+    let retries: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let retry_seen = Arc::clone(&retries);
+    handlers.on_retry = Some(Box::new(move |detail: String| {
+        retry_seen.lock().unwrap().push(detail);
+    }));
+    let setup = client(handlers, 300_000);
+
+    setup.controls.send(&json!({ "type": "agent_start" }));
+    setup.controls.send(&failed_reply("overloaded_error"));
+    setup.controls.send(&json!({
+        "type": "auto_retry_start",
+        "attempt": 1,
+        "maxAttempts": 3,
+        "delayMs": 2000,
+        "errorMessage": "overloaded_error",
+    }));
+    setup.controls.send(&json!({
+        "type": "message_end",
+        "message": { "role": "assistant", "content": [{ "type": "text", "text": "done" }] },
+    }));
+    setup.controls.send(&json!({ "type": "agent_settled" }));
+    settle().await;
+
+    assert_eq!(
+        *retries.lock().unwrap(),
+        vec!["overloaded_error".to_owned()]
+    );
+    assert_eq!(*seen.lock().unwrap(), vec![None]);
+    setup.finish().await;
+}
