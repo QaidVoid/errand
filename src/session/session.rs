@@ -673,6 +673,10 @@ struct Running {
     aborting: bool,
     /// An interruption already asked for and not yet answered.
     abort_in_flight: bool,
+    /// What came of the last pull request, said at the start of the next
+    /// prompt. It is opened after the agent's turn ends, so the agent has
+    /// not seen the outcome, and could only guess at why a retry is needed.
+    pull_request_outcome: Option<String>,
 
     /// Who has already been told why they cannot take part.
     explained: HashSet<String>,
@@ -743,6 +747,7 @@ impl Running {
             },
             aborting: false,
             abort_in_flight: false,
+            pull_request_outcome: None,
             abort_timer: None,
             sandbox: None,
             client: None,
@@ -1499,6 +1504,11 @@ impl Running {
         self.turn_first_output_at = None;
         self.views.send(SessionEvent::Waiting { text: None }).await;
         self.views.send(SessionEvent::Busy { busy: true }).await;
+        let content = match self.pull_request_outcome.take() {
+            Some(outcome) => format!("{outcome}\n\n{content}"),
+            None => content.to_owned(),
+        };
+        let content = content.as_str();
 
         self.log.debug(
             "sending a prompt",

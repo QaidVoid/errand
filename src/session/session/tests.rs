@@ -1483,6 +1483,89 @@ async fn a_pull_request_the_agent_asked_for_opens_when_somebody_asked_too() {
     .await;
 }
 
+/// A pull request is opened after the agent's turn ends, so it has not seen
+/// the outcome. It is told at the start of its next turn, once, which is what
+/// makes "try again" something it can act on.
+#[tokio::test]
+async fn the_agent_is_told_what_came_of_its_pull_request_next_turn() {
+    let asked_for = Arc::new(Mutex::new(Vec::new()));
+    with_session(
+        SessionTestCase {
+            config: Some(config_with(&json!({
+                "github": { "token": "ghp", "userName": "errand-bot", "userEmail": "bot@example.com" },
+            }))),
+            open_pull_request: {
+                let asked_for = Arc::clone(&asked_for);
+                Some(Arc::new(move |request: pr::Request| {
+                    let asked_for = Arc::clone(&asked_for);
+                    Box::pin(async move {
+                        asked_for.lock().unwrap().push(request.repository.clone());
+                        Err::<String, PullRequestError>(PullRequestError(
+                            "there is no repository at `github.com/x/y` in this session".to_owned(),
+                        ))
+                    })
+                        as Pin<Box<dyn Future<Output = Result<String, PullRequestError>> + Send>>
+                }) as OpenPullRequest)
+            },
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .session
+                    .handle(message_from("open a pull request", OWNER, "m2"))
+                    .await;
+                std::fs::write(
+                    std::path::Path::new(&harness.state_dir).join("pull-request.txt"),
+                    "Fix the parser\nrepository: github.com/x/y\n",
+                )
+                .unwrap();
+                harness.run_turn().await;
+
+                harness
+                    .session
+                    .handle(message_from("try again", OWNER, "m3"))
+                    .await;
+                settle().await;
+                harness.run_turn().await;
+                harness
+                    .session
+                    .handle(message_from("and once more", OWNER, "m4"))
+                    .await;
+                settle().await;
+
+                let prompts: Vec<String> = harness
+                    .controls()
+                    .written()
+                    .into_iter()
+                    .filter(|line| line.contains("\"type\":\"prompt\""))
+                    .collect();
+                let retry = prompts
+                    .iter()
+                    .find(|line| line.contains("try again"))
+                    .expect("the retry is sent");
+                assert!(
+                    retry.contains("the pull request was not opened: there is no repository at"),
+                    "{retry}"
+                );
+                assert!(
+                    prompts
+                        .iter()
+                        .filter(|line| line.contains("was not opened"))
+                        .count()
+                        == 1,
+                    "said once, not on every turn after"
+                );
+                assert_eq!(
+                    *asked_for.lock().unwrap(),
+                    [Some("github.com/x/y".to_owned())]
+                );
+            })
+        },
+    )
+    .await;
+}
+
 /// An unasked-for pull request spends somebody else's review time.
 #[tokio::test]
 async fn a_pull_request_nobody_asked_for_is_refused_and_cleared() {

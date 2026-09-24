@@ -6,6 +6,7 @@
 use super::{Asked, IncomingMessage, Running, reason};
 use crate::chat::render::connection_line;
 use crate::log::{LogValue, fields};
+use crate::sandbox::backend::STATE_PATH;
 use crate::sandbox::paths;
 use crate::session::event::ReactionOutcome;
 use crate::session::github::{
@@ -195,6 +196,9 @@ impl Running {
         {
             Ok(url) => {
                 self.say(&connection_line(&format!("opened {url}"))).await;
+                self.pull_request_outcome = Some(format!(
+                    "(From errand: the pull request was opened at {url}.)"
+                ));
                 true
             }
             Err(error) => {
@@ -203,6 +207,11 @@ impl Running {
                     &fields([("detail", LogValue::from(error.to_string()))]),
                 );
                 self.say(&reason(&error)).await;
+                self.pull_request_outcome = Some(format!(
+                    "(From errand: the pull request was not opened: {}. To try again, \
+                     put right what that says and write {STATE_PATH}/{REQUEST_FILENAME} again.)",
+                    reason(&error).trim_end_matches('.')
+                ));
                 false
             }
         }
