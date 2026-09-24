@@ -8,7 +8,9 @@
 use std::collections::BTreeMap;
 
 use crate::config::schema::{NetworkMode, PolicyExtraConfig};
-use crate::sandbox::backend::{AGENT_BIN, AGENT_HOME, STATE_PATH, SandboxLaunch, WORKSPACE_PATH};
+use crate::sandbox::backend::{
+    AGENT_BIN, AGENT_HOME, STATE_PATH, SandboxLaunch, WORKSPACE_PATH, disk_tmp_dir,
+};
 use crate::sandbox::runtime::{AgentRuntime, SANDBOX_PATH};
 
 /// The bundled profile for a coding agent: its project and outbound HTTPS.
@@ -252,7 +254,7 @@ pub fn policy_contents(options: &PolicyOptions) -> String {
     if options.disk_tmp {
         lines.push(format!(
             "tmp_dir = {}",
-            quoted(&format!("{}/tmp", launch.state_dir))
+            quoted(&disk_tmp_dir(&launch.state_dir))
         ));
     }
 

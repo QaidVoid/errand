@@ -20,7 +20,7 @@ use crate::sandbox::BaileyStop;
 use crate::sandbox::SandboxHandle;
 use crate::sandbox::backend::{
     AGENT_SESSIONS, AgentCommand, CapabilityReport, SandboxLaunch, SandboxLaunchError,
-    SandboxUnavailableError, agent_command, placed_prompt_path, sandbox_name,
+    SandboxUnavailableError, agent_command, fresh_disk_tmp, placed_prompt_path, sandbox_name,
 };
 use crate::sandbox::policy::{
     AGENT_PROFILE, OFFLINE_PROFILE, PolicyOptions, RESOLV_CONF, RESOLV_FILENAME, policy_contents,
@@ -636,9 +636,7 @@ impl BaileySandbox {
         if self.config.disk_tmp {
             // The grant and TMPDIR point here, so it has to exist before the
             // policy is applied.
-            tokio::fs::create_dir_all(std::path::Path::new(&launch.state_dir).join("tmp"))
-                .await
-                .map_err(|error| SandboxLaunchError(error.to_string()))?;
+            fresh_disk_tmp(&launch.state_dir).await?;
         }
         self.write_provider_override(launch)
             .await

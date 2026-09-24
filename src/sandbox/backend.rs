@@ -104,6 +104,26 @@ pub fn sandbox_name(session_id: &str) -> String {
     format!("{SANDBOX_NAME_PREFIX}{session_id}")
 }
 
+/// The host directory bound at `/tmp` when `sandbox.diskTmp` is on.
+pub fn disk_tmp_dir(state_dir: &str) -> String {
+    format!("{state_dir}/tmp")
+}
+
+/// Empties the disk-backed `/tmp` of a session, making it when missing.
+///
+/// Called on every launch, so a session continued after its scratch filled
+/// does not reopen the same full `/tmp`. `remove_dir_all` does not follow
+/// symlinks, so one planted by the session removes the link, not its target.
+pub async fn fresh_disk_tmp(state_dir: &str) -> Result<(), SandboxLaunchError> {
+    let dir = disk_tmp_dir(state_dir);
+    let failed = |error: std::io::Error| SandboxLaunchError(format!("emptying {dir}: {error}"));
+    match tokio::fs::remove_dir_all(&dir).await {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(failed(error)),
+        _ => {}
+    }
+    tokio::fs::create_dir_all(&dir).await.map_err(failed)
+}
+
 /// What the agent is started with inside any sandbox.
 ///
 /// The provider is always passed. The agent picks its own default otherwise,

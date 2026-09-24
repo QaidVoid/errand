@@ -271,7 +271,8 @@ pub struct SandboxConfig {
     /// The backend binds a directory under `/state` at `/tmp`, which still
     /// masks the host's `/tmp` as the tmpfs did, so the whole of `/tmp` is on
     /// disk, not only what honours `TMPDIR`. Replaces the tmpfs, so `tmpSize`
-    /// has no effect while this is on.
+    /// has no effect while this is on. The directory is emptied at every
+    /// launch, so a continued session starts on a clean `/tmp`.
     pub disk_tmp: bool,
     /// How much a session may add to its project and state together.
     ///
