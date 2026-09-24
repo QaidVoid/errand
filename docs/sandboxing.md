@@ -28,10 +28,13 @@ needs another outbound port, name it under `sandbox.egressPorts`:
 ```
 
 The default is `[443]`, which is all a provider needs. Adding 80 lets a session
-speak plaintext HTTP, for a mirror or a redirect that has not moved to TLS. The
-bailey backend enforces this in the generated policy; podman bounds the network
-by namespace rather than by port, so the list is inert there. A session with
-`network` set to `none` opens nothing, whatever ports are named.
+speak plaintext HTTP, for a mirror or a redirect that has not moved to TLS. With
+`sandbox.egress.mode` set to `proxy`, the broker opens only these ports
+upstream, for `CONNECT` tunnels and plain `http://` requests alike, and holds
+both to the same allowlist. Without the broker, the bailey backend enforces the
+list in the generated policy, while podman bounds the network by namespace
+rather than by port, so the list is inert there. A session with `network` set
+to `none` opens nothing, whatever ports are named.
 
 Under the bailey backend a session shares the host's network namespace, so it
 can read the host address, the MAC, and the ARP neighbours through `ip`,

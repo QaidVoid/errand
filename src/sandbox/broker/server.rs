@@ -10,15 +10,16 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
 use super::{
-    ALLOWED_UPSTREAM_PORTS, ConnectTarget, DIAL_TIMEOUT, LOOKUP_TIMEOUT, ProviderRoute,
-    ProviderState, host_allowed, parse_connect, public_addresses,
+    DIAL_TIMEOUT, LOOKUP_TIMEOUT, ProviderRoute, ProviderState, Target, host_allowed,
+    parse_connect, parse_forward, public_addresses,
 };
 use crate::log::Logger;
 use crate::log::fields;
 
-/// A running CONNECT proxy that admits only allowlisted hosts.
+/// A running proxy that admits only allowlisted hosts on allowed ports.
 pub struct Broker {
     allow: Vec<String>,
+    ports: Vec<u16>,
     log: Logger,
     routes: Vec<ProviderRoute>,
     allow_internal: bool,
@@ -28,16 +29,18 @@ pub struct Broker {
 }
 
 impl Broker {
-    /// A broker over `allow`, optionally answering as the providers in
-    /// `routes`.
+    /// A broker over `allow` and `ports`, optionally answering as the
+    /// providers in `routes`.
     pub fn new(
         allow: Vec<String>,
+        ports: Vec<u16>,
         log: Logger,
         routes: Vec<ProviderRoute>,
         allow_internal: bool,
     ) -> Self {
         Self {
             allow,
+            ports,
             log,
             routes,
             allow_internal,
@@ -67,6 +70,7 @@ impl Broker {
         let state = Arc::new(ProviderState {
             routes: self.routes.clone(),
             allow: self.allow.clone(),
+            ports: self.ports.clone(),
             allow_internal: self.allow_internal,
             log: self.log.clone(),
             resolve: None,
@@ -100,6 +104,7 @@ impl Broker {
         let state = Arc::new(ProviderState {
             routes: self.routes.clone(),
             allow: self.allow.clone(),
+            ports: self.ports.clone(),
             allow_internal: self.allow_internal,
             log: self.log.clone(),
             resolve: None,
@@ -139,49 +144,53 @@ impl Broker {
     }
 }
 
-/// Handles one client connection: gate, serve the provider, or refuse.
-async fn handle(stream: TcpStream, state: Arc<ProviderState>) {
-    let (mut reader, mut writer) = stream.into_split();
-    let Some(head) = read_request_head(&mut reader).await else {
+/// Handles one client connection: tunnel, forward, serve the provider, or
+/// refuse.
+async fn handle(mut stream: TcpStream, state: Arc<ProviderState>) {
+    let Some(head) = read_request_head(&mut stream).await else {
         return;
     };
-    let request_line = head.split('\n').next().unwrap_or("").to_owned();
-    let Some(target) = parse_connect(&request_line) else {
-        // Not a tunnel. With a provider route this is the session calling the
-        // provider, which is served rather than refused: the head already read
-        // is replayed so the server sees the request whole.
-        if !state.routes.is_empty() {
-            let _ = serve_provider(&mut reader, &mut writer, &head, state.provider_port).await;
+    if let Some(target) = parse_connect(head.lines().next().unwrap_or("")) {
+        let Some(mut upstream) = admit(&mut stream, &target, &state).await else {
             return;
+        };
+        if stream
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await
+            .is_ok()
+        {
+            let _ = tokio::io::copy_bidirectional(&mut stream, &mut upstream).await;
         }
-        let _ = refuse(&mut writer, 400, "the broker speaks only CONNECT").await;
-        return;
-    };
-    let Some(upstream) = admit(&mut writer, &target, &state).await else {
-        return;
-    };
-    if writer
-        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-        .await
-        .is_err()
-    {
         return;
     }
-    let (mut up_reader, mut up_writer) = upstream.into_split();
-    let outbound = tokio::io::copy(&mut reader, &mut up_writer);
-    let inbound = tokio::io::copy(&mut up_reader, &mut writer);
-    let _ = tokio::join!(outbound, inbound);
+    if let Some(forward) = parse_forward(&head) {
+        let Some(mut upstream) = admit(&mut stream, &forward.target, &state).await else {
+            return;
+        };
+        if upstream.write_all(forward.head.as_bytes()).await.is_ok() {
+            let _ = tokio::io::copy_bidirectional(&mut stream, &mut upstream).await;
+        }
+        return;
+    }
+    // Neither proxied. With a provider route this is the session calling the
+    // provider, which is served rather than refused: the head already read is
+    // replayed so the server sees the request whole.
+    if !state.routes.is_empty() {
+        let _ = serve_provider(&mut stream, &head, state.provider_port).await;
+        return;
+    }
+    let _ = refuse(&mut stream, 400, "the broker speaks only as a proxy").await;
 }
 
 /// Gates a target and dials it, or refuses the client and says why.
 async fn admit<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut W,
-    target: &ConnectTarget,
+    target: &Target,
     state: &ProviderState,
 ) -> Option<TcpStream> {
     let host = target.host.as_str();
     let port = i64::from(target.port);
-    if !ALLOWED_UPSTREAM_PORTS.contains(&target.port) || !host_allowed(host, &state.allow) {
+    if !state.ports.contains(&target.port) || !host_allowed(host, &state.allow) {
         state.log.info(
             "egress refused",
             &fields([("host", host.into()), ("port", port.into())]),
@@ -254,19 +263,15 @@ pub(super) async fn dial(addresses: &[String], port: u16) -> std::io::Result<Tcp
 /// on before the two are joined; everything after it is still in the socket
 /// and flows through untouched, body and event stream alike.
 async fn serve_provider(
-    reader: &mut tokio::net::tcp::OwnedReadHalf,
-    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+    stream: &mut TcpStream,
     head: &str,
     provider_port: u16,
 ) -> std::io::Result<()> {
-    let Ok(inner) = tokio::net::TcpStream::connect(("127.0.0.1", provider_port)).await else {
-        return refuse(writer, 502, "the provider endpoint is not up").await;
+    let Ok(mut inner) = TcpStream::connect(("127.0.0.1", provider_port)).await else {
+        return refuse(stream, 502, "the provider endpoint is not up").await;
     };
-    let (mut inner_reader, mut inner_writer) = inner.into_split();
-    inner_writer.write_all(head.as_bytes()).await?;
-    let outbound = tokio::io::copy(reader, &mut inner_writer);
-    let inbound = tokio::io::copy(&mut inner_reader, writer);
-    let _ = tokio::join!(outbound, inbound);
+    inner.write_all(head.as_bytes()).await?;
+    tokio::io::copy_bidirectional(stream, &mut inner).await?;
     Ok(())
 }
 
@@ -276,7 +281,7 @@ async fn serve_provider(
 /// client that means to tunnel.
 pub const MAX_HEAD_BYTES: usize = 8192;
 
-/// Reads the whole CONNECT request head, up to and including the blank line.
+/// Reads the whole request head, up to and including the blank line.
 ///
 /// Read one byte at a time so nothing past the head is consumed: what follows
 /// is the tunnelled bytes, and reading even one of them here would strip it

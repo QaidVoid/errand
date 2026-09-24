@@ -9,7 +9,8 @@ use tokio::net::TcpStream;
 
 use super::server::{Broker, dial, read_request_head};
 use super::{
-    ProviderRoute, Resolve, host_allowed, is_private_address, parse_connect, public_addresses,
+    ProviderRoute, Resolve, host_allowed, is_private_address, parse_connect, parse_forward,
+    public_addresses,
 };
 use crate::log::{LogFields, Logger};
 
@@ -85,14 +86,14 @@ fn a_lone_star_admits_any_host_but_not_the_empty_host() {
 fn a_connect_line_yields_its_host_and_port_or_nothing() {
     assert_eq!(
         parse_connect("CONNECT github.com:443 HTTP/1.1"),
-        Some(super::ConnectTarget {
+        Some(super::Target {
             host: "github.com".to_owned(),
             port: 443
         })
     );
     assert_eq!(
         parse_connect("connect github.com:443 HTTP/1.1"),
-        Some(super::ConnectTarget {
+        Some(super::Target {
             host: "github.com".to_owned(),
             port: 443
         })
@@ -103,6 +104,55 @@ fn a_connect_line_yields_its_host_and_port_or_nothing() {
     assert_eq!(parse_connect("CONNECT github.com:https HTTP/1.1"), None);
     assert_eq!(parse_connect("CONNECT github.com:99999 HTTP/1.1"), None);
     assert_eq!(parse_connect("CONNECT evil.com/path:443 HTTP/1.1"), None);
+}
+
+#[test]
+fn a_proxied_http_request_is_rewritten_for_the_origin() {
+    let forward = parse_forward(
+        "POST http://mirror.example:8080/simple/pkg?x=1 HTTP/1.1\r\n\
+Host: mirror.example:8080\r\n\
+Proxy-Connection: keep-alive\r\n\
+Proxy-Authorization: Basic c2VjcmV0\r\n\
+Content-Length: 4\r\n\r\n",
+    )
+    .expect("a proxied request");
+    assert_eq!(
+        forward.target,
+        super::Target {
+            host: "mirror.example".to_owned(),
+            port: 8080
+        }
+    );
+    assert_eq!(
+        forward.head,
+        "POST /simple/pkg?x=1 HTTP/1.1\r\n\
+Host: mirror.example:8080\r\n\
+Content-Length: 4\r\n\
+Connection: close\r\n\r\n"
+    );
+
+    let bare = parse_forward("GET http://mirror.example HTTP/1.1\r\n\r\n").expect("a request");
+    assert_eq!(bare.target.port, 80);
+    assert!(bare.head.starts_with("GET / HTTP/1.1\r\n"));
+
+    // A tunnel, a provider call, TLS, a bad port, and smuggled credentials.
+    assert_eq!(
+        parse_forward("CONNECT github.com:443 HTTP/1.1\r\n\r\n"),
+        None
+    );
+    assert_eq!(parse_forward("GET /provider/v1 HTTP/1.1\r\n\r\n"), None);
+    assert_eq!(
+        parse_forward("GET https://github.com/ HTTP/1.1\r\n\r\n"),
+        None
+    );
+    assert_eq!(
+        parse_forward("GET http://github.com:0/ HTTP/1.1\r\n\r\n"),
+        None
+    );
+    assert_eq!(
+        parse_forward("GET http://me@github.com/ HTTP/1.1\r\n\r\n"),
+        None
+    );
 }
 
 /// Connects to the broker as an `HTTPS_PROXY` client would, sends one CONNECT.
@@ -127,7 +177,13 @@ async fn the_broker_refuses_what_is_not_allowed_by_name_port_and_address() {
     // Loopback is allowlisted here on purpose: even so, it is refused, because
     // the allowlist decides which names, and the address filter decides that
     // the host's own network is never one of them.
-    let mut broker = Broker::new(vec!["127.0.0.1".to_owned()], silent(), Vec::new(), false);
+    let mut broker = Broker::new(
+        vec!["127.0.0.1".to_owned()],
+        vec![443],
+        silent(),
+        Vec::new(),
+        false,
+    );
     let port = broker.listen("127.0.0.1").await.expect("bound");
     // Allowed by name, but an internal address, so refused all the same.
     assert!(try_connect(port, "127.0.0.1:443").await.contains("403"));
@@ -144,7 +200,13 @@ async fn the_broker_refuses_what_is_not_allowed_by_name_port_and_address() {
 
 #[tokio::test]
 async fn the_broker_refuses_a_non_connect_opener() {
-    let mut broker = Broker::new(vec!["github.com".to_owned()], silent(), Vec::new(), false);
+    let mut broker = Broker::new(
+        vec!["github.com".to_owned()],
+        vec![443],
+        silent(),
+        Vec::new(),
+        false,
+    );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
     let mut conn = TcpStream::connect(("127.0.0.1", port))
@@ -214,6 +276,7 @@ async fn the_credential_is_put_on_at_the_broker_never_given_to_the_session() {
 
     let mut broker = Broker::new(
         Vec::new(),
+        vec![443],
         silent(),
         vec![ProviderRoute {
             prefix: "/provider".to_owned(),
@@ -263,6 +326,7 @@ async fn each_provider_has_its_own_route_and_its_own_nonce() {
 
     let mut broker = Broker::new(
         Vec::new(),
+        vec![443],
         silent(),
         vec![
             ProviderRoute {
@@ -410,7 +474,7 @@ async fn a_name_is_judged_by_where_it_resolves_not_by_its_spelling() {
 /// The broker refuses to tunnel to the host's own loopback.
 #[tokio::test]
 async fn a_tunnel_to_loopback_is_refused_even_under_a_lone_star() {
-    let mut broker = Broker::new(vec!["*".to_owned()], silent(), Vec::new(), false);
+    let mut broker = Broker::new(vec!["*".to_owned()], vec![443], silent(), Vec::new(), false);
     let port = broker.listen("127.0.0.1").await.expect("bound");
     let reply = try_connect(port, "127.0.0.1:443").await;
     assert!(reply.contains("403"));
@@ -445,12 +509,24 @@ async fn allow_internal_admits_a_literal_address_never_a_name() {
 
 #[tokio::test]
 async fn an_allowlisted_internal_address_is_dialled_only_when_allowed_on_purpose() {
-    let mut off = Broker::new(vec!["127.0.0.1".to_owned()], silent(), Vec::new(), false);
+    let mut off = Broker::new(
+        vec!["127.0.0.1".to_owned()],
+        vec![443],
+        silent(),
+        Vec::new(),
+        false,
+    );
     let off_port = off.listen("127.0.0.1").await.expect("bound");
     assert!(try_connect(off_port, "127.0.0.1:443").await.contains("403"));
     off.close();
 
-    let mut on = Broker::new(vec!["127.0.0.1".to_owned()], silent(), Vec::new(), true);
+    let mut on = Broker::new(
+        vec!["127.0.0.1".to_owned()],
+        vec![443],
+        silent(),
+        Vec::new(),
+        true,
+    );
     let on_port = on.listen("127.0.0.1").await.expect("bound");
     // Admitted now, so it gets as far as dialling: nothing listens on 443, so
     // it fails upstream rather than being refused at the gate.
@@ -466,6 +542,7 @@ async fn a_provider_at_an_internal_address_is_refused_unless_allowed_on_purpose(
 
     let mut broker = Broker::new(
         Vec::new(),
+        vec![443],
         silent(),
         vec![ProviderRoute {
             prefix: "/provider".to_owned(),
@@ -543,7 +620,13 @@ fn _route_shape(route: &ProviderRoute) -> serde_json::Value {
 
 #[tokio::test]
 async fn closing_the_broker_stops_it_accepting() {
-    let mut broker = Broker::new(vec!["github.com".to_owned()], silent(), Vec::new(), false);
+    let mut broker = Broker::new(
+        vec!["github.com".to_owned()],
+        vec![443],
+        silent(),
+        Vec::new(),
+        false,
+    );
     let port = broker.listen("127.0.0.1").await.expect("bound");
     assert!(TcpStream::connect(("127.0.0.1", port)).await.is_ok());
 
@@ -592,4 +675,67 @@ async fn a_dial_moves_past_an_address_that_refuses() {
         "127.0.0.1"
     );
     assert!(dial(&addresses[..1], port).await.is_err());
+}
+
+/// A plain HTTP request reaches an allowed origin in origin form, and the
+/// answer comes back whole even when the origin ends it by closing.
+#[tokio::test]
+async fn a_plain_http_request_is_forwarded_only_on_an_allowed_port() {
+    let origin = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bound");
+    let origin_port = origin.local_addr().expect("an address").port();
+    let received = tokio::spawn(async move {
+        let (mut conn, _) = origin.accept().await.expect("a connection");
+        let head = read_request_head(&mut conn).await.expect("a head");
+        conn.write_all(b"HTTP/1.1 200 OK\r\n\r\nhello")
+            .await
+            .expect("answered");
+        head
+    });
+
+    let mut broker = Broker::new(
+        vec!["127.0.0.1".to_owned()],
+        vec![origin_port],
+        silent(),
+        Vec::new(),
+        true,
+    );
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+
+    let mut conn = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("the broker");
+    conn.write_all(
+        format!("GET http://127.0.0.1:{origin_port}/a?b=c HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .as_bytes(),
+    )
+    .await
+    .expect("written");
+    let mut answer = String::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        conn.read_to_string(&mut answer),
+    )
+    .await
+    .expect("the answer ends when the origin closes")
+    .expect("read");
+    assert_eq!(answer, "HTTP/1.1 200 OK\r\n\r\nhello");
+    assert!(
+        received
+            .await
+            .expect("the origin ran")
+            .starts_with("GET /a?b=c HTTP/1.1\r\n")
+    );
+
+    let mut conn = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("the broker");
+    conn.write_all(b"GET http://127.0.0.1:1/ HTTP/1.1\r\n\r\n")
+        .await
+        .expect("written");
+    let mut refused = String::new();
+    let _ = conn.read_to_string(&mut refused).await;
+    assert!(refused.starts_with("HTTP/1.1 403"));
+    broker.close();
 }

@@ -469,6 +469,7 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
     });
     let mut broker_instance = Broker::new(
         allow.clone(),
+        config.sandbox.egress_ports.clone(),
         log.clone(),
         routes.clone(),
         config.sandbox.egress.allow_internal,

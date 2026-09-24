@@ -8,10 +8,11 @@
 //! relay it does not need and turning an outbound allowance into a two-way
 //! channel.
 //!
-//! A session speaks to it as an ordinary HTTP `CONNECT` proxy, so
-//! `HTTPS_PROXY` is all a well-behaved client needs. The tunnel is opaque once
-//! established: the broker gates on the host in the CONNECT line and then
-//! copies bytes, it does not read inside the TLS. Credential injection for the
+//! A session speaks to it as an ordinary HTTP proxy, so `HTTPS_PROXY` and
+//! `HTTP_PROXY` are all a well-behaved client needs. A `CONNECT` tunnel is
+//! opaque once established: the broker gates on the host in the CONNECT line
+//! and then copies bytes, it does not read inside the TLS. A plain `http://`
+//! request is gated the same way on the host in its URL. Credential injection for the
 //! provider is a separate, terminating path, served on this module's second
 //! listener; this file is the gate.
 
@@ -56,12 +57,12 @@ pub fn host_allowed(host: &str, allow: &[String]) -> bool {
     false
 }
 
-/// The host and port a `CONNECT` line asked for.
+/// The host and port a session asked the broker to reach.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConnectTarget {
-    /// The host the tunnel is asked for.
+pub struct Target {
+    /// The host asked for.
     pub host: String,
-    /// The port the tunnel is asked for.
+    /// The port asked for.
     pub port: u16,
 }
 
@@ -71,37 +72,85 @@ pub struct ConnectTarget {
 /// port that is not a number or is out of range, is refused by returning
 /// nothing rather than guessing, since a target the broker had to guess at is
 /// one it cannot claim to have checked.
-pub fn parse_connect(request_line: &str) -> Option<ConnectTarget> {
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() < 2 || !parts[0].eq_ignore_ascii_case("CONNECT") {
+pub fn parse_connect(request_line: &str) -> Option<Target> {
+    let mut parts = request_line.split_whitespace();
+    if !parts.next()?.eq_ignore_ascii_case("CONNECT") {
         return None;
     }
-    let authority = parts[1];
-    // IPv6 literals would be bracketed; a session reaches named hosts, so a
-    // bracketed authority is not something the allowlist can match and is left
-    // to be refused by the caller rather than parsed into a host here.
-    let colon = authority.rfind(':')?;
-    if colon == 0 || colon == authority.len() - 1 {
-        return None;
+    parse_authority(parts.next()?, None)
+}
+
+/// A plain HTTP request a session sent through the broker as its proxy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Forward {
+    /// Where the request goes.
+    pub target: Target,
+    /// The head as the origin is to receive it.
+    pub head: String,
+}
+
+/// Headers that concern the hop to the broker rather than the origin.
+///
+/// The framing headers stay, because the body is relayed as it arrived.
+const PROXY_HOP_HEADERS: [&str; 6] = [
+    "connection",
+    "keep-alive",
+    "proxy-authorization",
+    "proxy-connection",
+    "te",
+    "upgrade",
+];
+
+/// Reads a proxied `http://` request and rewrites its head for the origin.
+///
+/// A proxy is sent `GET http://host/path HTTP/1.1` and an origin expects
+/// `GET /path HTTP/1.1`. The connection is closed after one exchange because
+/// what follows the head is relayed as bytes to the host that was judged, so
+/// a client reusing it for another host would otherwise reach this one.
+pub fn parse_forward(head: &str) -> Option<Forward> {
+    let mut lines = head.lines();
+    let mut parts = lines.next()?.split_whitespace();
+    let (method, uri, version) = (parts.next()?, parts.next()?, parts.next()?);
+    let rest = uri.strip_prefix("http://")?;
+    let (authority, path) = rest.find('/').map_or((rest, "/"), |at| rest.split_at(at));
+    let target = parse_authority(authority, Some(80))?;
+
+    let mut rewritten = format!("{method} {path} {version}\r\n");
+    for line in lines.take_while(|line| !line.is_empty()) {
+        let name = line.split(':').next().unwrap_or("").trim();
+        if !PROXY_HOP_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+            rewritten.push_str(line);
+            rewritten.push_str("\r\n");
+        }
     }
-    let host = &authority[..colon];
-    let port: i64 = authority[colon + 1..].parse().ok()?;
-    if !(1..=65_535).contains(&port) {
-        return None;
-    }
-    if host.contains('/') || host.contains('[') {
-        return None;
-    }
-    Some(ConnectTarget {
-        host: host.to_owned(),
-        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        port: port as u16,
+    rewritten.push_str("Connection: close\r\n\r\n");
+    Some(Forward {
+        target,
+        head: rewritten,
     })
 }
 
-/// Ports the broker will open upstream, so a tunnel cannot reach a service on
-/// an odd port.
-pub const ALLOWED_UPSTREAM_PORTS: [u16; 1] = [443];
+/// Reads `host:port`, or a bare host when there is a `default_port`.
+///
+/// IPv6 literals would be bracketed; a session reaches named hosts, so a
+/// bracketed authority is not something the allowlist can match and is
+/// refused rather than parsed into a host. So is one carrying credentials.
+fn parse_authority(authority: &str, default_port: Option<u16>) -> Option<Target> {
+    if authority.contains(['/', '[', '@']) {
+        return None;
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, port.parse::<u16>().ok().filter(|port| *port != 0)?),
+        None => (authority, default_port?),
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(Target {
+        host: host.to_owned(),
+        port,
+    })
+}
 
 /// Where the model provider really is, and what stands in for its key.
 ///
@@ -370,6 +419,8 @@ pub(crate) struct ProviderState {
     pub routes: Vec<ProviderRoute>,
     /// The egress allowlist, by host.
     pub allow: Vec<String>,
+    /// The upstream ports the broker will open.
+    pub ports: Vec<u16>,
     /// Whether a literal internal address may be dialled.
     pub allow_internal: bool,
     /// The logger the refusals go to.
