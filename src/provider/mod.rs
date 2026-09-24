@@ -3,6 +3,8 @@
 
 /// One question put to a model beside a session.
 pub mod ask;
+/// Asks providers which models they serve, and holds what sessions read.
+pub mod discover;
 /// Reads a metered window from a gateway that reports one.
 pub mod gateway;
 /// The host's model store: which models exist and what they cost.

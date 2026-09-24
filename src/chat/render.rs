@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::agent::protocol::DialogMethod;
 use crate::agent::protocol::DialogRequest;
 use crate::chat::chars::{PrefixKey, prefixed};
+use crate::provider::discover::Outcome;
 use crate::provider::usage::{Quota, is_spent};
 use crate::session::event::Delegated;
 use crate::session::files::Entry;
@@ -464,6 +465,22 @@ fn span_until(epoch_ms: i64, now: i64) -> String {
         (0, _) => format!("{hours}h {minutes}m"),
         _ => format!("{days}d {hours}h"),
     }
+}
+
+/// What `!models refresh` found, one line per provider asked.
+pub fn models_refreshed(outcomes: &[Outcome]) -> String {
+    if outcomes.is_empty() {
+        return "no provider is set to be asked for its models; set `discover` on one".to_owned();
+    }
+    outcomes
+        .iter()
+        .map(|(provider, outcome)| match outcome {
+            Ok(1) => format!("`{provider}`: 1 model"),
+            Ok(count) => format!("`{provider}`: {count} models"),
+            Err(why) => format!("`{provider}`: kept the models it names, since {why}"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A moment as `YYYY-MM-DD HH:MM` in UTC.

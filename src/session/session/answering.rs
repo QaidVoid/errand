@@ -305,7 +305,7 @@ impl Running {
 
     /// Says which model this session runs on and which it can switch to.
     async fn list_models(&mut self) {
-        let available = &self.options.available_models;
+        let available = &self.options.catalog.models();
         let running = self
             .running_model()
             .unwrap_or_else(|| "the provider default".to_owned());
@@ -335,7 +335,7 @@ impl Running {
         // after: an alias may carry one, and `musecringe:max` is not the name
         // of anything the host lists.
         let (wanted, asked_level) = split_level(&expanded);
-        let available = &self.options.available_models;
+        let available = &self.options.catalog.models();
 
         if wanted.is_empty() {
             self.list_models().await;

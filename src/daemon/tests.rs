@@ -20,6 +20,7 @@ use crate::config::schema::SandboxBackend;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, LogLevel, Logger};
 use crate::memory::store::{MemoryStore, Scope};
+use crate::provider::discover::Catalog;
 use crate::sandbox::Backend;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
@@ -367,6 +368,7 @@ struct DaemonCase {
     settings: Option<serde_json::Value>,
     power_off: Option<super::PowerOff>,
     describe_usage: Option<super::DescribeUsage>,
+    refresh_models: Option<super::RefreshModels>,
     report: Option<CapabilityReport>,
     start: bool,
     memory: Option<Arc<MemoryStore>>,
@@ -378,6 +380,7 @@ impl Default for DaemonCase {
             settings: None,
             power_off: None,
             describe_usage: None,
+            refresh_models: None,
             report: None,
             start: true,
             memory: None,
@@ -433,8 +436,9 @@ async fn with_daemon(
         memory: case.memory.clone(),
         power_off: case.power_off.clone(),
         describe_usage: case.describe_usage.clone(),
+        refresh_models: case.refresh_models.clone(),
         public_url: None,
-        available_models: Vec::new(),
+        catalog: Catalog::default(),
         delegate_base_url: None,
         operator_ids: None,
         unavailable: None,
@@ -1305,6 +1309,52 @@ async fn in_a_thread_the_daemon_leaves_memory_to_the_session() {
         },
     )
     .await;
+}
+
+/// Asking the providers again reaches every session, so it is an operator's,
+/// and anybody else is told so without anything being asked.
+#[tokio::test]
+async fn only_an_operator_may_ask_the_providers_for_their_models_again() {
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&asked);
+    let refresh: super::RefreshModels = Arc::new(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { "`gateway`: 2 models".to_owned() })
+    });
+    let as_operator = json!({
+        "chat": {
+            "token": "t",
+            "channelId": "chan",
+            "allowedUserIds": [OWNER],
+            "operatorUserIds": [OWNER],
+        },
+    });
+
+    for (settings, expected, calls) in [
+        (None, "only an operator", 0),
+        (Some(as_operator), "`gateway`: 2 models", 1),
+    ] {
+        asked.store(0, std::sync::atomic::Ordering::SeqCst);
+        with_daemon(
+            DaemonCase {
+                settings,
+                refresh_models: Some(Arc::clone(&refresh)),
+                ..Default::default()
+            },
+            |harness| {
+                Box::pin(async move {
+                    harness
+                        .daemon
+                        .handle(raw("!models refresh"), InboundDecision::Start)
+                        .await;
+                    assert!(harness.said().contains(expected), "{}", harness.said());
+                    assert!(created(&harness.threads).is_empty());
+                })
+            },
+        )
+        .await;
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), calls);
+    }
 }
 
 #[tokio::test]

@@ -16,7 +16,8 @@ use crate::config::schema::Config;
 use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
-use crate::provider::models::{AvailableModel, provider_for};
+use crate::provider::discover::Catalog;
+use crate::provider::models::provider_for;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
@@ -166,8 +167,9 @@ pub struct ManagerOptions {
     pub describe_images: Option<DescribeImages>,
     /// Where the interface is published, when it is.
     pub public_url: Option<String>,
-    /// Models this host knows the provider serves, for `!model`.
-    pub available_models: Vec<AvailableModel>,
+    /// The provider definitions sessions launch with and the models `!model`
+    /// can switch to.
+    pub catalog: Catalog,
     /// Where a delegated question is sent, read from the host's model store.
     pub delegate_base_url: Option<String>,
     /// Injected so record timestamps are predictable in tests.
@@ -184,7 +186,7 @@ struct Shared {
     memory: Option<Arc<MemoryStore>>,
     describe_images: Option<DescribeImages>,
     public_url: Option<String>,
-    available_models: Vec<AvailableModel>,
+    catalog: Catalog,
     delegate_base_url: Option<String>,
     unavailable: Option<Unavailable>,
     launcher: Launcher,
@@ -223,7 +225,7 @@ impl SessionManager {
             memory: options.memory.clone(),
             describe_images: options.describe_images.clone(),
             public_url: options.public_url.clone(),
-            available_models: options.available_models.clone(),
+            catalog: options.catalog.clone(),
             delegate_base_url: options.delegate_base_url.clone(),
             unavailable: options.unavailable.clone(),
             launcher: {
@@ -442,7 +444,7 @@ impl SessionManager {
             if resolved.provider.is_none() {
                 let bare = split_level(&resolved.model).0;
                 resolved.provider = provider_for(
-                    &self.options.available_models,
+                    &self.options.catalog.models(),
                     &bare,
                     &self.options.config.agent.provider,
                 );
@@ -586,7 +588,7 @@ impl SessionManager {
             thread_id: Some(thread.id.clone()),
             guild_id: self.shared.guild_id.lock().expect("the guild lock").clone(),
             public_url: self.shared.public_url.clone(),
-            available_models: self.shared.available_models.clone(),
+            catalog: self.shared.catalog.clone(),
             delegate_base_url: self.shared.delegate_base_url.clone(),
             unavailable: self.shared.unavailable.clone(),
             operator_ids: self.shared.operator_ids.clone(),
@@ -756,7 +758,7 @@ impl SessionManager {
             thread_id: Some(record.thread_id.clone()),
             guild_id: self.shared.guild_id.lock().expect("the guild lock").clone(),
             public_url: self.shared.public_url.clone(),
-            available_models: self.shared.available_models.clone(),
+            catalog: self.shared.catalog.clone(),
             delegate_base_url: self.shared.delegate_base_url.clone(),
             unavailable: self.shared.unavailable.clone(),
             operator_ids: self.shared.operator_ids.clone(),

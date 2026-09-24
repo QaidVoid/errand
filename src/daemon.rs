@@ -17,7 +17,7 @@ use crate::config::schema::defaults::IMAGE;
 use crate::config::schema::{ALLOW_EVERY_USER, ChatConfig, Config, SandboxBackend};
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::{MemoryStore, Scope};
-use crate::provider::models::AvailableModel;
+use crate::provider::discover::Catalog;
 use crate::sandbox::Backend;
 use crate::sandbox::backend::{CapabilityReport, SandboxUnavailableError};
 use crate::sandbox::bailey::BaileyOptions;
@@ -193,6 +193,10 @@ pub type PowerOff =
 pub type DescribeUsage =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = String> + Send>> + Send + Sync>;
 
+/// Asks the providers for their models again, and says what came of it.
+pub type RefreshModels =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = String> + Send>> + Send + Sync>;
+
 /// Posts a refusal back to the channel, outside any thread.
 pub type ReplyInChannel =
     Arc<dyn Fn(IncomingMessage, String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
@@ -215,13 +219,16 @@ pub struct DaemonOptions {
     pub power_off: Option<PowerOff>,
     /// Says what is left of the provider window, or none when unmetered.
     pub describe_usage: Option<DescribeUsage>,
+    /// Asks the providers for their models again, and says what they listed.
+    pub refresh_models: Option<RefreshModels>,
     /// Describes an attached image for a session whose model cannot see one,
     /// or none when every session's model can.
     pub describe_images: Option<DescribeImages>,
     /// Where the interface is published, when it is.
     pub public_url: Option<String>,
-    /// Models this host knows the provider serves, for `!model`.
-    pub available_models: Vec<AvailableModel>,
+    /// The provider definitions sessions launch with and the models `!model`
+    /// can switch to.
+    pub catalog: Catalog,
     /// Where a delegated question is sent, read from the host's model store.
     pub delegate_base_url: Option<String>,
     /// Who may control any session, beyond the configured list.
@@ -279,7 +286,7 @@ impl Daemon {
             memory: options.memory.clone(),
             describe_images: options.describe_images.clone(),
             public_url: options.public_url.clone(),
-            available_models: options.available_models.clone(),
+            catalog: options.catalog.clone(),
             delegate_base_url: options.delegate_base_url.clone(),
             now: None,
         });
@@ -395,6 +402,35 @@ impl Daemon {
         }
     }
 
+    /// Asks the providers for their models again, for an operator.
+    ///
+    /// Reaches every session's `!model` at once. A running sandbox keeps what
+    /// it was launched with until its next launch.
+    async fn refresh_models(&self, content: &str, author_id: &str) -> Option<String> {
+        if first_word(content) != "!models" {
+            return None;
+        }
+        if content.trim()["!models".len()..].trim() != "refresh" {
+            return Some(
+                "say `!models refresh` to ask the providers for their models again".to_owned(),
+            );
+        }
+        if !self
+            .options
+            .config
+            .chat
+            .operator_user_ids
+            .iter()
+            .any(|id| id == author_id)
+        {
+            return Some("only an operator may ask the providers again".to_owned());
+        }
+        match &self.options.refresh_models {
+            None => Some("no provider is set to be asked for its models".to_owned()),
+            Some(refresh) => Some(refresh().await),
+        }
+    }
+
     /// Whatever the daemon answers itself, wherever it was typed.
     async fn answer_as_daemon(
         &self,
@@ -406,6 +442,9 @@ impl Daemon {
             return Some(answer);
         }
         if let Some(answer) = self.describe_usage(content).await {
+            return Some(answer);
+        }
+        if let Some(answer) = self.refresh_models(content, author_id).await {
             return Some(answer);
         }
         self.answer_about_memory(content, author_id, in_thread)

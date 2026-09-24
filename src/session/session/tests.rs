@@ -18,6 +18,7 @@ use crate::config::schema::Config;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
 use crate::memory::store::{MemoryStore, Scope};
+use crate::provider::discover::Catalog;
 use crate::provider::models::AvailableModel;
 use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
@@ -718,7 +719,10 @@ async fn with_session(
         thread_id: None,
         guild_id: None,
         public_url: None,
-        available_models: case.available_models.clone(),
+        catalog: Catalog::new(
+            config.agent.providers.clone(),
+            case.available_models.clone(),
+        ),
         delegate_base_url: None,
         unavailable: case.unavailable.clone(),
         operator_ids: Vec::new(),

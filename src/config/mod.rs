@@ -7,6 +7,8 @@
 
 use std::path::{Component, Path, PathBuf};
 
+/// How a provider definition says to ask it for its models.
+pub mod discover;
 /// Finds the configuration file and reads it.
 pub mod load;
 /// Removes secrets from anything about to leave the daemon.

@@ -25,6 +25,50 @@ A provider the agent has built in needs only its `credential` to be switched
 to. The daemon reads where it is served from the host's model store, so it
 does not have to be the provider a session started on.
 
+## Asking a provider for its models
+
+A provider can be asked which models it serves instead of having them listed
+by hand. Set `discover` on it, and errand reads the listing under its `baseUrl`
+when the daemon starts:
+
+```json
+{
+  "agent": {
+    "providers": {
+      "gateway": {
+        "baseUrl": "https://gateway.example/v1",
+        "api": "openai-completions",
+        "credential": "...",
+        "discover": { "defaults": { "reasoning": true } },
+        "models": [{ "id": "glm-5.3-flash", "contextWindow": 256000 }]
+      }
+    }
+  }
+}
+```
+
+`true` reads the usual `/models` listing, with the sizes under
+`context_window` and `max_output_tokens`. A provider shaped otherwise says
+where things are:
+
+```json
+"discover": {
+  "path": "/api/models",
+  "list": "result.models",
+  "fields": { "id": "slug", "contextWindow": "top_provider.context_length" }
+}
+```
+
+What is found goes underneath what `models` says. An entry for a model that
+was found overrides only the fields it names, so the example above keeps the
+listed `maxTokens` and replaces the window. `defaults` fills fields no listing
+carries, such as `reasoning`, for every model found. A provider that cannot be
+asked keeps the models it names, and the log says why.
+
+An operator can ask again without a restart with `!models refresh`. Every
+session's `!model` sees the new list at once. A running sandbox keeps what it
+was launched with until its next launch.
+
 ## Switching the model a session runs on
 
 `!model` lists what this host knows the provider serves. `!model <name>` moves

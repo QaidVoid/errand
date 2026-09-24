@@ -46,5 +46,6 @@ aside: everyone in the thread sees it and the agent is never told.
 | `!status` | anyone permitted | session state and queue |
 | `!help` | anyone permitted | list these commands |
 | `!usage` | anyone permitted | how much of the provider's usage window is left |
+| `!models refresh` | the owner and operators | ask the providers again which models they serve |
 | `!shutdown` | named accounts, answered by the daemon | power off the host this daemon runs on |
 

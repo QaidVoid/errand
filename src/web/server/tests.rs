@@ -14,6 +14,7 @@ use crate::config::schema::SandboxBackend;
 use crate::config::schema::WebConfig;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
+use crate::provider::discover::Catalog;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
@@ -340,7 +341,7 @@ async fn with_server_where(
         memory: None,
         describe_images: None,
         public_url: None,
-        available_models: Vec::new(),
+        catalog: Catalog::default(),
         delegate_base_url: None,
         now: Some(Arc::new(|| 1_000)),
     }));
@@ -913,7 +914,7 @@ async fn an_interface_asked_to_bind_publicly_refuses_to_start() {
         memory: None,
         describe_images: None,
         public_url: None,
-        available_models: Vec::new(),
+        catalog: Catalog::default(),
         delegate_base_url: None,
         now: None,
     }));

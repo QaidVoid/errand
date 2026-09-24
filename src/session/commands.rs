@@ -241,6 +241,16 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
             argument: None,
         },
     ),
+    // Acts on every session at once, so the daemon answers it.
+    (
+        "!models",
+        CommandMeta {
+            access: Owner,
+            group: You,
+            summary: "ask the providers again which models they serve",
+            argument: Some("refresh"),
+        },
+    ),
     // Acts on the machine, so the daemon answers it against its own list and a
     // session never sees it.
     (

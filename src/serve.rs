@@ -21,7 +21,7 @@ use crate::chat::commands::TranslatedCommand;
 use crate::chat::commands::{acknowledge, register_commands};
 use crate::chat::gateway::{Gateway, GatewayHandlers};
 use crate::chat::render::{
-    MESSAGE_LIMIT, split_message, usage_table, when_relative, when_relative_plain,
+    MESSAGE_LIMIT, models_refreshed, split_message, usage_table, when_relative, when_relative_plain,
 };
 use crate::chat::threads::ChatThreadFactory;
 use crate::chat::threads::plain;
@@ -37,10 +37,10 @@ use crate::lock::acquire_lock;
 use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
+use crate::provider::discover::{Catalog, Outcome, discover};
 use crate::provider::gateway::{GATEWAY_USAGE, fetch_gateway_usage};
 use crate::provider::models::{
-    agent_directory, available_models, common_base_url, model_by_id, read_models, read_store,
-    store_entries,
+    agent_directory, common_base_url, model_by_id, read_models, read_store, store_entries,
 };
 use crate::provider::usage::Fetch;
 use crate::provider::usage::HttpRequest;
@@ -74,6 +74,31 @@ pub const MEMORY_FILENAME: &str = "memory.db";
 
 /// How long the chat service has to answer a login.
 const READY_TIMEOUT_MS: u64 = 30_000;
+
+/// How long a provider may take to list its models.
+const DISCOVER_TIMEOUT_MS: u64 = 10_000;
+
+/// Says in the log what asking each provider for its models came to.
+fn report_discovery(log: &Logger, outcomes: &[Outcome]) {
+    for (provider, outcome) in outcomes {
+        match outcome {
+            Ok(count) => log.info(
+                "a provider listed its models",
+                &fields([
+                    ("provider", LogValue::from(provider.as_str())),
+                    ("models", LogValue::from(*count)),
+                ]),
+            ),
+            Err(why) => log.warn(
+                "a provider could not be asked for its models; keeping the ones it names",
+                &fields([
+                    ("provider", LogValue::from(provider.as_str())),
+                    ("detail", LogValue::from(why.as_str())),
+                ]),
+            ),
+        }
+    }
+}
 
 /// The one real fetch of a provider endpoint, over HTTPS.
 struct HttpFetch;
@@ -785,6 +810,16 @@ async fn run(
         );
     }
 
+    let (providers, switchable, outcomes) = discover(
+        &config.agent,
+        store.as_deref(),
+        &HttpFetch,
+        DISCOVER_TIMEOUT_MS,
+    )
+    .await;
+    report_discovery(log, &outcomes);
+    let catalog = Catalog::new(providers, switchable);
+
     let describer = image_describer(&config.agent, store.as_deref(), HttpPost);
     if let Some(describer) = &describer {
         log.info(
@@ -933,7 +968,22 @@ async fn run(
         }),
         public_url: config.web.as_ref().and_then(|web| web.public_url.clone()),
         operator_ids: Some(operator_ids),
-        available_models: available_models(&config.agent, store.as_deref()),
+        catalog: catalog.clone(),
+        refresh_models: Some({
+            let agent = config.agent.clone();
+            let log = log.clone();
+            Arc::new(move || {
+                let (agent, store, log, catalog) =
+                    (agent.clone(), store.clone(), log.clone(), catalog.clone());
+                Box::pin(async move {
+                    let (providers, switchable, outcomes) =
+                        discover(&agent, store.as_deref(), &HttpFetch, DISCOVER_TIMEOUT_MS).await;
+                    report_discovery(&log, &outcomes);
+                    catalog.replace(providers, switchable);
+                    models_refreshed(&outcomes)
+                }) as Pin<Box<dyn Future<Output = String> + Send>>
+            })
+        }),
         delegate_base_url,
         unavailable,
     }));

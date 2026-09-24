@@ -37,7 +37,7 @@ use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::ask::{Endpoint, HttpSender};
-use crate::provider::models::AvailableModel;
+use crate::provider::discover::Catalog;
 use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 use crate::session::attachments::{self, RawAttachment, is_image, receive};
@@ -333,9 +333,9 @@ pub struct SessionOptions {
     pub guild_id: Option<String>,
     /// Where the interface is published, when it is.
     pub public_url: Option<String>,
-    /// Models this host knows this provider serves, for switching between
-    /// them.
-    pub available_models: Vec<AvailableModel>,
+    /// The provider definitions a launch is given and the models a session
+    /// can switch to, shared so a refresh reaches every session.
+    pub catalog: Catalog,
     /// Where the provider is reached for a delegated question.
     pub delegate_base_url: Option<String>,
     /// Why nothing can run yet, or none when it can.
@@ -1072,7 +1072,7 @@ impl Running {
             env,
             provider: self.provider(),
             model: self.model(),
-            providers: self.options.config.agent.providers.clone(),
+            providers: self.options.catalog.providers(),
             extensions: self.options.config.agent.extensions.clone(),
             system_prompt_path,
             resume: self.options.resume,

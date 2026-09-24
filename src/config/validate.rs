@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use super::{is_absolute, resolve};
+use crate::config::discover::Discovery;
 use crate::config::schema::{
     self, AgentConfig, ChatConfig, Config, ConfigError, DelegateConfig, EgressConfig, EgressMode,
     GithubConfig, LimitsConfig, NetworkMode, OutputConfig, PolicyExtraConfig, SandboxBackend,
@@ -509,7 +510,8 @@ fn validate_chat(raw: &Map<String, Value>, problems: &mut Problems) -> ChatConfi
 /// are written.
 ///
 /// Each value is handed to the agent unread, so only the shape this depends on
-/// is checked: a name mapping to an object. Naming the fields here would mean
+/// is checked: a name mapping to an object, and `discover`, which errand
+/// reads itself. Naming the fields here would mean
 /// refusing one the agent had just learned, and this is not the schema's owner.
 fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> Map<String, Value> {
     let Some(raw) = source.get("providers") else {
@@ -531,6 +533,19 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
                 "agent.providers.{name} must be an object describing the provider"
             ));
             continue;
+        }
+        match Discovery::of(name, definition) {
+            Err(found) => {
+                for problem in found {
+                    problems.add(problem);
+                }
+            }
+            Ok(Some(_)) if definition.get("baseUrl").and_then(Value::as_str).is_none() => {
+                problems.add(format!(
+                    "agent.providers.{name}.discover needs a baseUrl to ask under"
+                ));
+            }
+            Ok(_) => {}
         }
         defined.insert(name.trim().to_owned(), definition.clone());
     }

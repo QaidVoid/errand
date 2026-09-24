@@ -18,6 +18,7 @@ use crate::config::schema::SandboxBackend;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
 use crate::memory::store::MemoryStore;
+use crate::provider::discover::Catalog;
 use crate::provider::models::AvailableModel;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
@@ -461,6 +462,7 @@ async fn with_models(
         750,
     );
     let id = Mutex::new(0);
+    let catalog = Catalog::new(settings.agent.providers.clone(), available_models.clone());
 
     let manager = SessionManager::new(ManagerOptions {
         config: settings,
@@ -481,7 +483,7 @@ async fn with_models(
         }),
         describe_images: None,
         public_url: None,
-        available_models: available_models.clone(),
+        catalog,
         delegate_base_url: None,
         now: Some(Arc::new(|| 1_000)),
     });

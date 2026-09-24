@@ -63,6 +63,7 @@ pub fn provider_config(
         // and the agent's configuration would only report it as a field it
         // does not know.
         fields.remove("usage");
+        fields.remove("discover");
         if let (Some(Value::Array(models)), Some(known)) =
             (fields.get_mut("models"), built_in.get(name))
         {
