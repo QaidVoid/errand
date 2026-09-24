@@ -177,6 +177,7 @@ pub struct BrokeredProvider {
 pub fn provider_config(
     defined: &Map<String, Value>,
     brokered: &BTreeMap<String, BrokeredProvider>,
+    built_in: &BTreeMap<String, Vec<Value>>,
 ) -> Map<String, Value> {
     let mut providers = Map::new();
     for (name, definition) in defined {
@@ -197,6 +198,13 @@ pub fn provider_config(
         // and the agent's configuration would only report it as a field it
         // does not know.
         fields.remove("usage");
+        if let (Some(Value::Array(models)), Some(known)) =
+            (fields.get_mut("models"), built_in.get(name))
+        {
+            for model in models {
+                *model = over_built_in(model, known);
+            }
+        }
         providers.insert(name.clone(), Value::Object(fields));
     }
 
@@ -219,6 +227,31 @@ pub fn provider_config(
     let mut wrapped = Map::new();
     wrapped.insert("providers".to_owned(), Value::Object(providers));
     wrapped
+}
+
+/// A model entry laid over the agent's own definition of that model.
+///
+/// The agent replaces a built-in model with an entry of the same id rather
+/// than merging the two, so an entry that only sets `contextWindow` would
+/// lose the rest, reasoning and thinking levels included. The store's
+/// definition goes underneath instead. Its `baseUrl` and `provider` are left
+/// out, so the model is still reached wherever its provider is, broker
+/// included. An entry the store does not know is left as written.
+fn over_built_in(entry: &Value, known: &[Value]) -> Value {
+    let id = entry.get("id").and_then(Value::as_str);
+    let Some(Value::Object(base)) = known
+        .iter()
+        .find(|model| id.is_some() && model.get("id").and_then(Value::as_str) == id)
+    else {
+        return entry.clone();
+    };
+    let mut merged = base.clone();
+    merged.remove("baseUrl");
+    merged.remove("provider");
+    if let Value::Object(fields) = entry {
+        merged.extend(fields.clone());
+    }
+    Value::Object(merged)
 }
 
 /// Copies a file or a directory tree from the host into the session.
@@ -269,6 +302,9 @@ pub struct BaileyOptions {
     pub brokering: Option<ProviderBrokering>,
     /// Finds the agent. Injected so a test needs no agent installed.
     pub lookup: Option<Lookup>,
+    /// The host store's definitions of each defined provider's models, by
+    /// provider, for an entry naming one of them to be laid over.
+    pub built_in: BTreeMap<String, Vec<Value>>,
 }
 
 /// The proxy URL a brokered session's tools use, for a given broker port.
@@ -415,7 +451,7 @@ impl BaileySandbox {
             return Ok(());
         }
 
-        let providers = provider_config(defined, &brokered);
+        let providers = provider_config(defined, &brokered, &self.options.built_in);
 
         let directory = std::path::Path::new(&launch.state_dir)
             .join("home")

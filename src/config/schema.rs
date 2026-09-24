@@ -131,7 +131,11 @@ pub struct AgentConfig {
     /// optionally the `credentialName` the agent reads it from, and whatever
     /// else the agent's own configuration takes: `baseUrl`, `api`, `models`.
     /// Written into the agent's configuration verbatim apart from the
-    /// credential, because that schema belongs to the agent.
+    /// credential, because that schema belongs to the agent. The exception is
+    /// an entry of `models` naming a model the host's store already defines
+    /// for that provider: it is laid over that definition, so setting only
+    /// `contextWindow` keeps the model's reasoning, thinking levels, and
+    /// inputs.
     ///
     /// A `defaultThinkingLevel` on a provider says how hard its models think
     /// when nobody says, and one on an entry of `models` says it for that

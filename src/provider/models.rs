@@ -200,6 +200,29 @@ pub struct StoreContents {
     pub skipped: usize,
 }
 
+/// Every model the store lists for a provider, as the agent wrote it, or
+/// nothing when there is no store or it cannot be read.
+pub fn store_entries(directory: Option<&str>, provider: &str) -> Vec<Value> {
+    let Some(directory) = directory else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(std::path::Path::new(directory).join(STORE_FILENAME))
+    else {
+        return Vec::new();
+    };
+    let Ok(mut parsed) = serde_json::from_str::<Value>(&text) else {
+        return Vec::new();
+    };
+    match parsed
+        .get_mut(provider)
+        .and_then(|entry| entry.get_mut("models"))
+        .map(Value::take)
+    {
+        Some(Value::Array(models)) => models,
+        _ => Vec::new(),
+    }
+}
+
 /// Everything the store lists for one provider, or nothing at all.
 pub fn read_models(directory: Option<&str>, provider: &str) -> Vec<ModelInfo> {
     read_store(directory, provider).models
@@ -212,33 +235,9 @@ pub fn read_models(directory: Option<&str>, provider: &str) -> Vec<ModelInfo> {
 /// because one line of it is wrong is a worse answer than a daemon that
 /// starts and says which line.
 pub fn read_store(directory: Option<&str>, provider: &str) -> StoreContents {
-    let nothing = || StoreContents {
-        models: Vec::new(),
-        skipped: 0,
-    };
-    let Some(directory) = directory else {
-        return nothing();
-    };
-    let Ok(text) = std::fs::read_to_string(std::path::Path::new(directory).join(STORE_FILENAME))
-    else {
-        return nothing();
-    };
-    let parsed: Value = match serde_json::from_str(&text) {
-        Ok(parsed) => parsed,
-        Err(_) => return nothing(),
-    };
-
-    let models = parsed
-        .get(provider)
-        .and_then(|entry| entry.get("models"))
-        .and_then(Value::as_array);
-    let Some(models) = models else {
-        return nothing();
-    };
-
     let mut found = Vec::new();
     let mut skipped = 0;
-    for raw in models {
+    for raw in &store_entries(directory, provider) {
         let Some(model) = raw.as_object() else {
             skipped += 1;
             continue;

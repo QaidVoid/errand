@@ -38,6 +38,7 @@ use crate::memory::store::MemoryStore;
 use crate::provider::gateway::{GATEWAY_USAGE, fetch_gateway_usage};
 use crate::provider::models::{
     agent_directory, available_models, common_base_url, model_by_id, read_models, read_store,
+    store_entries,
 };
 use crate::provider::usage::Fetch;
 use crate::provider::usage::HttpRequest;
@@ -559,11 +560,20 @@ async fn run(
     // The sandbox is checked before the chat service is touched, so a missing
     // image or an unenforceable guarantee fails immediately rather than after
     // a login round trip.
+    let store = agent_directory(&host_environment());
+    let built_in = config
+        .agent
+        .providers
+        .keys()
+        .map(|name| (name.clone(), store_entries(store.as_deref(), name)))
+        .filter(|(_, models)| !models.is_empty())
+        .collect();
     let sandbox = Arc::new(create_sandbox(
         config,
         log.clone(),
         egress_proxy_port,
         brokering,
+        built_in,
     ));
     let report = match probe_sandbox(sandbox.as_ref(), config, log).await {
         Ok(report) => report,

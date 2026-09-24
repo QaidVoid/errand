@@ -464,7 +464,7 @@ fn an_operators_provider_definition_survives_the_brokers_base_url() {
             nonce: "n-meta".to_owned(),
         },
     );
-    let merged = provider_config(&defined, &brokered);
+    let merged = provider_config(&defined, &brokered, &BTreeMap::new());
     let providers = merged
         .get("providers")
         .and_then(Value::as_object)
@@ -506,7 +506,7 @@ fn a_provider_the_operator_never_defined_still_gets_its_base_url() {
             nonce: "n".to_owned(),
         },
     );
-    let merged = provider_config(&serde_json::Map::new(), &brokered);
+    let merged = provider_config(&serde_json::Map::new(), &brokered, &BTreeMap::new());
     let providers = merged
         .get("providers")
         .and_then(Value::as_object)
@@ -528,7 +528,7 @@ fn without_a_broker_the_definitions_pass_through_less_the_credential() {
         "meta".to_owned(),
         json!({ "baseUrl": "https://api.meta.example/v1", "credential": "k" }),
     );
-    let merged = provider_config(&defined, &BTreeMap::new());
+    let merged = provider_config(&defined, &BTreeMap::new(), &BTreeMap::new());
     let providers = merged
         .get("providers")
         .and_then(Value::as_object)
@@ -537,6 +537,51 @@ fn without_a_broker_the_definitions_pass_through_less_the_credential() {
     assert_eq!(
         providers.get("meta"),
         Some(&json!({ "baseUrl": "https://api.meta.example/v1" }))
+    );
+}
+
+/// An entry naming a model the agent already defines adjusts that model
+/// rather than replacing it with one that has forgotten how to think. A model
+/// the store does not know is left as written.
+#[test]
+fn an_entry_for_a_built_in_model_is_laid_over_its_definition() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "zai-coding-cn".to_owned(),
+        json!({
+            "credential": "k",
+            "models": [
+                { "id": "glm-5.3-flash", "contextWindow": 256_000 },
+                { "id": "glm-6", "contextWindow": 128_000 },
+            ],
+        }),
+    );
+    let built_in = BTreeMap::from([(
+        "zai-coding-cn".to_owned(),
+        vec![json!({
+            "id": "glm-5.3-flash",
+            "provider": "zai-coding-cn",
+            "api": "openai-completions",
+            "baseUrl": "https://zai.example/v4",
+            "reasoning": true,
+            "thinkingLevelMap": { "max": "max" },
+            "contextWindow": 1_000_000,
+        })],
+    )]);
+    let merged = provider_config(&defined, &BTreeMap::new(), &built_in);
+
+    assert_eq!(
+        merged["providers"]["zai-coding-cn"]["models"],
+        json!([
+            {
+                "id": "glm-5.3-flash",
+                "api": "openai-completions",
+                "reasoning": true,
+                "thinkingLevelMap": { "max": "max" },
+                "contextWindow": 256_000,
+            },
+            { "id": "glm-6", "contextWindow": 128_000 },
+        ])
     );
 }
 
@@ -553,7 +598,7 @@ fn an_extension_provider_is_left_out_of_what_is_written() {
         "meta".to_owned(),
         json!({ "baseUrl": "https://api.meta.example/v1", "credential": "k" }),
     );
-    let merged = provider_config(&defined, &BTreeMap::new());
+    let merged = provider_config(&defined, &BTreeMap::new(), &BTreeMap::new());
     let providers = merged
         .get("providers")
         .and_then(Value::as_object)

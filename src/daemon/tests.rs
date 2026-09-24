@@ -1,5 +1,6 @@
 //! Daemon wiring tests, ported from `daemon_test.ts`.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -1349,7 +1350,7 @@ fn create_sandbox_names_the_configured_backend() {
         "projectRoot": root.path().join("projects").display().to_string(),
         "stateDir": root.path().join("state").display().to_string(),
     }));
-    let sandbox = create_sandbox(&config, silent(), None, None);
+    let sandbox = create_sandbox(&config, silent(), None, None, BTreeMap::new());
     assert!(matches!(sandbox, Backend::Bailey(_)));
 
     let config = config_with(&json!({
@@ -1357,7 +1358,7 @@ fn create_sandbox_names_the_configured_backend() {
         "stateDir": root.path().join("state").display().to_string(),
         "sandbox": { "backend": "podman" },
     }));
-    let sandbox = create_sandbox(&config, silent(), None, None);
+    let sandbox = create_sandbox(&config, silent(), None, None, BTreeMap::new());
     assert!(matches!(sandbox, Backend::Podman(_)));
 }
 

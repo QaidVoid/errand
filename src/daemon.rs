@@ -4,6 +4,7 @@
 //! Kept apart from the entry point so the whole daemon can be built and
 //! exercised in a test with no connection and no real sandbox.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -65,12 +66,15 @@ pub enum StartError {
 /// `egress_proxy_port`, when given, is the host loopback port of the broker
 /// every session's egress is forced through under `egress.mode = proxy`. Only
 /// the bailey backend uses it; podman bounds the network by its own
-/// namespace.
+/// namespace. `built_in` is the host store's definitions of each defined
+/// provider's models, which the bailey backend writes under an entry naming
+/// one.
 pub fn create_sandbox(
     config: &Config,
     log: Logger,
     egress_proxy_port: Option<u16>,
     brokering: Option<ProviderBrokering>,
+    built_in: BTreeMap<String, Vec<serde_json::Value>>,
 ) -> Backend {
     match config.sandbox.backend {
         SandboxBackend::Podman => Backend::Podman(Arc::new(PodmanSandbox::new(
@@ -86,6 +90,7 @@ pub fn create_sandbox(
             BaileyOptions {
                 egress_proxy_port,
                 brokering,
+                built_in,
                 ..Default::default()
             },
         ))),
