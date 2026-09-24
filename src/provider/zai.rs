@@ -80,10 +80,5 @@ pub async fn fetch_quota(key: &str, fetch: &impl Fetch, timeout_ms: u64) -> Opti
     read_quota(&response.body?)
 }
 
-/// True for a provider metered by the endpoint above.
-pub fn meters_usage(provider: &str) -> bool {
-    provider.starts_with("zai")
-}
-
 #[cfg(test)]
 mod tests;

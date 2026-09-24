@@ -17,6 +17,7 @@ use crate::config::schema::{
     SandboxConfig, ShutdownConfig, TimeoutsConfig, WebConfig,
 };
 use crate::config::size::parse_size;
+use crate::config::usage::UsageShape;
 
 /// Variables the policy sets itself, and so refuses to take from a file.
 const SET_BY_THE_POLICY: [&str; 2] = ["PATH", "HOME"];
@@ -510,8 +511,8 @@ fn validate_chat(raw: &Map<String, Value>, problems: &mut Problems) -> ChatConfi
 /// are written.
 ///
 /// Each value is handed to the agent unread, so only the shape this depends on
-/// is checked: a name mapping to an object, and `discover`, which errand
-/// reads itself. Naming the fields here would mean
+/// is checked: a name mapping to an object, and `discover` and `usage`,
+/// which errand reads itself. Naming the fields here would mean
 /// refusing one the agent had just learned, and this is not the schema's owner.
 fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> Map<String, Value> {
     let Some(raw) = source.get("providers") else {
@@ -546,6 +547,27 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
                 ));
             }
             Ok(_) => {}
+        }
+        match UsageShape::of(name, definition) {
+            Err(found) => {
+                for problem in found {
+                    problems.add(problem);
+                }
+            }
+            Ok(Some(shape)) => {
+                let has = |key: &str| definition.get(key).and_then(Value::as_str).is_some();
+                if !has("credential") {
+                    problems.add(format!(
+                        "agent.providers.{name}.usage needs a credential to ask with"
+                    ));
+                }
+                if shape != UsageShape::Zai && !has("baseUrl") {
+                    problems.add(format!(
+                        "agent.providers.{name}.usage needs a baseUrl to ask under"
+                    ));
+                }
+            }
+            Ok(None) => {}
         }
         defined.insert(name.trim().to_owned(), definition.clone());
     }

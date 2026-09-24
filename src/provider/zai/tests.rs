@@ -4,7 +4,7 @@ use std::future::Future;
 
 use serde_json::{Value, json};
 
-use super::{QUOTA_URL, fetch_quota, meters_usage, read_quota};
+use super::{QUOTA_URL, fetch_quota, read_quota};
 use crate::provider::usage::{Fetch, FetchError, HttpRequest, HttpResponse, Quota};
 
 fn quota_body(percentage: f64, resets_at: i64) -> Value {
@@ -139,13 +139,6 @@ fn anything_unrecognised_is_read_as_nothing_rather_than_as_spent() {
         })),
         None
     );
-}
-
-#[test]
-fn only_the_provider_that_meters_this_way_is_asked() {
-    assert!(meters_usage("zai"));
-    assert!(meters_usage("zai-coding-cn"));
-    assert!(!meters_usage("anthropic"));
 }
 
 /// The key goes raw, not as a bearer token: that is what the endpoint takes.

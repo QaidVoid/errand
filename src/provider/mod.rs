@@ -7,6 +7,8 @@ pub mod ask;
 pub mod discover;
 /// Reads a metered window from a gateway that reports one.
 pub mod gateway;
+/// Reads a usage window from wherever a provider's definition says it is.
+pub mod mapped;
 /// The host's model store: which models exist and what they cost.
 pub mod models;
 /// Holds a window answer so every session does not ask again.

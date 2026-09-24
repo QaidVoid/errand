@@ -28,6 +28,7 @@ use crate::chat::threads::plain;
 use crate::config::load::Environment;
 use crate::config::redact::{redact_text, secret_values};
 use crate::config::schema::{AgentConfig, Config, EgressMode};
+use crate::config::usage::UsageShape;
 use crate::daemon::SlashCommand;
 use crate::daemon::StartError;
 use crate::daemon::{Daemon, DaemonOptions};
@@ -38,7 +39,8 @@ use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::discover::{Catalog, Outcome, discover};
-use crate::provider::gateway::{GATEWAY_USAGE, fetch_gateway_usage};
+use crate::provider::gateway::fetch_gateway_usage;
+use crate::provider::mapped::fetch_mapped;
 use crate::provider::models::{
     agent_directory, common_base_url, model_by_id, read_models, read_store, store_entries,
 };
@@ -53,7 +55,7 @@ use crate::provider::usage::{
 };
 use crate::provider::vision::HttpPost;
 use crate::provider::vision::image_describer;
-use crate::provider::zai::{fetch_quota, meters_usage};
+use crate::provider::zai::fetch_quota;
 use crate::sandbox::bailey::ProviderBrokering;
 use crate::sandbox::bailey::{EGRESS_MAP_ADDRESS, provider_prefix};
 use crate::sandbox::broker::Broker;
@@ -168,33 +170,33 @@ type BoxedGateRead =
 fn usage_sources(config: &Config) -> Vec<UsageSource<BoxedGateRead>> {
     let mut sources = Vec::new();
     for (name, definition) in &config.agent.providers {
-        let Some(credential) = config.agent.credential_of(name) else {
+        let (Ok(Some(shape)), Some(credential)) = (
+            UsageShape::of(name, definition),
+            config.agent.credential_of(name),
+        ) else {
             continue;
         };
         let credential = credential.to_owned();
-        let gateway_url = definition
+        let base_url = definition
             .get("baseUrl")
             .and_then(serde_json::Value::as_str)
-            .filter(|_| {
-                definition.get("usage").and_then(serde_json::Value::as_str) == Some(GATEWAY_USAGE)
+            .unwrap_or_default()
+            .to_owned();
+        let read: BoxedGateRead = Box::new(move || {
+            let (shape, base_url, credential) =
+                (shape.clone(), base_url.clone(), credential.clone());
+            Box::pin(async move {
+                match &shape {
+                    UsageShape::Zai => fetch_quota(&credential, &HttpFetch, 10_000).await,
+                    UsageShape::Gateway => {
+                        fetch_gateway_usage(&base_url, &credential, &HttpFetch, 10_000).await
+                    }
+                    UsageShape::Mapped(mapping) => {
+                        fetch_mapped(&base_url, &credential, mapping, &HttpFetch, 10_000).await
+                    }
+                }
             })
-            .map(str::to_owned);
-        let read: BoxedGateRead = if meters_usage(name) {
-            Box::new(move || {
-                let credential = credential.clone();
-                Box::pin(async move { fetch_quota(&credential, &HttpFetch, 10_000).await })
-            })
-        } else if let Some(base_url) = gateway_url {
-            Box::new(move || {
-                let base_url = base_url.clone();
-                let credential = credential.clone();
-                Box::pin(async move {
-                    fetch_gateway_usage(&base_url, &credential, &HttpFetch, 10_000).await
-                })
-            })
-        } else {
-            continue;
-        };
+        });
         sources.push(UsageSource {
             provider: name.clone(),
             gate: QuotaGate::new(read, now_ms),

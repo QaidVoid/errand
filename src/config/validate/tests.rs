@@ -816,3 +816,44 @@ fn an_ordinary_starting_provider_still_needs_its_credential() {
         "agent.providers.bare.credential is required"
     ));
 }
+
+/// Asking a provider needs somewhere to ask and a key to ask with, and a
+/// misshapen `discover` or `usage` is refused rather than quietly skipped.
+#[test]
+fn asking_a_provider_needs_a_base_url_and_a_key() {
+    let raw = valid(json!({
+        "agent": {
+            "provider": "anthropic",
+            "providers": {
+                "anthropic": { "credential": "secret-value" },
+                "keyless": { "baseUrl": "https://keyless.example/v1", "usage": "gateway" },
+                "nowhere": { "credential": "k", "usage": "gateway", "discover": true },
+                "zai": { "credential": "k", "usage": "zai" },
+                "odd": { "baseUrl": "https://odd.example/v1", "credential": "k", "discover": 1 },
+            },
+        },
+    }));
+    let problems = problems_of(&raw);
+
+    assert!(
+        problems
+            .contains(&"agent.providers.keyless.usage needs a credential to ask with".to_owned())
+    );
+    assert!(
+        problems.contains(&"agent.providers.nowhere.usage needs a baseUrl to ask under".to_owned())
+    );
+    assert!(
+        problems
+            .contains(&"agent.providers.nowhere.discover needs a baseUrl to ask under".to_owned())
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.starts_with("agent.providers.odd.discover"))
+    );
+    assert!(
+        !problems
+            .iter()
+            .any(|problem| problem.contains("providers.zai"))
+    );
+}

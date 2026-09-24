@@ -17,6 +17,8 @@ pub mod redact;
 pub mod schema;
 /// Reads a byte size written the way people write one.
 pub mod size;
+/// How a provider definition says to read its usage window.
+pub mod usage;
 /// Turns whatever was written into a configuration, or refuses.
 pub mod validate;
 

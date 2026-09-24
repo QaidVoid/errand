@@ -147,6 +147,14 @@ pub struct AgentConfig {
     /// found carries. An entry of `models` naming a model found overrides the
     /// fields it names and keeps the rest.
     ///
+    /// `usage` says how to read what is left of the provider's usage window,
+    /// for `!usage`, the bot's status, and refusing a session the window
+    /// cannot serve: `"zai"` for z.ai's quota endpoint, `"gateway"` for
+    /// `/usage` under the `baseUrl`, or an object with `path`, `auth`
+    /// (`bearer` or `raw`), `percent` and `percentIs` (`used` or `left`), and
+    /// `resets` and `resetsAs` (`iso`, `ms`, or `s`). A provider without it is
+    /// not metered, whatever it is called.
+    ///
     /// A `defaultThinkingLevel` on a provider says how hard its models think
     /// when nobody says, and one on an entry of `models` says it for that
     /// model alone. Naming a model the host's store already lists says it for

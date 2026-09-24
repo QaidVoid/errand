@@ -17,12 +17,6 @@ use super::usage::{Fetch, HttpRequest, Quota};
 /// Where a gateway reports what is left, relative to its base URL.
 pub const USAGE_PATH: &str = "/usage";
 
-/// The value of `usage` on a provider definition that opts in.
-///
-/// Named rather than a boolean, so a second shape can be added later without
-/// the configuration having to mean two things by `true`.
-pub const GATEWAY_USAGE: &str = "gateway";
-
 /// Reads the window out of a gateway's answer.
 ///
 /// Only `limiting` is read, which the gateway defines as the one constraint

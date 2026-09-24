@@ -69,6 +69,37 @@ An operator can ask again without a restart with `!models refresh`. Every
 session's `!model` sees the new list at once. A running sandbox keeps what it
 was launched with until its next launch.
 
+## Reading a provider's usage window
+
+`!usage` and the bot's status say what is left of each provider's usage
+window, and a session is refused up front when its provider's window is spent.
+A provider is read only when its definition says how, with `usage`:
+
+```json
+"zai-coding-cn": { "credential": "...", "usage": "zai" },
+"ajamxhacker": { "baseUrl": "https://meta.example/v1", "credential": "...", "usage": "gateway" }
+```
+
+`"zai"` asks z.ai's own quota endpoint. `"gateway"` asks `/usage` under the
+`baseUrl`, the shape a gateway serving one beside its API answers with. Any
+other provider says where its numbers are:
+
+```json
+"usage": {
+  "path": "/v1/usage",
+  "auth": "bearer",
+  "percent": "limiting.remainingPercent",
+  "percentIs": "left",
+  "resets": "limiting.resetsAt",
+  "resetsAs": "iso"
+}
+```
+
+`auth` is `bearer` or `raw`, for a key sent without `Bearer`. `percentIs` has
+no default, because reading what is left as what is used turns the window
+upside down. `resetsAs` is `iso`, `ms`, or `s`. A provider that cannot be
+read shows as unknown and never stops a session.
+
 ## Switching the model a session runs on
 
 `!model` lists what this host knows the provider serves. `!model <name>` moves
