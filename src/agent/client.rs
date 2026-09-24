@@ -410,11 +410,33 @@ impl AgentClient {
     /// The conversation is kept: what was said stays said, and the next turn
     /// is answered by the model named here. That is the point of switching
     /// rather than starting again.
+    ///
     /// The id must be bare. The agent matches a model by exactly the id it
     /// lists, so a `:level` written onto the name finds nothing: the level is
     /// [`set_thinking_level`](Self::set_thinking_level), sent after this.
-    pub fn set_model(&self, provider: &str, model_id: &str) -> bool {
-        self.send(&json!({ "type": "set_model", "provider": provider, "modelId": model_id }))
+    ///
+    /// Waits for the agent's answer, because it refuses a model it has no key
+    /// for, and a switch it refused must not be reported as made.
+    pub async fn set_model(
+        &self,
+        provider: &str,
+        model_id: &str,
+        timeout_ms: u64,
+    ) -> Result<(), String> {
+        let answer = self
+            .request(
+                json!({ "type": "set_model", "provider": provider, "modelId": model_id }),
+                timeout_ms,
+            )
+            .await?;
+        if answer.get("success") == Some(&Value::Bool(false)) {
+            return Err(answer
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("the agent refused the switch")
+                .to_owned());
+        }
+        Ok(())
     }
 
     /// Sets how hard the model thinks, named without its colon.

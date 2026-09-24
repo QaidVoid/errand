@@ -303,6 +303,29 @@ impl Running {
         }
     }
 
+    /// Says which model this session runs on and which it can switch to.
+    async fn list_models(&mut self) {
+        let available = &self.options.available_models;
+        let running = self
+            .running_model()
+            .unwrap_or_else(|| "the provider default".to_owned());
+        self.say(&if available.is_empty() {
+            format!("this session runs on `{running}`; the host lists no others to switch to")
+        } else {
+            let mut lines = vec![format!(
+                "this session runs on `{running}`. Switch with `!model <name>`:"
+            )];
+            lines.extend(grouped_by_provider(
+                available,
+                &self.provider(),
+                &split_level(&running).0,
+                &self.options.config.agent.aliases,
+            ));
+            lines.join("\n")
+        })
+        .await;
+    }
+
     /// Shows which models this session can run on, or moves it to one.
     pub(super) async fn switch_model(&mut self, rest: &str, message: &IncomingMessage) {
         // A short name is what somebody types here too, so it stands for the
@@ -315,24 +338,7 @@ impl Running {
         let available = &self.options.available_models;
 
         if wanted.is_empty() {
-            let running = self
-                .running_model()
-                .unwrap_or_else(|| "the provider default".to_owned());
-            self.say(&if available.is_empty() {
-                format!("this session runs on `{running}`; the host lists no others to switch to")
-            } else {
-                let mut lines = vec![format!(
-                    "this session runs on `{running}`. Switch with `!model <name>`:"
-                )];
-                lines.extend(grouped_by_provider(
-                    available,
-                    &self.provider(),
-                    &split_level(&running).0,
-                    &self.options.config.agent.aliases,
-                ));
-                lines.join("\n")
-            })
-            .await;
+            self.list_models().await;
             return;
         }
 
@@ -384,18 +390,39 @@ impl Running {
                 ("model", LogValue::from(wanted.as_str())),
             ]),
         );
-        let sent = self.client.as_ref().is_some_and(|client| {
-            client.set_model(&provider, &chosen.id)
-                && match level.strip_prefix(':') {
-                    Some(level) => client.set_thinking_level(level),
-                    None => true,
-                }
-        });
-        if !sent {
+        let Some(client) = self.client.clone() else {
             self.say("the agent is not accepting anything further; this session has ended")
                 .await;
             self.react(&message.id, ReactionOutcome::Failed).await;
             return;
+        };
+        let switched = client
+            .set_model(
+                &provider,
+                &chosen.id,
+                self.options.config.timeouts.question_ms,
+            )
+            .await;
+        if let Err(error) = switched {
+            self.log.warn(
+                "the agent refused a model switch",
+                &fields([
+                    ("model", LogValue::from(format!("{provider}/{}", chosen.id))),
+                    ("detail", LogValue::from(error.as_str())),
+                ]),
+            );
+            self.say(&format!(
+                "this session stays on `{}`: the agent refused `{provider}/{}`: {error}",
+                self.running_model()
+                    .unwrap_or_else(|| "the provider default".to_owned()),
+                chosen.id
+            ))
+            .await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
+            return;
+        }
+        if let Some(level) = level.strip_prefix(':') {
+            client.set_thinking_level(level);
         }
 
         self.switched = Some((provider.clone(), wanted.clone()));

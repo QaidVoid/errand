@@ -2708,10 +2708,15 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
             settle().await;
             let before = harness.controls().written().len();
 
-            harness
-                .session
-                .handle(message_from("!model muse", OWNER, "m2"))
-                .await;
+            tokio::join!(
+                harness
+                    .session
+                    .handle(message_from("!model muse", OWNER, "m2")),
+                async {
+                    settle().await;
+                    harness.controls().answer(&json!({}));
+                }
+            );
             settle().await;
 
             let said: Vec<String> = harness.controls().written().split_off(before);
@@ -2757,6 +2762,71 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
             assert!(
                 listing.contains("`musecringe`  (running, `muse`)"),
                 "the model it was switched to is the one marked, got {listing}"
+            );
+        })
+    })
+    .await;
+}
+
+/// A switch the agent refused is reported as refused, with its reason, and
+/// the session is still taken to be on the model it was on.
+#[tokio::test]
+async fn a_refused_switch_is_not_reported_as_made() {
+    let case = SessionTestCase {
+        available_models: vec![AvailableModel {
+            provider: "zai-coding-cn".to_owned(),
+            id: "glm-5.3-flash".to_owned(),
+            default_level: None,
+        }],
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().send(&json!({ "type": "agent_settled" }));
+            settle().await;
+
+            tokio::join!(
+                harness
+                    .session
+                    .handle(message_from("!model glm-5.3-flash", OWNER, "m2")),
+                async {
+                    settle().await;
+                    let asked: Value = serde_json::from_str(
+                        harness
+                            .controls()
+                            .written()
+                            .iter()
+                            .rev()
+                            .find(|line| line.contains("set_model"))
+                            .expect("the switch is sent"),
+                    )
+                    .expect("JSON");
+                    harness.controls().send(&json!({
+                        "type": "response",
+                        "id": asked["id"],
+                        "command": "set_model",
+                        "success": false,
+                        "error": "Model not found: zai-coding-cn/glm-5.3-flash",
+                    }));
+                }
+            );
+            settle().await;
+
+            let said = harness.thread.everything();
+            assert!(said.contains("Model not found"), "{said}");
+            assert!(!said.contains("now runs on"), "{said}");
+            assert!(
+                !harness
+                    .controls()
+                    .written()
+                    .iter()
+                    .any(|line| line.contains("set_thinking_level")),
+                "nothing follows a refused switch"
+            );
+            assert_eq!(
+                harness.thread.final_reaction("m2"),
+                Some(ReactionOutcome::Failed)
             );
         })
     })
