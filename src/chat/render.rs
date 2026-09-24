@@ -382,33 +382,31 @@ pub fn when_relative_plain(epoch_ms: i64, now: i64) -> String {
     }
 }
 
-/// `!usage` as a table, in a code block so the columns line up.
+/// `!usage` as a markdown-style table, in a code block so the columns line
+/// up: chat does not render a markdown table, only a fixed-width font.
 ///
 /// Each row is a provider and what it said of its window, or nothing where it
-/// did not answer. A code block shows `<t:...>` verbatim, so a reset is
-/// written out twice instead: how long until it, as of `now`, and the moment
-/// itself in UTC. The number shown is what is left rather than what is spent,
-/// because that is the number somebody is deciding on.
+/// did not answer. What is left is drawn as a bar beside its number, because
+/// that is the number somebody is deciding on. A code block shows `<t:...>`
+/// verbatim, so a reset is written out twice instead: how long until it, as
+/// of `now`, and the moment itself in UTC. ASCII throughout, so it renders the
+/// same in any font.
 pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
     let dash = || "-".to_owned();
     let mut table = vec![[
         "provider".to_owned(),
         "left".to_owned(),
-        "resets".to_owned(),
+        "resets in".to_owned(),
         "at (UTC)".to_owned(),
     ]];
     for (provider, quota) in rows {
         let (left, resets, at) = match quota {
             None => ("unknown".to_owned(), dash(), dash()),
             Some(quota) => {
-                let left = if is_spent(quota) {
-                    "spent".to_owned()
-                } else {
-                    format!("{}%", (100.0 - quota.percentage).round().max(0.0))
-                };
+                let left = left_bar(quota);
                 match quota.resets_at {
                     None => (left, dash(), dash()),
-                    Some(at) => (left, when_relative_plain(at, now), utc_minute(at)),
+                    Some(at) => (left, span_until(at, now), utc_minute(at)),
                 }
             }
         };
@@ -418,19 +416,54 @@ pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
     let widths: Vec<usize> = (0..4)
         .map(|column| table.iter().map(|row| row[column].len()).max().unwrap_or(0))
         .collect();
-    let lines: Vec<String> = table
+    let line = |cells: &[String]| {
+        let cells: Vec<String> = cells
+            .iter()
+            .zip(&widths)
+            .map(|(cell, width)| format!("{cell:<width$}"))
+            .collect();
+        format!("| {} |", cells.join(" | "))
+    };
+    let rule = widths
         .iter()
-        .map(|row| {
-            row.iter()
-                .zip(&widths)
-                .map(|(cell, width)| format!("{cell:<width$}"))
-                .collect::<Vec<_>>()
-                .join("  ")
-                .trim_end()
-                .to_owned()
-        })
-        .collect();
+        .map(|width| "-".repeat(width + 2))
+        .collect::<Vec<_>>()
+        .join("|");
+    let mut lines = vec![line(&table[0]), format!("|{rule}|")];
+    lines.extend(table[1..].iter().map(|row| line(row)));
     format!("```\n{}\n```", lines.join("\n"))
+}
+
+/// What is left of a window as a ten-step bar and its percentage.
+fn left_bar(quota: &Quota) -> String {
+    let left = (100.0 - quota.percentage).round().clamp(0.0, 100.0);
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "clamped to 0..=100 above"
+    )]
+    let filled = (left / 10.0).round() as usize;
+    let number = if is_spent(quota) {
+        "spent".to_owned()
+    } else {
+        format!("{left}%")
+    };
+    format!(
+        "[{}{}] {number:>5}",
+        "#".repeat(filled),
+        ".".repeat(10 - filled)
+    )
+}
+
+/// How long until a moment, in days, hours, and minutes as it grows.
+fn span_until(epoch_ms: i64, now: i64) -> String {
+    let minutes = ((epoch_ms - now).max(0) + 59_999) / 60_000;
+    let (days, hours, minutes) = (minutes / 1_440, minutes / 60 % 24, minutes % 60);
+    match (days, hours) {
+        (0, 0) => format!("{minutes}m"),
+        (0, _) => format!("{hours}h {minutes}m"),
+        _ => format!("{days}d {hours}h"),
+    }
 }
 
 /// A moment as `YYYY-MM-DD HH:MM` in UTC.
