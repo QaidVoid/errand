@@ -18,7 +18,7 @@ use crate::session::pr::{Api, ApiCall};
 /// Something said to the bot on GitHub, ready to hand to the daemon.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Heard {
-    /// The issue or pull request it was said on, as a thread.
+    /// The issue or pull request it was said on, as a thread name.
     pub thread_id: String,
     /// Whether it names the bot, which is what may start a session.
     pub mentions: bool,
@@ -340,13 +340,12 @@ fn timestamp(value: &Value) -> Result<jiff::Timestamp, String> {
 
 /// What the daemon is handed for something heard on an issue.
 ///
-/// An issue that already has a session, running or waiting to be resumed,
-/// hears every comment from somebody heard, as a chat thread hears every
-/// reply. One that has none starts a session only when the bot was named, and
-/// that session is first told where it was asked. Anything else is left be.
-pub fn decide(heard: Heard, held: bool) -> Option<(RawMessage, InboundDecision)> {
-    if held {
-        let thread_id = heard.thread_id;
+/// An issue answered by a thread whose session is running, or waiting to be
+/// resumed, hears every comment from somebody heard, as the thread hears every
+/// reply. One with none starts a session only when the bot was named, and that
+/// session is first told where it was asked. Anything else is left be.
+pub fn decide(heard: Heard, answered_by: Option<String>) -> Option<(RawMessage, InboundDecision)> {
+    if let Some(thread_id) = answered_by {
         return Some((heard.message, InboundDecision::Thread { thread_id }));
     }
     if !heard.mentions {

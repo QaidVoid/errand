@@ -34,8 +34,8 @@ use crate::daemon::StartError;
 use crate::daemon::{Daemon, DaemonOptions};
 use crate::daemon::{create_sandbox, probe_sandbox};
 use crate::issues::poll::{Poller, decide};
-use crate::issues::route::ByThread;
-use crate::issues::thread::is_github_thread;
+use crate::issues::route::{ByThread, LINKS_FILENAME};
+use crate::issues::thread::issue_of;
 use crate::issues::view::IssueThreads;
 use crate::lock::DaemonLock;
 use crate::lock::acquire_lock;
@@ -97,6 +97,7 @@ async fn listen_on_github(
     github: &GithubConfig,
     trigger: &GithubTrigger,
     daemon: Arc<Daemon>,
+    router: Arc<ByThread>,
     log: &Logger,
 ) {
     let me = call_api(
@@ -137,9 +138,10 @@ async fn listen_on_github(
                 Ok(heard) => {
                     for heard in heard {
                         let sessions = daemon.sessions();
-                        let held = sessions.for_thread(&heard.thread_id).is_some()
-                            || sessions.can_resume(&heard.thread_id);
-                        if let Some((message, decision)) = decide(heard, held) {
+                        let answered_by = router.thread_for(&heard.thread_id).filter(|thread| {
+                            sessions.for_thread(thread).is_some() || sessions.can_resume(thread)
+                        });
+                        if let Some((message, decision)) = decide(heard, answered_by) {
                             daemon.handle(message, decision).await;
                         }
                     }
@@ -1000,90 +1002,94 @@ async fn run(
         }))
     };
 
+    let chat_threads = {
+        struct FactoryAdapter(Arc<ChatThreadFactory>);
+        impl ThreadFactory for FactoryAdapter {
+            fn create(
+                self: Arc<Self>,
+                message: IncomingMessage,
+                name: String,
+            ) -> Pin<Box<dyn Future<Output = Result<CreatedThread, String>> + Send>> {
+                let starter = serenity::model::id::MessageId::new(message.id.parse().unwrap_or(0));
+                let factory = Arc::clone(&self.0);
+                Box::pin(async move {
+                    let (id, thread) = factory.create(starter, &name).await?;
+                    Ok(CreatedThread {
+                        id,
+                        view: Arc::new(thread) as Arc<dyn SessionView>,
+                    })
+                })
+            }
+
+            fn open(
+                self: Arc<Self>,
+                name: String,
+                opener: String,
+            ) -> Pin<Box<dyn Future<Output = Result<CreatedThread, String>> + Send>> {
+                let factory = Arc::clone(&self.0);
+                Box::pin(async move {
+                    let (id, thread) = factory.open(&name, &opener).await?;
+                    Ok(CreatedThread {
+                        id,
+                        view: Arc::new(thread) as Arc<dyn SessionView>,
+                    })
+                })
+            }
+
+            fn port_for(self: Arc<Self>, thread_id: String) -> FoundView {
+                let factory = Arc::clone(&self.0);
+                Box::pin(async move {
+                    let id = thread_id.parse().ok()?;
+                    factory
+                        .port_for(id)
+                        .await
+                        .map(|thread| Arc::new(thread) as Arc<dyn SessionView>)
+                })
+            }
+        }
+        Arc::new(FactoryAdapter(thread_factory)) as Arc<dyn ThreadFactory>
+    };
+    // Work asked for on GitHub runs in a chat thread like any other, and the
+    // issue it came from is answered beside it.
+    let issue_router = issue_threads.as_ref().map(|issues| {
+        Arc::new(ByThread::new(
+            Arc::clone(&chat_threads),
+            Arc::clone(issues),
+            std::path::Path::new(&config.state_dir).join(LINKS_FILENAME),
+            log.clone(),
+        ))
+    });
+    let threads = match &issue_router {
+        Some(router) => Arc::clone(router) as Arc<dyn ThreadFactory>,
+        None => Arc::clone(&chat_threads),
+    };
+
     let daemon = Arc::new(Daemon::new(DaemonOptions {
         config: config.clone(),
         sandbox,
-        threads: {
-            struct FactoryAdapter(Arc<ChatThreadFactory>);
-            impl ThreadFactory for FactoryAdapter {
-                fn create(
-                    self: Arc<Self>,
-                    message: IncomingMessage,
-                    name: String,
-                ) -> Pin<Box<dyn Future<Output = Result<CreatedThread, String>> + Send>>
-                {
-                    let starter =
-                        serenity::model::id::MessageId::new(message.id.parse().unwrap_or(0));
-                    let factory = Arc::clone(&self.0);
-                    Box::pin(async move {
-                        let (id, thread) = factory.create(starter, &name).await?;
-                        Ok(CreatedThread {
-                            id,
-                            view: Arc::new(thread) as Arc<dyn SessionView>,
-                        })
-                    })
-                }
-
-                fn open(
-                    self: Arc<Self>,
-                    name: String,
-                    opener: String,
-                ) -> Pin<Box<dyn Future<Output = Result<CreatedThread, String>> + Send>>
-                {
-                    let factory = Arc::clone(&self.0);
-                    Box::pin(async move {
-                        let (id, thread) = factory.open(&name, &opener).await?;
-                        Ok(CreatedThread {
-                            id,
-                            view: Arc::new(thread) as Arc<dyn SessionView>,
-                        })
-                    })
-                }
-
-                fn port_for(self: Arc<Self>, thread_id: String) -> FoundView {
-                    let factory = Arc::clone(&self.0);
-                    Box::pin(async move {
-                        let id = thread_id.parse().ok()?;
-                        factory
-                            .port_for(id)
-                            .await
-                            .map(|thread| Arc::new(thread) as Arc<dyn SessionView>)
-                    })
-                }
-            }
-            let chat = Arc::new(FactoryAdapter(thread_factory)) as Arc<dyn ThreadFactory>;
-            match &issue_threads {
-                Some(issues) => Arc::new(ByThread {
-                    chat,
-                    issues: Arc::clone(issues),
-                }) as Arc<dyn ThreadFactory>,
-                None => chat,
-            }
-        },
+        threads: Arc::clone(&threads),
         log: log.clone(),
         reply_in_channel: {
             let http = Arc::clone(&http);
             let secrets = secrets.to_vec();
             let log = log.clone();
             let served = *served_channel;
-            let issues = issue_threads.clone();
             Arc::new(move |message: IncomingMessage, text: String| {
                 let http = Arc::clone(&http);
                 let secrets = secrets.clone();
                 let log = log.clone();
-                let issues = issues.clone();
                 Box::pin(async move {
-                    match issues.filter(|_| is_github_thread(&message.channel_id)) {
-                        // Said on an issue, so answered there. The view has
-                        // already said why, if it could not be posted.
-                        Some(issues) => {
-                            let text = redact_text(&text, &secrets);
-                            let _ = issues.comment(&message.channel_id, &text).await;
-                        }
-                        None => {
-                            reply_in_channel(&http, &log, &secrets, served, &message, &text).await;
-                        }
-                    }
+                    // Asked on an issue, but answered in the channel: the
+                    // issue hears a session's turns, not the daemon turning
+                    // work away, which is for whoever runs it.
+                    let text = match issue_of(&message.channel_id) {
+                        Some((repository, number)) => format!(
+                            "{} asked on GitHub, on {repository}#{number}, and {text}",
+                            message.author_name.as_deref().unwrap_or("somebody")
+                        ),
+                        None => text,
+                    };
+                    reply_in_channel(&http, &log, &secrets, served, &message, &text).await;
                 })
             })
         },
@@ -1145,14 +1151,17 @@ async fn run(
     if daemon.start(Some(report)).await.is_err() {
         return Exit::Failed;
     }
-    if let (Some(github), Some(trigger)) = (
-        config.github.as_ref(),
-        config
-            .github
-            .as_ref()
-            .and_then(|github| github.trigger.as_ref()),
-    ) {
-        listen_on_github(github, trigger, Arc::clone(&daemon), log).await;
+    if let (Some(github), Some(router)) = (config.github.as_ref(), &issue_router)
+        && let Some(trigger) = &github.trigger
+    {
+        listen_on_github(
+            github,
+            trigger,
+            Arc::clone(&daemon),
+            Arc::clone(router),
+            log,
+        )
+        .await;
     }
 
     // Registered after startup, so a bot invited without the commands scope

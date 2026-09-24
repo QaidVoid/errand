@@ -14,15 +14,13 @@ use serde_json::json;
 use super::thread::issue_of;
 use crate::log::{LogValue, Logger, fields};
 use crate::session::event::{NoticeLevel, SessionEvent};
-use crate::session::manager::{CreatedThread, FoundView, MadeThread, ThreadFactory};
 use crate::session::pr::{Api, ApiCall};
-use crate::session::session::IncomingMessage;
 use crate::session::views::{SessionView, ViewError};
 
 /// The most a comment carries. GitHub refuses one past 65,536 characters.
 const COMMENT_LIMIT: usize = 60_000;
 
-/// Makes and finds the threads that are issues and pull requests.
+/// Makes the views that answer issues and pull requests.
 pub struct IssueThreads {
     /// Calls the GitHub API.
     pub api: Api,
@@ -33,7 +31,8 @@ pub struct IssueThreads {
 }
 
 impl IssueThreads {
-    fn view_for(&self, thread_id: &str) -> Option<Arc<IssueView>> {
+    /// The view that answers the issue a thread name names.
+    pub fn view_for(&self, thread_id: &str) -> Option<Arc<IssueView>> {
         let (repository, number) = issue_of(thread_id)?;
         Some(Arc::new(IssueView {
             api: Arc::clone(&self.api),
@@ -43,42 +42,6 @@ impl IssueThreads {
             turn: Mutex::new(Vec::new()),
             log: self.log.clone(),
         }))
-    }
-
-    /// Posts one comment on an issue, for an answer given outside a session.
-    pub async fn comment(&self, thread_id: &str, text: &str) -> Result<(), ViewError> {
-        let view = self
-            .view_for(thread_id)
-            .ok_or_else(|| format!("{thread_id} is not an issue"))?;
-        view.post(text).await
-    }
-}
-
-impl ThreadFactory for IssueThreads {
-    /// The issue the message was said on is the thread; nothing is made.
-    fn create(self: Arc<Self>, message: IncomingMessage, _name: String) -> MadeThread {
-        Box::pin(async move {
-            let view = self
-                .view_for(&message.channel_id)
-                .ok_or_else(|| format!("{} is not an issue", message.channel_id))?;
-            Ok(CreatedThread {
-                id: message.channel_id,
-                view,
-            })
-        })
-    }
-
-    fn open(self: Arc<Self>, _name: String, _opener: String) -> MadeThread {
-        Box::pin(async {
-            Err("a session on GitHub starts from a mention on an issue, not from here".to_owned())
-        })
-    }
-
-    fn port_for(self: Arc<Self>, thread_id: String) -> FoundView {
-        Box::pin(async move {
-            self.view_for(&thread_id)
-                .map(|view| view as Arc<dyn SessionView>)
-        })
     }
 }
 

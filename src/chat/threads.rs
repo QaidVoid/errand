@@ -30,6 +30,7 @@ use crate::chat::diff::FileDiff;
 use crate::chat::diff::render_diff;
 use crate::chat::outbox::{DEFAULT_MAX_BUFFERED, Outbox, TaskError};
 use crate::chat::render::{MESSAGE_LIMIT, delegation_line, split_message};
+use crate::issues::thread::logins_plainly;
 use crate::log::{LogValue, Logger, fields};
 use crate::session::event::Delegated;
 use crate::session::event::ToolResult;
@@ -380,7 +381,9 @@ impl<T: ThreadTransport> ChatThread<T> {
         // The agent speaking ends the current run of tool calls, so the next
         // one starts a fresh block rather than being appended below prose.
         self.reset_activity();
-        for chunk in split_message(text, MESSAGE_LIMIT) {
+        // A session asked for on GitHub names its owner as a GitHub account,
+        // which the chat cannot mention, so the login is written plainly.
+        for chunk in split_message(&logins_plainly(text), MESSAGE_LIMIT) {
             let transport = Arc::clone(&self.transport);
             let chunk = chunk.clone();
             self.outbox.enqueue(Box::new(move || {

@@ -7,9 +7,8 @@ use serde_json::{Value, json};
 use super::{IssueThreads, for_github};
 use crate::log::{LogFields, Logger};
 use crate::session::event::{NoticeLevel, SessionEvent};
-use crate::session::manager::ThreadFactory;
 use crate::session::pr::{Api, ApiReply};
-use crate::session::session::IncomingMessage;
+use crate::session::views::SessionView;
 
 /// Every comment posted, by where it was posted and what it carried.
 type Posted = Arc<Mutex<Vec<(String, Value)>>>;
@@ -46,8 +45,7 @@ fn threads(api: Api) -> Arc<IssueThreads> {
 async fn a_turn_is_one_comment_posted_when_it_ends() {
     let (api, posted) = api();
     let view = threads(api)
-        .port_for("github:QaidVoid/edu#7".to_owned())
-        .await
+        .view_for("github:QaidVoid/edu#7")
         .expect("an issue");
 
     for event in [
@@ -95,10 +93,7 @@ async fn a_turn_is_one_comment_posted_when_it_ends() {
 #[tokio::test]
 async fn a_command_is_answered_at_once() {
     let (api, posted) = api();
-    let view = threads(api)
-        .port_for("github:o/r#2".to_owned())
-        .await
-        .expect("an issue");
+    let view = threads(api).view_for("github:o/r#2").expect("an issue");
 
     view.observe(&SessionEvent::Reply {
         text: "this session runs on `glm-5.3-flash`".to_owned(),
@@ -120,36 +115,8 @@ fn chat_markup_is_said_in_githubs_terms_and_the_rest_is_left_alone() {
     );
 }
 
-/// The issue a session is started on is its thread; nothing is made, and a
-/// chat thread is not an issue.
-#[tokio::test]
-async fn the_issue_is_the_thread_and_a_chat_thread_is_not_one() {
+#[test]
+fn only_an_issue_has_a_view() {
     let (api, _) = api();
-    let issues = threads(api);
-    let message = |channel_id: &str| IncomingMessage {
-        id: "github-comment:1".to_owned(),
-        author_id: "github:qaidvoid".to_owned(),
-        channel_id: channel_id.to_owned(),
-        author_name: None,
-        content: String::new(),
-        attachments: Vec::new(),
-    };
-
-    let made = Arc::clone(&issues)
-        .create(message("github:o/r#3"), "unused".to_owned())
-        .await
-        .expect("made");
-    assert_eq!(made.id, "github:o/r#3");
-    assert!(
-        Arc::clone(&issues)
-            .create(message("1552528761872851095"), "unused".to_owned())
-            .await
-            .is_err()
-    );
-    assert!(
-        issues
-            .port_for("1552528761872851095".to_owned())
-            .await
-            .is_none()
-    );
+    assert!(threads(api).view_for("1552528761872851095").is_none());
 }

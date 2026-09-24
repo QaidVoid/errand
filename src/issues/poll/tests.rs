@@ -286,24 +286,26 @@ fn heard(mentions: bool) -> Heard {
     }
 }
 
-/// An issue with a session hears every comment, as a thread hears every
-/// reply; one without starts a session only when the bot was named.
+/// An issue answered by a live thread hears every comment, as the thread
+/// hears every reply; one without starts a session only when the bot was
+/// named.
 #[test]
 fn an_issue_with_a_session_continues_it_and_one_without_needs_the_bot_named() {
-    let (message, decision) = decide(heard(false), true).expect("continued");
+    let (message, decision) =
+        decide(heard(false), Some("1552528761872851095".to_owned())).expect("continued");
     assert_eq!(message.content, "the words");
     assert_eq!(
         decision,
         InboundDecision::Thread {
-            thread_id: "github:o/r#1".to_owned()
+            thread_id: "1552528761872851095".to_owned()
         }
     );
 
-    let (message, decision) = decide(heard(true), false).expect("started");
+    let (message, decision) = decide(heard(true), None).expect("started");
     assert!(message.content.starts_with("r-1: the words"));
     assert_eq!(decision, InboundDecision::Start);
 
-    assert_eq!(decide(heard(false), false), None);
+    assert_eq!(decide(heard(false), None), None);
 }
 
 /// A notification with nothing since the daemon started holds nothing new,

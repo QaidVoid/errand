@@ -32,5 +32,25 @@ pub fn account_id(login: &str) -> String {
     format!("{PREFIX}{}", login.to_lowercase())
 }
 
+/// Writes every GitHub account named the way the chat names an account,
+/// `<@github:login>`, as `@login`, for a surface that cannot mention it.
+pub fn logins_plainly(text: &str) -> String {
+    let marker = format!("<@{PREFIX}");
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(&marker) {
+        let after = &rest[start + marker.len()..];
+        let Some(end) = after.find('>') else {
+            break;
+        };
+        plain.push_str(&rest[..start]);
+        plain.push('@');
+        plain.push_str(&after[..end]);
+        rest = &after[end + 1..];
+    }
+    plain.push_str(rest);
+    plain
+}
+
 #[cfg(test)]
 mod tests;
