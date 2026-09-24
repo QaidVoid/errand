@@ -1890,7 +1890,7 @@ impl Running {
         if lower.contains("enospc") || lower.contains("no space left on device") {
             return Some(
                 "it ran out of the sandbox's scratch space (raise sandbox.tmpSize, \
-                 sandbox.shmSize, or sandbox.fileMax)",
+                 sandbox.shmSize, or sandbox.fileMax, or turn on sandbox.diskTmp)",
             );
         }
         if lower.contains("enomem")
