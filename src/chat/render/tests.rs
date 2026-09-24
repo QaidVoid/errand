@@ -457,9 +457,9 @@ fn a_turn_summary_groups_what_it_answers() {
     assert_eq!(turn_summary(Some(""), "2.4s", None), "2.4s");
 }
 
-/// `!usage` lines up as a table in a code block: what is left as a bar, when
-/// it resets as a span, and the moment in UTC, with a dash for what a
-/// provider did not say.
+/// `!usage` lines up as a table in a code block: what is left, when it resets
+/// as a span, and the moment in UTC, with a dash for what a provider did not
+/// say.
 #[test]
 fn usage_is_a_table_with_the_reset_in_utc() {
     let now = 1_790_000_000_000;
@@ -494,12 +494,12 @@ fn usage_is_a_table_with_the_reset_in_utc() {
     assert_eq!(
         table,
         "```\n\
-| provider      | left               | resets in | at (UTC)         |\n\
-|---------------|--------------------|-----------|------------------|\n\
-| ajamxhacker   | [######....]   58% | 2h 13m    | 2026-09-21 16:26 |\n\
-| zai-coding-cn | [..........] spent | 3d 21h    | 2026-09-25 11:13 |\n\
-| fresh         | [##########]  100% | -         | -                |\n\
-| quiet         | unknown            | -         | -                |\n\
+| provider      | left    | resets in | at (UTC)         |\n\
+|---------------|---------|-----------|------------------|\n\
+| ajamxhacker   | 58%     | 2h 13m    | 2026-09-21 16:26 |\n\
+| zai-coding-cn | spent   | 3d 21h    | 2026-09-25 11:13 |\n\
+| fresh         | 100%    | -         | -                |\n\
+| quiet         | unknown | -         | -                |\n\
 ```"
     );
 }

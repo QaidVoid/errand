@@ -387,7 +387,7 @@ pub fn when_relative_plain(epoch_ms: i64, now: i64) -> String {
 /// up: chat does not render a markdown table, only a fixed-width font.
 ///
 /// Each row is a provider and what it said of its window, or nothing where it
-/// did not answer. What is left is drawn as a bar beside its number, because
+/// did not answer. What is left is shown rather than what is used, because
 /// that is the number somebody is deciding on. A code block shows `<t:...>`
 /// verbatim, so a reset is written out twice instead: how long until it, as
 /// of `now`, and the moment itself in UTC. ASCII throughout, so it renders the
@@ -404,7 +404,7 @@ pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
         let (left, resets, at) = match quota {
             None => ("unknown".to_owned(), dash(), dash()),
             Some(quota) => {
-                let left = left_bar(quota);
+                let left = left_of(quota);
                 match quota.resets_at {
                     None => (left, dash(), dash()),
                     Some(at) => (left, span_until(at, now), utc_minute(at)),
@@ -435,25 +435,13 @@ pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
     format!("```\n{}\n```", lines.join("\n"))
 }
 
-/// What is left of a window as a ten-step bar and its percentage.
-fn left_bar(quota: &Quota) -> String {
-    let left = (100.0 - quota.percentage).round().clamp(0.0, 100.0);
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "clamped to 0..=100 above"
-    )]
-    let filled = (left / 10.0).round() as usize;
-    let number = if is_spent(quota) {
+/// What is left of a window, or that it is spent.
+fn left_of(quota: &Quota) -> String {
+    if is_spent(quota) {
         "spent".to_owned()
     } else {
-        format!("{left}%")
-    };
-    format!(
-        "[{}{}] {number:>5}",
-        "#".repeat(filled),
-        ".".repeat(10 - filled)
-    )
+        format!("{}%", (100.0 - quota.percentage).round().clamp(0.0, 100.0))
+    }
 }
 
 /// How long until a moment, in days, hours, and minutes as it grows.
