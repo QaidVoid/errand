@@ -46,7 +46,7 @@ const KNOWN_CHAT: [&str; 6] = [
     "operatorUserIds",
     "startOnMention",
 ];
-const KNOWN_AGENT: [&str; 10] = [
+const KNOWN_AGENT: [&str; 11] = [
     "provider",
     "model",
     "visionModel",
@@ -55,6 +55,7 @@ const KNOWN_AGENT: [&str; 10] = [
     "providers",
     "extensions",
     "aliases",
+    "fallback",
     // Known so that finding one is answered with where it went, rather than
     // with the spelling check an actual typo gets.
     "credential",
@@ -574,6 +575,25 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
     defined
 }
 
+/// Reads the models a session falls back to, each a name for one.
+fn validate_fallback(source: &Map<String, Value>, problems: &mut Problems) -> Vec<String> {
+    let Some(raw) = source.get("fallback") else {
+        return Vec::new();
+    };
+    let Some(entries) = raw.as_array() else {
+        problems.add("agent.fallback must be a list of models, in the order to try them");
+        return Vec::new();
+    };
+    let mut models = Vec::new();
+    for entry in entries {
+        match entry.as_str().map(str::trim) {
+            Some(model) if !model.is_empty() => models.push(model.to_owned()),
+            _ => problems.add("agent.fallback contains an entry that does not name a model"),
+        }
+    }
+    models
+}
+
 /// Reads the short names for models, which must be names standing for text.
 fn validate_aliases(
     source: &Map<String, Value>,
@@ -641,6 +661,7 @@ fn validate_agent(raw: &Map<String, Value>, problems: &mut Problems) -> AgentCon
         providers: validate_providers(&source, problems),
         extensions: validate_extensions(&source, problems),
         aliases: validate_aliases(&source, problems),
+        fallback: validate_fallback(&source, problems),
     };
 
     // A provider a session starts on that nothing describes is a session that

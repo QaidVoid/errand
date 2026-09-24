@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use crate::admission::scheduler::Scheduler;
-use crate::chat::render::thread_name;
+use crate::chat::render::{thread_name, warning_line};
 use crate::config::redact::secret_values;
 use crate::config::schema::Config;
 use crate::log::now_ms;
@@ -21,7 +21,7 @@ use crate::provider::models::provider_for;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
-use crate::session::event::EndReason;
+use crate::session::event::{EndReason, NoticeLevel, SessionEvent};
 use crate::session::ids::{TOKEN_LENGTH, session_id, session_token};
 use crate::session::model::{
     ChosenModel, expand_alias, known_providers, resolve_model, select_model, split_level,
@@ -399,6 +399,40 @@ impl SessionManager {
         .await
     }
 
+    /// A model named as `!model` names one, with the provider that serves it.
+    ///
+    /// A bare model id names no provider, so it would otherwise start on the
+    /// default one and reach the wrong endpoint. Which provider actually
+    /// serves it is looked up.
+    fn resolve(&self, value: &str) -> ChosenModel {
+        let agent = &self.options.config.agent;
+        let mut resolved = resolve_model(
+            &expand_alias(value, &agent.aliases),
+            &known_providers(agent),
+        );
+        if resolved.provider.is_none() {
+            let bare = split_level(&resolved.model).0;
+            resolved.provider =
+                provider_for(&self.options.catalog.models(), &bare, &agent.provider);
+        }
+        resolved
+    }
+
+    /// The first fallback model whose provider has not spent its window.
+    async fn fallback(&self) -> Option<ChosenModel> {
+        for named in &self.options.config.agent.fallback {
+            let resolved = self.resolve(named);
+            let provider = resolved
+                .provider
+                .clone()
+                .unwrap_or_else(|| self.options.config.agent.provider.clone());
+            if self.unavailable(&provider).await.is_none() {
+                return Some(resolved);
+            }
+        }
+        None
+    }
+
     /// Refuses a start, saying why in the log as well as to whoever asked.
     fn refused(&self, reason: String) -> StartOutcome {
         self.options.log.debug(
@@ -432,25 +466,7 @@ impl SessionManager {
         // runs on decides whose window matters, and another provider's being
         // spent is not a reason to refuse work this one can do.
         let asked = select_model(&project.prompt);
-        let known = known_providers(&self.options.config.agent);
-        let chosen = asked.value.as_ref().map(|value| {
-            let mut resolved = resolve_model(
-                &expand_alias(value, &self.options.config.agent.aliases),
-                &known,
-            );
-            // A bare model id names no provider, so it would otherwise start
-            // on the default one and reach the wrong endpoint. Find which
-            // provider actually serves it.
-            if resolved.provider.is_none() {
-                let bare = split_level(&resolved.model).0;
-                resolved.provider = provider_for(
-                    &self.options.catalog.models(),
-                    &bare,
-                    &self.options.config.agent.provider,
-                );
-            }
-            resolved
-        });
+        let mut chosen = asked.value.as_deref().map(|value| self.resolve(value));
         project.prompt = asked.prompt;
         self.options.log.debug(
             "starting a session",
@@ -480,8 +496,27 @@ impl SessionManager {
             .as_ref()
             .and_then(|chosen| chosen.provider.clone())
             .unwrap_or_else(|| self.options.config.agent.provider.clone());
+        let mut fell_back = None;
         if let Some(spent) = self.unavailable(&provider_for_window).await {
-            return self.refused(spent);
+            let Some(fallback) = self.fallback().await else {
+                return self.refused(spent);
+            };
+            let named = match &fallback.provider {
+                Some(provider) => format!("{provider}/{}", fallback.model),
+                None => fallback.model.clone(),
+            };
+            self.options.log.info(
+                "the provider's usage window is spent, so the session starts on a fallback",
+                &fields([
+                    ("spent", LogValue::from(provider_for_window.as_str())),
+                    ("model", LogValue::from(named.as_str())),
+                ]),
+            );
+            fell_back = Some(format!(
+                "`{provider_for_window}` has spent its usage window, so this session runs on \
+                 `{named}` instead"
+            ));
+            chosen = Some(fallback);
         }
 
         // Refused before anything is reserved or created, so a project only
@@ -561,6 +596,14 @@ impl SessionManager {
             .clone()
             .attach(Arc::clone(&thread.view) as Arc<dyn SessionView>)
             .await;
+        if let Some(fell_back) = fell_back {
+            fan_out
+                .send(SessionEvent::Notice {
+                    text: warning_line(&fell_back),
+                    level: NoticeLevel::Started,
+                })
+                .await;
+        }
         self.state
             .views
             .lock()

@@ -95,13 +95,17 @@
         },
         "aliases": {
           "description": "Short names for models, so a session is started without spelling one."
+        },
+        "fallback": {
+          "description": "Models to start a session on instead, in order, when the provider it would start on has spent its usage window. Named as `!model` names them, aliases included. The first whose provider has room is used; a session is turned away only when every one is spent too."
         }
       },
       "required": [
         "provider",
         "providers",
         "extensions",
-        "aliases"
+        "aliases",
+        "fallback"
       ]
     },
     "github": {

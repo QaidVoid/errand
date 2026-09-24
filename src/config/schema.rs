@@ -183,6 +183,11 @@ pub struct AgentConfig {
     pub extensions: Vec<String>,
     /// Short names for models, so a session is started without spelling one.
     pub aliases: BTreeMap<String, String>,
+    /// Models to start a session on instead, in order, when the provider it
+    /// would start on has spent its usage window. Named as `!model` names
+    /// them, aliases included. The first whose provider has room is used; a
+    /// session is turned away only when every one is spent too.
+    pub fallback: Vec<String>,
 }
 
 impl AgentConfig {

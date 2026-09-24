@@ -121,6 +121,20 @@ reset, gives way to the next. A spent window outranks them all: a spent
 weekly allowance leaves nothing for the five hour window to give, so the
 provider reads as spent until the last spent window resets.
 
+### When a window is spent
+
+A session asked for while its provider's window is spent can start somewhere
+else instead of being turned away. `agent.fallback` lists models to try, in
+order, named as `!model` names them:
+
+```json
+{ "agent": { "fallback": ["glmcringe", "zai-coding-cn/glm-5.3-flash", "free"] } }
+```
+
+The first whose provider has room is used, and the thread says which window
+was spent and what the session runs on instead. Only when every fallback is
+spent too is the session turned away.
+
 ## Switching the model a session runs on
 
 `!model` lists what this host knows the provider serves. `!model <name>` moves

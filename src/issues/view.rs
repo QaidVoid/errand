@@ -112,6 +112,12 @@ impl SessionView for IssueView {
         Box::pin(async move {
             match event {
                 SessionEvent::Post { text } => self.gather(text),
+                // How a session started is the thread's to say. The issue
+                // hears the turns.
+                SessionEvent::Notice {
+                    level: NoticeLevel::Started,
+                    ..
+                } => {}
                 SessionEvent::Notice { text, level } => {
                     self.gather(text);
                     if *level == NoticeLevel::Ended {

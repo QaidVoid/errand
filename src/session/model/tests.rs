@@ -183,6 +183,7 @@ fn the_configured_model_may_name_its_provider_too() {
         ]),
         extensions: Vec::new(),
         aliases: BTreeMap::new(),
+        fallback: Vec::new(),
     };
 
     assert_eq!(

@@ -1444,6 +1444,87 @@ async fn a_spent_default_provider_does_not_refuse_another_provider() {
     .await;
 }
 
+/// A view that keeps every notice it is shown.
+struct Noticed(Mutex<Vec<String>>);
+
+impl SessionView for Noticed {
+    fn observe<'a>(
+        &'a self,
+        event: &'a SessionEvent,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
+        if let SessionEvent::Notice { text, .. } = event {
+            self.0.lock().unwrap().push(text.clone());
+        }
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// A spent window starts the session on the first fallback with room rather
+/// than turning the work away, and the thread is told why; with every
+/// fallback spent too, it is turned away as before.
+#[tokio::test]
+async fn a_spent_window_falls_back_to_the_first_model_with_room() {
+    let overrides = |fallback: serde_json::Value| {
+        json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "meta": { "baseUrl": "https://api.meta.example/v1" },
+                },
+                "fallback": fallback,
+            },
+        })
+    };
+    let spent_anthropic: Unavailable = Arc::new(|provider: &str| {
+        let known = provider.to_owned();
+        Box::pin(async move {
+            (known == "anthropic").then(|| "anthropic's usage window is spent".to_owned())
+        }) as Pin<Box<dyn Future<Output = Option<String>> + Send>>
+    });
+
+    with_manager_options(
+        &overrides(json!(["anthropic/other", "meta/muse"])),
+        Some(Arc::clone(&spent_anthropic)),
+        |harness| {
+            Box::pin(async move {
+                let started = harness.manager.start(message("demo: just go", "m1")).await;
+                let session = started.session().expect("started on the fallback").clone();
+                let launched = harness.sandbox.launched.lock().unwrap()[0].clone();
+                assert_eq!(launched.provider, "meta");
+                assert_eq!(launched.model.as_deref(), Some("muse"));
+
+                let noticed = Arc::new(Noticed(Mutex::new(Vec::new())));
+                assert!(
+                    harness
+                        .manager
+                        .attach_view(session.id(), Arc::clone(&noticed) as Arc<dyn SessionView>)
+                        .await
+                        .is_some()
+                );
+                let noticed = noticed.0.lock().unwrap().join("\n");
+                assert!(
+                    noticed.contains("`anthropic` has spent its usage window, so this session runs on `meta/muse` instead"),
+                    "{noticed}"
+                );
+            })
+        },
+    )
+    .await;
+
+    with_manager_options(
+        &overrides(json!(["anthropic/other"])),
+        Some(spent_anthropic),
+        |harness| {
+            Box::pin(async move {
+                let refused = harness.manager.start(message("demo: just go", "m1")).await;
+                assert!(refused_reason(&refused).contains("usage window is spent"));
+            })
+        },
+    )
+    .await;
+}
+
 /// And the configured one is still refused when it is the one being used.
 #[tokio::test]
 async fn a_spent_provider_still_refuses_a_prompt_that_would_use_it() {

@@ -52,6 +52,7 @@ fn agent() -> AgentConfig {
         )]),
         extensions: Vec::new(),
         aliases: BTreeMap::new(),
+        fallback: Vec::new(),
     }
 }
 
