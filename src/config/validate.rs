@@ -760,8 +760,39 @@ fn validate_github_trigger(
 ) -> Option<GithubTrigger> {
     source.get("trigger")?;
     let trigger = section(source, "trigger");
-    reject_unknown(&trigger, &["allowedUsers"], "github.trigger", problems);
+    reject_unknown(
+        &trigger,
+        &["allowedUsers", "repositories", "on"],
+        "github.trigger",
+        problems,
+    );
     let allowed_users = id_list(&trigger, "allowedUsers", "github.trigger", problems);
+    let repositories = id_list(&trigger, "repositories", "github.trigger", problems);
+    for repository in &repositories {
+        let named = repository.split_once('/').is_some_and(|(owner, name)| {
+            !owner.is_empty() && !name.is_empty() && !name.contains('/')
+        });
+        if !named {
+            problems.add(format!(
+                "github.trigger.repositories names `{repository}`, which is not `owner/repo` or \
+                 `owner/*`"
+            ));
+        }
+    }
+    let on = match trigger.get("on") {
+        None => vec!["mention".to_owned(), "assign".to_owned()],
+        Some(_) => id_list(&trigger, "on", "github.trigger", problems),
+    };
+    for starts in &on {
+        if starts != "mention" && starts != "assign" {
+            problems.add(format!(
+                "github.trigger.on names `{starts}`; what starts a session is `mention` or `assign`"
+            ));
+        }
+    }
+    if on.is_empty() {
+        problems.add("github.trigger.on names nothing, so nothing would ever start a session");
+    }
     if allowed_users.is_empty() {
         problems
             .add("github.trigger.allowedUsers must name the GitHub logins that may ask for work");
@@ -772,7 +803,12 @@ fn validate_github_trigger(
              repository, and every session runs code",
         );
     }
-    Some(GithubTrigger { allowed_users })
+    Some(GithubTrigger {
+        allowed_users,
+        repositories,
+        on_mention: on.iter().any(|starts| starts == "mention"),
+        on_assign: on.iter().any(|starts| starts == "assign"),
+    })
 }
 
 /// Reads the paths granted on top of the generated policy, if any.

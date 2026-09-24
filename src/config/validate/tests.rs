@@ -884,8 +884,37 @@ fn a_github_trigger_names_who_may_ask_and_never_everybody() {
         &github(json!({ "allowedUsers": ["*"] })),
         "cannot be \"*\""
     ));
+    let trigger = |extra: Value| {
+        validate_config(&github(extra))
+            .expect("valid")
+            .github
+            .and_then(|github| github.trigger)
+            .expect("a trigger")
+    };
+    let both = trigger(json!({ "allowedUsers": ["a"] }));
+    assert!(both.on_mention && both.on_assign && both.repositories.is_empty());
+    let narrowed = trigger(json!({
+        "allowedUsers": ["a"],
+        "on": ["assign"],
+        "repositories": ["QaidVoid/errand", "pkgforge-dev/*"],
+    }));
+    assert!(!narrowed.on_mention && narrowed.on_assign);
+    assert_eq!(narrowed.repositories, ["QaidVoid/errand", "pkgforge-dev/*"]);
+
     assert!(problems_contain(
-        &github(json!({ "on": ["mention"], "allowedUsers": ["a"] })),
+        &github(json!({ "allowedUsers": ["a"], "on": ["assigned"] })),
+        "`mention` or `assign`"
+    ));
+    assert!(problems_contain(
+        &github(json!({ "allowedUsers": ["a"], "on": [] })),
+        "names nothing"
+    ));
+    assert!(problems_contain(
+        &github(json!({ "allowedUsers": ["a"], "repositories": ["errand"] })),
+        "not `owner/repo`"
+    ));
+    assert!(problems_contain(
+        &github(json!({ "allowedUsers": ["a"], "events": [] })),
         "github.trigger"
     ));
 }

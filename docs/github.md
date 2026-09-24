@@ -19,6 +19,25 @@ comments on the issue reach the same session.
 
 Without `trigger`, GitHub is only where work is sent, as pull requests.
 
+## Where and what starts a session
+
+`repositories` narrows where the bot listens, as `owner/repo`, or `owner/*`
+for every repository an account or organisation holds. Without it, the bot
+listens wherever it is mentioned or assigned. A notification from anywhere
+else is marked read and left alone.
+
+`on` says what starts a session: `mention`, `assign`, or both, which is the
+default. With `["assign"]`, a mention is still heard in an issue that already
+has a session, but only assigning an issue to the bot starts new work.
+
+```json
+"trigger": {
+  "allowedUsers": ["your-login"],
+  "repositories": ["your-login/parser", "your-org/*"],
+  "on": ["mention", "assign"]
+}
+```
+
 ## Who is heard
 
 Only the logins in `allowedUsers`. On a public repository anyone can comment,

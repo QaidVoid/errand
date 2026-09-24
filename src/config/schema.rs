@@ -263,6 +263,16 @@ pub struct GithubTrigger {
     /// whose comments continue one. Nobody else is heard: on a public
     /// repository anyone can comment, and every session runs code.
     pub allowed_users: Vec<String>,
+    /// The repositories listened to, as `owner/repo`, or `owner/*` for every
+    /// one an account or organisation holds. Absent means wherever the bot is
+    /// mentioned or assigned.
+    pub repositories: Vec<String>,
+    /// Whether a mention of the bot starts a session. On unless `on` leaves
+    /// `mention` out.
+    pub on_mention: bool,
+    /// Whether assigning an issue or pull request to the bot starts one. On
+    /// unless `on` leaves `assign` out.
+    pub on_assign: bool,
 }
 
 /// Paths granted to a session on top of what the daemon already grants.

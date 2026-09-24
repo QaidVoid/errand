@@ -39,6 +39,13 @@ pub struct Poller {
     pub bot: String,
     /// The logins that are heard. Anybody else is not.
     pub allowed: Vec<String>,
+    /// The repositories listened to, as `owner/repo` or `owner/*`. Empty
+    /// means every one.
+    pub repositories: Vec<String>,
+    /// Whether naming the bot starts a session.
+    pub on_mention: bool,
+    /// Whether assigning to the bot starts one.
+    pub on_assign: bool,
     /// When the daemon started. Nothing said before it is acted on, as a
     /// chat message sent while the daemon was down is not either.
     pub since: jiff::Timestamp,
@@ -107,6 +114,9 @@ impl Poller {
         let repository = notification["repository"]["full_name"]
             .as_str()
             .ok_or("a notification names no repository")?;
+        if !self.listens_in(repository) {
+            return Ok(Vec::new());
+        }
         let number: u64 = subject["url"]
             .as_str()
             .and_then(|url| url.rsplit('/').next())
@@ -131,11 +141,11 @@ impl Poller {
                 login: issue.login.clone(),
                 text: issue.body.clone(),
                 at: issue.at,
-                mentions: mentions(&issue.body, &self.bot),
+                mentions: self.on_mention && mentions(&issue.body, &self.bot),
             });
         }
         said.extend(self.comments(repository, number, floor).await?);
-        if notification["reason"].as_str() == Some("assign") {
+        if self.on_assign && notification["reason"].as_str() == Some("assign") {
             said.extend(self.assignment(repository, number, &issue, floor).await?);
         }
         said.sort_by_key(|said| said.at);
@@ -169,6 +179,19 @@ impl Poller {
                 }
             })
             .collect())
+    }
+
+    /// Whether a repository is one the daemon listens in.
+    fn listens_in(&self, repository: &str) -> bool {
+        self.repositories.is_empty()
+            || self.repositories.iter().any(|listened| {
+                listened.eq_ignore_ascii_case(repository)
+                    || listened.strip_suffix("/*").is_some_and(|owner| {
+                        repository
+                            .split_once('/')
+                            .is_some_and(|(of, _)| of.eq_ignore_ascii_case(owner))
+                    })
+            })
     }
 
     /// Whether a login is one the daemon listens to, and not the bot itself.
@@ -225,7 +248,7 @@ impl Poller {
                         .as_str()
                         .unwrap_or_default()
                         .to_owned(),
-                    mentions: mentions(&text, &self.bot),
+                    mentions: self.on_mention && mentions(&text, &self.bot),
                     text,
                     at: timestamp(&comment["created_at"])?,
                 })

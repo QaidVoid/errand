@@ -46,6 +46,9 @@ fn poller(api: Api) -> Poller {
         token: "ghp".to_owned(),
         bot: BOT.to_owned(),
         allowed: vec!["QaidVoid".to_owned()],
+        repositories: Vec::new(),
+        on_mention: true,
+        on_assign: true,
         since: "2026-09-24T10:00:00Z".parse().unwrap(),
         log: Logger::new(LogFields::new(), Arc::new(|_level, _line| {})),
     }
@@ -326,5 +329,73 @@ async fn a_notification_quiet_since_the_start_is_not_asked_about() {
             "GET /notifications?participating=true&per_page=50".to_owned(),
             "PATCH /notifications/threads/900".to_owned(),
         ]
+    );
+}
+
+/// Only the repositories listened in are asked about; the rest are marked
+/// read, so they do not wait in the queue.
+#[tokio::test]
+async fn a_repository_not_listened_in_is_not_asked_about() {
+    for (listened, expected) in [
+        (vec!["QaidVoid/edu".to_owned()], 1),
+        (vec!["qaidvoid/*".to_owned()], 1),
+        (
+            vec!["somebody-else/*".to_owned(), "QaidVoid/other".to_owned()],
+            0,
+        ),
+    ] {
+        let (answering, calls) = api(answers(
+            &notification("mention", None),
+            &issue("2026-09-24T11:00:00Z", &format!("@{BOT} fix the parser")),
+            &json!([]),
+            "2026-09-24T10:00:00Z",
+        ));
+        let mut poller = poller(answering);
+        poller.repositories = listened.clone();
+
+        let heard = poller.poll().await.expect("read");
+
+        assert_eq!(heard.len(), expected, "{listened:?}");
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .contains(&"PATCH /notifications/threads/900".to_owned())
+        );
+    }
+}
+
+/// `on` says what may start a session: with mentions off, a mention is heard
+/// but starts nothing, and with assignments off, an assignment is not asked
+/// about at all.
+#[tokio::test]
+async fn only_what_on_names_starts_a_session() {
+    let (mentioned, _) = api(answers(
+        &notification("mention", None),
+        &issue("2026-09-24T11:00:00Z", &format!("@{BOT} fix the parser")),
+        &json!([]),
+        "2026-09-24T10:00:00Z",
+    ));
+    let mut mentions_off = poller(mentioned);
+    mentions_off.on_mention = false;
+    let heard = mentions_off.poll().await.expect("read");
+    assert_eq!(heard.len(), 1);
+    assert!(!heard[0].mentions, "heard, but it starts nothing");
+
+    let (assigned, calls) = api(answers(
+        &notification("assign", None),
+        &issue("2026-09-24T09:00:00Z", "Make the parser stream."),
+        &json!([]),
+        "2026-09-24T10:00:00Z",
+    ));
+    let mut assign_off = poller(assigned);
+    assign_off.on_assign = false;
+    assert!(assign_off.poll().await.expect("read").is_empty());
+    assert!(
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call.contains("/events"))
     );
 }

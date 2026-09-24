@@ -128,6 +128,9 @@ async fn listen_on_github(
         token: github.token.clone(),
         bot: bot.to_owned(),
         allowed: trigger.allowed_users.clone(),
+        repositories: trigger.repositories.clone(),
+        on_mention: trigger.on_mention,
+        on_assign: trigger.on_assign,
         since: jiff::Timestamp::now(),
         log: log.clone(),
     };
