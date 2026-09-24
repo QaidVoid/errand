@@ -39,10 +39,11 @@ fn threads(api: Api) -> Arc<IssueThreads> {
     })
 }
 
-/// A tracker notifies everybody watching of every comment, so a turn is
-/// gathered and posted once, when it ends, in GitHub's terms.
+/// A tracker notifies everybody watching of every comment, so the issue is
+/// told what a turn came to, the agent's last message, once, when it ends,
+/// in GitHub's terms. The working and the numbers stay in the thread.
 #[tokio::test]
-async fn a_turn_is_one_comment_posted_when_it_ends() {
+async fn the_issue_is_told_only_what_the_turn_came_to() {
     let (api, posted) = api();
     let view = threads(api)
         .view_for("github:QaidVoid/edu#7")
@@ -51,17 +52,21 @@ async fn a_turn_is_one_comment_posted_when_it_ends() {
     for event in [
         SessionEvent::BeginTurn { turn: 1 },
         SessionEvent::Post {
-            text: "Found it: the last line has no newline.".to_owned(),
+            text: "Short answer for the thread, then the detail.".to_owned(),
         },
         SessionEvent::Activity {
             line: "read src/parse.rs".to_owned(),
             tool: None,
         },
+        SessionEvent::Reply {
+            text: "this session runs on `glm-5.3-flash`".to_owned(),
+            command: "!model".to_owned(),
+        },
         SessionEvent::Post {
-            text: "Fixed on the branch `fix-last-line`.".to_owned(),
+            text: "Fixed for <@github:qaidvoid>, reset <t:1790273365:R>.".to_owned(),
         },
         SessionEvent::Notice {
-            text: "<@github:qaidvoid> done, resets <t:1790273365:R>".to_owned(),
+            text: "<@github:qaidvoid> [done] glm-5.3-flash | 16m27s".to_owned(),
             level: NoticeLevel::Done,
         },
     ] {
@@ -84,25 +89,31 @@ async fn a_turn_is_one_comment_posted_when_it_ends() {
     assert_eq!(posted[0].0, "/repos/QaidVoid/edu/issues/7/comments");
     assert_eq!(
         posted[0].1["body"],
-        "Found it: the last line has no newline.\n\nFixed on the branch `fix-last-line`.\n\n\
-         @qaidvoid done, resets 2026-09-24 18:09 UTC"
+        "Fixed for @qaidvoid, reset 2026-09-24 18:09 UTC."
     );
 }
 
-/// A command is answered at once, apart from any turn.
+/// A turn that failed before saying anything still tells the issue why, so
+/// whoever asked there is not left waiting.
 #[tokio::test]
-async fn a_command_is_answered_at_once() {
+async fn a_turn_that_said_nothing_tells_the_issue_why_it_failed() {
     let (api, posted) = api();
     let view = threads(api).view_for("github:o/r#2").expect("an issue");
 
-    view.observe(&SessionEvent::Reply {
-        text: "this session runs on `glm-5.3-flash`".to_owned(),
-        command: "!model".to_owned(),
-    })
-    .await
-    .expect("posted");
+    for event in [
+        SessionEvent::Notice {
+            text: "the turn failed: 429 rate limit exceeded".to_owned(),
+            level: NoticeLevel::Warning,
+        },
+        SessionEvent::Busy { busy: false },
+    ] {
+        view.observe(&event).await.expect("observed");
+    }
 
-    assert_eq!(posted.lock().unwrap().len(), 1);
+    assert_eq!(
+        posted.lock().unwrap()[0].1["body"],
+        "the turn failed: 429 rate limit exceeded"
+    );
 }
 
 #[test]

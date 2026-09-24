@@ -150,13 +150,14 @@ async fn an_issue_gets_a_chat_thread_that_answers_it_across_a_restart() {
         .port_for("t1".to_owned())
         .await
         .expect("found");
-    found
-        .observe(&SessionEvent::Reply {
+    for event in [
+        SessionEvent::Post {
             text: "ok".to_owned(),
-            command: "!model".to_owned(),
-        })
-        .await
-        .unwrap();
+        },
+        SessionEvent::Busy { busy: false },
+    ] {
+        found.observe(&event).await.unwrap();
+    }
     assert_eq!(
         *posted_again.lock().unwrap(),
         ["/repos/o/r/issues/4/comments"]

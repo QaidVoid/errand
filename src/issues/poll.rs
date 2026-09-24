@@ -463,8 +463,9 @@ pub fn project_name(repository: &str, number: u64) -> String {
 /// comment, what the issue itself says, come with them.
 fn opening(repository: &str, number: u64, issue: &Issue, text: &str, from_comment: bool) -> String {
     let mut opening = format!(
-        "{}: {text}\n\n(Asked on GitHub, on {} {repository}#{number}, \"{}\": {}. Your answer is \
-         posted there as a comment.)",
+        "{}: {text}\n\n(Asked on GitHub, on {} {repository}#{number}, \"{}\": {}. The last thing \
+         you say each turn is posted there as a comment, so write it for the people reading the \
+         {1}, and do not comment there yourself.)",
         project_name(repository, number),
         issue.kind,
         issue.title,

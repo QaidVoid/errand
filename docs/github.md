@@ -78,9 +78,13 @@ finds both again.
 
 ## What comes back
 
-The thread shows everything, as it does for any session. The issue gets one
-comment per turn, when it ends: what the agent said, and the line that closes
-the turn. An answer to a command is its own comment, straight away.
+The thread shows everything, as it does for any session. The issue is told
+only what each turn came to: the agent's last message, posted as one comment
+when the turn ends. The agent is told so, and writes that message for the
+issue's readers rather than commenting there itself. A turn that failed
+before saying anything posts why instead, so whoever asked is not left
+waiting. The working, command answers, and the turn's numbers stay in the
+thread.
 
 A start that is turned away, for a spent usage window or a project that
 already has a session, is said in the channel rather than on the issue: that
@@ -97,8 +101,8 @@ is for whoever runs the bot, not for everybody watching the repository.
 3. Within about a minute a thread opens in the channel and the session starts
    there. Run the daemon with `-v` to watch it in the log: `starting a
    session`, then `launching a sandbox`.
-4. When the turn ends, the answer arrives in the thread and, as one comment,
-   on the issue.
+4. When the turn ends, the whole of it is in the thread, and its answer
+   arrives on the issue as one comment.
 5. Comment again, without the mention, to continue. `!model` answers at once.
 
 Mentioning the bot from a login not in `allowedUsers` should do nothing at all,

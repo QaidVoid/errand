@@ -1,9 +1,10 @@
-//! An issue as a thread: made, found again, and written to.
+//! What an issue is told of the session answering it.
 //!
-//! A chat thread shows a turn as it happens, a message at a time. An issue is
-//! read by people watching a tracker, who are notified of every comment, so a
-//! turn is gathered and posted as one comment when it ends. Tool activity,
-//! diffs, and reasoning stay in the transcript, which the comment links to.
+//! The thread shows a turn as it happens, a message at a time. An issue is
+//! read by people watching a tracker, who are notified of every comment, so it
+//! is told only what the turn came to: the agent's last message, or why the
+//! turn failed when it said nothing. The working, the commands, and the
+//! numbers stay in the thread.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -39,7 +40,7 @@ impl IssueThreads {
             token: self.token.clone(),
             repository: repository.to_owned(),
             number,
-            turn: Mutex::new(Vec::new()),
+            turn: Mutex::new(Turn::default()),
             log: self.log.clone(),
         }))
     }
@@ -51,25 +52,27 @@ pub struct IssueView {
     token: String,
     repository: String,
     number: u64,
-    /// What the turn has said so far, posted when it ends.
-    turn: Mutex<Vec<String>>,
+    /// What the turn came to so far, posted when it ends.
+    turn: Mutex<Turn>,
     log: Logger,
 }
 
-impl IssueView {
-    fn gather(&self, text: &str) {
-        self.turn
-            .lock()
-            .expect("the issue turn lock")
-            .push(text.to_owned());
-    }
+/// What one turn came to, as far as the issue is concerned.
+#[derive(Default)]
+struct Turn {
+    /// The agent's latest message, which is its answer once the turn ends.
+    answer: Option<String>,
+    /// Why the turn failed, for a turn that said nothing.
+    failure: Option<String>,
+}
 
+impl IssueView {
     async fn flush(&self) -> Result<(), ViewError> {
-        let said = std::mem::take(&mut *self.turn.lock().expect("the issue turn lock"));
-        if said.is_empty() {
-            return Ok(());
+        let turn = std::mem::take(&mut *self.turn.lock().expect("the issue turn lock"));
+        match turn.answer.or(turn.failure) {
+            Some(said) => self.post(&said).await,
+            None => Ok(()),
         }
-        self.post(&said.join("\n\n")).await
     }
 
     async fn post(&self, text: &str) -> Result<(), ViewError> {
@@ -111,20 +114,15 @@ impl SessionView for IssueView {
     ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
         Box::pin(async move {
             match event {
-                SessionEvent::Post { text } => self.gather(text),
-                // How a session started is the thread's to say. The issue
-                // hears the turns.
-                SessionEvent::Notice {
-                    level: NoticeLevel::Started,
-                    ..
-                } => {}
-                SessionEvent::Notice { text, level } => {
-                    self.gather(text);
-                    if *level == NoticeLevel::Ended {
-                        return self.flush().await;
-                    }
+                SessionEvent::Post { text } => {
+                    self.turn.lock().expect("the issue turn lock").answer = Some(text.clone());
                 }
-                SessionEvent::Reply { text, .. } => return self.post(text).await,
+                SessionEvent::Notice {
+                    text,
+                    level: NoticeLevel::Warning,
+                } => {
+                    self.turn.lock().expect("the issue turn lock").failure = Some(text.clone());
+                }
                 SessionEvent::Busy { busy: false } | SessionEvent::Close { .. } => {
                     return self.flush().await;
                 }
