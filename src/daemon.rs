@@ -67,8 +67,7 @@ pub enum StartError {
 /// every session's egress is forced through under `egress.mode = proxy`. Only
 /// the bailey backend uses it; podman bounds the network by its own
 /// namespace. `built_in` is the host store's definitions of each defined
-/// provider's models, which the bailey backend writes under an entry naming
-/// one.
+/// provider's models, which either backend writes under an entry naming one.
 pub fn create_sandbox(
     config: &Config,
     log: Logger,
@@ -81,6 +80,7 @@ pub fn create_sandbox(
             config.sandbox.clone(),
             log,
             run_podman_arc(),
+            built_in,
         ))),
         SandboxBackend::Bailey => Backend::Bailey(Arc::new(BaileySandbox::new(
             config.sandbox.clone(),

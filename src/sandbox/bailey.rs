@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::config::schema::EgressMode;
 use crate::config::schema::NetworkMode;
@@ -18,6 +18,7 @@ use crate::log::fields;
 use crate::log::{LogValue, Logger};
 use crate::sandbox::BaileyStop;
 use crate::sandbox::SandboxHandle;
+use crate::sandbox::agent_config::{BrokeredProvider, write_agent_config};
 use crate::sandbox::backend::{
     AGENT_SESSIONS, AgentCommand, CapabilityReport, SandboxLaunch, SandboxLaunchError,
     SandboxUnavailableError, agent_command, fresh_disk_tmp, placed_prompt_path, sandbox_name,
@@ -157,137 +158,6 @@ pub fn provider_broker_url(port: u16, provider: &str) -> String {
     )
 }
 
-/// Where the broker is reached, and the nonce standing in for the key.
-#[derive(Debug, Clone)]
-pub struct BrokeredProvider {
-    /// The base URL the session is pointed at.
-    pub base_url: String,
-    /// What stands in for the credential.
-    pub nonce: String,
-}
-
-/// The agent's provider configuration for one session.
-///
-/// The operator's definitions first, then the broker's base URL over the one
-/// provider it stands in for. Merged rather than written over the top: a
-/// definition is how a provider with no built-in entry is reached at all, and
-/// replacing it wholesale would leave the agent with a provider it has never
-/// heard of. Only the base URL is taken from the broker, so everything else
-/// the operator said about that provider still stands.
-///
-/// Without a broker there is nothing to put a key on in transit, so with
-/// `hand_over_keys` each credential is written as the provider's `apiKey`.
-/// Otherwise only the provider the session starts on would have one, and the
-/// agent refuses to switch to any other.
-pub fn provider_config(
-    defined: &Map<String, Value>,
-    brokered: &BTreeMap<String, BrokeredProvider>,
-    built_in: &BTreeMap<String, Vec<Value>>,
-    hand_over_keys: bool,
-) -> Map<String, Value> {
-    let mut providers = Map::new();
-    for (name, definition) in defined {
-        // An extension registers this provider itself, so writing a second
-        // definition here would collide with the one the extension makes.
-        if definition.get("extension").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
-        let mut fields = match definition {
-            Value::Object(fields) => fields.clone(),
-            _ => Map::new(),
-        };
-        // The credential is the daemon's record of how to reach the provider,
-        // not the agent's. Under a broker it is put on there instead.
-        let credential = fields.remove("credential");
-        if hand_over_keys
-            && !fields.contains_key("apiKey")
-            && let Some(credential) = credential
-        {
-            fields.insert("apiKey".to_owned(), credential);
-        }
-        // How the daemon asks about the window is the daemon's business too,
-        // and the agent's configuration would only report it as a field it
-        // does not know.
-        fields.remove("usage");
-        if let (Some(Value::Array(models)), Some(known)) =
-            (fields.get_mut("models"), built_in.get(name))
-        {
-            for model in models {
-                *model = over_built_in(model, known);
-            }
-        }
-        providers.insert(name.clone(), Value::Object(fields));
-    }
-
-    for (name, through) in brokered {
-        let mut fields = match providers.get(name) {
-            Some(Value::Object(fields)) => fields.clone(),
-            _ => Map::new(),
-        };
-        // The nonce stands in for the key, so what the agent holds is worth
-        // nothing anywhere but this broker.
-        fields.insert(
-            "baseUrl".to_owned(),
-            Value::String(through.base_url.clone()),
-        );
-        fields.insert("apiKey".to_owned(), Value::String(through.nonce.clone()));
-        providers.insert(name.clone(), Value::Object(fields));
-    }
-    // The agent reads its models from a file whose shape names the map, so
-    // the providers ride under that key rather than at the top level.
-    let mut wrapped = Map::new();
-    wrapped.insert("providers".to_owned(), Value::Object(providers));
-    wrapped
-}
-
-/// A model entry laid over the agent's own definition of that model.
-///
-/// The agent replaces a built-in model with an entry of the same id rather
-/// than merging the two, so an entry that only sets `contextWindow` would
-/// lose the rest, reasoning and thinking levels included. The store's
-/// definition goes underneath instead. Its `baseUrl` and `provider` are left
-/// out, so the model is still reached wherever its provider is, broker
-/// included. An entry the store does not know is left as written.
-fn over_built_in(entry: &Value, known: &[Value]) -> Value {
-    let id = entry.get("id").and_then(Value::as_str);
-    let Some(Value::Object(base)) = known
-        .iter()
-        .find(|model| id.is_some() && model.get("id").and_then(Value::as_str) == id)
-    else {
-        return entry.clone();
-    };
-    let mut merged = base.clone();
-    merged.remove("baseUrl");
-    merged.remove("provider");
-    if let Value::Object(fields) = entry {
-        merged.extend(fields.clone());
-    }
-    Value::Object(merged)
-}
-
-/// Copies a file or a directory tree from the host into the session.
-///
-/// Recursive and shallow-simple: pi extensions are a file or a small folder,
-/// so this walks directories and copies files, which is all one needs. A
-/// symlink is followed by the copy, which is what reading the named directory
-/// means.
-async fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-    let meta = tokio::fs::metadata(from).await?;
-    if meta.is_dir() {
-        tokio::fs::create_dir_all(to).await?;
-        let mut entries = tokio::fs::read_dir(from).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            Box::pin(copy_tree(&entry.path(), &to.join(entry.file_name()))).await?;
-        }
-    } else {
-        if let Some(parent) = to.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::copy(from, to).await?;
-    }
-    Ok(())
-}
-
 /// What the daemon holds back from a session, and what it gives instead.
 ///
 /// The credential never crosses into a sandbox: the broker puts it on at the
@@ -425,82 +295,24 @@ impl BaileySandbox {
             })
     }
 
-    /// Points the agent at the broker in place of the provider, or, with no
-    /// broker, hands it each provider's key.
-    ///
-    /// Written as a `models.json` override in the agent's own configuration
-    /// directory, which names a base URL and nothing else, so every model the
-    /// provider serves stays available and only where they are reached
-    /// changes. The file sits in the session's state directory, which the
-    /// session can write: rewriting it buys nothing, since the nonce it holds
-    /// is good only against the broker and the namespace reaches nothing else.
-    async fn write_provider_override(&self, launch: &SandboxLaunch) -> std::io::Result<()> {
-        let defined = &launch.providers;
-
-        let mut brokered = BTreeMap::new();
-        if let (Some(brokering), Some(port)) =
+    /// The broker's route for each provider it stands in front of.
+    fn brokered_providers(&self) -> BTreeMap<String, BrokeredProvider> {
+        let (Some(brokering), Some(port)) =
             (&self.options.brokering, self.options.egress_proxy_port)
-        {
-            for (name, nonce) in &brokering.nonces {
-                brokered.insert(
-                    name.clone(),
-                    BrokeredProvider {
-                        base_url: provider_broker_url(port, name),
-                        nonce: nonce.clone(),
-                    },
-                );
-            }
-        }
-        if brokered.is_empty() && defined.is_empty() {
-            return Ok(());
-        }
-
-        let providers = provider_config(
-            defined,
-            &brokered,
-            &self.options.built_in,
-            self.config.egress.mode != EgressMode::Proxy,
-        );
-
-        let directory = std::path::Path::new(&launch.state_dir)
-            .join("home")
-            .join(".pi")
-            .join("agent");
-        tokio::fs::create_dir_all(&directory).await?;
-        let body = format!(
-            "{}\n",
-            serde_json::to_string_pretty(&providers).unwrap_or_default()
-        );
-        tokio::fs::write(directory.join("models.json"), body).await?;
-        Ok(())
-    }
-
-    /// Copies each configured pi extension into the session's agent
-    /// directory, where the sandboxed agent auto-loads it.
-    ///
-    /// The host's own pi configuration is invisible to a sandbox, so an
-    /// extension installed there is placed here instead, under the same
-    /// `extensions` directory the agent scans. A directory that cannot be read
-    /// is reported rather than skipped silently: an extension the operator
-    /// named and that never loaded is a misconfiguration worth surfacing.
-    async fn write_agent_extensions(&self, launch: &SandboxLaunch) -> std::io::Result<()> {
-        if launch.extensions.is_empty() {
-            return Ok(());
-        }
-        let root = std::path::Path::new(&launch.state_dir)
-            .join("home")
-            .join(".pi")
-            .join("agent")
-            .join("extensions");
-        tokio::fs::create_dir_all(&root).await?;
-        for source in &launch.extensions {
-            let source = std::path::Path::new(source);
-            let Some(name) = source.file_name() else {
-                continue;
-            };
-            copy_tree(source, &root.join(name)).await?;
-        }
-        Ok(())
+        else {
+            return BTreeMap::new();
+        };
+        brokering
+            .nonces
+            .iter()
+            .map(|(name, nonce)| {
+                let through = BrokeredProvider {
+                    base_url: provider_broker_url(port, name),
+                    nonce: nonce.clone(),
+                };
+                (name.clone(), through)
+            })
+            .collect()
     }
 
     /// The operator env, with the proxy variables added under a brokered
@@ -683,12 +495,13 @@ impl BaileySandbox {
             // policy is applied.
             fresh_disk_tmp(&launch.state_dir).await?;
         }
-        self.write_provider_override(launch)
-            .await
-            .map_err(|error| SandboxLaunchError(error.to_string()))?;
-        self.write_agent_extensions(launch)
-            .await
-            .map_err(|error| SandboxLaunchError(error.to_string()))?;
+        write_agent_config(
+            launch,
+            &self.brokered_providers(),
+            &self.options.built_in,
+            self.config.egress.mode != EgressMode::Proxy,
+        )
+        .await?;
         let env = match &self.options.brokering {
             Some(brokering) => brokered_env(&launch.env, brokering),
             None => launch.env.clone(),

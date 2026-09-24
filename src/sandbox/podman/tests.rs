@@ -302,7 +302,7 @@ async fn podman_that_is_not_rootless_cannot_run_this_backend() {
     let mut answers = BTreeMap::new();
     answers.insert("info".to_owned(), (Some(0), Some("false".to_owned())));
     let (run, _calls) = fake_run(answers);
-    let sandbox = PodmanSandbox::new(config(), silent(), run);
+    let sandbox = PodmanSandbox::new(config(), silent(), run, BTreeMap::new());
 
     let error = sandbox.probe().await.expect_err("refused");
     assert!(error.to_string().contains("not running rootless"));
@@ -313,7 +313,7 @@ async fn a_missing_image_is_reported_at_startup_not_at_the_first_session() {
     let mut answers = BTreeMap::new();
     answers.insert("image".to_owned(), (Some(1), None));
     let (run, _calls) = fake_run(answers);
-    let sandbox = PodmanSandbox::new(config(), silent(), run);
+    let sandbox = PodmanSandbox::new(config(), silent(), run, BTreeMap::new());
 
     let error = sandbox.probe().await.expect_err("refused");
     assert!(error.to_string().contains("is not present"));
@@ -322,7 +322,7 @@ async fn a_missing_image_is_reported_at_startup_not_at_the_first_session() {
 #[tokio::test]
 async fn a_healthy_host_reports_what_it_enforces_and_no_gaps() {
     let (run, _calls) = fake_run(BTreeMap::new());
-    let sandbox = PodmanSandbox::new(config(), silent(), run);
+    let sandbox = PodmanSandbox::new(config(), silent(), run, BTreeMap::new());
 
     let report = sandbox.probe().await.expect("a report");
 
@@ -344,7 +344,7 @@ async fn leftover_containers_are_found_by_label_and_removed() {
         (Some(0), Some("errand-s-1\nerrand-s-2\n".to_owned())),
     );
     let (run, calls) = fake_run(answers);
-    let sandbox = PodmanSandbox::new(config(), silent(), run);
+    let sandbox = PodmanSandbox::new(config(), silent(), run, BTreeMap::new());
 
     assert_eq!(
         sandbox.list_orphans().await.expect("listed"),

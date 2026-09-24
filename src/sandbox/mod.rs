@@ -16,6 +16,8 @@ use crate::sandbox::backend::SandboxUnavailableError;
 use crate::session::manager::SandboxPool;
 use crate::session::session::RunningBox;
 
+/// What a sandboxed agent is told about providers and extensions.
+pub mod agent_config;
 /// What a backend must offer, and what it reports it enforces.
 pub mod backend;
 /// The bailey backend: a confined process on this host.

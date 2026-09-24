@@ -10,7 +10,10 @@
 //! not write there. The agent stores credential state under its home, so an
 //! unwritable home rejects every prompt with a permission error.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
+
+use serde_json::Value;
 
 use crate::config::schema::NetworkMode;
 use crate::config::schema::SandboxBackend;
@@ -19,6 +22,7 @@ use crate::config::size::parse_size;
 use crate::log::Logger;
 use crate::log::fields;
 use crate::sandbox::SandboxHandle;
+use crate::sandbox::agent_config::write_agent_config;
 use crate::sandbox::backend::placed_prompt_path;
 use crate::sandbox::backend::{
     AGENT_HOME, AGENT_SESSIONS, AgentCommand, CapabilityReport, SESSION_LABEL, STATE_PATH,
@@ -134,6 +138,7 @@ pub struct PodmanSandbox {
     config: SandboxConfig,
     log: Logger,
     run: super::Run,
+    built_in: BTreeMap<String, Vec<Value>>,
 }
 
 /// Runs the installed tool. Injected for tests.
@@ -164,8 +169,21 @@ pub fn run_podman_arc() -> super::Run {
 
 impl PodmanSandbox {
     /// A backend over the installed tool.
-    pub fn new(config: SandboxConfig, log: Logger, run: super::Run) -> Self {
-        Self { config, log, run }
+    ///
+    /// `built_in` is the host store's definitions of each defined provider's
+    /// models, for an entry naming one of them to be laid over.
+    pub fn new(
+        config: SandboxConfig,
+        log: Logger,
+        run: super::Run,
+        built_in: BTreeMap<String, Vec<Value>>,
+    ) -> Self {
+        Self {
+            config,
+            log,
+            run,
+            built_in,
+        }
     }
 
     async fn call(&self, args: &[&str]) -> super::RunResult {
@@ -255,6 +273,9 @@ impl PodmanSandbox {
         if self.config.disk_tmp {
             fresh_disk_tmp(&launch.state_dir).await?;
         }
+        // No broker stands in front of a container, so each provider's key
+        // is written for the agent.
+        write_agent_config(launch, &BTreeMap::new(), &self.built_in, true).await?;
         let name = sandbox_name(&launch.session_id);
         let args = podman_args(&self.config, launch);
         let spawned = spawn_agent("podman", &args, None, None)
