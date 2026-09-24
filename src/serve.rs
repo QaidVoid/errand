@@ -60,6 +60,7 @@ use crate::sandbox::bailey::ProviderBrokering;
 use crate::sandbox::bailey::{EGRESS_MAP_ADDRESS, provider_prefix};
 use crate::sandbox::broker::Broker;
 use crate::sandbox::broker::ProviderRoute;
+use crate::sandbox::broker::{LOOKUP_TIMEOUT, NoAddress, public_addresses};
 use crate::sandbox::paths;
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
 use crate::session::model::{configured_model, split_level};
@@ -255,6 +256,61 @@ fn brokerable_providers(agent: &AgentConfig, store: Option<&str>) -> Vec<(String
             Some((name.clone(), upstream, credential.to_owned()))
         })
         .collect()
+}
+
+/// The broker's route for each provider it can stand in front of, and the
+/// nonce each is reached with, by provider name.
+///
+/// The credential is held back from the session and put on at the broker
+/// instead, so what a sandbox carries is a nonce that is worth nothing
+/// anywhere else. One route per provider whose upstream and credential the
+/// daemon knows, each with a nonce of its own.
+fn provider_routes(
+    agent: &AgentConfig,
+    store: Option<&str>,
+) -> (Vec<ProviderRoute>, BTreeMap<String, String>) {
+    let mut nonces = BTreeMap::new();
+    let mut routes = Vec::new();
+    for (name, upstream, credential) in brokerable_providers(agent, store) {
+        let nonce = provider_nonce();
+        nonces.insert(name.clone(), nonce.clone());
+        routes.push(ProviderRoute {
+            prefix: provider_prefix(&name),
+            upstream,
+            nonce,
+            credential,
+        });
+    }
+    (routes, nonces)
+}
+
+/// Warns at startup about a brokered provider this host cannot resolve.
+///
+/// The broker resolves names on this host, with this host's resolver, so a
+/// host whose resolver answers nothing leaves every session unable to reach
+/// the provider. Said now, naming the resolver, rather than first seen as a
+/// failed turn. Startup goes on: the resolver may come up after the daemon.
+async fn check_provider_names(routes: &[ProviderRoute], allow_internal: bool, log: &Logger) {
+    for route in routes {
+        let Some(host) = host_of(&route.upstream) else {
+            continue;
+        };
+        let lookup = public_addresses(&host, allow_internal, None);
+        let why = match tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await {
+            Ok(Err(NoAddress::Unresolved(why))) => why,
+            Err(_) => "the lookup did not finish in time".to_owned(),
+            Ok(_) => continue,
+        };
+        log.warn(
+            "this host cannot resolve a provider, and the broker resolves names with this \
+             host's resolver; check /etc/resolv.conf",
+            &fields([
+                ("provider", LogValue::from(route.prefix.as_str())),
+                ("host", LogValue::from(host)),
+                ("detail", LogValue::from(why)),
+            ]),
+        );
+    }
 }
 
 /// A per-run stand-in for the provider credential.
@@ -454,22 +510,8 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
         );
         return Err(Exit::Refused);
     }
-    // The credential is held back from the session and put on here
-    // instead, so what a sandbox carries is a nonce that is worth nothing
-    // anywhere else. One route per provider whose upstream and credential
-    // the daemon knows, each with a nonce of its own.
-    let mut nonces = BTreeMap::new();
-    let mut routes: Vec<ProviderRoute> = Vec::new();
-    for (name, upstream, credential) in brokerable_providers(&config.agent, store.as_deref()) {
-        let nonce = provider_nonce();
-        nonces.insert(name.clone(), nonce.clone());
-        routes.push(ProviderRoute {
-            prefix: provider_prefix(&name),
-            upstream,
-            nonce,
-            credential,
-        });
-    }
+    let (routes, nonces) = provider_routes(&config.agent, store.as_deref());
+    check_provider_names(&routes, config.sandbox.egress.allow_internal, log).await;
     let brokering = ProviderBrokering {
         credential_names: config
             .agent

@@ -66,6 +66,10 @@ pub struct EgressConfig {
     /// matches subdomains; a lone `*` admits any host.
     pub allow: Vec<String>,
     /// Whether the broker may dial an address on the host's own network.
+    ///
+    /// Only an address written as a literal: a name that resolves somewhere
+    /// internal stays refused, since what it points at is not the operator's
+    /// to decide.
     pub allow_internal: bool,
 }
 

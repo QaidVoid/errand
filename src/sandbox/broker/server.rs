@@ -10,7 +10,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
 use super::{
-    DIAL_TIMEOUT, LOOKUP_TIMEOUT, ProviderRoute, ProviderState, Target, host_allowed,
+    DIAL_TIMEOUT, LOOKUP_TIMEOUT, NoAddress, ProviderRoute, ProviderState, Target, host_allowed,
     parse_connect, parse_forward, public_addresses,
 };
 use crate::log::Logger;
@@ -203,21 +203,32 @@ async fn admit<W: tokio::io::AsyncWrite + Unpin>(
     // allowed: the broker runs on the host, so dialling the host's own network
     // through it is a way back in that the namespace was built to close.
     let lookup = public_addresses(host, state.allow_internal, state.resolve.as_ref());
-    let Ok(addresses) = tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await else {
+    let Ok(resolved) = tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await else {
         state
             .log
             .warn("egress lookup timed out", &fields([("host", host.into())]));
         let _ = refuse(writer, 504, "the name did not resolve in time").await;
         return None;
     };
-    if addresses.is_empty() {
-        state.log.warn(
-            "egress refused a target with no public address",
-            &fields([("host", host.into())]),
-        );
-        let _ = refuse(writer, 403, "not a public host").await;
-        return None;
-    }
+    let addresses = match resolved {
+        Ok(addresses) => addresses,
+        Err(NoAddress::Unresolved(why)) => {
+            state.log.warn(
+                "egress could not resolve a name on this host",
+                &fields([("host", host.into()), ("detail", why.into())]),
+            );
+            let _ = refuse(writer, 502, "the name did not resolve").await;
+            return None;
+        }
+        Err(NoAddress::Internal) => {
+            state.log.warn(
+                "egress refused a host-internal target",
+                &fields([("host", host.into())]),
+            );
+            let _ = refuse(writer, 403, "not a public host").await;
+            return None;
+        }
+    };
 
     match dial(&addresses, target.port).await {
         Ok(upstream) => {

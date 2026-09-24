@@ -36,6 +36,16 @@ list in the generated policy, while podman bounds the network by namespace
 rather than by port, so the list is inert there. A session with `network` set
 to `none` opens nothing, whatever ports are named.
 
+The broker resolves a name itself, on this host and with this host's resolver,
+not the session's, and dials only the addresses it judged. A name that resolves
+only to the host's own network, loopback, private, or link-local, is refused
+with `403 not a public host`, and `sandbox.egress.allowInternal` lifts that only
+for an address written as a literal: what a name points at is not the
+operator's to decide. A name that does not resolve at all is answered with
+`502 the name did not resolve`, and the log gives the resolver's reason. That
+is this host's resolver to fix, `/etc/resolv.conf` first, and the daemon warns
+at startup when it cannot resolve a brokered provider.
+
 Under the bailey backend a session shares the host's network namespace, so it
 can read the host address, the MAC, and the ARP neighbours through `ip`,
 `/proc/net`, or `/sys`. To hide them, set `sandbox.hideHostAddress`:

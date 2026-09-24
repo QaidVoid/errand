@@ -383,34 +383,59 @@ pub const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 /// change what that points at. A name resolving somewhere internal stays
 /// refused even then, because what a name points at is not the operator's to
 /// decide.
+///
+/// A name that does not resolve is told apart from one that resolves only
+/// somewhere internal, because the fix for each is different: the first is
+/// this host's resolver, the second is the name or the allowlist.
 pub async fn public_addresses(
     host: &str,
     allow_internal: bool,
     resolve: Option<&Resolve>,
-) -> Vec<String> {
+) -> Result<Vec<String>, NoAddress> {
     let literal = host.split('.').count() == 4 && host.parse::<std::net::Ipv4Addr>().is_ok()
         || host.contains(':');
     if literal {
         if allow_internal || !is_private_address(host) {
-            return vec![host.to_owned()];
+            return Ok(vec![host.to_owned()]);
         }
-        return Vec::new();
+        return Err(NoAddress::Internal);
     }
     let addresses = match resolve {
         Some(resolve) => resolve(host.to_owned()).await,
         None => default_resolve(host).await,
-    };
-    addresses
+    }
+    .map_err(NoAddress::Unresolved)?;
+    if addresses.is_empty() {
+        return Err(NoAddress::Unresolved(
+            "the resolver found no address".to_owned(),
+        ));
+    }
+    let public: Vec<String> = addresses
         .into_iter()
         .filter(|address| !is_private_address(address))
-        .collect()
+        .collect();
+    if public.is_empty() {
+        Err(NoAddress::Internal)
+    } else {
+        Ok(public)
+    }
 }
 
-async fn default_resolve(name: &str) -> Vec<String> {
-    match tokio::net::lookup_host((name, 0_u16)).await {
-        Ok(addrs) => addrs.map(|addr| addr.ip().to_string()).collect(),
-        Err(_) => Vec::new(),
-    }
+/// Why a target has no address the broker may dial.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoAddress {
+    /// The name did not resolve, for the reason given. The broker resolves on
+    /// this host, with this host's resolver, not the session's.
+    Unresolved(String),
+    /// Every address it resolves to is on the host's own network.
+    Internal,
+}
+
+async fn default_resolve(name: &str) -> Result<Vec<String>, String> {
+    tokio::net::lookup_host((name, 0_u16))
+        .await
+        .map(|addrs| addrs.map(|addr| addr.ip().to_string()).collect())
+        .map_err(|error| error.to_string())
 }
 
 /// What one broker shares across its connection tasks and its server.
@@ -487,39 +512,8 @@ pub(crate) async fn serve_provider_request(
     let rest = path[route.prefix.len()..].to_owned();
     let trimmed_upstream = route.upstream.strip_suffix('/').unwrap_or(&route.upstream);
     let target = format!("{trimmed_upstream}{rest}{query}");
-    // The provider is the operator's to name, so this is not a session
-    // reaching somewhere it chose. It is still judged by the same rule, so
-    // that a provider pointed at this machine is a deliberate setting rather
-    // than a quiet exception to where the broker will go.
-    let hostname = url_host(&target);
-    let internal = match hostname {
-        Some(hostname) => {
-            let lookup = public_addresses(&hostname, state.allow_internal, None);
-            let Ok(addresses) = tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await else {
-                state.log.warn(
-                    "the provider's name did not resolve in time",
-                    &fields([("host", hostname.as_str().into())]),
-                );
-                return (
-                    axum::http::StatusCode::GATEWAY_TIMEOUT,
-                    "the provider's name did not resolve in time\n",
-                )
-                    .into_response();
-            };
-            addresses.is_empty()
-        }
-        None => true,
-    };
-    if internal {
-        state.log.warn(
-            "a provider is configured at a host-internal address",
-            &fields([("provider", route.prefix.as_str().into())]),
-        );
-        return (
-            axum::http::StatusCode::BAD_GATEWAY,
-            "the provider is not at a reachable address\n",
-        )
-            .into_response();
+    if let Some(refused) = provider_refusal(&state, route, &target).await {
+        return refused;
     }
 
     let method = request.method().to_string();
@@ -559,6 +553,71 @@ pub(crate) async fn serve_provider_request(
                 .into_response()
         }
     }
+}
+
+/// What to answer the session with when its provider cannot be reached.
+async fn provider_refusal(
+    state: &ProviderState,
+    route: &ProviderRoute,
+    target: &str,
+) -> Option<axum::response::Response> {
+    use axum::response::IntoResponse;
+
+    // The provider is the operator's to name, so this is not a session
+    // reaching somewhere it chose. It is still judged by the same rule, so
+    // that a provider pointed at this machine is a deliberate setting rather
+    // than a quiet exception to where the broker will go.
+    let hostname = url_host(target);
+    let internal = match hostname {
+        Some(hostname) => {
+            let lookup = public_addresses(&hostname, state.allow_internal, None);
+            let Ok(addresses) = tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await else {
+                state.log.warn(
+                    "the provider's name did not resolve in time",
+                    &fields([("host", hostname.as_str().into())]),
+                );
+                return Some(
+                    (
+                        axum::http::StatusCode::GATEWAY_TIMEOUT,
+                        "the provider's name did not resolve in time\n",
+                    )
+                        .into_response(),
+                );
+            };
+            match addresses {
+                Ok(_) => false,
+                Err(NoAddress::Internal) => true,
+                Err(NoAddress::Unresolved(why)) => {
+                    state.log.warn(
+                        "the provider's name did not resolve on this host",
+                        &fields([("host", hostname.as_str().into()), ("detail", why.into())]),
+                    );
+                    return Some(
+                        (
+                            axum::http::StatusCode::BAD_GATEWAY,
+                            "the provider's name did not resolve\n",
+                        )
+                            .into_response(),
+                    );
+                }
+            }
+        }
+        None => true,
+    };
+    if internal {
+        state.log.warn(
+            "a provider is configured at a host-internal address",
+            &fields([("provider", route.prefix.as_str().into())]),
+        );
+        return Some(
+            (
+                axum::http::StatusCode::BAD_GATEWAY,
+                "the provider is not at a reachable address\n",
+            )
+                .into_response(),
+        );
+    }
+    None
 }
 
 /// The outbound request, with the session's key replaced by the real one.
@@ -614,7 +673,7 @@ fn stream_answer(answered: reqwest::Response) -> axum::response::Response {
 }
 
 /// Where a resolved name comes back as.
-pub(crate) type ResolveFuture = Pin<Box<dyn Future<Output = Vec<String>> + Send>>;
+pub(crate) type ResolveFuture = Pin<Box<dyn Future<Output = Result<Vec<String>, String>> + Send>>;
 
 /// The host of a URL, without pulling in a full URL parser for one field.
 fn url_host(target: &str) -> Option<String> {

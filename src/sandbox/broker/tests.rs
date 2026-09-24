@@ -9,8 +9,8 @@ use tokio::net::TcpStream;
 
 use super::server::{Broker, dial, read_request_head};
 use super::{
-    ProviderRoute, Resolve, host_allowed, is_private_address, parse_connect, parse_forward,
-    public_addresses,
+    NoAddress, ProviderRoute, Resolve, host_allowed, is_private_address, parse_connect,
+    parse_forward, public_addresses,
 };
 use crate::log::{LogFields, Logger};
 
@@ -25,7 +25,7 @@ fn resolver(addresses: &[&str]) -> Resolve {
         .collect();
     Arc::new(move |_name| {
         let addresses = addresses.clone();
-        Box::pin(async move { addresses.clone() })
+        Box::pin(async move { Ok(addresses.clone()) })
     })
 }
 
@@ -449,7 +449,7 @@ async fn a_name_is_judged_by_where_it_resolves_not_by_its_spelling() {
     // Resolves to loopback: nothing to dial.
     assert_eq!(
         public_addresses("rebind.test", false, Some(&resolver(&["127.0.0.1"]))).await,
-        Vec::<String>::new()
+        Err(NoAddress::Internal)
     );
     // Mixed: the public ones are what get dialled, in resolver order, and they
     // are addresses, so what was judged is what is used rather than the name
@@ -461,14 +461,33 @@ async fn a_name_is_judged_by_where_it_resolves_not_by_its_spelling() {
             Some(&resolver(&["10.0.0.1", "9.9.9.9", "1.1.1.1"]))
         )
         .await,
-        ["9.9.9.9", "1.1.1.1"]
+        Ok(vec!["9.9.9.9".to_owned(), "1.1.1.1".to_owned()])
     );
     // A literal internal target does not even reach the resolver.
-    assert!(
-        public_addresses("169.254.169.254", false, None)
-            .await
-            .is_empty()
+    assert_eq!(
+        public_addresses("169.254.169.254", false, None).await,
+        Err(NoAddress::Internal)
     );
+}
+
+/// A name that does not resolve is not called internal. The fix is this
+/// host's resolver, not the allowlist, and saying otherwise sent an operator
+/// looking in the wrong place.
+#[tokio::test]
+async fn a_name_that_does_not_resolve_is_not_called_internal() {
+    let broken: Resolve = Arc::new(|_name| {
+        Box::pin(async { Err("failed to lookup address information".to_owned()) })
+    });
+    assert_eq!(
+        public_addresses("opencode.ai", true, Some(&broken)).await,
+        Err(NoAddress::Unresolved(
+            "failed to lookup address information".to_owned()
+        ))
+    );
+    assert!(matches!(
+        public_addresses("opencode.ai", false, Some(&resolver(&[]))).await,
+        Err(NoAddress::Unresolved(_))
+    ));
 }
 
 /// The broker refuses to tunnel to the host's own loopback.
@@ -486,24 +505,28 @@ async fn a_tunnel_to_loopback_is_refused_even_under_a_lone_star() {
 /// theirs to decide, so it stays refused even with the flag on.
 #[tokio::test]
 async fn allow_internal_admits_a_literal_address_never_a_name() {
-    assert_eq!(public_addresses("10.0.0.5", true, None).await, ["10.0.0.5"]);
+    assert_eq!(
+        public_addresses("10.0.0.5", true, None).await,
+        Ok(vec!["10.0.0.5".to_owned()])
+    );
     assert_eq!(
         public_addresses("127.0.0.1", true, None).await,
-        ["127.0.0.1"]
+        Ok(vec!["127.0.0.1".to_owned()])
     );
-    assert!(public_addresses("10.0.0.5", false, None).await.is_empty());
+    assert_eq!(
+        public_addresses("10.0.0.5", false, None).await,
+        Err(NoAddress::Internal)
+    );
 
     // A name that resolves internally is refused whether the flag is on or off.
     let mirror = resolver(&["10.0.0.5"]);
-    assert!(
-        public_addresses("mirror.internal", true, Some(&mirror))
-            .await
-            .is_empty()
+    assert_eq!(
+        public_addresses("mirror.internal", true, Some(&mirror)).await,
+        Err(NoAddress::Internal)
     );
-    assert!(
-        public_addresses("mirror.internal", false, Some(&mirror))
-            .await
-            .is_empty()
+    assert_eq!(
+        public_addresses("mirror.internal", false, Some(&mirror)).await,
+        Err(NoAddress::Internal)
     );
 }
 
