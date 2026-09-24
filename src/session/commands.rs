@@ -398,7 +398,8 @@ pub fn asks_for_pull_request(content: &str) -> bool {
 /// Reads an account id from a mention or a bare id.
 ///
 /// A client sends a mention as `<@id>`, and somebody typing by hand will paste
-/// the id on its own, so both are accepted. Anything else is not an account,
+/// the id on its own, so both are accepted. A GitHub account, which a comment
+/// names as `@login`, arrives as `<@github:login>`. Anything else is not an account,
 /// and is refused rather than guessed at: `!deny` acting on the wrong id
 /// removes the wrong person.
 pub fn parse_user_id(text: &str) -> Option<String> {
@@ -407,6 +408,16 @@ pub fn parse_user_id(text: &str) -> Option<String> {
     }
 
     let trimmed = text.trim();
+    if let Some(login) = trimmed
+        .strip_prefix("<@github:")
+        .and_then(|rest| rest.strip_suffix('>'))
+    {
+        let is_login = (1..=39).contains(&login.len())
+            && login
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+        return is_login.then(|| format!("github:{}", login.to_ascii_lowercase()));
+    }
     if let Some(rest) = trimmed.strip_prefix("<@") {
         let rest = rest.strip_prefix('!').unwrap_or(rest);
         if let Some(digits) = rest.strip_suffix('>') {

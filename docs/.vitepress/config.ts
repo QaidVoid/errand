@@ -24,6 +24,7 @@ export default defineConfig({
           { text: "What it is", link: "/" },
           { text: "Getting started", link: "/start" },
           { text: "In a thread", link: "/threads" },
+          { text: "On GitHub", link: "/github" },
           { text: "Instructions", link: "/instructions" },
           { text: "Memory", link: "/memory" },
           { text: "Two models", link: "/models" },

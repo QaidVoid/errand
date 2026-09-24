@@ -18,6 +18,7 @@ fn github() -> GithubConfig {
         token: "ghp-value".to_owned(),
         user_name: "errand-bot".to_owned(),
         user_email: "bot@example.com".to_owned(),
+        trigger: None,
     }
 }
 

@@ -857,3 +857,35 @@ fn asking_a_provider_needs_a_base_url_and_a_key() {
             .any(|problem| problem.contains("providers.zai"))
     );
 }
+
+/// Asking for work from GitHub names who may, and never everybody.
+#[test]
+fn a_github_trigger_names_who_may_ask_and_never_everybody() {
+    let github = |trigger: Value| {
+        valid(json!({ "github": {
+            "token": "ghp", "userName": "bot", "userEmail": "bot@example.com",
+            "trigger": trigger,
+        } }))
+    };
+
+    let config = validate_config(&github(json!({ "allowedUsers": ["QaidVoid"] }))).expect("valid");
+    assert_eq!(
+        config
+            .github
+            .and_then(|github| github.trigger)
+            .map(|trigger| trigger.allowed_users),
+        Some(vec!["QaidVoid".to_owned()])
+    );
+    assert!(problems_contain(
+        &github(json!({ "allowedUsers": [] })),
+        "must name the GitHub logins"
+    ));
+    assert!(problems_contain(
+        &github(json!({ "allowedUsers": ["*"] })),
+        "cannot be \"*\""
+    ));
+    assert!(problems_contain(
+        &github(json!({ "on": ["mention"], "allowedUsers": ["a"] })),
+        "github.trigger"
+    ));
+}

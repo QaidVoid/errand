@@ -27,12 +27,16 @@ use crate::chat::threads::ChatThreadFactory;
 use crate::chat::threads::plain;
 use crate::config::load::Environment;
 use crate::config::redact::{redact_text, secret_values};
-use crate::config::schema::{AgentConfig, Config, EgressMode};
+use crate::config::schema::{AgentConfig, Config, EgressMode, GithubConfig, GithubTrigger};
 use crate::config::usage::UsageShape;
 use crate::daemon::SlashCommand;
 use crate::daemon::StartError;
 use crate::daemon::{Daemon, DaemonOptions};
 use crate::daemon::{create_sandbox, probe_sandbox};
+use crate::issues::poll::{Poller, decide};
+use crate::issues::route::ByThread;
+use crate::issues::thread::is_github_thread;
+use crate::issues::view::IssueThreads;
 use crate::lock::DaemonLock;
 use crate::lock::acquire_lock;
 use crate::log::now_ms;
@@ -64,6 +68,7 @@ use crate::sandbox::broker::{LOOKUP_TIMEOUT, NoAddress, public_addresses};
 use crate::sandbox::paths;
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
 use crate::session::model::{configured_model, split_level};
+use crate::session::pr::{ApiCall, call_api};
 use crate::session::session::DescribeImages;
 use crate::session::session::IncomingMessage;
 use crate::session::session::Unavailable;
@@ -77,6 +82,77 @@ pub const MEMORY_FILENAME: &str = "memory.db";
 
 /// How long the chat service has to answer a login.
 const READY_TIMEOUT_MS: u64 = 30_000;
+
+/// How often GitHub is asked what was said to the bot. GitHub asks for no
+/// more than once a minute.
+const GITHUB_POLL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Starts hearing what is said to the bot on GitHub, for as long as the
+/// daemon runs.
+///
+/// Whose token it is decides whose mentions count, so the login is asked for
+/// first. A token that cannot say whose it is leaves GitHub unheard, and the
+/// log says so, rather than stopping a daemon that still serves the chat.
+async fn listen_on_github(
+    github: &GithubConfig,
+    trigger: &GithubTrigger,
+    daemon: Arc<Daemon>,
+    log: &Logger,
+) {
+    let me = call_api(
+        "/user".to_owned(),
+        ApiCall {
+            method: "GET".to_owned(),
+            token: github.token.clone(),
+            body: None,
+        },
+    )
+    .await;
+    let Some(bot) = me.body["login"].as_str().filter(|_| me.status == 200) else {
+        log.error(
+            "GitHub did not say whose token this is, so nothing said there is heard",
+            &fields([("status", LogValue::from(i64::from(me.status)))]),
+        );
+        return;
+    };
+    log.info(
+        "listening on GitHub",
+        &fields([
+            ("as", LogValue::from(bot)),
+            ("allowed", LogValue::from(trigger.allowed_users.join(", "))),
+        ]),
+    );
+    let poller = Poller {
+        api: Arc::new(call_api),
+        token: github.token.clone(),
+        bot: bot.to_owned(),
+        allowed: trigger.allowed_users.clone(),
+        since: jiff::Timestamp::now(),
+        log: log.clone(),
+    };
+    let log = log.clone();
+    tokio::spawn(async move {
+        loop {
+            match poller.poll().await {
+                Ok(heard) => {
+                    for heard in heard {
+                        let sessions = daemon.sessions();
+                        let held = sessions.for_thread(&heard.thread_id).is_some()
+                            || sessions.can_resume(&heard.thread_id);
+                        if let Some((message, decision)) = decide(heard, held) {
+                            daemon.handle(message, decision).await;
+                        }
+                    }
+                }
+                Err(why) => log.warn(
+                    "GitHub could not be asked what was said to the bot; asking again shortly",
+                    &fields([("detail", LogValue::from(why))]),
+                ),
+            }
+            tokio::time::sleep(GITHUB_POLL).await;
+        }
+    });
+}
 
 /// How long a provider may take to list its models.
 const DISCOVER_TIMEOUT_MS: u64 = 10_000;
@@ -802,6 +878,20 @@ async fn run(
         watching,
     ));
 
+    // Only when somebody may ask for work there: otherwise GitHub stays where
+    // work is sent, and nothing about it is started.
+    let issue_threads = config
+        .github
+        .as_ref()
+        .filter(|github| github.trigger.is_some())
+        .map(|github| {
+            Arc::new(IssueThreads {
+                api: Arc::new(call_api),
+                token: github.token.clone(),
+                log: log.clone(),
+            })
+        });
+
     let memory = Arc::new(
         MemoryStore::open(std::path::Path::new(&config.state_dir).join(MEMORY_FILENAME))
             .expect("the memory store opens"),
@@ -961,7 +1051,14 @@ async fn run(
                     })
                 }
             }
-            Arc::new(FactoryAdapter(thread_factory)) as Arc<dyn ThreadFactory>
+            let chat = Arc::new(FactoryAdapter(thread_factory)) as Arc<dyn ThreadFactory>;
+            match &issue_threads {
+                Some(issues) => Arc::new(ByThread {
+                    chat,
+                    issues: Arc::clone(issues),
+                }) as Arc<dyn ThreadFactory>,
+                None => chat,
+            }
         },
         log: log.clone(),
         reply_in_channel: {
@@ -969,12 +1066,24 @@ async fn run(
             let secrets = secrets.to_vec();
             let log = log.clone();
             let served = *served_channel;
+            let issues = issue_threads.clone();
             Arc::new(move |message: IncomingMessage, text: String| {
                 let http = Arc::clone(&http);
                 let secrets = secrets.clone();
                 let log = log.clone();
+                let issues = issues.clone();
                 Box::pin(async move {
-                    reply_in_channel(&http, &log, &secrets, served, &message, &text).await;
+                    match issues.filter(|_| is_github_thread(&message.channel_id)) {
+                        // Said on an issue, so answered there. The view has
+                        // already said why, if it could not be posted.
+                        Some(issues) => {
+                            let text = redact_text(&text, &secrets);
+                            let _ = issues.comment(&message.channel_id, &text).await;
+                        }
+                        None => {
+                            reply_in_channel(&http, &log, &secrets, served, &message, &text).await;
+                        }
+                    }
                 })
             })
         },
@@ -1035,6 +1144,15 @@ async fn run(
 
     if daemon.start(Some(report)).await.is_err() {
         return Exit::Failed;
+    }
+    if let (Some(github), Some(trigger)) = (
+        config.github.as_ref(),
+        config
+            .github
+            .as_ref()
+            .and_then(|github| github.trigger.as_ref()),
+    ) {
+        listen_on_github(github, trigger, Arc::clone(&daemon), log).await;
     }
 
     // Registered after startup, so a bot invited without the commands scope

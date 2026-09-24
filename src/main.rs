@@ -31,6 +31,7 @@ mod chat;
 mod cli;
 mod config;
 mod daemon;
+mod issues;
 mod lock;
 mod log;
 mod memory;

@@ -82,6 +82,8 @@ The GitHub identity a session works with, when one is configured.  A session wit
 | `token` | `string` | required | Token the agent authenticates with. Secret, and reachable by the agent. |
 | `userName` | `string` | required | Name commits are authored with. |
 | `userEmail` | `string` | required | Email commits are authored with. |
+| `trigger` | `GithubTrigger or undefined` | none | Who may start a session from GitHub, by mentioning the bot's account on an issue or pull request or assigning one to it. Absent means GitHub is only where work is sent, never where it is asked for. |
+| `allowedUsers` | `Vec<String` | none | The GitHub logins whose mentions and assignments start a session, and whose comments continue one. Nobody else is heard: on a public repository anyone can comment, and every session runs code. |
 
 ## sandbox
 

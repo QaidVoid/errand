@@ -13,8 +13,8 @@ use super::{is_absolute, resolve};
 use crate::config::discover::Discovery;
 use crate::config::schema::{
     self, AgentConfig, ChatConfig, Config, ConfigError, DelegateConfig, EgressConfig, EgressMode,
-    GithubConfig, LimitsConfig, NetworkMode, OutputConfig, PolicyExtraConfig, SandboxBackend,
-    SandboxConfig, ShutdownConfig, TimeoutsConfig, WebConfig,
+    GithubConfig, GithubTrigger, LimitsConfig, NetworkMode, OutputConfig, PolicyExtraConfig,
+    SandboxBackend, SandboxConfig, ShutdownConfig, TimeoutsConfig, WebConfig,
 };
 use crate::config::size::parse_size;
 use crate::config::usage::UsageShape;
@@ -61,7 +61,7 @@ const KNOWN_AGENT: [&str; 10] = [
     "credentialName",
 ];
 const KNOWN_DELEGATE: [&str; 4] = ["model", "perTurn", "deadlineMs", "baseUrl"];
-const KNOWN_GITHUB: [&str; 3] = ["token", "userName", "userEmail"];
+const KNOWN_GITHUB: [&str; 4] = ["token", "userName", "userEmail", "trigger"];
 const KNOWN_SANDBOX: [&str; 20] = [
     "backend",
     "requireFullEnforcement",
@@ -725,7 +725,33 @@ fn validate_github(raw: &Map<String, Value>, problems: &mut Problems) -> Option<
         token: required_string(&source, "token", "github", problems),
         user_name: required_string(&source, "userName", "github", problems),
         user_email: required_string(&source, "userEmail", "github", problems),
+        trigger: validate_github_trigger(&source, problems),
     })
+}
+
+/// Reads who may ask for work from GitHub, if anybody.
+///
+/// A wildcard is refused rather than read: on a public repository anyone can
+/// comment, so "anyone" would mean running whatever a stranger wrote.
+fn validate_github_trigger(
+    source: &Map<String, Value>,
+    problems: &mut Problems,
+) -> Option<GithubTrigger> {
+    source.get("trigger")?;
+    let trigger = section(source, "trigger");
+    reject_unknown(&trigger, &["allowedUsers"], "github.trigger", problems);
+    let allowed_users = id_list(&trigger, "allowedUsers", "github.trigger", problems);
+    if allowed_users.is_empty() {
+        problems
+            .add("github.trigger.allowedUsers must name the GitHub logins that may ask for work");
+    }
+    if allowed_users.iter().any(|login| login == "*") {
+        problems.add(
+            "github.trigger.allowedUsers cannot be \"*\": anyone can comment on a public \
+             repository, and every session runs code",
+        );
+    }
+    Some(GithubTrigger { allowed_users })
 }
 
 /// Reads the paths granted on top of the generated policy, if any.

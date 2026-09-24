@@ -94,6 +94,11 @@ fn an_account_is_named_by_a_mention_or_by_its_bare_id() {
         Some("123456789".to_owned())
     );
     assert_eq!(parse_user_id("123456789"), Some("123456789".to_owned()));
+    assert_eq!(
+        parse_user_id("<@github:QaidVoid>"),
+        Some("github:qaidvoid".to_owned())
+    );
+    assert_eq!(parse_user_id("<@github:not a login>"), None);
 }
 
 /// Guessing at an id means `!deny` withdrawing somebody who was never named.

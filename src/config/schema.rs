@@ -244,6 +244,20 @@ pub struct GithubConfig {
     pub user_name: String,
     /// Email commits are authored with.
     pub user_email: String,
+    /// Who may start a session from GitHub, by mentioning the bot's account
+    /// on an issue or pull request or assigning one to it. Absent means GitHub
+    /// is only where work is sent, never where it is asked for.
+    pub trigger: Option<GithubTrigger>,
+}
+
+/// Who may ask for work from GitHub.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubTrigger {
+    /// The GitHub logins whose mentions and assignments start a session, and
+    /// whose comments continue one. Nobody else is heard: on a public
+    /// repository anyone can comment, and every session runs code.
+    pub allowed_users: Vec<String>,
 }
 
 /// Paths granted to a session on top of what the daemon already grants.

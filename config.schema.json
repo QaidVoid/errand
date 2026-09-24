@@ -120,12 +120,19 @@
         "userEmail": {
           "type": "string",
           "description": "Email commits are authored with."
+        },
+        "trigger": {
+          "description": "Who may start a session from GitHub, by mentioning the bot's account on an issue or pull request or assigning one to it. Absent means GitHub is only where work is sent, never where it is asked for."
+        },
+        "allowedUsers": {
+          "description": "The GitHub logins whose mentions and assignments start a session, and whose comments continue one. Nobody else is heard: on a public repository anyone can comment, and every session runs code."
         }
       },
       "required": [
         "token",
         "userName",
-        "userEmail"
+        "userEmail",
+        "allowedUsers"
       ]
     },
     "projectRoot": {
