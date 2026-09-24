@@ -464,7 +464,7 @@ fn an_operators_provider_definition_survives_the_brokers_base_url() {
             nonce: "n-meta".to_owned(),
         },
     );
-    let merged = provider_config(&defined, &brokered, &BTreeMap::new());
+    let merged = provider_config(&defined, &brokered, &BTreeMap::new(), false);
     let providers = merged
         .get("providers")
         .and_then(Value::as_object)
@@ -506,7 +506,7 @@ fn a_provider_the_operator_never_defined_still_gets_its_base_url() {
             nonce: "n".to_owned(),
         },
     );
-    let merged = provider_config(&serde_json::Map::new(), &brokered, &BTreeMap::new());
+    let merged = provider_config(&serde_json::Map::new(), &brokered, &BTreeMap::new(), false);
     let providers = merged
         .get("providers")
         .and_then(Value::as_object)
@@ -521,14 +521,16 @@ fn a_provider_the_operator_never_defined_still_gets_its_base_url() {
     );
 }
 
+/// Under a broker the key stays with the daemon, even for a provider the
+/// broker has no route to.
 #[test]
-fn without_a_broker_the_definitions_pass_through_less_the_credential() {
+fn an_unbrokered_definition_passes_through_less_the_credential() {
     let mut defined = serde_json::Map::new();
     defined.insert(
         "meta".to_owned(),
         json!({ "baseUrl": "https://api.meta.example/v1", "credential": "k" }),
     );
-    let merged = provider_config(&defined, &BTreeMap::new(), &BTreeMap::new());
+    let merged = provider_config(&defined, &BTreeMap::new(), &BTreeMap::new(), false);
     let providers = merged
         .get("providers")
         .and_then(Value::as_object)
@@ -537,6 +539,30 @@ fn without_a_broker_the_definitions_pass_through_less_the_credential() {
     assert_eq!(
         providers.get("meta"),
         Some(&json!({ "baseUrl": "https://api.meta.example/v1" }))
+    );
+}
+
+/// With no broker to put a key on, every provider carries its own, so the
+/// agent can switch to any of them. A key written as `apiKey` is kept.
+#[test]
+fn without_a_broker_each_credential_becomes_the_providers_key() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "zai-coding-cn".to_owned(),
+        json!({ "credential": "z-key", "models": [{ "id": "glm-5.3" }] }),
+    );
+    defined.insert(
+        "meta".to_owned(),
+        json!({ "baseUrl": "https://api.meta.example/v1", "apiKey": "own-key", "credential": "k" }),
+    );
+    let merged = provider_config(&defined, &BTreeMap::new(), &BTreeMap::new(), true);
+
+    assert_eq!(
+        merged["providers"],
+        json!({
+            "zai-coding-cn": { "apiKey": "z-key", "models": [{ "id": "glm-5.3" }] },
+            "meta": { "baseUrl": "https://api.meta.example/v1", "apiKey": "own-key" },
+        })
     );
 }
 
@@ -568,7 +594,7 @@ fn an_entry_for_a_built_in_model_is_laid_over_its_definition() {
             "contextWindow": 1_000_000,
         })],
     )]);
-    let merged = provider_config(&defined, &BTreeMap::new(), &built_in);
+    let merged = provider_config(&defined, &BTreeMap::new(), &built_in, false);
 
     assert_eq!(
         merged["providers"]["zai-coding-cn"]["models"],
@@ -598,7 +624,7 @@ fn an_extension_provider_is_left_out_of_what_is_written() {
         "meta".to_owned(),
         json!({ "baseUrl": "https://api.meta.example/v1", "credential": "k" }),
     );
-    let merged = provider_config(&defined, &BTreeMap::new(), &BTreeMap::new());
+    let merged = provider_config(&defined, &BTreeMap::new(), &BTreeMap::new(), false);
     let providers = merged
         .get("providers")
         .and_then(Value::as_object)

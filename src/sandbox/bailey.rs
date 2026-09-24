@@ -174,10 +174,16 @@ pub struct BrokeredProvider {
 /// replacing it wholesale would leave the agent with a provider it has never
 /// heard of. Only the base URL is taken from the broker, so everything else
 /// the operator said about that provider still stands.
+///
+/// Without a broker there is nothing to put a key on in transit, so with
+/// `hand_over_keys` each credential is written as the provider's `apiKey`.
+/// Otherwise only the provider the session starts on would have one, and the
+/// agent refuses to switch to any other.
 pub fn provider_config(
     defined: &Map<String, Value>,
     brokered: &BTreeMap<String, BrokeredProvider>,
     built_in: &BTreeMap<String, Vec<Value>>,
+    hand_over_keys: bool,
 ) -> Map<String, Value> {
     let mut providers = Map::new();
     for (name, definition) in defined {
@@ -191,9 +197,14 @@ pub fn provider_config(
             _ => Map::new(),
         };
         // The credential is the daemon's record of how to reach the provider,
-        // not the agent's. It is taken out here and put on at the broker
-        // instead.
-        fields.remove("credential");
+        // not the agent's. Under a broker it is put on there instead.
+        let credential = fields.remove("credential");
+        if hand_over_keys
+            && !fields.contains_key("apiKey")
+            && let Some(credential) = credential
+        {
+            fields.insert("apiKey".to_owned(), credential);
+        }
         // How the daemon asks about the window is the daemon's business too,
         // and the agent's configuration would only report it as a field it
         // does not know.
@@ -422,7 +433,8 @@ impl BaileySandbox {
         }
     }
 
-    /// Points the agent at the broker in place of the provider.
+    /// Points the agent at the broker in place of the provider, or, with no
+    /// broker, hands it each provider's key.
     ///
     /// Written as a `models.json` override in the agent's own configuration
     /// directory, which names a base URL and nothing else, so every model the
@@ -451,7 +463,12 @@ impl BaileySandbox {
             return Ok(());
         }
 
-        let providers = provider_config(defined, &brokered, &self.options.built_in);
+        let providers = provider_config(
+            defined,
+            &brokered,
+            &self.options.built_in,
+            self.config.egress.mode != EgressMode::Proxy,
+        );
 
         let directory = std::path::Path::new(&launch.state_dir)
             .join("home")

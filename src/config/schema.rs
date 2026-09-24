@@ -131,7 +131,9 @@ pub struct AgentConfig {
     /// optionally the `credentialName` the agent reads it from, and whatever
     /// else the agent's own configuration takes: `baseUrl`, `api`, `models`.
     /// Written into the agent's configuration verbatim apart from the
-    /// credential, because that schema belongs to the agent. The exception is
+    /// credential, because that schema belongs to the agent. The credential
+    /// is put on at the broker under `egress.mode = proxy`, and is otherwise
+    /// written as the provider's `apiKey`. The exception to verbatim is
     /// an entry of `models` naming a model the host's store already defines
     /// for that provider: it is laid over that definition, so setting only
     /// `contextWindow` keeps the model's reasoning, thinking levels, and
