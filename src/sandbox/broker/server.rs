@@ -10,8 +10,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
 use super::{
-    ALLOWED_UPSTREAM_PORTS, ProviderRoute, ProviderState, host_allowed, parse_connect,
-    public_address,
+    ALLOWED_UPSTREAM_PORTS, ConnectTarget, DIAL_TIMEOUT, LOOKUP_TIMEOUT, ProviderRoute,
+    ProviderState, host_allowed, parse_connect, public_addresses,
 };
 use crate::log::Logger;
 use crate::log::fields;
@@ -53,10 +53,14 @@ impl Broker {
     /// Runs on the async runtime, which owns the accept loop and the provider
     /// endpoint from here on.
     pub async fn listen(&mut self, host: &str) -> std::io::Result<u16> {
+        let client = reqwest::Client::builder()
+            .connect_timeout(DIAL_TIMEOUT)
+            .build()
+            .map_err(std::io::Error::other)?;
         let provider_port = if self.routes.is_empty() {
             0
         } else {
-            self.start_provider().await
+            self.start_provider(client.clone()).await
         };
         let listener = TcpListener::bind((host, 0)).await?;
         let port = listener.local_addr()?.port();
@@ -67,7 +71,7 @@ impl Broker {
             log: self.log.clone(),
             resolve: None,
             provider_port,
-            client: reqwest::Client::new(),
+            client,
         });
         let (shutdown_sender, mut shutdown_receiver) = oneshot::channel::<()>();
         tokio::spawn(async move {
@@ -85,7 +89,7 @@ impl Broker {
         Ok(port)
     }
 
-    async fn start_provider(&mut self) -> u16 {
+    async fn start_provider(&mut self, client: reqwest::Client) -> u16 {
         let (shutdown_sender, shutdown_receiver) = oneshot::channel::<()>();
         let app = axum::Router::new().fallback(
             |axum::extract::State(state): axum::extract::State<Arc<ProviderState>>,
@@ -100,7 +104,7 @@ impl Broker {
             log: self.log.clone(),
             resolve: None,
             provider_port: 0,
-            client: reqwest::Client::new(),
+            client,
         });
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -153,64 +157,95 @@ async fn handle(stream: TcpStream, state: Arc<ProviderState>) {
         let _ = refuse(&mut writer, 400, "the broker speaks only CONNECT").await;
         return;
     };
-    if !ALLOWED_UPSTREAM_PORTS.contains(&target.port) || !host_allowed(&target.host, &state.allow) {
+    let Some(upstream) = admit(&mut writer, &target, &state).await else {
+        return;
+    };
+    if writer
+        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let (mut up_reader, mut up_writer) = upstream.into_split();
+    let outbound = tokio::io::copy(&mut reader, &mut up_writer);
+    let inbound = tokio::io::copy(&mut up_reader, &mut writer);
+    let _ = tokio::join!(outbound, inbound);
+}
+
+/// Gates a target and dials it, or refuses the client and says why.
+async fn admit<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    target: &ConnectTarget,
+    state: &ProviderState,
+) -> Option<TcpStream> {
+    let host = target.host.as_str();
+    let port = i64::from(target.port);
+    if !ALLOWED_UPSTREAM_PORTS.contains(&target.port) || !host_allowed(host, &state.allow) {
         state.log.info(
             "egress refused",
-            &fields([
-                ("host", target.host.as_str().into()),
-                ("port", i64::from(target.port).into()),
-            ]),
+            &fields([("host", host.into()), ("port", port.into())]),
         );
-        let _ = refuse(&mut writer, 403, "not on the egress allowlist").await;
-        return;
+        let _ = refuse(writer, 403, "not on the egress allowlist").await;
+        return None;
     }
 
     // Where the name actually points is checked, not just whether it is
     // allowed: the broker runs on the host, so dialling the host's own network
     // through it is a way back in that the namespace was built to close.
-    let address = public_address(&target.host, state.allow_internal, state.resolve.as_ref()).await;
-    let Some(address) = address else {
-        state.log.warn(
-            "egress refused a host-internal target",
-            &fields([("host", target.host.as_str().into())]),
-        );
-        let _ = refuse(&mut writer, 403, "not a public host").await;
-        return;
+    let lookup = public_addresses(host, state.allow_internal, state.resolve.as_ref());
+    let Ok(addresses) = tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await else {
+        state
+            .log
+            .warn("egress lookup timed out", &fields([("host", host.into())]));
+        let _ = refuse(writer, 504, "the name did not resolve in time").await;
+        return None;
     };
+    if addresses.is_empty() {
+        state.log.warn(
+            "egress refused a target with no public address",
+            &fields([("host", host.into())]),
+        );
+        let _ = refuse(writer, 403, "not a public host").await;
+        return None;
+    }
 
-    let upstream = tokio::net::TcpStream::connect((address.as_str(), target.port)).await;
-    match upstream {
+    match dial(&addresses, target.port).await {
         Ok(upstream) => {
-            if writer
-                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-                .await
-                .is_err()
-            {
-                return;
-            }
             state.log.info(
                 "egress allowed",
-                &fields([
-                    ("host", target.host.as_str().into()),
-                    ("port", i64::from(target.port).into()),
-                ]),
+                &fields([("host", host.into()), ("port", port.into())]),
             );
-            let (mut up_reader, mut up_writer) = upstream.into_split();
-            let outbound = tokio::io::copy(&mut reader, &mut up_writer);
-            let inbound = tokio::io::copy(&mut up_reader, &mut writer);
-            let _ = tokio::join!(outbound, inbound);
+            Some(upstream)
         }
         Err(error) => {
-            let _ = refuse(&mut writer, 502, "upstream unreachable").await;
+            let _ = refuse(writer, 502, "upstream unreachable").await;
             state.log.warn(
                 "upstream connect failed",
-                &fields([
-                    ("host", target.host.as_str().into()),
-                    ("detail", error.to_string().into()),
-                ]),
+                &fields([("host", host.into()), ("detail", error.to_string().into())]),
             );
+            None
         }
     }
+}
+
+/// Dials each address in turn, giving each [`DIAL_TIMEOUT`] to accept.
+pub(super) async fn dial(addresses: &[String], port: u16) -> std::io::Result<TcpStream> {
+    let mut last = std::io::Error::other("no address to dial");
+    for address in addresses {
+        let connect = TcpStream::connect((address.as_str(), port));
+        match tokio::time::timeout(DIAL_TIMEOUT, connect).await {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(error)) => last = error,
+            Err(_) => {
+                last = std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("{address} did not accept in time"),
+                );
+            }
+        }
+    }
+    Err(last)
 }
 
 /// Hands a connection to the provider server, head and all.

@@ -7,9 +7,9 @@ use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::server::{Broker, read_request_head};
+use super::server::{Broker, dial, read_request_head};
 use super::{
-    ProviderRoute, Resolve, host_allowed, is_private_address, parse_connect, public_address,
+    ProviderRoute, Resolve, host_allowed, is_private_address, parse_connect, public_addresses,
 };
 use crate::log::{LogFields, Logger};
 
@@ -384,23 +384,27 @@ fn host_internal_addresses_are_refused_whatever_the_allowlist_says() {
 async fn a_name_is_judged_by_where_it_resolves_not_by_its_spelling() {
     // Resolves to loopback: nothing to dial.
     assert_eq!(
-        public_address("rebind.test", false, Some(&resolver(&["127.0.0.1"]))).await,
-        None
+        public_addresses("rebind.test", false, Some(&resolver(&["127.0.0.1"]))).await,
+        Vec::<String>::new()
     );
-    // Mixed: the public one is what gets dialled, and it is an address, so
-    // what was judged is what is used rather than the name resolved a second
-    // time.
+    // Mixed: the public ones are what get dialled, in resolver order, and they
+    // are addresses, so what was judged is what is used rather than the name
+    // resolved a second time.
     assert_eq!(
-        public_address(
+        public_addresses(
             "mixed.test",
             false,
-            Some(&resolver(&["10.0.0.1", "9.9.9.9"]))
+            Some(&resolver(&["10.0.0.1", "9.9.9.9", "1.1.1.1"]))
         )
         .await,
-        Some("9.9.9.9".to_owned())
+        ["9.9.9.9", "1.1.1.1"]
     );
     // A literal internal target does not even reach the resolver.
-    assert_eq!(public_address("169.254.169.254", false, None).await, None);
+    assert!(
+        public_addresses("169.254.169.254", false, None)
+            .await
+            .is_empty()
+    );
 }
 
 /// The broker refuses to tunnel to the host's own loopback.
@@ -418,25 +422,24 @@ async fn a_tunnel_to_loopback_is_refused_even_under_a_lone_star() {
 /// theirs to decide, so it stays refused even with the flag on.
 #[tokio::test]
 async fn allow_internal_admits_a_literal_address_never_a_name() {
+    assert_eq!(public_addresses("10.0.0.5", true, None).await, ["10.0.0.5"]);
     assert_eq!(
-        public_address("10.0.0.5", true, None).await,
-        Some("10.0.0.5".to_owned())
+        public_addresses("127.0.0.1", true, None).await,
+        ["127.0.0.1"]
     );
-    assert_eq!(
-        public_address("127.0.0.1", true, None).await,
-        Some("127.0.0.1".to_owned())
-    );
-    assert_eq!(public_address("10.0.0.5", false, None).await, None);
+    assert!(public_addresses("10.0.0.5", false, None).await.is_empty());
 
     // A name that resolves internally is refused whether the flag is on or off.
     let mirror = resolver(&["10.0.0.5"]);
-    assert_eq!(
-        public_address("mirror.internal", true, Some(&mirror)).await,
-        None
+    assert!(
+        public_addresses("mirror.internal", true, Some(&mirror))
+            .await
+            .is_empty()
     );
-    assert_eq!(
-        public_address("mirror.internal", false, Some(&mirror)).await,
-        None
+    assert!(
+        public_addresses("mirror.internal", false, Some(&mirror))
+            .await
+            .is_empty()
     );
 }
 
@@ -573,4 +576,20 @@ async fn a_head_that_never_ends_is_refused_rather_than_cut() {
     let bytes = head.clone().into_bytes();
     let mut reader: &[u8] = &bytes;
     assert_eq!(read_request_head(&mut reader).await, Some(head));
+}
+
+/// An address that refuses does not end the dial while another is left.
+#[tokio::test]
+async fn a_dial_moves_past_an_address_that_refuses() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bound");
+    let port = listener.local_addr().expect("an address").port();
+    let addresses = ["127.0.0.2".to_owned(), "127.0.0.1".to_owned()];
+    let stream = dial(&addresses, port).await.expect("the second address");
+    assert_eq!(
+        stream.peer_addr().expect("a peer").ip().to_string(),
+        "127.0.0.1"
+    );
+    assert!(dial(&addresses[..1], port).await.is_err());
 }

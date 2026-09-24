@@ -20,6 +20,7 @@ use std::future::Future;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub use server::Broker;
 
@@ -314,31 +315,37 @@ pub fn is_private_address(address: &str) -> bool {
 /// Resolves names to addresses, injected so a test answers from a table.
 pub type Resolve = Arc<dyn Fn(String) -> ResolveFuture + Send + Sync>;
 
-/// Resolves a target to an address the broker may dial, or nothing.
+/// How long resolving a name may take before the broker gives up on it.
+pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long one upstream address may take to accept before the next is tried.
+pub const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Resolves a target to the addresses the broker may dial, in resolver order.
 ///
 /// A name is resolved here and the result is judged, so a name on the
 /// allowlist that points at the host's own network, whether by mistake or to
 /// slip past the allowlist, is refused. The connection is then made to the
-/// address that was judged rather than to the name resolved a second time, so
-/// what was checked is what is dialled.
+/// addresses that were judged rather than to the name resolved a second time,
+/// so what was checked is what is dialled.
 ///
 /// `allow_internal` relaxes this for a literal address only. An operator
 /// naming `10.0.0.5` has said which machine they mean, and no one else can
 /// change what that points at. A name resolving somewhere internal stays
 /// refused even then, because what a name points at is not the operator's to
 /// decide.
-pub async fn public_address(
+pub async fn public_addresses(
     host: &str,
     allow_internal: bool,
     resolve: Option<&Resolve>,
-) -> Option<String> {
+) -> Vec<String> {
     let literal = host.split('.').count() == 4 && host.parse::<std::net::Ipv4Addr>().is_ok()
         || host.contains(':');
     if literal {
-        if !is_private_address(host) {
-            return Some(host.to_owned());
+        if allow_internal || !is_private_address(host) {
+            return vec![host.to_owned()];
         }
-        return allow_internal.then(|| host.to_owned());
+        return Vec::new();
     }
     let addresses = match resolve {
         Some(resolve) => resolve(host.to_owned()).await,
@@ -346,7 +353,8 @@ pub async fn public_address(
     };
     addresses
         .into_iter()
-        .find(|address| !is_private_address(address))
+        .filter(|address| !is_private_address(address))
+        .collect()
 }
 
 async fn default_resolve(name: &str) -> Vec<String> {
@@ -434,9 +442,21 @@ pub(crate) async fn serve_provider_request(
     // than a quiet exception to where the broker will go.
     let hostname = url_host(&target);
     let internal = match hostname {
-        Some(hostname) => public_address(&hostname, state.allow_internal, None)
-            .await
-            .is_none(),
+        Some(hostname) => {
+            let lookup = public_addresses(&hostname, state.allow_internal, None);
+            let Ok(addresses) = tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await else {
+                state.log.warn(
+                    "the provider's name did not resolve in time",
+                    &fields([("host", hostname.as_str().into())]),
+                );
+                return (
+                    axum::http::StatusCode::GATEWAY_TIMEOUT,
+                    "the provider's name did not resolve in time\n",
+                )
+                    .into_response();
+            };
+            addresses.is_empty()
+        }
         None => true,
     };
     if internal {
