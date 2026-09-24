@@ -4,7 +4,9 @@
 //! `"gateway"` for a gateway that serves `/usage` beside its API, or an object
 //! that says where a provider shaped otherwise keeps the numbers.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+use super::path;
 
 /// Where a provider's usage window is read from.
 #[derive(Debug, Clone, PartialEq)]
@@ -24,11 +26,20 @@ pub struct MappedUsage {
     pub path: String,
     /// Whether the key is sent as `Bearer <key>` or as the key alone.
     pub bearer: bool,
-    /// Where the percentage sits in the answer, as a dotted path.
+    /// The windows to read, the one to show first. The next is shown when
+    /// one is missing or already past its reset, and a spent one is shown
+    /// over them all, since it is what stops work.
+    pub windows: Vec<MappedWindow>,
+}
+
+/// Where one window's numbers sit in the answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MappedWindow {
+    /// Where the percentage sits, as a path.
     pub percent: String,
     /// Whether that percentage is what is left rather than what is used.
     pub percent_is_left: bool,
-    /// Where the reset time sits, as a dotted path, and how it is written.
+    /// Where the reset time sits, as a path, and how it is written.
     pub resets: Option<(String, ResetFormat)>,
 }
 
@@ -63,30 +74,31 @@ impl UsageShape {
         };
 
         let mut problems = Vec::new();
-        let text = |key: &str, problems: &mut Vec<String>| match written.get(key) {
-            None => None,
-            Some(Value::String(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
-            Some(_) => {
-                problems.push(format!("{place}.{key} must be text"));
-                None
-            }
-        };
         for key in written.keys() {
-            if !["path", "auth", "percent", "percentIs", "resets", "resetsAs"]
-                .contains(&key.as_str())
+            if ![
+                "path",
+                "auth",
+                "windows",
+                "percent",
+                "percentIs",
+                "resets",
+                "resetsAs",
+            ]
+            .contains(&key.as_str())
             {
                 problems.push(format!(
-                    "{place}.{key} is not something usage takes; use path, auth, percent, \
-                     percentIs, resets, or resetsAs"
+                    "{place}.{key} is not something usage takes; use path, auth, windows, \
+                     percent, percentIs, resets, or resetsAs"
                 ));
             }
         }
 
-        let path = text("path", &mut problems).unwrap_or_else(|| "/usage".to_owned());
+        let path =
+            text(written, "path", &place, &mut problems).unwrap_or_else(|| "/usage".to_owned());
         if !path.starts_with('/') {
             problems.push(format!("{place}.path must be a path starting with /"));
         }
-        let bearer = match text("auth", &mut problems).as_deref() {
+        let bearer = match text(written, "auth", &place, &mut problems).as_deref() {
             None | Some("bearer") => true,
             Some("raw") => false,
             Some(_) => {
@@ -94,52 +106,133 @@ impl UsageShape {
                 true
             }
         };
-        let percent = text("percent", &mut problems);
-        if percent.is_none() {
-            problems.push(format!("{place}.percent must say where the percentage is"));
-        }
-        let percent_is_left = match text("percentIs", &mut problems).as_deref() {
-            Some("left") => true,
-            Some("used") => false,
-            _ => {
-                problems.push(format!(
-                    "{place}.percentIs must be \"used\" or \"left\", since reading one as the \
-                     other turns the window upside down"
-                ));
-                false
+
+        let windows = match written.get("windows") {
+            None => window(written, &place, &mut problems).into_iter().collect(),
+            Some(Value::Array(listed)) if !listed.is_empty() => {
+                if ["percent", "percentIs", "resets", "resetsAs"]
+                    .iter()
+                    .any(|key| written.contains_key(*key))
+                {
+                    problems.push(format!(
+                        "{place} names its windows under windows, so percent, percentIs, \
+                         resets, and resetsAs belong in each of them"
+                    ));
+                }
+                let mut windows = Vec::new();
+                for (index, entry) in listed.iter().enumerate() {
+                    let at = format!("{place}.windows[{index}]");
+                    match entry {
+                        Value::Object(entry) => {
+                            for key in entry.keys() {
+                                if !["percent", "percentIs", "resets", "resetsAs"]
+                                    .contains(&key.as_str())
+                                {
+                                    problems.push(format!(
+                                        "{at}.{key} is not something a window takes; use \
+                                         percent, percentIs, resets, or resetsAs"
+                                    ));
+                                }
+                            }
+                            windows.extend(window(entry, &at, &mut problems));
+                        }
+                        _ => problems.push(format!("{at} must be an object")),
+                    }
+                }
+                windows
             }
-        };
-        let resets = match (
-            text("resets", &mut problems),
-            text("resetsAs", &mut problems).as_deref(),
-        ) {
-            (None, None) => None,
-            (Some(at), Some("iso")) => Some((at, ResetFormat::Iso)),
-            (Some(at), Some("ms")) => Some((at, ResetFormat::Millis)),
-            (Some(at), Some("s")) => Some((at, ResetFormat::Seconds)),
-            (Some(_), _) => {
-                problems.push(format!(
-                    "{place}.resetsAs must be \"iso\", \"ms\", or \"s\" when resets is set"
-                ));
-                None
-            }
-            (None, Some(_)) => {
-                problems.push(format!(
-                    "{place}.resetsAs needs resets to say where the time is"
-                ));
-                None
+            Some(_) => {
+                problems.push(format!("{place}.windows must be a list of windows"));
+                Vec::new()
             }
         };
 
-        match percent {
-            Some(percent) if problems.is_empty() => Ok(Some(Self::Mapped(MappedUsage {
+        if problems.is_empty() {
+            Ok(Some(Self::Mapped(MappedUsage {
                 path,
                 bearer,
-                percent,
-                percent_is_left,
-                resets,
-            }))),
-            _ => Err(problems),
+                windows,
+            })))
+        } else {
+            Err(problems)
+        }
+    }
+}
+
+/// Reads one window's mapping out of `written`, reporting under `place`.
+fn window(
+    written: &Map<String, Value>,
+    place: &str,
+    problems: &mut Vec<String>,
+) -> Option<MappedWindow> {
+    let percent = text(written, "percent", place, problems);
+    if let Some(percent) = &percent
+        && let Err(problem) = path::check(percent)
+    {
+        problems.push(format!("{place}.percent: {problem}"));
+    }
+    if percent.is_none() {
+        problems.push(format!("{place}.percent must say where the percentage is"));
+    }
+    let percent_is_left = match text(written, "percentIs", place, problems).as_deref() {
+        Some("left") => true,
+        Some("used") => false,
+        _ => {
+            problems.push(format!(
+                "{place}.percentIs must be \"used\" or \"left\", since reading one as the \
+                 other turns the window upside down"
+            ));
+            false
+        }
+    };
+    let resets = match (
+        text(written, "resets", place, problems),
+        text(written, "resetsAs", place, problems).as_deref(),
+    ) {
+        (None, None) => None,
+        (Some(at), format) => {
+            if let Err(problem) = path::check(&at) {
+                problems.push(format!("{place}.resets: {problem}"));
+            }
+            match format {
+                Some("iso") => Some((at, ResetFormat::Iso)),
+                Some("ms") => Some((at, ResetFormat::Millis)),
+                Some("s") => Some((at, ResetFormat::Seconds)),
+                _ => {
+                    problems.push(format!(
+                        "{place}.resetsAs must be \"iso\", \"ms\", or \"s\" when resets is set"
+                    ));
+                    None
+                }
+            }
+        }
+        (None, Some(_)) => {
+            problems.push(format!(
+                "{place}.resetsAs needs resets to say where the time is"
+            ));
+            None
+        }
+    };
+    Some(MappedWindow {
+        percent: percent?,
+        percent_is_left,
+        resets,
+    })
+}
+
+/// A setting that must be text, when it is there at all.
+fn text(
+    written: &Map<String, Value>,
+    key: &str,
+    place: &str,
+    problems: &mut Vec<String>,
+) -> Option<String> {
+    match written.get(key) {
+        None => None,
+        Some(Value::String(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
+        Some(_) => {
+            problems.push(format!("{place}.{key} must be text"));
+            None
         }
     }
 }

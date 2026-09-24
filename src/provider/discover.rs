@@ -13,6 +13,7 @@ use serde_json::{Map, Value};
 use super::models::{AvailableModel, available_models};
 use super::usage::{Fetch, HttpRequest};
 use crate::config::discover::Discovery;
+use crate::config::path::at;
 use crate::config::schema::AgentConfig;
 
 /// Asks one provider for its models.
@@ -110,12 +111,6 @@ pub fn with_discovered(definition: &Value, found: &[Value]) -> Value {
     let mut fields = fields.clone();
     fields.insert("models".to_owned(), Value::Array(models));
     Value::Object(fields)
-}
-
-/// Walks a dotted path through nested objects.
-fn at<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-    path.split('.')
-        .try_fold(value, |inside, key| inside.get(key))
 }
 
 /// What asking one provider came to: how many models it listed, or why it

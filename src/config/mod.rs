@@ -11,6 +11,8 @@ use std::path::{Component, Path, PathBuf};
 pub mod discover;
 /// Finds the configuration file and reads it.
 pub mod load;
+/// Where a value sits in a JSON answer, as `discover` and `usage` name it.
+pub mod path;
 /// Removes secrets from anything about to leave the daemon.
 pub mod redact;
 /// The shape of a resolved configuration, and its defaults.

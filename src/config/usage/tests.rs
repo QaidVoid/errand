@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use super::{MappedUsage, ResetFormat, UsageShape};
+use super::{MappedUsage, MappedWindow, ResetFormat, UsageShape};
 
 #[test]
 fn a_named_shape_is_read_by_name_and_nothing_means_unmetered() {
@@ -37,10 +37,68 @@ fn a_mapping_says_where_the_numbers_are() {
         Ok(Some(UsageShape::Mapped(MappedUsage {
             path: "/v1/usage".to_owned(),
             bearer: false,
-            percent: "limiting.remainingPercent".to_owned(),
-            percent_is_left: true,
-            resets: Some(("limiting.resetsAt".to_owned(), ResetFormat::Iso)),
+            windows: vec![MappedWindow {
+                percent: "limiting.remainingPercent".to_owned(),
+                percent_is_left: true,
+                resets: Some(("limiting.resetsAt".to_owned(), ResetFormat::Iso)),
+            }],
         })))
+    );
+}
+
+#[test]
+fn several_windows_are_read_in_the_order_written() {
+    let shape = UsageShape::of(
+        "p",
+        &json!({ "usage": { "windows": [
+            { "percent": "windows[id=5h].used", "percentIs": "used" },
+            { "percent": "windows[id=1w].used", "percentIs": "used",
+              "resets": "windows[id=1w].at", "resetsAs": "ms" },
+        ] } }),
+    )
+    .expect("valid");
+
+    let Some(UsageShape::Mapped(mapped)) = shape else {
+        panic!("a mapping");
+    };
+    assert_eq!(mapped.windows.len(), 2);
+    assert_eq!(mapped.windows[0].percent, "windows[id=5h].used");
+    assert_eq!(
+        mapped.windows[1].resets,
+        Some(("windows[id=1w].at".to_owned(), ResetFormat::Millis))
+    );
+}
+
+/// A window's fields belong in the window, and a path that cannot be read is
+/// refused where it is written.
+#[test]
+fn a_window_list_is_refused_when_written_ambiguously() {
+    let problems = UsageShape::of(
+        "p",
+        &json!({ "usage": {
+            "percent": "left",
+            "windows": [{ "percent": "a[b", "percentIs": "used", "label": "5h" }],
+        } }),
+    )
+    .expect_err("refused");
+
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("belong in each of them")),
+        "{problems:?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("windows[0].percent")),
+        "{problems:?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("windows[0].label")),
+        "{problems:?}"
     );
 }
 

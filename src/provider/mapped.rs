@@ -1,26 +1,57 @@
 //! The usage window of a provider whose definition says where it is.
 //!
 //! For a provider that is neither z.ai nor a gateway of the known shape: its
-//! `usage` names the path, how the key is sent, where the percentage is and
-//! which way it reads, and where the reset time is and how it is written.
+//! `usage` names the path, how the key is sent, and for each window it keeps,
+//! where the percentage is and which way it reads, and where the reset time is
+//! and how it is written.
 
 use serde_json::Value;
 
-use super::usage::{Fetch, HttpRequest, Quota};
-use crate::config::usage::{MappedUsage, ResetFormat};
+use super::usage::{Fetch, HttpRequest, Quota, is_spent};
+use crate::config::path::at;
+use crate::config::usage::{MappedUsage, MappedWindow, ResetFormat};
+use crate::log::now_ms;
 
-/// Reads the window out of an answer, where the mapping says it is.
+/// Reads the window that matters out of an answer, where the mapping says.
 ///
-/// Returns nothing when the percentage is not where the mapping says, rather
-/// than a guess: a window read as spent would stop every session here.
-pub fn read_mapped(body: &Value, mapping: &MappedUsage) -> Option<Quota> {
-    let percent = at(body, &mapping.percent)?.as_f64()?;
-    let used = if mapping.percent_is_left {
+/// A spent window stops work whatever the others say, since a spent weekly
+/// allowance leaves nothing for the five hour one to give. So when any window
+/// is spent, the provider reads as spent until the last of them resets.
+/// Otherwise the first window is shown, or the next where one is missing or
+/// already past its reset, which is a reading left over from before it rolled.
+///
+/// Returns nothing when no window can be read, rather than a guess: a window
+/// read as spent would stop every session here.
+pub fn read_mapped(body: &Value, mapping: &MappedUsage, now: i64) -> Option<Quota> {
+    let read: Vec<Quota> = mapping
+        .windows
+        .iter()
+        .filter_map(|window| read_window(body, window))
+        .filter(|quota| quota.resets_at.is_none_or(|at| at > now))
+        .collect();
+    let spent_until = read
+        .iter()
+        .filter(|quota| is_spent(quota))
+        .map(|quota| quota.resets_at)
+        .max();
+    match spent_until {
+        Some(resets_at) => Some(Quota {
+            percentage: 100.0,
+            resets_at,
+        }),
+        None => read.into_iter().next(),
+    }
+}
+
+/// One window's reading, where the mapping says it is.
+fn read_window(body: &Value, window: &MappedWindow) -> Option<Quota> {
+    let percent = at(body, &window.percent)?.as_f64()?;
+    let used = if window.percent_is_left {
         100.0 - percent
     } else {
         percent
     };
-    let resets_at = mapping
+    let resets_at = window
         .resets
         .as_ref()
         .and_then(|(path, format)| reset_time(at(body, path)?, *format));
@@ -62,7 +93,7 @@ pub async fn fetch_mapped(
     if !response.ok() {
         return None;
     }
-    read_mapped(&response.body?, mapping)
+    read_mapped(&response.body?, mapping, now_ms())
 }
 
 /// A reset time in epoch milliseconds, read as the mapping says it is written.
@@ -76,12 +107,6 @@ fn reset_time(value: &Value, format: ResetFormat) -> Option<i64> {
         ResetFormat::Millis => value.as_i64(),
         ResetFormat::Seconds => value.as_i64().map(|seconds| seconds * 1_000),
     }
-}
-
-/// Walks a dotted path through nested objects.
-fn at<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-    path.split('.')
-        .try_fold(value, |inside, key| inside.get(key))
 }
 
 #[cfg(test)]

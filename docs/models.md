@@ -100,6 +100,27 @@ no default, because reading what is left as what is used turns the window
 upside down. `resetsAs` is `iso`, `ms`, or `s`. A provider that cannot be
 read shows as unknown and never stops a session.
 
+A path is dotted keys, and a key can pick one entry out of a list by a field it
+carries, since a provider does not promise the order of a list. A provider
+that keeps several windows lists them, the one to show first:
+
+```json
+"usage": {
+  "path": "/usage",
+  "windows": [
+    { "percent": "windows[id=window-share:300m].usedPercent", "percentIs": "used",
+      "resets": "windows[id=window-share:300m].resetsAt", "resetsAs": "iso" },
+    { "percent": "windows[id=window-share:1w].usedPercent", "percentIs": "used",
+      "resets": "windows[id=window-share:1w].resetsAt", "resetsAs": "iso" }
+  ]
+}
+```
+
+The first window is shown. One missing from the answer, or already past its
+reset, gives way to the next. A spent window outranks them all: a spent
+weekly allowance leaves nothing for the five hour window to give, so the
+provider reads as spent until the last spent window resets.
+
 ## Switching the model a session runs on
 
 `!model` lists what this host knows the provider serves. `!model <name>` moves

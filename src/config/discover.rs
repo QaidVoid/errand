@@ -8,14 +8,16 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
+use super::path;
+
 /// Where a provider lists its models, and how to read one entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Discovery {
     /// The path under the provider's `baseUrl` that answers with the list.
     pub path: String,
-    /// Where the list sits in the answer, as a dotted path.
+    /// Where the list sits in the answer, as a path.
     pub list: String,
-    /// Where each field sits in an entry, as a dotted path, keyed by the name
+    /// Where each field sits in an entry, as a path, keyed by the name
     /// the agent gives the field.
     pub fields: BTreeMap<String, String>,
     /// Fields every model found carries unless its entry says otherwise.
@@ -93,6 +95,16 @@ impl Discovery {
                 _ => problems.push(format!(
                     "{place}.{key} is not something discover takes; use path, list, fields, or defaults"
                 )),
+            }
+        }
+        for (label, at) in std::iter::once(("list", &discovery.list)).chain(
+            discovery
+                .fields
+                .iter()
+                .map(|(field, at)| (field.as_str(), at)),
+        ) {
+            if let Err(problem) = path::check(at) {
+                problems.push(format!("{place} {label}: {problem}"));
             }
         }
         if problems.is_empty() {
