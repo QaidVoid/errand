@@ -1,6 +1,12 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.2.3] - 2026-09-26
+
+
+### Fixes
+- (session) Resume on the configured model when a provider is gone ([8f117c6](https://github.com/QaidVoid/errand/commit/8f117c6360227a604be8c11fb8e28362ae0f16d4))
+
 ## [0.2.2] - 2026-09-24
 
 
