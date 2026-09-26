@@ -1555,6 +1555,62 @@ async fn a_spent_provider_still_refuses_a_prompt_that_would_use_it() {
     .await;
 }
 
+/// A thread that ran on a provider since renamed or removed comes back on the
+/// configured model rather than dying on every resume, and forgets the old
+/// one, so the next resume does not try it again.
+#[tokio::test]
+async fn a_thread_whose_provider_is_gone_resumes_on_the_configured_model() {
+    with_manager_options(
+        &json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "meta": { "baseUrl": "https://api.meta.example/v1" },
+                },
+            },
+        }),
+        None,
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .manager
+                    .start(message("demo: --model meta/one go", "m1"))
+                    .await;
+                harness
+                    .manager
+                    .end_thread("thread-1", EndReason::Idle)
+                    .await;
+                settle().await;
+                {
+                    let mut registry = harness.registry.lock().unwrap();
+                    let mut renamed = registry.get("thread-1").expect("remembered").clone();
+                    renamed.provider = Some("ajamxhacker".to_owned());
+                    renamed.model = Some("muse-spark-1.3-contributor:max".to_owned());
+                    registry.remember(renamed);
+                }
+
+                let resumed = harness
+                    .manager
+                    .resume("thread-1", message("carry on", "m2"))
+                    .await;
+
+                assert!(resumed.is_started());
+                let launched = harness.sandbox.launched.lock().unwrap()[1].clone();
+                assert_eq!(launched.provider, "anthropic");
+                assert_eq!(launched.model, None);
+                let registry = harness.registry.lock().unwrap();
+                let record = registry.get("thread-1").expect("remembered");
+                assert_eq!(
+                    (record.provider.as_deref(), record.model.as_deref()),
+                    (None, None)
+                );
+            })
+        },
+    )
+    .await;
+}
+
 /// A message deleted after its session ended is reconciled where it lies, and
 /// no session is started for it.
 #[tokio::test]

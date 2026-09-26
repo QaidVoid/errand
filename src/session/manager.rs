@@ -770,11 +770,40 @@ impl SessionManager {
             .insert(record.session_id.clone(), Arc::clone(&fan_out));
 
         // Back on the model it was working with, rather than the configured
-        // one.
-        let chosen = record.model.as_ref().map(|model| ChosenModel {
-            provider: record.provider.clone(),
-            model: model.clone(),
-        });
+        // one, unless the configuration no longer names its provider. The
+        // agent refuses to start on a provider it is not given, so every resume
+        // would end the same way, with nothing left in the thread to change it.
+        let gone = record
+            .provider
+            .clone()
+            .filter(|provider| !self.options.config.agent.providers.contains_key(provider));
+        let chosen = record
+            .model
+            .as_ref()
+            .filter(|_| gone.is_none())
+            .map(|model| ChosenModel {
+                provider: record.provider.clone(),
+                model: model.clone(),
+            });
+        if let Some(gone) = &gone {
+            self.options.log.warn(
+                "a resumed thread ran on a provider the configuration no longer names, so it \
+                 continues on the configured model",
+                &fields([
+                    ("thread", LogValue::from(thread_id)),
+                    ("provider", LogValue::from(gone.as_str())),
+                ]),
+            );
+            fan_out
+                .send(SessionEvent::Notice {
+                    text: warning_line(&format!(
+                        "`{gone}`, which this thread ran on, is no longer in the configuration, \
+                         so it continues on the configured model"
+                    )),
+                    level: NoticeLevel::Started,
+                })
+                .await;
+        }
         let session = SessionHandle::spawn(SessionOptions {
             id: record.session_id.clone(),
             project: ProjectSelection {
@@ -832,6 +861,10 @@ impl SessionManager {
             .insert(thread_id.to_owned(), session.clone());
         let mut updated = record.clone();
         updated.updated_at = self.now_ms();
+        if gone.is_some() {
+            updated.provider = None;
+            updated.model = None;
+        }
         self.options
             .registry
             .lock()
