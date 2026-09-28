@@ -28,7 +28,7 @@ use crate::sandbox::podman::PodmanSandbox;
 use crate::sandbox::podman::run_podman_arc;
 use crate::session::attachments::RawAttachment;
 use crate::session::commands::{
-    answer_without_session, first_word, is_addressed_to_bot, is_aside, parse_user_id,
+    answer_without_session, argument_of, first_word, is_addressed_to_bot, is_aside, parse_user_id,
 };
 use crate::session::event::EndReason;
 use crate::session::manager::SandboxPool;
@@ -190,8 +190,11 @@ pub type PowerOff =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Option<String>> + Send>> + Send + Sync>;
 
 /// Says what is left of the provider's usage window.
+///
+/// The flag asks the providers again rather than answering from what the
+/// daemon already holds, for a window that changed before its expiry.
 pub type DescribeUsage =
-    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = String> + Send>> + Send + Sync>;
+    Arc<dyn Fn(bool) -> Pin<Box<dyn Future<Output = String> + Send>> + Send + Sync>;
 
 /// Asks the providers for their models again, and says what came of it.
 pub type RefreshModels =
@@ -392,14 +395,42 @@ impl Daemon {
     }
 
     /// Says what is left of the provider's usage window.
-    async fn describe_usage(&self, content: &str) -> Option<String> {
+    ///
+    /// `!usage refresh` asks the providers again instead of answering from
+    /// what the daemon holds. That is the only way past the gate, which stops
+    /// asking about a spent window until it rolls over: a provider that
+    /// resets or tops a window up early would otherwise leave the daemon
+    /// refusing work the window can now serve until it restarted. The reading
+    /// is open to anyone, and the asking is an operator's, since each refresh
+    /// is a request to every provider.
+    async fn describe_usage(&self, content: &str, author_id: &str) -> Option<String> {
         if first_word(content) != "!usage" {
             return None;
         }
-        match &self.options.describe_usage {
-            None => Some("this provider does not report a usage window".to_owned()),
-            Some(describe) => Some(describe().await),
+        let refresh = match argument_of(content, "!usage") {
+            "" => false,
+            "refresh" => true,
+            _ => {
+                return Some(
+                    "say `!usage refresh` to ask the providers about their window again".to_owned(),
+                );
+            }
+        };
+        let Some(describe) = &self.options.describe_usage else {
+            return Some("this provider does not report a usage window".to_owned());
+        };
+        if refresh
+            && !self
+                .options
+                .config
+                .chat
+                .operator_user_ids
+                .iter()
+                .any(|id| id == author_id)
+        {
+            return Some("only an operator may ask the providers again".to_owned());
         }
+        Some(describe(refresh).await)
     }
 
     /// Asks the providers for their models again, for an operator.
@@ -410,7 +441,7 @@ impl Daemon {
         if first_word(content) != "!models" {
             return None;
         }
-        if content.trim()["!models".len()..].trim() != "refresh" {
+        if argument_of(content, "!models") != "refresh" {
             return Some(
                 "say `!models refresh` to ask the providers for their models again".to_owned(),
             );
@@ -441,7 +472,7 @@ impl Daemon {
         if let Some(answer) = self.power_off_host(content, author_id).await {
             return Some(answer);
         }
-        if let Some(answer) = self.describe_usage(content).await {
+        if let Some(answer) = self.describe_usage(content, author_id).await {
             return Some(answer);
         }
         if let Some(answer) = self.refresh_models(content, author_id).await {

@@ -133,10 +133,14 @@ where
     }
 
     /// Forgets what was held, so the next question reaches the provider.
-    #[allow(
-        dead_code,
-        reason = "the tests expire the held window rather than waiting out its lifetime"
-    )]
+    ///
+    /// A window is normally held because nothing can have changed it, which
+    /// is what saves the daemon from asking on every message. A window that
+    /// does change before its expiry is the exception: a provider may top a
+    /// window up, or reset it early, and until the answer is read again the
+    /// daemon refuses work the window can now serve. This is what lets an
+    /// operator read it again without restarting.
+    #[allow(dead_code)]
     pub fn forget(&mut self) {
         self.held = None;
         self.held_at = 0;

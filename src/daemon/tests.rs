@@ -1140,10 +1140,14 @@ async fn the_same_gap_is_allowed_when_the_configuration_allows_it() {
 async fn the_usage_window_is_reported_wherever_it_is_asked_about() {
     with_daemon(
         DaemonCase {
-            describe_usage: Some(Arc::new(|| {
-                Box::pin(async {
-                    "58% of the provider's usage window is left, and it resets in 2 hours"
-                        .to_owned()
+            describe_usage: Some(Arc::new(|refresh| {
+                Box::pin(async move {
+                    if refresh {
+                        "read the window again".to_owned()
+                    } else {
+                        "58% of the provider's usage window is left, and it resets in 2 hours"
+                            .to_owned()
+                    }
                 })
             })),
             ..Default::default()
@@ -1173,6 +1177,110 @@ async fn the_usage_window_is_reported_wherever_it_is_asked_about() {
                         .await,
                     harness.replies.lock().unwrap()[0].1.clone()
                 );
+            })
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn an_operator_can_ask_the_window_again_before_it_expires() {
+    with_daemon(
+        DaemonCase {
+            settings: Some(json!({
+                "chat": {
+                    "token": "a.token.value",
+                    "channelId": "chan",
+                    "allowedUserIds": [OWNER, "100000000000000002"],
+                    "operatorUserIds": [OWNER],
+                },
+            })),
+            describe_usage: Some(Arc::new(|refresh| {
+                Box::pin(async move {
+                    if refresh {
+                        "read from the provider again".to_owned()
+                    } else {
+                        "what was already held".to_owned()
+                    }
+                })
+            })),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("!usage"), InboundDecision::Start)
+                    .await;
+                assert!(harness.said().contains("what was already held"));
+
+                harness
+                    .daemon
+                    .handle(
+                        raw_with("!usage refresh", "m2", OWNER),
+                        InboundDecision::Start,
+                    )
+                    .await;
+                assert!(harness.said().contains("read from the provider again"));
+            })
+        },
+    )
+    .await;
+}
+
+/// The reading is open to anyone; the asking is not, since every refresh is a
+/// request to every provider.
+#[tokio::test]
+async fn a_permitted_account_that_is_not_an_operator_cannot_ask_the_window_again() {
+    with_daemon(
+        DaemonCase {
+            settings: Some(json!({
+                "chat": {
+                    "token": "a.token.value",
+                    "channelId": "chan",
+                    "allowedUserIds": [OWNER, "100000000000000002"],
+                    "operatorUserIds": [OWNER],
+                },
+            })),
+            describe_usage: Some(Arc::new(|_| Box::pin(async { "the window".to_owned() }))),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(
+                        raw_with("!usage refresh", "m2", "100000000000000002"),
+                        InboundDecision::Start,
+                    )
+                    .await;
+
+                assert!(harness.said().contains("only an operator"));
+                assert!(!harness.said().contains("the window"));
+            })
+        },
+    )
+    .await;
+}
+
+/// A mistyped argument is refused rather than read as a refresh, so nobody
+/// believes a window was re-read when it was not.
+#[tokio::test]
+async fn a_mistyped_refresh_is_refused_and_says_what_to_type() {
+    with_daemon(
+        DaemonCase {
+            describe_usage: Some(Arc::new(|_| Box::pin(async { "the window".to_owned() }))),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("!usage refreshes"), InboundDecision::Start)
+                    .await;
+
+                assert!(harness.said().contains("!usage refresh"));
+                assert!(!harness.said().contains("the window"));
             })
         },
     )
@@ -1464,7 +1572,7 @@ async fn a_dead_thread_is_answered_in_the_thread_not_the_channel() {
 async fn a_command_asked_in_a_thread_is_answered_there() {
     with_daemon(
         DaemonCase {
-            describe_usage: Some(Arc::new(|| {
+            describe_usage: Some(Arc::new(|_| {
                 Box::pin(async { "58% of the provider's usage window is left".to_owned() })
             })),
             ..DaemonCase::default()

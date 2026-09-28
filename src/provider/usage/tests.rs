@@ -189,6 +189,48 @@ async fn forgetting_makes_the_next_question_reach_the_provider() {
     assert_eq!(seen.recv().await, Some(()));
 }
 
+/// A spent window is held until it rolls over, so a provider that resets or
+/// tops it up early would otherwise go unread until the daemon restarted.
+#[tokio::test]
+async fn a_spent_window_is_asked_about_again_after_it_is_forgotten() {
+    let (signals, mut seen) = mpsc::unbounded_channel::<()>();
+    let answers = std::rc::Rc::new(std::cell::Cell::new(100.0));
+    let reads = std::rc::Rc::clone(&answers);
+    let now = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(1_000));
+    let clock = std::sync::Arc::clone(&now);
+    let mut gate = QuotaGate::new(
+        move || {
+            let (signals, reads) = (signals.clone(), std::rc::Rc::clone(&reads));
+            async move {
+                let _ = signals.send(());
+                Some(quota(reads.get(), Some(500_000)))
+            }
+        },
+        move || clock.load(std::sync::atomic::Ordering::Relaxed),
+    );
+
+    // First reading says the window is spent, with three minutes left on it.
+    let first = gate.current().await.expect("a reading");
+    assert!(is_spent(&first));
+
+    // Long before the reset, and with nothing else having asked, it is still
+    // the answer already held.
+    now.fetch_add(120_000, std::sync::atomic::Ordering::Relaxed);
+    let _ = gate.current().await;
+    assert!(seen.try_recv().is_ok(), "the provider was asked");
+    assert!(seen.try_recv().is_err(), "and asked again while held");
+
+    // The provider topped the window up in the meantime, which the daemon
+    // cannot know without asking.
+    answers.set(12.0);
+    gate.forget();
+    let after = gate.current().await.expect("a reading");
+    assert_eq!(seen.recv().await, Some(()));
+    // Spent before, not spent after, so what came back is the provider's
+    // answer rather than the one that was held.
+    assert!(!is_spent(&after), "the held window was not read again");
+}
+
 #[test]
 fn a_refusal_says_when_to_come_back() {
     assert!(spent_message("the provider", Some("in 3 hours")).contains("resets in 3 hours"));

@@ -241,6 +241,26 @@ fn when(at: Option<i64>, render: fn(i64) -> String) -> Option<String> {
 type BoxedGateRead =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = Option<Quota>> + Send>> + Send + Sync>;
 
+/// Reads every provider's window, one row each, in the order they are listed.
+///
+/// A refresh drops what each gate is holding before it is read again, which is
+/// what a provider that resets or tops a window up early needs: the gate would
+/// otherwise keep answering from what it last saw, since nothing about a spent
+/// window can change before it rolls over.
+async fn read_usage(
+    sources: &mut Vec<UsageSource<BoxedGateRead>>,
+    refresh: bool,
+) -> Vec<(String, Option<Quota>)> {
+    let mut rows = Vec::new();
+    for source in sources.iter_mut() {
+        if refresh {
+            source.gate.forget();
+        }
+        rows.push((source.provider.clone(), source.gate.current().await));
+    }
+    rows
+}
+
 /// Every provider on this host whose window can be asked about.
 ///
 /// A z.ai provider is asked at z.ai's quota endpoint, whether or not it is the
@@ -1104,14 +1124,11 @@ async fn run(
             None
         } else {
             let sources = Arc::clone(&sources);
-            Some(Arc::new(move || {
+            Some(Arc::new(move |refresh: bool| {
                 let sources = Arc::clone(&sources);
                 Box::pin(async move {
-                    let mut sources = sources.lock().await;
-                    let mut rows = Vec::new();
-                    for source in sources.iter_mut() {
-                        rows.push((source.provider.clone(), source.gate.current().await));
-                    }
+                    let mut held = sources.lock().await;
+                    let rows = read_usage(&mut held, refresh).await;
                     usage_table(&rows, now_ms())
                 })
             }))

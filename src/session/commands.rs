@@ -231,14 +231,17 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         },
     ),
     // About the provider rather than about a session, so the daemon answers it
-    // and it works in the channel as well as in a thread.
+    // and it works in the channel as well as in a thread. `refresh` is the
+    // operator's, and is the only way to read a window the daemon would
+    // otherwise hold: the gate stops asking a spent window about until it
+    // rolls over, which a provider resetting early would leave stale.
     (
         "!usage",
         CommandMeta {
             access: Anyone,
             group: You,
             summary: "how much of the provider's usage window is left",
-            argument: None,
+            argument: Some("[refresh]"),
         },
     ),
     // Acts on every session at once, so the daemon answers it.
@@ -274,6 +277,21 @@ pub const ASIDE: &str = "!!!";
 /// The first whitespace-separated word, which is what names a command.
 pub fn first_word(content: &str) -> &str {
     content.split_whitespace().next().unwrap_or("")
+}
+
+/// What follows a command name, or nothing when none was given.
+///
+/// The name must be followed by nothing or by whitespace, so `!usagereport`
+/// carries no argument rather than the tail of its own name. Every caller has
+/// already matched the whole first word, so this only holds the line for
+/// whoever reads this next.
+pub fn argument_of<'a>(content: &'a str, name: &str) -> &'a str {
+    let rest = content.trim().strip_prefix(name).unwrap_or_default();
+    if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+        rest.trim()
+    } else {
+        ""
+    }
 }
 
 /// Whether a message names a command rather than something to send the agent.

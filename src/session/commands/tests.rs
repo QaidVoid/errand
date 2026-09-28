@@ -1,8 +1,9 @@
 //! Tests for the command table, ported from `commands_test.ts`.
 
 use super::{
-    COMMANDS, CommandAccess, Standing, answer_without_session, asks_for_pull_request, help_text,
-    is_addressed_to_bot, is_aside, is_command, may_run, parse_user_id, pull_request_args,
+    COMMANDS, CommandAccess, Standing, answer_without_session, argument_of, asks_for_pull_request,
+    help_text, is_addressed_to_bot, is_aside, is_command, may_run, parse_user_id,
+    pull_request_args,
 };
 
 const OWNER: Standing = Standing {
@@ -33,6 +34,19 @@ fn anything_starting_with_a_bang_is_addressed_to_a_bot_known_or_not() {
     assert!(is_addressed_to_bot("!somebodyelses thing"));
     assert!(is_addressed_to_bot("  !status"));
     assert!(!is_addressed_to_bot("what does ! mean"));
+}
+
+/// The argument a command was given, or nothing when it was given none. The
+/// name must be followed by nothing or by whitespace, so a longer word that
+/// begins with it carries no argument.
+#[test]
+fn an_argument_is_what_follows_the_command_name_and_nothing_else() {
+    assert_eq!(argument_of("!usage refresh", "!usage"), "refresh");
+    assert_eq!(argument_of("  !usage   refresh  ", "!usage"), "refresh");
+    assert_eq!(argument_of("!usage", "!usage"), "");
+    assert_eq!(argument_of("!usage   ", "!usage"), "");
+    assert_eq!(argument_of("!usagereport", "!usage"), "");
+    assert_eq!(argument_of("!usage refresh now", "!usage"), "refresh now");
 }
 
 #[test]
