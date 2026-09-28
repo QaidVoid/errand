@@ -13,6 +13,7 @@ use super::{
 };
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
+use crate::config::live::LiveConfig;
 use crate::config::schema::Config;
 use crate::config::schema::SandboxBackend;
 use crate::config::validate::validate_config;
@@ -436,7 +437,39 @@ async fn with_everything(
     remembering: bool,
     run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + '_>>,
 ) {
-    with_models(overrides, unavailable, remembering, Vec::new(), run).await;
+    with_models(overrides, unavailable, remembering, listed(), run).await;
+}
+
+/// The models the tests below name, as a host lists them.
+///
+/// A real daemon has a catalog built from the providers the configuration
+/// defines, so a test that names a model is exercising the same lookup a real
+/// one does. An empty list would say no model exists, and a name that matches
+/// nothing is refused rather than passed on.
+fn listed() -> Vec<AvailableModel> {
+    [
+        ("anthropic", "glm-5.3-air"),
+        ("anthropic", "glm-5.3"),
+        ("anthropic", "opus"),
+        ("zai", "glm-5.3"),
+        ("zai", "glm-5.3-flash"),
+        ("openrouter", "glm-5.3-air"),
+        ("muse", "musecringe"),
+        ("meta", "muse-spark-1.3-contributor"),
+        ("meta", "muse"),
+        ("meta", "one"),
+        ("meta", "two"),
+        ("anthropic", "other"),
+        ("beta", "cheap"),
+        ("beta", "glm-5.3-air"),
+    ]
+    .into_iter()
+    .map(|(provider, id)| AvailableModel {
+        provider: provider.to_owned(),
+        id: id.to_owned(),
+        default_level: None,
+    })
+    .collect()
 }
 
 async fn with_models(
@@ -462,10 +495,14 @@ async fn with_models(
         750,
     );
     let id = Mutex::new(0);
-    let catalog = Catalog::new(settings.agent.providers.clone(), available_models.clone());
+    let catalog = Catalog::new(
+        settings.agent.providers.clone(),
+        available_models.clone(),
+        settings.agent.aliases.clone(),
+    );
 
     let manager = SessionManager::new(ManagerOptions {
-        config: settings,
+        config: LiveConfig::new(settings),
         sandbox: Arc::clone(&sandbox) as Arc<dyn SandboxPool>,
         scheduler: Arc::clone(&scheduler),
         threads: Arc::clone(&threads) as Arc<dyn ThreadFactory>,
@@ -1090,6 +1127,55 @@ async fn writing_to_a_session_that_stopped_picks_it_up_again() {
                     .await
             );
             assert_eq!(harness.manager.sessions().len(), 1);
+        })
+    })
+    .await;
+}
+
+/// A name no provider here serves is refused, so a typo costs a message rather
+/// than a sandbox and a turn that fails at the provider.
+#[tokio::test]
+async fn a_model_nothing_serves_is_refused_rather_than_turned_away_later() {
+    with_manager(|harness| {
+        Box::pin(async move {
+            for asked in [
+                "no-such-model",
+                "anthropic/no-such-model",
+                "no-such-provider/glm-5.3-air",
+            ] {
+                let outcome = harness
+                    .manager
+                    .start(message(&format!("demo: --model {asked} go"), "m1"))
+                    .await;
+
+                let StartOutcome::Refused { reason } = outcome else {
+                    panic!("`{asked}` was accepted, so it would fail at the provider");
+                };
+                assert!(
+                    reason.contains("no provider here serves"),
+                    "the refusal does not say what was wrong: {reason}"
+                );
+            }
+            // No sandbox was started for any of them.
+            assert!(harness.sandbox.launched.lock().unwrap().is_empty());
+        })
+    })
+    .await;
+}
+
+/// A host that lists no models cannot confirm one, so a name is refused rather
+/// than taken on trust. An empty list is not permission for anything.
+#[tokio::test]
+async fn a_host_that_lists_no_models_refuses_a_named_one() {
+    with_models(&json!({}), None, false, Vec::new(), |harness| {
+        Box::pin(async move {
+            let outcome = harness
+                .manager
+                .start(message("demo: --model glm-5.3-air go", "m1"))
+                .await;
+
+            assert!(matches!(outcome, StartOutcome::Refused { .. }));
+            assert!(harness.sandbox.launched.lock().unwrap().is_empty());
         })
     })
     .await;

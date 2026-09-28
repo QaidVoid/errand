@@ -15,6 +15,7 @@ use super::{
 };
 use crate::agent::client::AgentProcess;
 use crate::chat::inbound::{InboundDecision, RawMessage};
+use crate::config::live::LiveConfig;
 use crate::config::schema::Config;
 use crate::config::schema::SandboxBackend;
 use crate::config::validate::validate_config;
@@ -339,6 +340,9 @@ struct Harness {
     threads: Arc<FakeThreads>,
     replies: Arc<Mutex<Vec<(String, String)>>>,
     lines: Arc<Mutex<Vec<(LogLevel, String)>>>,
+    /// The configuration in force, so a test can change it the way a change
+    /// to the file does.
+    config: LiveConfig,
     _root: tempfile::TempDir,
 }
 
@@ -415,8 +419,9 @@ async fn with_daemon(
     let replies = Arc::new(Mutex::new(Vec::new()));
     let lines = Arc::new(Mutex::new(Vec::new()));
 
+    let config = LiveConfig::new(config);
     let daemon = Daemon::new(DaemonOptions {
-        config,
+        config: config.clone(),
         sandbox: Arc::clone(&sandbox) as Arc<dyn SandboxPool>,
         threads: Arc::clone(&threads) as Arc<dyn ThreadFactory>,
         describe_images: None,
@@ -452,6 +457,7 @@ async fn with_daemon(
         threads,
         replies,
         lines,
+        config: config.clone(),
         _root: root,
     };
 
@@ -1310,6 +1316,7 @@ async fn the_models_on_this_host_are_listed_without_starting_a_session() {
                         default_level: None,
                     },
                 ],
+                BTreeMap::new(),
             )),
             ..Default::default()
         },
@@ -1344,6 +1351,7 @@ async fn switching_a_model_in_a_channel_is_pointed_at_a_thread() {
                     id: "glm-5.3".to_owned(),
                     default_level: None,
                 }],
+                BTreeMap::new(),
             )),
             ..Default::default()
         },
@@ -1393,6 +1401,7 @@ async fn in_a_thread_the_daemon_leaves_the_model_to_the_session() {
                     id: "glm-5.3".to_owned(),
                     default_level: None,
                 }],
+                BTreeMap::new(),
             )),
             ..Default::default()
         },
@@ -1600,6 +1609,105 @@ async fn only_an_operator_may_ask_the_providers_for_their_models_again() {
         .await;
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), calls);
     }
+}
+
+/// Somebody who is refused because they are not an operator becomes one by
+/// the file being changed, without the daemon being restarted. The command
+/// that was refused then works, which is the whole point.
+#[tokio::test]
+async fn a_change_to_the_file_reaches_a_decision_the_daemon_already_made() {
+    let stranger = "100000000000000002";
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&asked);
+    let refresh: super::RefreshModels = Arc::new(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { "`gateway`: 2 models".to_owned() })
+    });
+
+    with_daemon(
+        DaemonCase {
+            settings: Some(json!({
+                "chat": {
+                    "token": "t",
+                    "channelId": "chan",
+                    "allowedUserIds": [OWNER, stranger],
+                },
+            })),
+            refresh_models: Some(Arc::clone(&refresh)),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(
+                        raw_with("!models refresh", "m1", stranger),
+                        InboundDecision::Start,
+                    )
+                    .await;
+                assert!(harness.said().contains("only an operator"));
+
+                // The file is edited to make them an operator.
+                let mut edited = harness.config.get();
+                edited.chat.operator_user_ids = vec![stranger.to_owned()];
+                assert!(harness.config.replace(edited), "the change was not applied");
+
+                harness
+                    .daemon
+                    .handle(
+                        raw_with("!models refresh", "m2", stranger),
+                        InboundDecision::Start,
+                    )
+                    .await;
+                assert!(
+                    harness.said().contains("`gateway`: 2 models"),
+                    "the same command was still refused after the change: {}",
+                    harness.said()
+                );
+            })
+        },
+    )
+    .await;
+    assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// A change that cannot be read is refused rather than applied, and the daemon
+/// is still answering from what it had when the next command arrives.
+#[tokio::test]
+async fn a_change_that_cannot_be_read_leaves_the_daemon_answering_as_it_did() {
+    with_daemon(
+        DaemonCase {
+            describe_usage: Some(Arc::new(|_| Box::pin(async { "the window".to_owned() }))),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("!usage"), InboundDecision::Start)
+                    .await;
+                assert!(harness.said().contains("the window"));
+
+                // What a half-written file resolves to.
+                let broken = Err(crate::config::schema::ConfigError {
+                    problems: vec!["not valid JSON or JSONC".to_owned()],
+                });
+                assert_eq!(
+                    harness.config.reload(broken),
+                    crate::config::live::Reloaded::Rejected(vec![
+                        "not valid JSON or JSONC".to_owned()
+                    ])
+                );
+
+                harness
+                    .daemon
+                    .handle(raw_with("!usage", "m2", OWNER), InboundDecision::Start)
+                    .await;
+                assert!(harness.said().contains("the window"));
+            })
+        },
+    )
+    .await;
 }
 
 #[tokio::test]

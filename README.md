@@ -122,6 +122,30 @@ answered by the daemon rather than starting a session. `!model` lists the
 models there; switching one still belongs to a session, so it asks for a
 thread.
 
+## Changing the configuration
+
+The daemon reads its configuration file again when it changes, so most edits
+take effect without a restart. The next session, and the daemon's own answers
+to `!usage`, `!model` and the rest, use the new file.
+
+A file that cannot be read is not fatal. An edit caught half-written, a field
+left out, a path that does not resolve: each is refused whole, the log says
+every reason, and the daemon carries on serving under the configuration it
+already had. Only a configuration that cannot be read at startup stops it,
+since a daemon with nothing to run on cannot serve.
+
+What a reload does not reach, because it was committed to before the daemon
+was serving:
+
+- the connection and the chat token, so who may use the bot in the served
+  channel is fixed until a restart
+- the sandbox backend, the egress broker, and the provider routes it holds
+- sessions already running, which keep what they were launched with
+
+The model list is derived from the file again after a change, so an edited
+`models` list is what `!model` lists straight away. `!models refresh` is for
+asking the providers themselves again, over the network.
+
 Full documentation, including every configuration field, is in
 [docs](docs), built with VitePress from `docs`.
 

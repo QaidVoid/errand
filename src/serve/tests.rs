@@ -8,8 +8,12 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use serde_json::json;
 use serenity::model::id::ChannelId;
 
-use super::{BoxedGateRead, answer_in, brokerable_providers, read_usage, usage_sources};
+use super::{
+    BoxedGateRead, answer_in, brokerable_providers, read_usage, rebuild_catalog, usage_sources,
+};
 use crate::config::validate::validate_config;
+use crate::log::{LogFields, Logger};
+use crate::provider::discover::Catalog;
 use crate::provider::models::STORE_FILENAME;
 use crate::provider::usage::{Quota, QuotaGate, UsageSource};
 
@@ -216,4 +220,47 @@ async fn a_provider_that_answers_nothing_is_reported_as_nothing() {
 
     let rows = read_usage(&mut sources, true).await;
     assert_eq!(rows, vec![("quiet".to_owned(), None)]);
+}
+
+/// The list a provider serves is what `!model` reads, and it is derived from
+/// the file rather than written down at startup, so an edit to the file's
+/// `models` has to reach the catalog. It did not: the catalog was built once
+/// and only ever replaced by `!models refresh`, so an edited list was in force
+/// while every answer still came from the one from before.
+#[tokio::test]
+async fn an_edited_models_list_reaches_the_catalog() {
+    let named = |id: &str| {
+        validate_config(&json!({
+            "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+            "agent": {
+                "provider": "zai",
+                "providers": { "zai": { "credential": "z-key", "models": [{ "id": id }] } },
+            },
+            "projectRoot": "/tmp/p",
+            "stateDir": "/tmp/s",
+        }))
+        .expect("a configuration naming one model")
+        .agent
+    };
+    let listed = |catalog: &Catalog| {
+        let mut ids: Vec<String> = catalog.models().into_iter().map(|model| model.id).collect();
+        ids.sort();
+        ids
+    };
+    let log = Logger::new(LogFields::new(), std::sync::Arc::new(|_level, _line| {}));
+    let catalog = Catalog::default();
+
+    rebuild_catalog(&named("glm-5.3"), None, &log, &catalog).await;
+    assert_eq!(
+        listed(&catalog),
+        ["glm-5.3"],
+        "the first list was not taken in"
+    );
+
+    rebuild_catalog(&named("glm-5.3-air"), None, &log, &catalog).await;
+    assert_eq!(
+        listed(&catalog),
+        ["glm-5.3-air"],
+        "the edited list did not replace the one from before"
+    );
 }

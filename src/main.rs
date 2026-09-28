@@ -69,21 +69,27 @@ fn usage(env: &Vars) -> String {
     .join("\n")
 }
 
-/// Reads the configuration the way every command does.
+/// Reads the configuration the way every command does, and the file it came
+/// from.
 ///
 /// The environment goes to the reader as well as to the search, so the list a
 /// missing file reports names the places actually looked in. Handing it a
 /// blank one, as the TypeScript entry point did, produced a report that
 /// ignored `ERRAND_CONFIG` and showed paths relative to a `HOME` that was
 /// never read: a description of a search that did not happen.
-fn load(env: &Vars) -> Result<Config, ConfigError> {
+///
+/// The path comes back with the configuration, because the daemon watches
+/// that file for the rest of its life and must not have to search for it
+/// again to find the same place.
+fn load(env: &Vars) -> Result<(String, Config), ConfigError> {
     let path = config_path(env, file_exists);
-    load_config(
+    let config = load_config(
         &path,
         |read| std::fs::read_to_string(read),
         env,
         file_exists,
-    )
+    )?;
+    Ok((path, config))
 }
 
 /// Pulls a `name = "value"` pair off the front of a grant body, leaving the
@@ -132,7 +138,7 @@ fn project_of(state_dir: &str) -> Option<Project> {
 }
 
 async fn threads(args: &[String], env: &Vars, level: LogLevel) -> Result<i32, ConfigError> {
-    let config = load(env)?;
+    let (_path, config) = load(env)?;
     let log = logger(level);
     let registry = Arc::new(Mutex::new(ThreadRegistry::new(
         ThreadRegistry::path_for(&config.state_dir),
@@ -168,10 +174,14 @@ async fn threads(args: &[String], env: &Vars, level: LogLevel) -> Result<i32, Co
 
 /// Runs the daemon, turning the failures an operator can act on into an exit
 /// code and one line rather than a stack trace.
+///
+/// A configuration that cannot be read at all is fatal here and only here: a
+/// daemon with nothing to run on cannot serve. The same file failing to
+/// resolve later is not, and the watcher carries on.
 async fn run(env: &Vars, level: LogLevel) -> i32 {
     let log = logger(level);
-    let config = match load(env) {
-        Ok(config) => config,
+    let (path, config) = match load(env) {
+        Ok(loaded) => loaded,
         Err(error) => {
             log.error(
                 "the daemon failed to start",
@@ -180,7 +190,7 @@ async fn run(env: &Vars, level: LogLevel) -> i32 {
             return 1;
         }
     };
-    serve(config, log).await.code()
+    serve(config, path, env.clone(), log).await.code()
 }
 
 fn main() -> std::process::ExitCode {

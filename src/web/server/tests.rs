@@ -10,6 +10,7 @@ use tokio::sync::watch;
 use super::{Assets, WebServer};
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
+use crate::config::live::LiveConfig;
 use crate::config::schema::SandboxBackend;
 use crate::config::schema::WebConfig;
 use crate::config::validate::validate_config;
@@ -323,7 +324,7 @@ async fn with_server_where(
     let id = Mutex::new(0);
 
     let manager = Arc::new(SessionManager::new(ManagerOptions {
-        config: settings,
+        config: LiveConfig::new(settings),
         sandbox: Arc::new(FakeSandbox) as Arc<dyn SandboxPool>,
         scheduler: Arc::clone(&scheduler),
         threads: Arc::new(FakeThreads {
@@ -900,7 +901,7 @@ async fn an_interface_asked_to_bind_publicly_refuses_to_start() {
         750,
     );
     let manager = Arc::new(SessionManager::new(ManagerOptions {
-        config: settings,
+        config: LiveConfig::new(settings),
         sandbox: Arc::new(FakeSandbox) as Arc<dyn SandboxPool>,
         scheduler: Arc::clone(&scheduler),
         threads: Arc::new(FakeThreads {

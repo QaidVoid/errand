@@ -1,5 +1,6 @@
 //! The daemon's configuration: its shape and defaults, the reading of the
-//! file, and the refusal that turns whatever was written into a [`Config`].
+//! file, the refusal that turns whatever was written into a [`Config`], and
+//! the copy in force that a later change to the file may replace.
 //!
 //! The reading and the validating are separate, so that "the file is not
 //! there" and "the file says something impossible" are different failures
@@ -9,6 +10,8 @@ use std::path::{Component, Path, PathBuf};
 
 /// How a provider definition says to ask it for its models.
 pub mod discover;
+/// The configuration in force, which a change to the file may replace.
+pub mod live;
 /// Finds the configuration file and reads it.
 pub mod load;
 /// Where a value sits in a JSON answer, as `discover` and `usage` name it.
@@ -23,6 +26,8 @@ pub mod size;
 pub mod usage;
 /// Turns whatever was written into a configuration, or refuses.
 pub mod validate;
+/// Watches the file and applies a change to it while the daemon runs.
+pub mod watch;
 
 #[cfg(test)]
 mod example_test;

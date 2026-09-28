@@ -143,8 +143,9 @@ pub struct AgentConfig {
     /// `contextWindow` keeps the model's reasoning, thinking levels, and
     /// inputs.
     ///
-    /// `discover` asks the provider which models it serves, at startup and on
-    /// `!models refresh`, under its `baseUrl`. `true` reads the usual
+    /// `discover` asks the provider which models it serves, at startup, after
+    /// a change to this file, and on `!models refresh`, under its `baseUrl`.
+    /// `true` reads the usual
     /// `/models` listing. An object moves it: `path`, `list` for where the
     /// array sits, `fields` naming where `id`, `name`, `contextWindow`, and
     /// `maxTokens` sit in an entry, and `defaults` for fields every model

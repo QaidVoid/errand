@@ -11,21 +11,19 @@ use std::sync::{Arc, Mutex};
 
 use crate::admission::scheduler::Scheduler;
 use crate::chat::render::{thread_name, warning_line};
+use crate::config::live::LiveConfig;
 use crate::config::redact::secret_values;
-use crate::config::schema::Config;
 use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::discover::Catalog;
-use crate::provider::models::provider_for;
+use crate::provider::models::{Matched, match_model};
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
 use crate::session::event::{EndReason, NoticeLevel, SessionEvent};
 use crate::session::ids::{TOKEN_LENGTH, session_id, session_token};
-use crate::session::model::{
-    ChosenModel, expand_alias, known_providers, resolve_model, select_model, split_level,
-};
+use crate::session::model::{ChosenModel, expand_alias, select_model, split_level};
 use crate::session::pr;
 use crate::session::projects::{ProjectSelection, ensure_project_directory, select_project};
 use crate::session::record::{prepare_record_dir, record_dir, withdraw_from_record};
@@ -140,8 +138,9 @@ pub trait SandboxPool: Send + Sync {
 
 /// Options for the session manager.
 pub struct ManagerOptions {
-    /// The configuration every session is started from.
-    pub config: Config,
+    /// The configuration every session is started from, and which a change to
+    /// the file may replace while the daemon runs.
+    pub config: LiveConfig,
     /// The backend sessions are confined by.
     pub sandbox: Arc<dyn SandboxPool>,
     /// Admits turns up to the configured cap.
@@ -180,7 +179,6 @@ pub struct ManagerOptions {
 /// is, gathered once.
 struct Shared {
     scheduler: Arc<Scheduler>,
-    config: Config,
     log: Logger,
     operator_ids: Vec<String>,
     memory: Option<Arc<MemoryStore>>,
@@ -207,21 +205,19 @@ pub struct SessionManager {
     options: ManagerOptions,
     shared: Arc<Shared>,
     state: Arc<ManagerState>,
-    secrets: Vec<String>,
 }
 
 impl SessionManager {
     /// Builds a manager over the given connections and stores.
     pub fn new(options: ManagerOptions) -> Self {
-        let secrets = secret_values(&options.config);
+        let starting = options.config.get();
         let shared = Arc::new(Shared {
             scheduler: Arc::clone(&options.scheduler),
-            config: options.config.clone(),
             log: options.log.clone(),
             operator_ids: options
                 .operator_ids
                 .clone()
-                .unwrap_or_else(|| options.config.chat.operator_user_ids.clone()),
+                .unwrap_or_else(|| starting.chat.operator_user_ids.clone()),
             memory: options.memory.clone(),
             describe_images: options.describe_images.clone(),
             public_url: options.public_url.clone(),
@@ -259,7 +255,6 @@ impl SessionManager {
                 ended_threads: Mutex::new(HashSet::new()),
                 views: Mutex::new(HashMap::new()),
             }),
-            secrets,
         }
     }
 
@@ -353,11 +348,12 @@ impl SessionManager {
     /// slot.
     pub async fn start(&self, message: IncomingMessage) -> StartOutcome {
         let token = self.next_id();
+        let project_root = self.options.config.get().project_root;
 
         // A named session reaches the same directory every time the name is
         // used. An unnamed one works in a directory of its own, named after
         // the session.
-        let project = select_project(&message.content, &self.options.config.project_root, &token);
+        let project = select_project(&message.content, &project_root, &token);
         let id = session_id(&project, &token);
         self.launch(id, project, message, ThreadKind::Created).await
     }
@@ -387,7 +383,7 @@ impl SessionManager {
 
         let project = select_project(
             &format!("{named}{}", request.prompt),
-            &self.options.config.project_root,
+            &self.options.config.get().project_root,
             &token,
         );
         self.launch(
@@ -399,33 +395,47 @@ impl SessionManager {
         .await
     }
 
-    /// A model named as `!model` names one, with the provider that serves it.
+    /// A model named as `--model` names one, with the provider that serves it.
     ///
-    /// A bare model id names no provider, so it would otherwise start on the
-    /// default one and reach the wrong endpoint. Which provider actually
-    /// serves it is looked up.
-    fn resolve(&self, value: &str) -> ChosenModel {
-        let agent = &self.options.config.agent;
-        let mut resolved = resolve_model(
-            &expand_alias(value, &agent.aliases),
-            &known_providers(agent),
-        );
-        if resolved.provider.is_none() {
-            let bare = split_level(&resolved.model).0;
-            resolved.provider =
-                provider_for(&self.options.catalog.models(), &bare, &agent.provider);
+    /// Nothing rather than a guess when the name is not one the host lists. A
+    /// name that resolved to no provider used to start the session on the
+    /// default one, which turns a typo into a turn that fails at the provider
+    /// instead of a refusal here that costs nothing.
+    ///
+    /// The level is taken off before the lookup and put back after: an alias
+    /// may carry one, and `musecringe:max` is not the name of anything the
+    /// host lists.
+    fn resolve(&self, value: &str) -> Option<ChosenModel> {
+        let agent = &self.options.config.get().agent;
+        let (wanted, level) = split_level(&expand_alias(value, &agent.aliases));
+        match match_model(&self.options.catalog.models(), &wanted, &agent.provider) {
+            Matched::One(found) => Some(ChosenModel {
+                provider: Some(found.provider.clone()),
+                model: found.with_level(&level),
+            }),
+            Matched::None | Matched::Several(_) => None,
         }
-        resolved
     }
 
     /// The first fallback model whose provider has not spent its window.
+    ///
+    /// A fallback naming a model the host does not list is skipped like one
+    /// whose window is spent, since running on it would fail the same way and
+    /// for a reason the operator wrote down.
     async fn fallback(&self) -> Option<ChosenModel> {
-        for named in &self.options.config.agent.fallback {
-            let resolved = self.resolve(named);
+        let agent = self.options.config.get().agent;
+        for named in &agent.fallback {
+            let Some(resolved) = self.resolve(named) else {
+                self.options.log.warn(
+                    "a fallback names a model no provider here serves",
+                    &fields([("model", LogValue::from(named.as_str()))]),
+                );
+                continue;
+            };
             let provider = resolved
                 .provider
                 .clone()
-                .unwrap_or_else(|| self.options.config.agent.provider.clone());
+                .unwrap_or_else(|| agent.provider.clone());
             if self.unavailable(&provider).await.is_none() {
                 return Some(resolved);
             }
@@ -466,8 +476,23 @@ impl SessionManager {
         // runs on decides whose window matters, and another provider's being
         // spent is not a reason to refuse work this one can do.
         let asked = select_model(&project.prompt);
-        let mut chosen = asked.value.as_deref().map(|value| self.resolve(value));
+        // A name that matches nothing is refused here rather than dropped, so
+        // the person is told the model was not found instead of finding out
+        // from a turn that fails at the provider after a sandbox has started.
+        let mut chosen = match asked.value.as_deref() {
+            None => None,
+            Some(value) => match self.resolve(value) {
+                Some(found) => Some(found),
+                None => {
+                    return self.refused(format!(
+                        "no provider here serves a model called `{value}`; say `!model` to see \
+                         what does"
+                    ));
+                }
+            },
+        };
         project.prompt = asked.prompt;
+        let default_provider = self.options.config.get().agent.provider;
         self.options.log.debug(
             "starting a session",
             &fields([
@@ -479,7 +504,7 @@ impl SessionManager {
                         chosen
                             .as_ref()
                             .and_then(|chosen| chosen.provider.as_deref())
-                            .unwrap_or(&self.options.config.agent.provider),
+                            .unwrap_or(&default_provider),
                     ),
                 ),
                 (
@@ -495,7 +520,7 @@ impl SessionManager {
         let provider_for_window = chosen
             .as_ref()
             .and_then(|chosen| chosen.provider.clone())
-            .unwrap_or_else(|| self.options.config.agent.provider.clone());
+            .unwrap_or(default_provider);
         let mut fell_back = None;
         if let Some(spent) = self.unavailable(&provider_for_window).await {
             let Some(fallback) = self.fallback().await else {
@@ -538,7 +563,8 @@ impl SessionManager {
             return self.refused(self.options.scheduler.session_refused_reason());
         }
 
-        let state_dir = std::path::Path::new(&self.options.config.state_dir)
+        let config = self.options.config.get();
+        let state_dir = std::path::Path::new(&config.state_dir)
             .join(&id)
             .display()
             .to_string();
@@ -549,7 +575,7 @@ impl SessionManager {
         let thread = match std::fs::create_dir_all(&home)
             .map_err(|error| error.to_string())
             .and_then(|()| {
-                ensure_project_directory(&project, &self.options.config.project_root)
+                ensure_project_directory(&project, &config.project_root)
                     .map_err(|error| error.to_string())
             }) {
             Err(error) => Err(error),
@@ -621,7 +647,7 @@ impl SessionManager {
             )),
             launcher: Arc::clone(&self.shared.launcher),
             scheduler: Arc::clone(&self.shared.scheduler),
-            config: self.shared.config.clone(),
+            config: self.options.config.get(),
             log: self.shared.log.clone(),
             timers: None,
             owner_id: message.author_id.clone(),
@@ -773,10 +799,15 @@ impl SessionManager {
         // one, unless the configuration no longer names its provider. The
         // agent refuses to start on a provider it is not given, so every resume
         // would end the same way, with nothing left in the thread to change it.
-        let gone = record
-            .provider
-            .clone()
-            .filter(|provider| !self.options.config.agent.providers.contains_key(provider));
+        let gone = record.provider.clone().filter(|provider| {
+            !self
+                .options
+                .config
+                .get()
+                .agent
+                .providers
+                .contains_key(provider)
+        });
         let chosen = record
             .model
             .as_ref()
@@ -820,7 +851,7 @@ impl SessionManager {
             )),
             launcher: Arc::clone(&self.shared.launcher),
             scheduler: Arc::clone(&self.shared.scheduler),
-            config: self.shared.config.clone(),
+            config: self.options.config.get(),
             log: self.shared.log.clone(),
             timers: None,
             owner_id: record.owner_id.clone(),
@@ -886,11 +917,18 @@ impl SessionManager {
     /// The configured secrets, plus the operator's house rules: those are
     /// handed to the agent as a file it can read, so a session reading its
     /// own prompt back would otherwise report them.
+    ///
+    /// Read from the configuration in force rather than from a list gathered
+    /// at startup, so a credential rotated in the file is redacted from the
+    /// next session's output. A session already running keeps the list it was
+    /// given, so a value it might still print is still scrubbed.
     fn reported_secrets(&self) -> Vec<String> {
-        match house_rules_text(self.options.config.agent.rules_path.as_deref()) {
-            None => self.secrets.clone(),
+        let config = self.options.config.get();
+        let secrets = secret_values(&config);
+        match house_rules_text(config.agent.rules_path.as_deref()) {
+            None => secrets,
             Some(rules) => {
-                let mut all = self.secrets.clone();
+                let mut all = secrets;
                 all.push(rules);
                 all
             }

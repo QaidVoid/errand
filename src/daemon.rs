@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use crate::admission::scheduler::{Scheduler, SystemClock};
 use crate::chat::inbound::{InboundDecision, RawMessage};
 use crate::chat::render::grouped_by_provider;
+use crate::config::live::LiveConfig;
 use crate::config::redact::redact_config;
 use crate::config::schema::defaults::IMAGE;
 use crate::config::schema::{ALLOW_EVERY_USER, ChatConfig, Config, SandboxBackend};
@@ -208,8 +209,9 @@ pub type ReplyInChannel =
 
 /// Everything the daemon needs, with the transport injected for testability.
 pub struct DaemonOptions {
-    /// The configuration every session is started from.
-    pub config: Config,
+    /// The configuration every session is started from, and which a change to
+    /// the file may replace while the daemon runs.
+    pub config: LiveConfig,
     /// The backend sessions are confined by.
     pub sandbox: Arc<dyn SandboxPool>,
     /// What makes a thread for a new session.
@@ -265,8 +267,9 @@ impl Daemon {
                 }
             })
         };
+        let starting = options.config.get();
         let scheduler = Scheduler::start(
-            options.config.limits.clone(),
+            starting.limits.clone(),
             Arc::new(clock),
             5_000,
             300_000,
@@ -275,7 +278,7 @@ impl Daemon {
         *holder.lock().expect("the clock holder lock") = Some(Arc::clone(&scheduler));
 
         let registry = Arc::new(Mutex::new(ThreadRegistry::new(
-            ThreadRegistry::path_for(&options.config.state_dir),
+            ThreadRegistry::path_for(&starting.state_dir),
             options.log.clone(),
         )));
         let sessions = SessionManager::new(ManagerOptions {
@@ -319,12 +322,8 @@ impl Daemon {
     /// Fails with [`StartError`] when the backend cannot run here, or when
     /// gaps exist and configuration forbids them.
     pub async fn probe(&self) -> Result<CapabilityReport, StartError> {
-        probe_sandbox(
-            self.options.sandbox.as_ref(),
-            &self.options.config,
-            &self.options.log,
-        )
-        .await
+        let config = self.options.config.get();
+        probe_sandbox(self.options.sandbox.as_ref(), &config, &self.options.log).await
     }
 
     /// Probes the backend, loads the thread index, and sweeps orphans.
@@ -335,12 +334,13 @@ impl Daemon {
         &self,
         probed: Option<CapabilityReport>,
     ) -> Result<CapabilityReport, StartError> {
-        let _ = std::fs::create_dir_all(&self.options.config.state_dir);
+        let starting = self.options.config.get();
+        let _ = std::fs::create_dir_all(&starting.state_dir);
         self.options.log.info(
             "effective configuration",
             &fields([(
                 "config",
-                LogValue::from(redact_config(&self.options.config).to_string()),
+                LogValue::from(redact_config(&starting).to_string()),
             )]),
         );
 
@@ -359,6 +359,22 @@ impl Daemon {
         Ok(report)
     }
 
+    /// Whether this account is an operator under the configuration in force.
+    ///
+    /// Read from the configuration rather than from a list held at startup, so
+    /// that adding somebody to `chat.operatorUserIds` takes effect on the next
+    /// command instead of the next restart. The read is one copy of the
+    /// configuration, which a command already needs for the rest of its answer.
+    fn is_operator(&self, author_id: &str) -> bool {
+        self.options
+            .config
+            .get()
+            .chat
+            .operator_user_ids
+            .iter()
+            .any(|id| id == author_id)
+    }
+
     /// Turns the host off, if this person may.
     ///
     /// Answered here rather than in a session: whoever starts a thread owns
@@ -369,7 +385,7 @@ impl Daemon {
             return None;
         }
 
-        let allowed = &self.options.config.shutdown.allowed_user_ids;
+        let allowed = self.options.config.get().shutdown.allowed_user_ids;
         if allowed.is_empty() {
             return Some(
                 "nobody may power off this host; set shutdown.allowedUserIds to change that"
@@ -421,15 +437,7 @@ impl Daemon {
         let Some(describe) = &self.options.describe_usage else {
             return Some("this provider does not report a usage window".to_owned());
         };
-        if refresh
-            && !self
-                .options
-                .config
-                .chat
-                .operator_user_ids
-                .iter()
-                .any(|id| id == author_id)
-        {
+        if refresh && !self.is_operator(author_id) {
             return Some("only an operator may ask the providers again".to_owned());
         }
         Some(describe(refresh).await)
@@ -448,14 +456,7 @@ impl Daemon {
                 "say `!models refresh` to ask the providers for their models again".to_owned(),
             );
         }
-        if !self
-            .options
-            .config
-            .chat
-            .operator_user_ids
-            .iter()
-            .any(|id| id == author_id)
-        {
+        if !self.is_operator(author_id) {
             return Some("only an operator may ask the providers again".to_owned());
         }
         match &self.options.refresh_models {
@@ -505,16 +506,14 @@ impl Daemon {
             );
         }
 
+        let agent = self.options.config.get().agent;
         let available = self.options.catalog.models();
-        let chosen = configured_model(&self.options.config.agent);
+        let chosen = configured_model(&agent);
         let provider = chosen
             .as_ref()
             .and_then(|chosen| chosen.provider.clone())
-            .unwrap_or_else(|| self.options.config.agent.provider.clone());
-        let running = chosen.map_or_else(
-            || self.options.config.agent.provider.clone(),
-            |chosen| chosen.model,
-        );
+            .unwrap_or_else(|| agent.provider.clone());
+        let running = chosen.map_or_else(|| agent.provider.clone(), |chosen| chosen.model);
 
         Some(if available.is_empty() {
             "this host lists no models to switch to".to_owned()
@@ -526,7 +525,7 @@ impl Daemon {
                 &available,
                 &provider,
                 &split_level(&running).0,
-                &self.options.config.agent.aliases,
+                &self.options.catalog.aliases(),
             ));
             lines.join("\n")
         })
@@ -561,14 +560,7 @@ impl Daemon {
         if word == "!forget" {
             // "Owner" means nothing in a channel, so this is the operator's,
             // the way anything else acting beyond one session is.
-            if !self
-                .options
-                .config
-                .chat
-                .operator_user_ids
-                .iter()
-                .any(|id| id == author_id)
-            {
+            if !self.is_operator(author_id) {
                 return Some(
                     "only an operator may forget what is remembered from here; ask in a thread you own"
                         .to_owned(),

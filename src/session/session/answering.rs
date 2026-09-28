@@ -8,7 +8,7 @@ use crate::chat::render::grouped_by_provider;
 use crate::chat::render::{bytes as byte_count, compaction_line, connection_line};
 use crate::log::{LogValue, fields};
 
-use crate::provider::models::AvailableModel;
+use crate::provider::models::{AvailableModel, Matched, match_model};
 use crate::session::commands::{
     COMMANDS, CommandAccess, Standing, help_text, may_run, parse_user_id,
 };
@@ -25,45 +25,24 @@ pub(super) enum Chosen {
     Several(Vec<String>),
 }
 
+impl From<Matched> for Chosen {
+    fn from(matched: Matched) -> Self {
+        match matched {
+            Matched::One(found) => Self::One(found),
+            Matched::None => Self::None,
+            Matched::Several(options) => Self::Several(options),
+        }
+    }
+}
+
 /// Finds the model a name asks for, and the provider that serves it.
 ///
-/// A bare id is looked for on the session's own provider first, because
-/// staying where you are is the common case and needs no qualification. Only
-/// when it is not there does the name range over every other provider, and a
-/// name that several serve is refused rather than guessed at.
+/// The rule is [`match_model`]'s, so a name refused by a session is refused by
+/// the one that starts it too. A name nothing lists is refused rather than
+/// sent on: that turns a refusal here, which costs nothing, into a turn that
+/// fails at the provider after a sandbox and a round trip.
 pub(super) fn choose(available: &[AvailableModel], wanted: &str, current: &str) -> Chosen {
-    if available.is_empty() {
-        return Chosen::One(AvailableModel {
-            provider: current.to_owned(),
-            id: wanted.to_owned(),
-            default_level: None,
-        });
-    }
-
-    if let Some((provider, id)) = wanted.split_once('/')
-        && let Some(found) = available
-            .iter()
-            .find(|model| model.provider == provider && model.id == id)
-    {
-        return Chosen::One(found.clone());
-    }
-
-    if let Some(found) = available
-        .iter()
-        .find(|model| model.provider == current && model.id == wanted)
-    {
-        return Chosen::One(found.clone());
-    }
-
-    let elsewhere: Vec<&AvailableModel> = available
-        .iter()
-        .filter(|model| model.id == wanted)
-        .collect();
-    match elsewhere.as_slice() {
-        [] => Chosen::None,
-        [only] => Chosen::One((*only).clone()),
-        several => Chosen::Several(several.iter().map(|model| model.qualified()).collect()),
-    }
+    match_model(available, wanted, current).into()
 }
 
 /// A short name spelled the same as the model teaches nobody anything, so it
@@ -262,7 +241,7 @@ impl Running {
                 available,
                 &self.provider(),
                 &split_level(&running).0,
-                &self.options.config.agent.aliases,
+                &self.options.catalog.aliases(),
             ));
             lines.join("\n")
         })
@@ -272,8 +251,12 @@ impl Running {
     /// Shows which models this session can run on, or moves it to one.
     pub(super) async fn switch_model(&mut self, rest: &str, message: &IncomingMessage) {
         // A short name is what somebody types here too, so it stands for the
-        // same model it would have at the start of a session.
-        let expanded = expand_alias(rest.trim(), &self.options.config.agent.aliases);
+        // same model it would have at the start of a session. Read from the
+        // catalog rather than from this session's own copy of the
+        // configuration, which was taken when it was launched: a name added
+        // since then names nothing here, and the operator is left with a
+        // refusal for a name the file plainly defines.
+        let expanded = expand_alias(rest.trim(), &self.options.catalog.aliases());
         // The level is taken off before the name is looked up and put back
         // after: an alias may carry one, and `musecringe:max` is not the name
         // of anything the host lists.

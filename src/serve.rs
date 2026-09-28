@@ -25,10 +25,12 @@ use crate::chat::render::{
 };
 use crate::chat::threads::ChatThreadFactory;
 use crate::chat::threads::plain;
+use crate::config::live::LiveConfig;
 use crate::config::load::Environment;
 use crate::config::redact::{redact_text, secret_values};
 use crate::config::schema::{AgentConfig, Config, EgressMode, GithubConfig, GithubTrigger};
 use crate::config::usage::UsageShape;
+use crate::config::watch::{AfterReload, POLL, watch};
 use crate::daemon::SlashCommand;
 use crate::daemon::StartError;
 use crate::daemon::{Daemon, DaemonOptions};
@@ -161,6 +163,30 @@ async fn listen_on_github(
 
 /// How long a provider may take to list its models.
 const DISCOVER_TIMEOUT_MS: u64 = 10_000;
+
+/// Asks every provider again and puts what it said into the catalog.
+///
+/// The one place the catalog is derived from the configuration, reached both
+/// by `!models refresh` and by the watcher after a change to the file. The
+/// configuration is read as it is in force rather than from a copy taken at
+/// startup, so a provider added or changed in the file is discovered rather
+/// than the definition that was there before, and a short name added in the
+/// file names a model straight away rather than after the next launch. The
+/// names go in beside the models they name, so the two cannot disagree.
+/// Returns what each provider answered, for the caller to report to whoever
+/// asked.
+async fn rebuild_catalog(
+    agent: &AgentConfig,
+    store: Option<&str>,
+    log: &Logger,
+    catalog: &Catalog,
+) -> Vec<Outcome> {
+    let (providers, switchable, outcomes) =
+        discover(agent, store, &HttpFetch, DISCOVER_TIMEOUT_MS).await;
+    report_discovery(log, &outcomes);
+    catalog.replace(providers, switchable, agent.aliases.clone());
+    outcomes
+}
 
 /// Says in the log what asking each provider for its models came to.
 fn report_discovery(log: &Logger, outcomes: &[Outcome]) {
@@ -474,9 +500,13 @@ impl Exit {
 ///
 /// Serving is the steady state, so this returns only on a signal or when the
 /// connection has been lost for good.
-pub async fn serve(config: Config, log: Logger) -> Exit {
-    let secrets = secret_values(&config);
-
+///
+/// The path is the file the configuration came from, kept so it can be watched
+/// for the rest of the run. A change to it is applied without a restart; a
+/// change that cannot be read is logged and carried on from, since the
+/// configuration in force was valid when it was read and a half-written file
+/// has not made it otherwise.
+pub async fn serve(config: Config, path: String, env: Environment, log: Logger) -> Exit {
     // Taken before anything connects or spawns, so a second daemon fails fast
     // instead of racing the first one for every message that arrives.
     let _ = std::fs::create_dir_all(&config.state_dir);
@@ -491,7 +521,8 @@ pub async fn serve(config: Config, log: Logger) -> Exit {
     };
 
     let mut served_channel = ChannelId::new(config.chat.channel_id.parse().unwrap_or(0));
-    let code = run(&config, &log, &secrets, &mut lock, &mut served_channel).await;
+    let live = LiveConfig::new(config);
+    let code = run(&live, &path, &env, &log, &mut lock, &mut served_channel).await;
     // Released on every path, including a startup that never got as far as
     // connecting. A lock left behind is taken over next time because its
     // holder is gone, but leaving one is still a puzzle for whoever finds it.
@@ -688,14 +719,28 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
 ///
 /// Wiring is linear and each piece names itself, so the length is the
 /// startup order, not a tangle; splitting it would hide that order.
+///
+/// Takes the configuration as a shared handle, because a change to the file
+/// replaces what is in it while the daemon is already running. The copy read
+/// here is what startup committed to; the handle is what a later change to
+/// the file reaches. What was committed to cannot be rewound: the connection
+/// and the broker are already up, and a running session keeps what it was
+/// launched with.
 #[expect(clippy::too_many_lines)]
 async fn run(
-    config: &Config,
+    live: &LiveConfig,
+    path: &str,
+    env: &Environment,
     log: &Logger,
-    secrets: &[String],
     lock: &mut DaemonLock,
     served_channel: &mut ChannelId,
 ) -> Exit {
+    // What startup committed to. The handle beside it is what a later change
+    // to the file reaches, and nothing here reads that: what is already
+    // connected cannot be rewired underneath a live session.
+    let config = live.get();
+    let config = &config;
+
     // Asked before anything starts: without it the daemon runs but cannot
     // read a session's own files, which is a puzzle rather than a failure.
     if !paths::containment_is_enforced() {
@@ -929,8 +974,12 @@ async fn run(
         refresh_presence(&sources, &gateway);
     }
 
-    let env = host_environment();
-    let store = agent_directory(&env);
+    // The host's own environment, which is where the agent's store lives. Not
+    // the environment the configuration was resolved from: that one names the
+    // places a missing file is reported as having been looked in, so it is
+    // what the watcher is handed instead.
+    let host = host_environment();
+    let store = agent_directory(&host);
     let read = read_store(store.as_deref(), config.agent.provider.as_str());
     if read.skipped > 0 {
         // Said once, at startup: the store is written by something other than
@@ -976,7 +1025,7 @@ async fn run(
     )
     .await;
     report_discovery(log, &outcomes);
-    let catalog = Catalog::new(providers, switchable);
+    let catalog = Catalog::new(providers, switchable, config.agent.aliases.clone());
 
     let describer = image_describer(&config.agent, store.as_deref(), HttpPost);
     if let Some(describer) = &describer {
@@ -1087,18 +1136,18 @@ async fn run(
     };
 
     let daemon = Arc::new(Daemon::new(DaemonOptions {
-        config: config.clone(),
+        config: live.clone(),
         sandbox,
         threads: Arc::clone(&threads),
         log: log.clone(),
         reply_in_channel: {
             let http = Arc::clone(&http);
-            let secrets = secrets.to_vec();
+            let live = live.clone();
             let log = log.clone();
             let served = *served_channel;
             Arc::new(move |message: IncomingMessage, text: String| {
                 let http = Arc::clone(&http);
-                let secrets = secrets.clone();
+                let live = live.clone();
                 let log = log.clone();
                 Box::pin(async move {
                     // Asked on an issue, but answered in the channel: the
@@ -1111,6 +1160,10 @@ async fn run(
                         ),
                         None => text,
                     };
+                    // Read from the configuration in force, so that a
+                    // credential rotated in the file is scrubbed from the
+                    // next thing said in the channel.
+                    let secrets = secret_values(&live.get());
                     reply_in_channel(&http, &log, &secrets, served, &message, &text).await;
                 })
             })
@@ -1148,16 +1201,19 @@ async fn run(
         operator_ids: Some(operator_ids),
         catalog: catalog.clone(),
         refresh_models: Some({
-            let agent = config.agent.clone();
+            // Cloned here rather than moved into this closure, because the
+            // watcher below derives the catalog from the same values when the
+            // file changes.
+            let store = store.clone();
+            let catalog = catalog.clone();
+            let live = live.clone();
             let log = log.clone();
             Arc::new(move || {
-                let (agent, store, log, catalog) =
-                    (agent.clone(), store.clone(), log.clone(), catalog.clone());
+                let (live, store, log, catalog) =
+                    (live.clone(), store.clone(), log.clone(), catalog.clone());
                 Box::pin(async move {
-                    let (providers, switchable, outcomes) =
-                        discover(&agent, store.as_deref(), &HttpFetch, DISCOVER_TIMEOUT_MS).await;
-                    report_discovery(&log, &outcomes);
-                    catalog.replace(providers, switchable);
+                    let agent = live.get().agent;
+                    let outcomes = rebuild_catalog(&agent, store.as_deref(), &log, &catalog).await;
                     models_refreshed(&outcomes)
                 }) as Pin<Box<dyn Future<Output = String> + Send>>
             })
@@ -1252,6 +1308,39 @@ async fn run(
     log.info(
         "accepting messages",
         &fields([("channel", LogValue::from(config.chat.channel_id.as_str()))]),
+    );
+
+    // Started once the daemon is serving, so a change to the file is applied
+    // to a daemon that is already answering. What was committed to at startup
+    // is not rewound by it: the connection and the broker are already up, and a
+    // session already running keeps what it was launched with. The next
+    // session, and the daemon's own answers, are what read the new file.
+    //
+    // The catalog is derived from the file as well, so it is derived again
+    // after a change. Without that, an edited `models` list would be in force
+    // and `!model` would still list the one from before, which looks exactly
+    // like the reload not working.
+    let after: AfterReload = {
+        let live = live.clone();
+        let log = log.clone();
+        Arc::new(move || {
+            let (live, store, log, catalog) =
+                (live.clone(), store.clone(), log.clone(), catalog.clone());
+            Box::pin(async move {
+                let agent = live.get().agent;
+                // What each provider answered is already in the log, from the
+                // reporting inside the one place the catalog is built.
+                rebuild_catalog(&agent, store.as_deref(), &log, &catalog).await;
+            }) as Pin<Box<dyn Future<Output = ()> + Send>>
+        }) as AfterReload
+    };
+    watch(
+        live.clone(),
+        path.to_owned(),
+        env.clone(),
+        log.clone(),
+        POLL,
+        after,
     );
 
     wait_for_signal().await;

@@ -1,11 +1,13 @@
 //! Asks providers which models they serve, and holds what sessions read.
 //!
-//! A provider whose definition carries `discover` is asked at startup and on
-//! `!models refresh`. What it lists goes underneath the models its definition
-//! names: an entry written for a model overrides what was fetched for it field
-//! by field, and keeps the rest. A provider that cannot be asked keeps the
-//! models its definition names, and the reason is reported.
+//! A provider whose definition carries `discover` is asked at startup, after a
+//! change to the configuration file, and on `!models refresh`. What it lists
+//! goes underneath the models its definition names: an entry written for a
+//! model overrides what was fetched for it field by field, and keeps the rest.
+//! A provider that cannot be asked keeps the models its definition names, and
+//! the reason is reported.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use serde_json::{Map, Value};
@@ -121,6 +123,8 @@ pub type Outcome = (String, Result<usize, String>);
 ///
 /// Returns the definitions with what was found folded in, the models a
 /// session can switch to among them, and what each provider asked answered.
+/// The short names are not asked for here: they name the models rather than
+/// being models, and the caller reads them from the configuration it holds.
 pub async fn discover(
     agent: &AgentConfig,
     store: Option<&str>,
@@ -157,25 +161,39 @@ pub async fn discover(
     (providers, models, outcomes)
 }
 
-/// The provider definitions sessions launch with and the models they can
-/// switch to, replaced whole when providers are asked again.
+/// The provider definitions sessions launch with, the models they can switch
+/// to, and the short names for them, replaced whole when the configuration
+/// changes or providers are asked again.
 ///
-/// Shared rather than copied into each session, so a refresh reaches every
-/// session's `!model` at once. A running sandbox keeps the definitions it was
-/// launched with until its next launch.
+/// Shared rather than copied into each session, so a change reaches every
+/// session's `!model` at once. The short names are here rather than read from
+/// a session's own copy of the configuration because they name these models:
+/// a session holding its own copy answered `!model` with a new list beside the
+/// old names, and could not switch to a name added after it was launched. A
+/// running sandbox keeps the definitions it was launched with until its next
+/// launch.
 #[derive(Clone, Default)]
 pub struct Catalog {
     inner: Arc<RwLock<Contents>>,
 }
 
-/// The definitions, then the models, as one value so they change together.
-type Contents = (Map<String, Value>, Vec<AvailableModel>);
+/// The definitions, the models, and the names, as one value so they change
+/// together and cannot disagree about which names mean which models.
+type Contents = (
+    Map<String, Value>,
+    Vec<AvailableModel>,
+    BTreeMap<String, String>,
+);
 
 impl Catalog {
-    /// A catalog holding these definitions and models.
-    pub fn new(providers: Map<String, Value>, models: Vec<AvailableModel>) -> Self {
+    /// A catalog holding these definitions, models, and short names.
+    pub fn new(
+        providers: Map<String, Value>,
+        models: Vec<AvailableModel>,
+        aliases: BTreeMap<String, String>,
+    ) -> Self {
         Self {
-            inner: Arc::new(RwLock::new((providers, models))),
+            inner: Arc::new(RwLock::new((providers, models, aliases))),
         }
     }
 
@@ -189,9 +207,19 @@ impl Catalog {
         self.inner.read().expect("the catalog lock").1.clone()
     }
 
+    /// The short names for those models.
+    pub fn aliases(&self) -> BTreeMap<String, String> {
+        self.inner.read().expect("the catalog lock").2.clone()
+    }
+
     /// Replaces what the catalog holds.
-    pub fn replace(&self, providers: Map<String, Value>, models: Vec<AvailableModel>) {
-        *self.inner.write().expect("the catalog lock") = (providers, models);
+    pub fn replace(
+        &self,
+        providers: Map<String, Value>,
+        models: Vec<AvailableModel>,
+        aliases: BTreeMap<String, String>,
+    ) {
+        *self.inner.write().expect("the catalog lock") = (providers, models, aliases);
     }
 }
 

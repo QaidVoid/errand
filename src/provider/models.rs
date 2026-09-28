@@ -169,26 +169,51 @@ pub fn available_models(agent: &AgentConfig, directory: Option<&str>) -> Vec<Ava
     found
 }
 
-/// The provider that serves a bare model id, when one clearly does.
+/// Which model a name picks out, or why it did not.
 ///
-/// A model named without a provider, `-m big-pickle`, belongs to whichever
-/// provider lists it, not to the one a session would otherwise start on:
-/// sending it to the default provider's endpoint is what this exists to stop.
-/// The starting provider wins a tie, because a model two providers both serve
-/// is most naturally the one already in hand; anything more ambiguous is left
-/// for the caller to fall back on the default.
-pub fn provider_for(available: &[AvailableModel], model_id: &str, prefer: &str) -> Option<String> {
-    let serving: Vec<&str> = available
-        .iter()
-        .filter(|model| model.id == model_id)
-        .map(|model| model.provider.as_str())
-        .collect();
-    if serving.contains(&prefer) {
-        return Some(prefer.to_owned());
+/// A name that picks out none is refused rather than guessed at, including
+/// when the host lists nothing at all: an empty list is a host that has said
+/// nothing about its models, which is not a statement that any name will do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Matched {
+    /// Exactly one model answers to the name.
+    One(AvailableModel),
+    /// Nothing the host lists answers to it.
+    None,
+    /// Several providers serve a model of that name, qualified for a reply.
+    Several(Vec<String>),
+}
+
+/// Finds the model a name asks for, and the provider that serves it.
+///
+/// A bare id is looked for on `prefer` first, because staying where you are
+/// is the common case and needs no qualification. Only when it is not there
+/// does the name range over every other provider, and a name that several
+/// serve is reported rather than picked from.
+pub fn match_model(available: &[AvailableModel], wanted: &str, prefer: &str) -> Matched {
+    if let Some((provider, id)) = wanted.split_once('/')
+        && let Some(found) = available
+            .iter()
+            .find(|model| model.provider == provider && model.id == id)
+    {
+        return Matched::One(found.clone());
     }
-    match serving.as_slice() {
-        [only] => Some((*only).to_owned()),
-        _ => None,
+
+    if let Some(found) = available
+        .iter()
+        .find(|model| model.provider == prefer && model.id == wanted)
+    {
+        return Matched::One(found.clone());
+    }
+
+    let elsewhere: Vec<&AvailableModel> = available
+        .iter()
+        .filter(|model| model.id == wanted)
+        .collect();
+    match elsewhere.as_slice() {
+        [] => Matched::None,
+        [only] => Matched::One((*only).clone()),
+        several => Matched::Several(several.iter().map(|model| model.qualified()).collect()),
     }
 }
 
@@ -322,3 +347,6 @@ pub fn vision_model(models: &[ModelInfo], preferred: Option<&str>) -> Option<Mod
     });
     candidates.first().map(|model| (*model).clone())
 }
+
+#[cfg(test)]
+mod tests;

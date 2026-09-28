@@ -67,7 +67,10 @@ asked keeps the models it names, and the log says why.
 
 An operator can ask again without a restart with `!models refresh`. Every
 session's `!model` sees the new list at once. A running sandbox keeps what it
-was launched with until its next launch.
+was launched with until its next launch. Editing the `models` list in the
+configuration file does not need the refresh: a change to the file is read out
+of it again, so the edited list is what `!model` lists. The refresh is for
+asking the providers themselves over the network.
 
 ## Reading a provider's usage window
 

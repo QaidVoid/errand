@@ -642,6 +642,10 @@ struct SessionTestCase {
     open_pull_request: Option<OpenPullRequest>,
     unavailable: Option<Unavailable>,
     available_models: Vec<AvailableModel>,
+    /// The catalog the session reads. Given one is held by the test, which is
+    /// how a change to the configuration is simulated after the session is
+    /// already running.
+    catalog: Option<Catalog>,
     start: bool,
 }
 
@@ -657,6 +661,7 @@ impl Default for SessionTestCase {
             open_pull_request: None,
             unavailable: None,
             available_models: Vec::new(),
+            catalog: None,
             start: true,
         }
     }
@@ -719,10 +724,13 @@ async fn with_session(
         thread_id: None,
         guild_id: None,
         public_url: None,
-        catalog: Catalog::new(
-            config.agent.providers.clone(),
-            case.available_models.clone(),
-        ),
+        catalog: case.catalog.clone().unwrap_or_else(|| {
+            Catalog::new(
+                config.agent.providers.clone(),
+                case.available_models.clone(),
+                config.agent.aliases.clone(),
+            )
+        }),
         delegate_base_url: None,
         unavailable: case.unavailable.clone(),
         operator_ids: Vec::new(),
@@ -2728,6 +2736,41 @@ fn a_name_two_providers_serve_is_not_guessed_at() {
     ));
 }
 
+/// A name the host does not list is refused rather than sent to the provider,
+/// which used to turn a typo into a switch that failed there instead of here.
+#[test]
+fn a_name_the_host_does_not_list_is_refused() {
+    let available = vec![AvailableModel {
+        provider: "zai".to_owned(),
+        id: "glm-5.3".to_owned(),
+        default_level: None,
+    }];
+
+    for asked in ["no-such-model", "zai/no-such-model", "other/glm-5.3"] {
+        assert!(
+            matches!(
+                super::answering::choose(&available, asked, "zai"),
+                super::answering::Chosen::None
+            ),
+            "`{asked}` was not refused"
+        );
+    }
+}
+
+/// A host that lists nothing has said nothing about its models, which is not a
+/// statement that any name will do. This branch used to accept every name.
+#[test]
+fn a_host_that_lists_nothing_refuses_a_name_rather_than_accepting_it() {
+    assert!(matches!(
+        super::answering::choose(&[], "glm-5.3", "zai"),
+        super::answering::Chosen::None
+    ));
+    assert!(matches!(
+        super::answering::choose(&[], "zai/glm-5.3", "zai"),
+        super::answering::Chosen::None
+    ));
+}
+
 /// The listing is grouped, and the session's own provider comes first so the
 /// models it can switch to without qualifying are the ones at the top.
 #[test]
@@ -3105,4 +3148,72 @@ fn a_fetch_error_is_reported_with_its_whole_cause_chain() {
         "error sending request for url: client error (Connect): \
          dns error: failed to lookup address"
     );
+}
+
+/// A short name added to the configuration after a session was launched stands
+/// for its model straight away. The session holds a copy of the configuration
+/// it was launched with, so a name read from there was refused for a model the
+/// file plainly defines: the operator typed a name the configuration carried
+/// and was told no such model existed.
+#[tokio::test]
+async fn a_short_name_added_after_the_launch_is_known_to_a_running_session() {
+    let model = AvailableModel {
+        provider: "ajamxhacker".to_owned(),
+        id: "musecringe".to_owned(),
+        default_level: None,
+    };
+    // The catalog as it stands when the session is launched: the model is
+    // listed, and no name stands for it.
+    let catalog = Catalog::new(
+        serde_json::Map::new(),
+        vec![model.clone()],
+        std::collections::BTreeMap::new(),
+    );
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "ajamxhacker",
+                "providers": { "ajamxhacker": { "credential": "secret" } },
+            },
+        }))),
+        available_models: vec![model],
+        catalog: Some(catalog.clone()),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().send(&json!({ "type": "agent_settled" }));
+            settle().await;
+
+            // The configuration is edited and reloaded while the session runs.
+            catalog.replace(
+                serde_json::Map::new(),
+                catalog.models(),
+                std::collections::BTreeMap::from([(
+                    "muse".to_owned(),
+                    "ajamxhacker/musecringe:max".to_owned(),
+                )]),
+            );
+
+            let before = harness.controls().written().len();
+            tokio::join!(
+                harness
+                    .session
+                    .handle(message_from("!model muse", OWNER, "m1")),
+                async {
+                    settle().await;
+                    harness.controls().answer(&json!({}));
+                }
+            );
+            settle().await;
+
+            let said: Vec<String> = harness.controls().written().split_off(before);
+            assert!(
+                said.iter().any(|line| line.contains("set_model")),
+                "a name added after the launch was refused: {said:?}"
+            );
+        })
+    })
+    .await;
 }
