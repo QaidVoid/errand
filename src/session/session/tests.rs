@@ -2750,7 +2750,7 @@ fn the_listing_says_what_somebody_can_type_back() {
         ("glm-5.3".to_owned(), "zai/glm-5.3".to_owned()),
     ]);
 
-    let lines = super::answering::grouped_by_provider(&available, "zai", "glm-5.3", &aliases);
+    let lines = crate::chat::render::grouped_by_provider(&available, "zai", "glm-5.3", &aliases);
 
     assert_eq!(
         lines,

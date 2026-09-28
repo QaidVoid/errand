@@ -21,6 +21,7 @@ use crate::config::validate::validate_config;
 use crate::log::{LogFields, LogLevel, Logger};
 use crate::memory::store::{MemoryStore, Scope};
 use crate::provider::discover::Catalog;
+use crate::provider::models::AvailableModel;
 use crate::sandbox::Backend;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
@@ -372,6 +373,7 @@ struct DaemonCase {
     report: Option<CapabilityReport>,
     start: bool,
     memory: Option<Arc<MemoryStore>>,
+    catalog: Option<Catalog>,
 }
 
 impl Default for DaemonCase {
@@ -384,6 +386,7 @@ impl Default for DaemonCase {
             report: None,
             start: true,
             memory: None,
+            catalog: None,
         }
     }
 }
@@ -438,7 +441,7 @@ async fn with_daemon(
         describe_usage: case.describe_usage.clone(),
         refresh_models: case.refresh_models.clone(),
         public_url: None,
-        catalog: Catalog::default(),
+        catalog: case.catalog.clone().unwrap_or_default(),
         delegate_base_url: None,
         operator_ids: None,
         unavailable: None,
@@ -1281,6 +1284,140 @@ async fn a_mistyped_refresh_is_refused_and_says_what_to_type() {
 
                 assert!(harness.said().contains("!usage refresh"));
                 assert!(!harness.said().contains("the window"));
+            })
+        },
+    )
+    .await;
+}
+
+/// Which models exist is a property of the host, so asking in a channel
+/// answers rather than starting a session and paying for a sandbox.
+#[tokio::test]
+async fn the_models_on_this_host_are_listed_without_starting_a_session() {
+    with_daemon(
+        DaemonCase {
+            catalog: Some(Catalog::new(
+                serde_json::Map::new(),
+                vec![
+                    AvailableModel {
+                        provider: "zai".to_owned(),
+                        id: "glm-5.3".to_owned(),
+                        default_level: Some(":high".to_owned()),
+                    },
+                    AvailableModel {
+                        provider: "openrouter".to_owned(),
+                        id: "a".to_owned(),
+                        default_level: None,
+                    },
+                ],
+            )),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("!model"), InboundDecision::Start)
+                    .await;
+
+                let said = harness.said();
+                assert!(said.contains("**zai**"), "{said}");
+                assert!(said.contains("`glm-5.3`"), "{said}");
+                assert!(said.contains("**openrouter**"), "{said}");
+                assert!(created(&harness.threads).is_empty());
+            })
+        },
+    )
+    .await;
+}
+
+/// A session runs on one model at a time, so a name typed in a channel is
+/// pointed at a thread rather than acted on with no session to change.
+#[tokio::test]
+async fn switching_a_model_in_a_channel_is_pointed_at_a_thread() {
+    with_daemon(
+        DaemonCase {
+            catalog: Some(Catalog::new(
+                serde_json::Map::new(),
+                vec![AvailableModel {
+                    provider: "zai".to_owned(),
+                    id: "glm-5.3".to_owned(),
+                    default_level: None,
+                }],
+            )),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("!model glm-5.3"), InboundDecision::Start)
+                    .await;
+
+                assert!(harness.said().contains("inside a session thread"));
+                assert!(created(&harness.threads).is_empty());
+            })
+        },
+    )
+    .await;
+}
+
+/// A host that lists nothing says so, rather than an empty list that reads as
+/// a broken catalog.
+#[tokio::test]
+async fn a_host_with_no_models_says_so() {
+    with_daemon(DaemonCase::default(), |harness| {
+        Box::pin(async move {
+            harness
+                .daemon
+                .handle(raw("!model"), InboundDecision::Start)
+                .await;
+
+            assert!(harness.said().contains("lists no models"));
+            assert!(created(&harness.threads).is_empty());
+        })
+    })
+    .await;
+}
+
+/// Inside a thread the session answers, because that is where a name is acted
+/// on. The daemon listing there instead would cost the thread its own model.
+#[tokio::test]
+async fn in_a_thread_the_daemon_leaves_the_model_to_the_session() {
+    with_daemon(
+        DaemonCase {
+            catalog: Some(Catalog::new(
+                serde_json::Map::new(),
+                vec![AvailableModel {
+                    provider: "zai".to_owned(),
+                    id: "glm-5.3".to_owned(),
+                    default_level: None,
+                }],
+            )),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                let mut sent = raw("!model");
+                sent.channel_id = "thread-1".to_owned();
+                sent.parent_channel_id = Some("chan".to_owned());
+                harness
+                    .daemon
+                    .handle(
+                        sent,
+                        InboundDecision::Thread {
+                            thread_id: "thread-1".to_owned(),
+                        },
+                    )
+                    .await;
+                // Not answered here, so it falls through to the session, which
+                // is what owns the model a thread runs on.
+                assert!(
+                    harness.said().is_empty(),
+                    "the daemon answered in a thread: {}",
+                    harness.said()
+                );
+                assert!(created(&harness.threads).is_empty());
             })
         },
     )

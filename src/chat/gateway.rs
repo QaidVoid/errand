@@ -20,7 +20,7 @@ use serenity::model::channel::{Attachment, Channel, Message};
 use serenity::model::gateway::Ready;
 use serenity::model::id::ChannelId;
 
-use crate::chat::commands::{TranslatedCommand, acknowledge, translate};
+use crate::chat::commands::{TranslatedCommand, acknowledge, answer_deferred, defer, translate};
 use crate::chat::inbound::DeletionDecision;
 use crate::chat::inbound::{
     InboundDecision, RawAttachment, RawDeletion, RawMessage, classify, classify_deletion,
@@ -301,16 +301,22 @@ impl EventHandler for Gateway {
             command.user.id.get().to_string().as_str(),
             user_name.as_str(),
         );
+        // Claimed before the command runs. The daemon may take longer than
+        // the service allows an unanswered interaction, and it is the claim
+        // that keeps a slow answer from looking like a broken bot. The
+        // permission refusal above is the one answer sent directly, since it
+        // is decided here and needs no waiting on.
+        defer(&ctx, &command).await;
         let ack: Arc<dyn Fn(&str) + Send + Sync> = {
             let ctx = ctx.clone();
             Arc::new(move |text: &str| {
-                // Fire and forget: a failure to acknowledge is a service
-                // report of failure, which is what it already is.
+                // Fire and forget: a failure to answer is a service report of
+                // failure, which is what it already is.
                 let ctx = ctx.clone();
                 let command = command.clone();
                 let text = text.to_owned();
                 tokio::spawn(async move {
-                    acknowledge(&ctx, &command, &text).await;
+                    answer_deferred(&ctx, &command, &text).await;
                 });
             })
         };

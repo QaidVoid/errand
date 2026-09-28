@@ -9,13 +9,15 @@
 //! waiting for global propagation.
 
 use serenity::builder::{
-    CreateCommand, CreateCommandOption, CreateInteractionResponse, CreateInteractionResponseMessage,
+    CreateCommand, CreateCommandOption, CreateInteractionResponse,
+    CreateInteractionResponseFollowup, CreateInteractionResponseMessage, EditInteractionResponse,
 };
 use serenity::client::Context;
 use serenity::model::application::CommandDataOption;
 use serenity::model::application::CommandInteraction;
 use serenity::model::id::GuildId;
 
+use crate::chat::render::{MESSAGE_LIMIT, split_message};
 use crate::log::{LogValue, Logger, fields};
 use crate::session::commands::{COMMANDS, CommandAccess};
 
@@ -227,6 +229,62 @@ pub async fn acknowledge(ctx: &Context, interaction: &CommandInteraction, text: 
             ),
         )
         .await;
+}
+
+/// Claims an interaction before the work behind it begins, so the answer is
+/// allowed to arrive late.
+///
+/// The service expires an interaction left unanswered for a few seconds, and
+/// the work behind one is not always quick: `!usage` asks a provider over the
+/// network, `!models refresh` asks every provider, and a session command
+/// reaches a sandbox. A person told "the application did not respond" has no
+/// way to tell that from the bot being broken, so the interaction is claimed
+/// first and shows a loading state until the real answer replaces it.
+pub async fn defer(ctx: &Context, interaction: &CommandInteraction) {
+    let _ = interaction
+        .create_response(
+            ctx,
+            CreateInteractionResponse::Defer(
+                CreateInteractionResponseMessage::new().ephemeral(true),
+            ),
+        )
+        .await;
+}
+
+/// What an answer is broken into for a deferred interaction: the piece to
+/// edit in, then the pieces to follow up with.
+///
+/// The service refuses a message over its limit rather than truncating it, so
+/// a long answer is several messages. An empty answer still gets a piece, so
+/// that a loading state is always replaced by something rather than left
+/// spinning.
+pub fn deferred_pieces(text: &str) -> (String, Vec<String>) {
+    let mut pieces = split_message(text, MESSAGE_LIMIT).into_iter();
+    (
+        pieces.next().unwrap_or_else(|| "done".to_owned()),
+        pieces.collect(),
+    )
+}
+
+/// Puts an answer into an interaction that has already been deferred.
+///
+/// An answer too long for one message is edited in and the remainder sent as
+/// follow-ups.
+pub async fn answer_deferred(ctx: &Context, interaction: &CommandInteraction, text: &str) {
+    let (first, rest) = deferred_pieces(text);
+    let _ = interaction
+        .edit_response(ctx, EditInteractionResponse::new().content(&first))
+        .await;
+    for piece in rest {
+        let _ = interaction
+            .create_followup(
+                ctx,
+                CreateInteractionResponseFollowup::new()
+                    .content(&piece)
+                    .ephemeral(true),
+            )
+            .await;
+    }
 }
 
 #[cfg(test)]

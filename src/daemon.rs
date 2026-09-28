@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::admission::scheduler::{Scheduler, SystemClock};
 use crate::chat::inbound::{InboundDecision, RawMessage};
+use crate::chat::render::grouped_by_provider;
 use crate::config::redact::redact_config;
 use crate::config::schema::defaults::IMAGE;
 use crate::config::schema::{ALLOW_EVERY_USER, ChatConfig, Config, SandboxBackend};
@@ -35,6 +36,7 @@ use crate::session::manager::SandboxPool;
 use crate::session::manager::{
     ManagerOptions, SessionManager, StartOutcome, ThreadFactory, Unavailable,
 };
+use crate::session::model::{configured_model, split_level};
 use crate::session::registry::ThreadRegistry;
 use crate::session::session::{DescribeImages, IncomingMessage};
 
@@ -478,7 +480,56 @@ impl Daemon {
         if let Some(answer) = self.refresh_models(content, author_id).await {
             return Some(answer);
         }
+        if let Some(answer) = self.list_models(content, in_thread) {
+            return Some(answer);
+        }
         self.answer_about_memory(content, author_id, in_thread)
+    }
+
+    /// Lists the models this host serves, for a channel with no session in it.
+    ///
+    /// Which models exist is a property of the host rather than of a session,
+    /// so asking in the channel should not start one, and should not pay for
+    /// a sandbox and a model call to answer. Inside a thread the session
+    /// answers instead, because that is where a name given is acted on: a
+    /// session runs on one model at a time, and switching it needs the session
+    /// that would change.
+    fn list_models(&self, content: &str, in_thread: bool) -> Option<String> {
+        if first_word(content) != "!model" || in_thread {
+            return None;
+        }
+        if !argument_of(content, "!model").is_empty() {
+            return Some(
+                "a session runs on one model at a time, so switch it inside a session thread with `!model <name>`"
+                    .to_owned(),
+            );
+        }
+
+        let available = self.options.catalog.models();
+        let chosen = configured_model(&self.options.config.agent);
+        let provider = chosen
+            .as_ref()
+            .and_then(|chosen| chosen.provider.clone())
+            .unwrap_or_else(|| self.options.config.agent.provider.clone());
+        let running = chosen.map_or_else(
+            || self.options.config.agent.provider.clone(),
+            |chosen| chosen.model,
+        );
+
+        Some(if available.is_empty() {
+            "this host lists no models to switch to".to_owned()
+        } else {
+            let mut lines = vec![format!(
+                "a new session runs on `{running}`. Switch with `!model <name>` in a session thread:"
+            )];
+            lines.extend(grouped_by_provider(
+                &available,
+                &provider,
+                &split_level(&running).0,
+                &self.options.config.agent.aliases,
+            ));
+            lines.join("\n")
+        })
     }
 
     /// Answers what is remembered, for somebody who is not in a thread.

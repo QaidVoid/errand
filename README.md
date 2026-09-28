@@ -117,6 +117,11 @@ switch to the cheap one to carry it out, switch back to review. The same command
 commands, so they can be picked rather than remembered. A message starting
 `!!!` is an aside: the people in the thread see it and the agent is never told.
 
+`!help`, `!usage` and `!model` also work in the channel, where they are
+answered by the daemon rather than starting a session. `!model` lists the
+models there; switching one still belongs to a session, so it asks for a
+thread.
+
 Full documentation, including every configuration field, is in
 [docs](docs), built with VitePress from `docs`.
 

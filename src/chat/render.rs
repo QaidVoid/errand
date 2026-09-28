@@ -5,16 +5,20 @@
 //! fence in the earlier message and reopens it with the same language in the
 //! next, so every message posted is independently well formed.
 
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 
 use crate::agent::protocol::DialogMethod;
 use crate::agent::protocol::DialogRequest;
 use crate::chat::chars::{PrefixKey, prefixed};
 use crate::provider::discover::Outcome;
+use crate::provider::models::AvailableModel;
 use crate::provider::usage::{Quota, is_spent};
 use crate::session::event::Delegated;
 use crate::session::files::Entry;
 use crate::session::files::{FileContents, MAX_INLINE_BYTES};
+use crate::session::model::split_level;
 
 /// The service's per-message character limit.
 pub const MESSAGE_LIMIT: usize = 2000;
@@ -435,6 +439,70 @@ pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
     format!("```\n{}\n```", lines.join("\n"))
 }
 
+/// Every model, under a heading per provider, the current one first.
+///
+/// A name somebody can type back is the point, so a short name is shown
+/// beside the model it stands for, the current one is marked, and a level
+/// that applies without being asked for is spelled out: a list that never
+/// says `muse` cannot be used without reading the configuration first.
+///
+/// Shared because a session lists from its own model and the daemon lists
+/// from the catalog, and the two must not drift apart.
+pub fn grouped_by_provider(
+    available: &[AvailableModel],
+    current_provider: &str,
+    current_model: &str,
+    aliases: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut providers: Vec<&str> = Vec::new();
+    for model in available {
+        if !providers.contains(&model.provider.as_str()) {
+            providers.push(&model.provider);
+        }
+    }
+    providers.sort_by_key(|provider| (*provider != current_provider, *provider));
+
+    let mut lines = Vec::new();
+    for provider in providers {
+        lines.push(format!("**{provider}**"));
+        for model in available.iter().filter(|model| model.provider == provider) {
+            let mut notes = Vec::new();
+            if provider == current_provider && model.id == current_model {
+                notes.push("running".to_owned());
+            }
+            notes.extend(short_names(aliases, model));
+            if let Some(level) = &model.default_level {
+                notes.push(format!("thinks {}", level.trim_start_matches(':')));
+            }
+            let said = if notes.is_empty() {
+                String::new()
+            } else {
+                format!("  ({})", notes.join(", "))
+            };
+            lines.push(format!("  `{}`{said}", model.id));
+        }
+    }
+    lines
+}
+
+/// The short names that stand for one model, in the order they were written.
+///
+/// A short name spelled the same as the model teaches nobody anything, so it
+/// is left out rather than shown beside the name it repeats.
+pub fn short_names(aliases: &BTreeMap<String, String>, model: &AvailableModel) -> Vec<String> {
+    let qualified = model.qualified();
+    aliases
+        .iter()
+        .filter(|(short, target)| {
+            let bare = split_level(target).0;
+            (bare == qualified || bare == model.id) && **short != model.id
+        })
+        .map(|(short, _)| format!("`{short}`"))
+        .collect()
+}
+
+/// A short name spelled the same as the model teaches nobody anything, so it
+/// is left out rather than shown beside the name it repeats.
 /// What is left of a window, or that it is spent.
 fn left_of(quota: &Quota) -> String {
     if is_spent(quota) {

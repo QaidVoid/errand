@@ -2,7 +2,8 @@
 
 use serenity::model::application::CommandDataOption;
 
-use super::{build_commands, translate};
+use super::{build_commands, deferred_pieces, translate};
+use crate::chat::render::MESSAGE_LIMIT;
 use crate::session::commands::COMMANDS;
 
 /// Builds one option from the shape the service sends, since the library's
@@ -79,6 +80,45 @@ fn every_command_is_offered_as_a_slash_command_too() {
             name.strip_prefix('!').unwrap_or(name)
         );
     }
+}
+
+/// An answer that fits goes in one edit, with nothing following it.
+#[test]
+fn an_answer_that_fits_needs_no_follow_up() {
+    let (first, rest) = deferred_pieces("42% of the window is left");
+
+    assert_eq!(first, "42% of the window is left");
+    assert!(rest.is_empty());
+}
+
+/// The service refuses a message over its limit rather than truncating it, so
+/// a longer answer is split, and every piece the daemon sends is one the
+/// service will take.
+#[test]
+fn an_answer_over_the_limit_is_split_into_pieces_the_service_takes() {
+    let long = "x".repeat(MESSAGE_LIMIT * 2 + 40);
+    let (first, rest) = deferred_pieces(&long);
+
+    assert!(first.chars().count() <= MESSAGE_LIMIT);
+    assert_eq!(rest.len(), 2);
+    for piece in &rest {
+        assert!(piece.chars().count() <= MESSAGE_LIMIT);
+    }
+    let rejoined: String = std::iter::once(&first)
+        .chain(&rest)
+        .map(String::as_str)
+        .collect();
+    assert_eq!(rejoined, long, "nothing was dropped or added");
+}
+
+/// A command that answers with nothing must still replace the loading state,
+/// or the person is left watching a spinner for a command that already ran.
+#[test]
+fn an_empty_answer_still_replaces_the_loading_state() {
+    let (first, rest) = deferred_pieces("");
+
+    assert!(!first.is_empty());
+    assert!(rest.is_empty());
 }
 
 /// Whoever reads the picker should know before they try.

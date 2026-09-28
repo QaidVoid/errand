@@ -18,7 +18,7 @@ use serenity::model::id::ChannelId;
 
 use crate::agent::protocol::AgentImage;
 use crate::chat::commands::TranslatedCommand;
-use crate::chat::commands::{acknowledge, register_commands};
+use crate::chat::commands::register_commands;
 use crate::chat::gateway::{Gateway, GatewayHandlers};
 use crate::chat::render::{
     MESSAGE_LIMIT, models_refreshed, split_message, usage_table, when_relative, when_relative_plain,
@@ -795,11 +795,10 @@ async fn run(
                                 }
                                 None => "the daemon is not ready".to_owned(),
                             };
+                            // The interaction was claimed before this ran, so
+                            // the answer lands in a response that is already
+                            // waiting for it however long the command took.
                             ack(&answer);
-                            // The service reports an interaction nobody answered
-                            // as the bot being broken, so a private nod always
-                            // goes out even when the answer ran long.
-                            let _ = acknowledge;
                         });
                     },
                 )
