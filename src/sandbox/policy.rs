@@ -180,7 +180,14 @@ pub fn policy_contents(options: &PolicyOptions) -> String {
     // hold the agent and the interpreter that runs it, which is the whole
     // reason they are granted at all, and a read grant no longer carries
     // execute with it: bailey separated the two, and without this the agent's
-    // own `execve` is refused. Nothing else in the read list is widened.
+    // own `execve` is refused.
+    //
+    // The project is granted execute as well. A session runs builds, tests,
+    // and scripts from its own tree, and without this every `execve` of a
+    // file under /workspace is refused. The grant is placed rather than
+    // named, so the host path never appears where the agent can read it and
+    // a plain "/workspace" entry never names a host path that does not
+    // exist. Nothing else in the read list is widened.
     let mut execute_set: Vec<String> = SYSTEM_EXECUTE
         .iter()
         .map(|entry| (*entry).to_owned())
@@ -190,11 +197,12 @@ pub fn policy_contents(options: &PolicyOptions) -> String {
     execute_set.extend(options.runtime.read_paths.iter().cloned());
     execute_set.extend(extra.execute.iter().cloned());
     let mut seen_execute = std::collections::HashSet::new();
-    let execute: Vec<String> = execute_set
+    let mut execute: Vec<String> = execute_set
         .into_iter()
         .filter(|entry| seen_execute.insert(entry.clone()))
         .map(|entry| quoted(&entry))
         .collect();
+    execute.push(placed(&launch.project_path, WORKSPACE_PATH));
 
     // The environment is built rather than inherited, so a variable not named
     // here does not cross. The provider credential is named and nothing else
