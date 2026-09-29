@@ -4,6 +4,24 @@ reset = true
 read = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/proc", "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d", "/etc/ssl", "/etc/ca-certificates.conf", "/etc/ca-certificates", "/var/lib/ca-certificates", "/etc/pki", "/etc/nsswitch.conf", "/etc/services", "/etc/protocols", { path = "/var/lib/errand/resolv.conf", at = "/etc/resolv.conf" }, { path = "/home/operator/code/demo", at = "/workspace" }, { path = "/home/operator/.local/state/errand/s-1", at = "/state" }, "/opt/agent/bin", "/opt/agent/lib/pi"]
 write = [{ path = "/home/operator/code/demo", at = "/workspace" }, { path = "/home/operator/.local/state/errand/s-1", at = "/state" }]
 execute = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/state/home/bin", "/opt/agent/bin", "/opt/agent/lib/pi", { path = "/home/operator/code/demo", at = "/workspace" }]
+[[device]]
+path = "/dev/null"
+access = "rw"
+[[device]]
+path = "/dev/zero"
+access = "r"
+[[device]]
+path = "/dev/full"
+access = "rw"
+[[device]]
+path = "/dev/urandom"
+access = "r"
+[[device]]
+path = "/dev/random"
+access = "r"
+[[device]]
+path = "/dev/tty"
+access = "rw"
 
 [env]
 pass = ["ZAI_API_KEY"]

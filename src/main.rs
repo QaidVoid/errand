@@ -93,9 +93,11 @@ fn load(env: &Vars) -> Result<(String, Config), ConfigError> {
 }
 
 /// Pulls a `name = "value"` pair off the front of a grant body, leaving the
-/// rest of it.
+/// rest of it. A body may start with the comma a previous pair left behind.
 fn grant_pair<'a>(body: &'a str, name: &str) -> Option<(&'a str, String)> {
-    let body = body.trim_start().strip_prefix(name)?;
+    let body = body.trim_start();
+    let body = body.strip_prefix(',').unwrap_or(body).trim_start();
+    let body = body.strip_prefix(name)?;
     let body = body.trim_start().strip_prefix('=')?.trim_start();
     let body = body.strip_prefix('"')?;
     let end = body.find('"')?;
@@ -261,5 +263,76 @@ async fn dispatch(mut args: Vec<String>, env: Vars) -> Result<i32, ConfigError> 
             eprintln!("{}", usage(&env));
             Ok(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::grant_pair;
+    use super::workspace_grant;
+    use crate::config::schema::NetworkMode;
+    use crate::sandbox::backend::SandboxLaunch;
+    use crate::sandbox::policy::{PolicyOptions, policy_contents};
+    use crate::sandbox::runtime::AgentRuntime;
+
+    /// The revive reader scans inline tables for the grant placed at the
+    /// workspace. The generated policy grows new kinds of entries over time
+    /// (`[[device]]` tables, network ports); a block it cannot read must
+    /// never make the whole scan give up before the workspace grant is
+    /// found, or every revive refuses.
+    #[test]
+    fn the_policy_reader_finds_the_workspace_grant_in_a_policy_with_devices() {
+        let launch = SandboxLaunch {
+            session_id: "s-1".to_owned(),
+            project_path: "/home/operator/code/demo".to_owned(),
+            state_dir: "/home/operator/.local/state/errand/s-1".to_owned(),
+            env: BTreeMap::new(),
+            system_prompt_path: None,
+            provider: "zai-coding-cn".to_owned(),
+            model: Some("glm-5.3".to_owned()),
+            providers: serde_json::Map::new(),
+            extensions: Vec::new(),
+            resume: false,
+        };
+        let runtime = AgentRuntime {
+            read_paths: vec!["/opt/agent/bin".to_owned()],
+            path_entries: vec!["/opt/agent/bin".to_owned()],
+        };
+        for network in [NetworkMode::Restricted, NetworkMode::None] {
+            let options = PolicyOptions {
+                launch: &launch,
+                network,
+                egress_ports: Some(&[443]),
+                runtime: &runtime,
+                file_max: "1g",
+                tmp_size: "512m",
+                shm_size: "256m",
+                disk_tmp: false,
+                resolv_conf: "/var/lib/errand/resolv.conf",
+                extra: None,
+                env: None,
+                path_extra: None,
+            };
+            let policy = policy_contents(&options);
+            assert_eq!(
+                workspace_grant(&policy).as_deref(),
+                Some("/home/operator/code/demo"),
+                "the workspace grant is lost in a {network:?} policy"
+            );
+        }
+    }
+
+    /// The pairs after the first arrive with a comma in front, and the
+    /// reader has to step over it rather than give up on the whole scan.
+    #[test]
+    fn a_grant_pair_reads_the_pair_a_comma_precedes() {
+        let body = " path = \"/a\", at = \"/workspace\" ";
+        let (rest, path) = grant_pair(body, "path").expect("the path pair is read");
+        assert_eq!(path, "/a");
+        let (rest, at) = grant_pair(rest, "at").expect("the at pair is read");
+        assert_eq!(at, "/workspace");
+        assert!(rest.trim().is_empty());
     }
 }

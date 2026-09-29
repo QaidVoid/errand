@@ -82,6 +82,21 @@ fn the_policy_clears_the_profiles_grants_before_listing_its_own() {
     assert!(policy_bytes(&overrides()).contains("reset = true"));
 }
 
+/// The reset strips the profile's device list, and the nodes a session's
+/// tools assume are named here: a run with no `/dev/null` cannot start a
+/// child with its input ignored, which is how the agent's shell tool spawns
+/// everything.
+#[test]
+fn the_policy_names_the_device_nodes_a_session_reaches_for() {
+    let written = policy_bytes(&overrides());
+
+    assert!(written.contains("[[device]]\npath = \"/dev/null\"\naccess = \"rw\""));
+    assert!(written.contains("[[device]]\npath = \"/dev/urandom\"\naccess = \"r\""));
+    for node in ["/dev/zero", "/dev/full", "/dev/random", "/dev/tty"] {
+        assert!(written.contains(&format!("path = \"{node}\"")));
+    }
+}
+
 /// A host path names the operator and the shape of their machine.
 #[test]
 fn the_project_and_the_state_are_placed_never_shown_as_host_paths() {

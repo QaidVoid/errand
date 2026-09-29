@@ -63,6 +63,23 @@ const SYSTEM_READ: [&str; 17] = [
 /// Where the agent may run programs from.
 const SYSTEM_EXECUTE: [&str; 5] = ["/usr", "/lib", "/lib64", "/bin", "/sbin"];
 
+/// The device nodes a session reaches for, and the access each needs.
+///
+/// The policy resets the profile's grants, and a reset clears the profile's
+/// device list, so the nodes a session's tools assume are named here rather
+/// than surviving a reset by accident. A run without `/dev/null` cannot
+/// start a child with its input ignored, which is how the agent's shell
+/// tool spawns everything; without `/dev/urandom` a program that reads
+/// entropy from the file gets nothing.
+const SESSION_DEVICES: [(&str, &str); 6] = [
+    ("/dev/null", "rw"),
+    ("/dev/zero", "r"),
+    ("/dev/full", "rw"),
+    ("/dev/urandom", "r"),
+    ("/dev/random", "r"),
+    ("/dev/tty", "rw"),
+];
+
 /// The resolver a session is given, in place of the host's.
 ///
 /// The host's `/etc/resolv.conf` names whoever resolves for this machine,
@@ -100,6 +117,18 @@ pub fn policy_path(launch: &SandboxLaunch) -> String {
         .join(POLICY_FILENAME)
         .to_string_lossy()
         .into_owned()
+}
+
+/// Renders the `[[device]]` entries of a generated policy, one block per
+/// node.
+fn device_lines() -> Vec<String> {
+    let mut lines = Vec::new();
+    for (path, access) in SESSION_DEVICES {
+        lines.push("[[device]]".to_owned());
+        lines.push(format!("path = {}", quoted(path)));
+        lines.push(format!("access = {}", quoted(access)));
+    }
+    lines
 }
 
 /// What goes into one rendered policy, when the defaults are not enough.
@@ -242,12 +271,20 @@ pub fn policy_contents(options: &PolicyOptions) -> String {
     let mut lines = vec![
         "# Generated per session by errand. Do not edit.".to_owned(),
         "[filesystem]".to_owned(),
-        // Clears the profile's grants, so the list below is the whole of what
-        // a session can reach rather than an addition to a wider floor.
+        // Clears the profile's grants, including its device list, so the
+        // grants below, plus the device nodes named after them, are the whole
+        // of what a session can reach rather than an addition to a wider
+        // floor.
         "reset = true".to_owned(),
         format!("read = [{}]", read.join(", ")),
         format!("write = [{}]", write.join(", ")),
         format!("execute = [{}]", execute.join(", ")),
+    ];
+    // Named in the resetting layer itself, so the reset and the grants land
+    // in one breath and no profile's node list survives what it cannot
+    // outlive.
+    lines.extend(device_lines());
+    lines.extend([
         String::new(),
         "[env]".to_owned(),
         format!("pass = [{}]", pass.join(", ")),
@@ -260,7 +297,7 @@ pub fn policy_contents(options: &PolicyOptions) -> String {
         format!("file_max = {}", quoted(options.file_max)),
         format!("tmp_size = {}", quoted(options.tmp_size)),
         format!("shm_size = {}", quoted(options.shm_size)),
-    ];
+    ]);
     // A disk directory the backend binds at /tmp instead of a tmpfs, so /tmp
     // is on disk and bounded by the disk budget. It is under the state tree,
     // which the budget measures and the backend already relocates.
