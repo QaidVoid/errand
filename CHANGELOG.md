@@ -1,6 +1,18 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.2.4] - 2026-09-29
+
+
+### Features
+- Add errand skills ([b90c1c7](https://github.com/QaidVoid/errand/commit/b90c1c7a8d42e351353c91715717d910a3b7b7e2))
+
+### Fixes
+- (sandbox) Bound the broker's dial across all addresses ([ace9ba7](https://github.com/QaidVoid/errand/commit/ace9ba71f51336aeeb26543644f1ec2ffa553efd))
+- (sandbox) Close the daemon's symlink-following sinks ([088ee6a](https://github.com/QaidVoid/errand/commit/088ee6a0c9235633f203ead52d6a3cbe5e9ea5c1))
+- (sandbox) Point bailey user dirs at the operator home ([5f4ea77](https://github.com/QaidVoid/errand/commit/5f4ea7720bc67211a2b33bde2eb8bf96dfa47f31))
+- (session) Refuse symlinks in recall and delegation answers ([6c4cafa](https://github.com/QaidVoid/errand/commit/6c4cafab783ee0f167652e3257ed88997c248721))
+
 ## [0.2.3] - 2026-09-29
 
 
