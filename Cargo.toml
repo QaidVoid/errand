@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["agent", "chat", "sandbox", "daemon", "discord"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = ["/docs", "/web", "/packaging", "/test"]
+exclude = ["/docs", "/web", "/packaging", "/skills", "/test"]
 
 [[bin]]
 name = "errand"
