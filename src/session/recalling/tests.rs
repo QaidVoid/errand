@@ -116,3 +116,61 @@ fn the_answer_names_what_was_asked() {
     assert!(rendered.contains("`build tool`"));
     assert!(rendered.contains("- the build runs with bun"));
 }
+
+/// A link at the temporary answer name redirects nothing: the answer is not
+/// written, and the link's target keeps what it had.
+#[test]
+fn a_link_at_the_answer_name_is_not_followed() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let memory = seeded(dir.path());
+    write_request(dir.path(), "r4", "cloudflare");
+    let target = dir.path().join("outside.txt");
+    std::fs::write(&target, "untouched").expect("a target file");
+    std::os::unix::fs::symlink(
+        &target,
+        dir.path().join(RECALL_DIR).join("r4.answer.writing"),
+    )
+    .expect("planted the link");
+
+    Recalling::new(
+        dir.path(),
+        memory,
+        "owner".to_owned(),
+        "demo".to_owned(),
+        silent(),
+    )
+    .sweep();
+
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("read back"),
+        "untouched"
+    );
+    assert!(!dir.path().join(RECALL_DIR).join("r4.answer").exists());
+}
+
+/// A link in place of the exchange directory is refused: answering through
+/// one would read, unlink and create beside whatever it names.
+#[test]
+fn a_link_in_place_of_the_directory_is_refused() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let elsewhere = tempfile::tempdir().expect("another temp dir");
+    std::fs::write(
+        elsewhere.path().join("r5.request"),
+        serde_json::json!({ "query": "cloudflare" }).to_string(),
+    )
+    .expect("a request outside the exchange");
+    std::os::unix::fs::symlink(elsewhere.path(), dir.path().join(RECALL_DIR)).expect("planted");
+
+    Recalling::new(
+        dir.path(),
+        seeded(dir.path()),
+        "owner".to_owned(),
+        "demo".to_owned(),
+        silent(),
+    )
+    .sweep();
+
+    assert!(elsewhere.path().join("r5.request").exists());
+    assert!(!elsewhere.path().join("r5.answer").exists());
+    assert!(!elsewhere.path().join("r5.answer.writing").exists());
+}

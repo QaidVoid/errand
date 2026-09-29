@@ -8,7 +8,6 @@
 //! Nothing here can fail a turn. A request that cannot be answered is refused
 //! in words the agent reads, and the work stays with the session's own model.
 
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -76,13 +75,27 @@ impl Delegating {
 
     /// Answers whatever is waiting, through the turn's delegations when a turn
     /// is running and with a refusal when there is none.
+    ///
+    /// Refuses when the directory is a link. A session can replace it, and
+    /// answering through one would read, unlink and create beside whatever
+    /// it names.
     pub async fn sweep<S, P>(&self, mut turn: Option<&mut TurnDelegations<S, P>>)
     where
         S: Sources + 'static,
         P: Sender,
     {
-        let Ok(entries) = std::fs::read_dir(&self.directory) else {
+        let Ok(meta) = std::fs::symlink_metadata(&self.directory) else {
             // No directory yet, which is every session that has not delegated.
+            return;
+        };
+        if meta.file_type().is_symlink() {
+            self.warn(
+                "the delegation directory is a link",
+                &self.directory.to_string_lossy(),
+            );
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(&self.directory) else {
             return;
         };
         let mut names: Vec<String> = entries
@@ -172,26 +185,22 @@ impl Delegating {
     /// Writes an answer where the agent is waiting for it.
     ///
     /// Under a temporary name and then renamed, so the agent cannot read half
-    /// of one and treat it as the whole answer.
+    /// of one and treat it as the whole answer. The temporary name is opened
+    /// beneath the exchange directory with no link followed, because a
+    /// session writes there too: a link planted at it would otherwise have
+    /// this create or truncate whatever it points at, outside the sandbox.
     fn write(&self, id: &str, kind: &str, body: &str) {
+        let name = format!("{id}.{kind}.writing");
         let target = self.directory.join(format!("{id}.{kind}"));
-        let writing = self.directory.join(format!("{id}.{kind}.writing"));
+        let writing = self.directory.join(&name);
         let body = if body.ends_with('\n') {
             body.to_owned()
         } else {
             format!("{body}\n")
         };
-        let written = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&writing)
-            .and_then(|mut file| {
-                use std::io::Write;
-                file.write_all(body.as_bytes())
-            })
-            .and_then(|()| std::fs::rename(&writing, &target));
+        let written =
+            paths::write_beneath(&self.directory.to_string_lossy(), &name, body.as_bytes())
+                .and_then(|()| std::fs::rename(&writing, &target));
         if let Err(error) = written {
             self.warn(
                 "a delegation answer could not be written",

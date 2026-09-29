@@ -461,3 +461,51 @@ fn an_answer_says_which_model_produced_it_and_that_it_is_a_description() {
     assert!(said.contains("description rather than the thing itself"));
     assert!(said.contains("the log shows a failed write"));
 }
+
+/// A link at the temporary answer name redirects nothing: the refusal is not
+/// written, and the link's target keeps what it had.
+#[tokio::test]
+async fn a_link_at_the_answer_name_is_not_followed() {
+    let harness = with_watcher(8, json!({}));
+    harness.request("d9", &json!({ "question": "what failed?", "callId": "t1" }));
+    let outside = tempfile::tempdir().expect("another temp directory");
+    let target = outside.path().join("outside.txt");
+    std::fs::write(&target, "untouched").expect("a target file");
+    std::os::unix::fs::symlink(&target, harness.directory.join("d9.refused.writing"))
+        .expect("planted the link");
+
+    harness.watcher.sweep::<DiskSources, FakeSender>(None).await;
+
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("read back"),
+        "untouched"
+    );
+    assert!(harness.refusal_of("d9").is_none());
+}
+
+/// A link in place of the exchange directory is refused: answering through
+/// one would read, unlink and create beside whatever it names.
+#[tokio::test]
+async fn a_link_in_place_of_the_directory_is_refused() {
+    let reported = Arc::new(Mutex::new(Vec::new()));
+    let root = tempfile::tempdir().expect("a temp directory");
+    let elsewhere = tempfile::tempdir().expect("another temp directory");
+    std::fs::write(
+        elsewhere.path().join("d10.request"),
+        json!({ "question": "what failed?", "callId": "t1" }).to_string(),
+    )
+    .expect("a request outside the exchange");
+    std::os::unix::fs::symlink(elsewhere.path(), root.path().join(DELEGATE_DIR))
+        .expect("planted the link");
+
+    Delegating::new(root.path(), silent(), {
+        let reported = Arc::clone(&reported);
+        Arc::new(move |outcome| reported.lock().unwrap().push(outcome))
+    })
+    .sweep::<DiskSources, FakeSender>(None)
+    .await;
+
+    assert!(elsewhere.path().join("d10.request").exists());
+    assert!(!elsewhere.path().join("d10.refused").exists());
+    assert!(reported.lock().unwrap().is_empty());
+}
