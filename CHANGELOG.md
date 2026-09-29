@@ -1,6 +1,18 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.2.3] - 2026-09-29
+
+
+### Features
+- (model) List models in the channel, and answer slash commands ([c436fd2](https://github.com/QaidVoid/errand/commit/c436fd2db197da42df3c9490b0b06babe5da9a44))
+- (sandbox) Grant execute on /workspace by default ([7a0e1f1](https://github.com/QaidVoid/errand/commit/7a0e1f13494a61dc5fdf4f8ded71f509d066f031))
+- (usage) Let an operator re-read the usage window ([133fb67](https://github.com/QaidVoid/errand/commit/133fb6747763007a217780d893d2825a8e81d736))
+
+### Fixes
+- (model) Let a short name added later reach a running session ([ce59a96](https://github.com/QaidVoid/errand/commit/ce59a9663a7ba64990c050d23a8e9819dbe1e58b))
+- (session) Resume on the configured model when a provider is gone ([8f117c6](https://github.com/QaidVoid/errand/commit/8f117c6360227a604be8c11fb8e28362ae0f16d4))
+
 ## [0.2.2] - 2026-09-24
 
 
