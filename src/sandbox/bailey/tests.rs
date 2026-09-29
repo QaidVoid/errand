@@ -326,6 +326,75 @@ fn the_cgroup_the_tool_may_use_is_passed_through() {
     assert_eq!(env.get("CHAT_TOKEN"), None);
 }
 
+/// bailey reads its global config, profiles, and trust store from the XDG
+/// directories, falling back to HOME, which here is the session's private
+/// home. A planted file there would run hooks as the daemon user, so the
+/// tool is pointed at the operator's own directories instead.
+#[test]
+fn the_tool_reads_user_config_and_data_from_the_operator_dirs() {
+    let source = BTreeMap::from([("HOME".to_owned(), "/home/operator".to_owned())]);
+    let env = session_environment(&BTreeMap::new(), &source, "/state/s-1/home");
+
+    assert_eq!(
+        env.get("XDG_CONFIG_HOME").map(String::as_str),
+        Some("/home/operator/.config")
+    );
+    assert_eq!(
+        env.get("XDG_DATA_HOME").map(String::as_str),
+        Some("/home/operator/.local/share")
+    );
+    assert_eq!(env.get("HOME").map(String::as_str), Some("/state/s-1/home"));
+}
+
+/// The daemon's own XDG directories win when they name absolute paths, so an
+/// operator override keeps working.
+#[test]
+fn an_absolute_operator_xdg_directory_is_kept() {
+    let source = BTreeMap::from([
+        ("HOME".to_owned(), "/home/operator".to_owned()),
+        (
+            "XDG_CONFIG_HOME".to_owned(),
+            "/etc/operator-config".to_owned(),
+        ),
+        (
+            "XDG_DATA_HOME".to_owned(),
+            "/var/lib/operator-data".to_owned(),
+        ),
+    ]);
+    let env = session_environment(&BTreeMap::new(), &source, "/state/s-1/home");
+
+    assert_eq!(
+        env.get("XDG_CONFIG_HOME").map(String::as_str),
+        Some("/etc/operator-config")
+    );
+    assert_eq!(
+        env.get("XDG_DATA_HOME").map(String::as_str),
+        Some("/var/lib/operator-data")
+    );
+}
+
+/// A relative XDG directory would resolve against the tool's working
+/// directory, which is the project the agent writes, so it falls back to the
+/// operator's home like an unset one.
+#[test]
+fn a_relative_operator_xdg_directory_falls_back_to_the_home() {
+    let source = BTreeMap::from([
+        ("HOME".to_owned(), "/home/operator".to_owned()),
+        ("XDG_CONFIG_HOME".to_owned(), "relative/config".to_owned()),
+        ("XDG_DATA_HOME".to_owned(), String::new()),
+    ]);
+    let env = session_environment(&BTreeMap::new(), &source, "/state/s-1/home");
+
+    assert_eq!(
+        env.get("XDG_CONFIG_HOME").map(String::as_str),
+        Some("/home/operator/.config")
+    );
+    assert_eq!(
+        env.get("XDG_DATA_HOME").map(String::as_str),
+        Some("/home/operator/.local/share")
+    );
+}
+
 /// Stands in for an installed agent, so a probe does not depend on the host.
 /// CI has no pi on PATH, and these tests are about what the report says.
 fn fake_agent(name: &str) -> Option<String> {

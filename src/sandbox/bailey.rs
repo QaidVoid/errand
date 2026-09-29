@@ -88,10 +88,38 @@ pub fn session_environment(
     // create it, so it is given a host path. The target's HOME is set in the
     // policy instead, to the placed path, which overrides this.
     env.insert("HOME".to_owned(), home.to_owned());
+    // bailey reads its global config, profiles, and trust store from the XDG
+    // directories, falling back to HOME. HOME here is the session's private
+    // home, which the agent writes, so leaving them unset would let a planted
+    // file run hooks or plant trust as the daemon user before any
+    // confinement. Point them at the operator's own directories instead.
+    if let Some(dir) = operator_dir(source, "XDG_CONFIG_HOME", ".config") {
+        env.insert("XDG_CONFIG_HOME".to_owned(), dir);
+    }
+    if let Some(dir) = operator_dir(source, "XDG_DATA_HOME", ".local/share") {
+        env.insert("XDG_DATA_HOME".to_owned(), dir);
+    }
     for (name, value) in launch_env {
         env.insert(name.clone(), value.clone());
     }
     env
+}
+
+/// The operator's directory for an XDG variable bailey reads user config or
+/// data from: the daemon's own value when it names an absolute path, else the
+/// standard subdirectory of the daemon's home. Nothing when neither resolves,
+/// in which case the variable stays unset.
+fn operator_dir(source: &BTreeMap<String, String>, name: &str, subdir: &str) -> Option<String> {
+    if let Some(dir) = source.get(name)
+        && !dir.is_empty()
+        && std::path::Path::new(dir).is_absolute()
+    {
+        return Some(dir.clone());
+    }
+    source
+        .get("HOME")
+        .filter(|home| !home.is_empty() && std::path::Path::new(home).is_absolute())
+        .map(|home| format!("{home}/{subdir}"))
 }
 
 /// Reads gaps out of what the tool reports about this host.
