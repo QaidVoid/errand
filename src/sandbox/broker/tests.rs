@@ -692,12 +692,31 @@ async fn a_dial_moves_past_an_address_that_refuses() {
         .expect("bound");
     let port = listener.local_addr().expect("an address").port();
     let addresses = ["127.0.0.2".to_owned(), "127.0.0.1".to_owned()];
-    let stream = dial(&addresses, port).await.expect("the second address");
+    let deadline = tokio::time::Instant::now() + super::DIAL_BUDGET;
+    let stream = dial(&addresses, port, deadline)
+        .await
+        .expect("the second address");
     assert_eq!(
         stream.peer_addr().expect("a peer").ip().to_string(),
         "127.0.0.1"
     );
-    assert!(dial(&addresses[..1], port).await.is_err());
+    assert!(dial(&addresses[..1], port, deadline).await.is_err());
+}
+
+/// A spent budget ends the dial with addresses left, so the broker refuses
+/// while the client is still waiting rather than after it gave up.
+#[tokio::test]
+async fn a_dial_stops_at_its_deadline() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bound");
+    let port = listener.local_addr().expect("an address").port();
+    let addresses = ["127.0.0.1".to_owned()];
+    let error = dial(&addresses, port, tokio::time::Instant::now())
+        .await
+        .expect_err("no time left to dial");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(error.to_string().contains("0 of 1 addresses tried"));
 }
 
 /// A plain HTTP request reaches an allowed origin in origin form, and the

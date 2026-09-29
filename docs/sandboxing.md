@@ -46,6 +46,14 @@ operator's to decide. A name that does not resolve at all is answered with
 is this host's resolver to fix, `/etc/resolv.conf` first, and the daemon warns
 at startup when it cannot resolve a brokered provider.
 
+The broker gives a lookup 5 seconds and the dial 10 seconds across every
+address a name has, so a stalled upstream is answered with `504 the name did
+not resolve in time` or `502 upstream unreachable` before a client's own
+timeout fires. The log names the host and the phase that failed. A bailey
+session behind the broker is locked to it alone, with UDP, ICMP, and
+DNS dropped inside it, so the broker's answer and its log are the only record
+of where a request stalled.
+
 Under the bailey backend a session shares the host's network namespace, so it
 can read the host address, the MAC, and the ARP neighbours through `ip`,
 `/proc/net`, or `/sys`. To hide them, set `sandbox.hideHostAddress`:

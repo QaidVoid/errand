@@ -10,8 +10,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
 use super::{
-    DIAL_TIMEOUT, LOOKUP_TIMEOUT, NoAddress, ProviderRoute, ProviderState, Target, host_allowed,
-    parse_connect, parse_forward, public_addresses,
+    DIAL_BUDGET, DIAL_TIMEOUT, LOOKUP_TIMEOUT, NoAddress, ProviderRoute, ProviderState, Target,
+    host_allowed, parse_connect, parse_forward, public_addresses,
 };
 use crate::log::Logger;
 use crate::log::fields;
@@ -230,7 +230,8 @@ async fn admit<W: tokio::io::AsyncWrite + Unpin>(
         }
     };
 
-    match dial(&addresses, target.port).await {
+    let deadline = tokio::time::Instant::now() + DIAL_BUDGET;
+    match dial(&addresses, target.port, deadline).await {
         Ok(upstream) => {
             state.log.info(
                 "egress allowed",
@@ -249,12 +250,28 @@ async fn admit<W: tokio::io::AsyncWrite + Unpin>(
     }
 }
 
-/// Dials each address in turn, giving each [`DIAL_TIMEOUT`] to accept.
-pub(super) async fn dial(addresses: &[String], port: u16) -> std::io::Result<TcpStream> {
+/// Dials each address in turn, giving each [`DIAL_TIMEOUT`] to accept, and
+/// stops at `deadline` whether or not any are left.
+pub(super) async fn dial(
+    addresses: &[String],
+    port: u16,
+    deadline: tokio::time::Instant,
+) -> std::io::Result<TcpStream> {
     let mut last = std::io::Error::other("no address to dial");
-    for address in addresses {
+    for (tried, address) in addresses.iter().enumerate() {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "the dial deadline passed with {tried} of {} addresses tried; last: {last}",
+                    addresses.len()
+                ),
+            ));
+        }
         let connect = TcpStream::connect((address.as_str(), port));
-        match tokio::time::timeout(DIAL_TIMEOUT, connect).await {
+        let attempt_ends = deadline.min(now + DIAL_TIMEOUT);
+        match tokio::time::timeout_at(attempt_ends, connect).await {
             Ok(Ok(stream)) => return Ok(stream),
             Ok(Err(error)) => last = error,
             Err(_) => {

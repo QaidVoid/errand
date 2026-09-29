@@ -370,6 +370,15 @@ pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long one upstream address may take to accept before the next is tried.
 pub const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long dialling a target may take across all of its addresses.
+///
+/// A name with many addresses, several of them unanswering, would otherwise
+/// take one [`DIAL_TIMEOUT`] each, and a client commonly gives up at 20s. With
+/// the lookup's 5s this keeps the broker's refusal ahead of that, so the
+/// client sees a 502 instead of a timeout that says nothing about where it
+/// stalled.
+pub const DIAL_BUDGET: Duration = Duration::from_secs(10);
+
 /// Resolves a target to the addresses the broker may dial, in resolver order.
 ///
 /// A name is resolved here and the result is judged, so a name on the
