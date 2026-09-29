@@ -391,7 +391,8 @@ async fn revive(deps: &Deps, session: Option<&str>, args: &[String]) -> i32 {
     }
     let Some(project) = (deps.project_of)(state_dir.clone()).await else {
         (deps.write)(&format!(
-            "{session} does not say which project it worked in, so it cannot be put back"
+            "{session} does not name a project inside the configured project root, so it cannot \
+             be put back"
         ));
         return 1;
     };

@@ -114,9 +114,13 @@ impl SandboxHandle {
 
     /// Translates a path as the agent sees it into a path on the host.
     ///
-    /// Returns nothing for anything outside the project, which is what stops
-    /// a crafted path from making the daemon read a file the sandbox itself
-    /// could not.
+    /// A spelling check only: a leading separator is read as the workspace,
+    /// and any other absolute path as project-relative, so `/etc/passwd`
+    /// names a file inside the project rather than the host's. It answers
+    /// where a project-relative path would land, and says nothing about what
+    /// sits there now; a read or a write the daemon performs on the answer
+    /// goes through `paths::open_beneath`, which is what refuses a link
+    /// planted between the two.
     pub fn to_host_path(&self, agent_path: &str) -> Option<String> {
         let project = self.project_path();
         paths::host_path_under(backend::WORKSPACE_PATH, &project, agent_path)

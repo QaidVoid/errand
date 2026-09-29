@@ -69,8 +69,7 @@ fn launch() -> SandboxLaunch {
     }
 }
 
-const HEALTHY: &str =
-    "landlock: yes (abi 5)\nuser namespaces: yes\ncgroup delegation: yes\nseccomp: yes";
+const HEALTHY: &str = "landlock: ABI 5\nuser namespaces: yes\ncgroup delegation: yes\nseccomp: yes";
 
 /// What a scripted command answers: its exit code, its stdout, its stderr.
 type Answer = (Option<i32>, Option<String>, Option<String>);
@@ -125,7 +124,7 @@ async fn a_host_missing_landlock_cannot_run_this_backend_at_all() {
         "doctor".to_owned(),
         (
             Some(0),
-            Some("landlock: no\nuser namespaces: yes".to_owned()),
+            Some("landlock: unavailable\nuser namespaces: yes".to_owned()),
             None,
         ),
     );
@@ -138,9 +137,23 @@ async fn a_host_missing_landlock_cannot_run_this_backend_at_all() {
 
 #[tokio::test]
 async fn a_host_without_user_namespaces_cannot_run_this_backend_either() {
-    let (_, unavailable) = parse_doctor("landlock: yes\nuser namespaces: no");
+    let (_, unavailable) = parse_doctor("landlock: ABI 4\nuser namespaces: no");
     assert_eq!(unavailable.len(), 1);
     assert!(unavailable[0].contains("user namespaces"));
+}
+
+/// The one report the tool makes when the kernel has no Landlock at all. A
+/// check that matches a line the tool never prints is how a Landlock-less
+/// host would come to be described as fully confined.
+#[test]
+fn a_host_reporting_landlock_unavailable_is_refused() {
+    let (_, unavailable) = parse_doctor("landlock: unavailable\nuser namespaces: yes");
+    assert_eq!(unavailable.len(), 1);
+    assert!(unavailable[0].contains("Landlock"));
+
+    let (_, unavailable) = parse_doctor("user namespaces: yes");
+    assert_eq!(unavailable.len(), 1);
+    assert!(unavailable[0].contains("Landlock"));
 }
 
 /// A gap, not a refusal: the daemon still runs, and says what it cannot
@@ -148,7 +161,7 @@ async fn a_host_without_user_namespaces_cannot_run_this_backend_either() {
 #[tokio::test]
 async fn no_cgroup_delegation_is_a_gap_that_is_reported_not_a_refusal() {
     let (gaps, unavailable) =
-        parse_doctor("landlock: yes\nuser namespaces: yes\ncgroup delegation: no");
+        parse_doctor("landlock: ABI 5\nuser namespaces: yes\ncgroup delegation: no");
 
     assert_eq!(unavailable.len(), 0);
     assert_eq!(gaps.len(), 1);

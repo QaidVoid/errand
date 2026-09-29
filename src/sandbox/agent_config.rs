@@ -10,6 +10,7 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
+use crate::sandbox::paths;
 
 /// Where the broker is reached, and the nonce standing in for the key.
 #[derive(Debug, Clone)]
@@ -126,7 +127,20 @@ fn over_built_in(entry: &Value, known: &[Value]) -> Value {
 /// so this walks directories and copies files, which is all one needs. A
 /// symlink is followed by the copy, which is what reading the named directory
 /// means.
+///
+/// A link already sitting at a destination is refused rather than copied
+/// over. The destination is inside the state directory, which the session
+/// writes, so a planted link would otherwise redirect the copy to wherever it
+/// points.
 pub(crate) async fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    if let Ok(meta) = tokio::fs::symlink_metadata(to).await
+        && meta.file_type().is_symlink()
+    {
+        return Err(std::io::Error::other(format!(
+            "a link is in the way of {}",
+            to.display()
+        )));
+    }
     let meta = tokio::fs::metadata(from).await?;
     if meta.is_dir() {
         tokio::fs::create_dir_all(to).await?;
@@ -173,8 +187,10 @@ pub async fn write_agent_config(
             "{}\n",
             serde_json::to_string_pretty(&providers).unwrap_or_default()
         );
-        tokio::fs::write(directory.join("models.json"), body)
-            .await
+        // Written beneath the directory rather than by name, for the same
+        // reason the policy is: the session writes here too, and a link
+        // planted at the file name would redirect the write.
+        paths::write_beneath(&directory.to_string_lossy(), "models.json", body.as_bytes())
             .map_err(failed)?;
     }
 

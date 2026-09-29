@@ -159,3 +159,86 @@ fn a_line_that_cannot_be_parsed_is_carried_across_untouched() {
     assert!(stored.contains("{ this is not json"));
     assert!(!stored.contains("ghp_TOPSECRET123"));
 }
+
+/// A link planted at the staging name redirects nothing. The name is fixed
+/// and the directory is the session's to write, so the daemon refuses the
+/// write rather than truncating whatever the link points at.
+#[test]
+fn a_link_at_the_staging_name_is_not_written_through() {
+    let session = with_session();
+    let state = session.state.to_str().expect("a path");
+    let outside = tempfile::tempdir().expect("another temp directory");
+    let target = outside.path().join("outside.txt");
+    std::fs::write(&target, "untouched").expect("a host file");
+    std::os::unix::fs::symlink(
+        &target,
+        session.state.join("sessions").join("s.jsonl.withdrawing"),
+    )
+    .expect("planted the link");
+
+    assert!(withdraw_from_agent_session(state, &session.said).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("read back"),
+        "untouched"
+    );
+}
+
+/// A link in place of a session file is skipped, neither read nor rewritten.
+/// Reading it through would copy a host file into a file the session can
+/// read; writing through the staging name would truncate the target.
+#[test]
+fn a_link_in_place_of_a_session_file_is_skipped_not_read_through() {
+    let session = with_session();
+    let state = session.state.to_str().expect("a path");
+    let outside = tempfile::tempdir().expect("another temp directory");
+    let target = outside.path().join("outside.jsonl");
+    // Carries the words, so a read through the link would have matched.
+    std::fs::write(
+        &target,
+        serde_json::json!({
+            "type": "message",
+            "message": {"role": "user", "content": [{"type": "text", "text": session.said}]},
+        })
+        .to_string(),
+    )
+    .expect("a host file");
+    let link = session.state.join("sessions").join("s.jsonl");
+    std::fs::remove_file(&link).expect("the real file is removed");
+    std::os::unix::fs::symlink(&target, &link).expect("planted the link");
+
+    assert!(
+        !withdraw_from_agent_session(state, &session.said).expect("it reads"),
+        "nothing is withdrawn through a link"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("read back"),
+        serde_json::json!({
+            "type": "message",
+            "message": {"role": "user", "content": [{"type": "text", "text": session.said}]},
+        })
+        .to_string()
+    );
+}
+
+/// A link planted at a transcript left in the older place is not read
+/// through. The words would otherwise have been copied out of a file the
+/// daemon can read and the session cannot.
+#[test]
+fn a_link_at_a_legacy_transcript_is_not_followed() {
+    let root = tempfile::tempdir().expect("a temp directory");
+    let state = root.path().join("session");
+    std::fs::create_dir_all(&state).expect("the state directory is made");
+    let outside = tempfile::tempdir().expect("another temp directory");
+    let target = outside.path().join("outside.txt");
+    std::fs::write(&target, "untouched").expect("a host file");
+    std::os::unix::fs::symlink(&target, state.join(TRANSCRIPT_FILENAME)).expect("planted the link");
+
+    assert_eq!(
+        withdraw_from_record(state.to_str().expect("a path"), "m-1").expect("it reads"),
+        None
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("read back"),
+        "untouched"
+    );
+}

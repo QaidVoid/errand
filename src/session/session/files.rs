@@ -167,59 +167,83 @@ impl Running {
     }
 
     /// Uploads a file from the project on request.
+    ///
+    /// Opened beneath the project, the same rule `read_path` answers `!cat`
+    /// with. This used to be the one read that went by name: a link planted
+    /// where the agent writes would have had the daemon read whatever it
+    /// pointed at and post it to the channel.
     pub(super) async fn upload_file(&mut self, request: &str) {
+        use std::io::Read;
+
         let wanted = request.trim();
         if wanted.is_empty() {
             self.say("say which file, as `!file <path>`").await;
             return;
         }
 
+        let root = self.options.project.path.clone();
         let Some(host) = self.host_path(wanted) else {
             self.say(&format!("`{wanted}` is not inside this session's project"))
                 .await;
             return;
         };
 
-        match std::fs::metadata(&host) {
-            Ok(meta) if !meta.is_file() => {
-                self.say(&format!("`{wanted}` is not a file")).await;
+        let display = {
+            let shown = self.display_path(wanted);
+            if shown.is_empty() {
+                ".".to_owned()
+            } else {
+                shown
             }
-            Ok(meta) if meta.len() > MAX_UPLOAD_BYTES => {
-                #[expect(
-                    clippy::cast_precision_loss,
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss
-                )]
-                let kilobytes = (meta.len() as f64 / 1024.0).round() as u64;
-                self.say(&format!(
-                    "`{wanted}` is {kilobytes} KB, larger than the upload limit"
-                ))
-                .await;
-            }
-            Ok(meta) => match std::fs::read(&host) {
-                Ok(bytes) => {
-                    let name = host.rsplit('/').next().unwrap_or("file").to_owned();
-                    self.views
-                        .send(SessionEvent::Upload {
-                            name,
-                            bytes,
-                            caption: format!(
-                                "`{}` {} bytes",
-                                self.display_path(wanted),
-                                meta.len()
-                            ),
-                        })
-                        .await;
-                }
-                Err(error) => {
-                    self.say(&format!("could not read `{wanted}`: {error}"))
-                        .await;
-                }
-            },
+        };
+        let mut file = match paths::open_beneath(&root, &display, &paths::OpenOptions::read()) {
+            Ok(file) => file,
             Err(error) => {
                 self.say(&format!("could not read `{wanted}`: {error}"))
                     .await;
+                return;
             }
+        };
+        // Measured on the file that was opened, so what is checked and what is
+        // sent are the same however the tree changes underneath.
+        let meta = match file.metadata() {
+            Ok(meta) => meta,
+            Err(error) => {
+                self.say(&format!("could not read `{wanted}`: {error}"))
+                    .await;
+                return;
+            }
+        };
+        if !meta.is_file() {
+            self.say(&format!("`{wanted}` is not a file")).await;
+            return;
         }
+        if meta.len() > MAX_UPLOAD_BYTES {
+            #[expect(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss
+            )]
+            let kilobytes = (meta.len() as f64 / 1024.0).round() as u64;
+            self.say(&format!(
+                "`{wanted}` is {kilobytes} KB, larger than the upload limit"
+            ))
+            .await;
+            return;
+        }
+        let mut bytes = Vec::new();
+        if let Err(error) = file.read_to_end(&mut bytes) {
+            self.say(&format!("could not read `{wanted}`: {error}"))
+                .await;
+            return;
+        }
+        let name = host.rsplit('/').next().unwrap_or("file").to_owned();
+        self.views
+            .send(SessionEvent::Upload {
+                name,
+                bytes,
+                caption: format!("`{}` {} bytes", display, meta.len()),
+            })
+            .await;
     }
 }

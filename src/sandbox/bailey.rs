@@ -23,9 +23,10 @@ use crate::sandbox::backend::{
     AGENT_SESSIONS, AgentCommand, CapabilityReport, SandboxLaunch, SandboxLaunchError,
     SandboxUnavailableError, agent_command, fresh_disk_tmp, placed_prompt_path, sandbox_name,
 };
+use crate::sandbox::paths;
 use crate::sandbox::policy::{
-    AGENT_PROFILE, OFFLINE_PROFILE, PolicyOptions, RESOLV_CONF, RESOLV_FILENAME, policy_contents,
-    policy_path,
+    AGENT_PROFILE, OFFLINE_PROFILE, POLICY_FILENAME, PolicyOptions, RESOLV_CONF, RESOLV_FILENAME,
+    policy_contents, policy_path,
 };
 use crate::sandbox::runtime::which;
 use crate::sandbox::runtime::{AgentRuntime, Lookup, agent_runtime};
@@ -135,7 +136,11 @@ pub fn parse_doctor(doctor: &str) -> (Vec<String>, Vec<String>) {
         .collect();
 
     let landlock = lines.iter().find(|line| line.starts_with("landlock:"));
-    if landlock.is_none_or(|line| line.contains("no")) {
+    // The tool reports either `landlock: ABI <n>` when the kernel provides it
+    // or `landlock: unavailable` when it does not. Matching that shape, and
+    // not a substring of it, is what makes a host without Landlock refuse to
+    // start instead of reporting full enforcement.
+    if landlock.is_none_or(|line| !line.starts_with("landlock: ABI")) {
         unavailable
             .push("the kernel does not provide Landlock, which this backend requires".to_owned());
     }
@@ -540,8 +545,13 @@ impl BaileySandbox {
         };
         let resolv = self.write_resolv_conf().await;
         let policy = policy_path(&launch);
-        tokio::fs::write(
-            &policy,
+        // Written beneath the state directory rather than by name. The
+        // directory is granted to the session, so a link planted at the file
+        // name would otherwise have this write the policy through to whatever
+        // it points at, as the daemon, before any confinement exists.
+        paths::write_beneath(
+            &launch.state_dir,
+            POLICY_FILENAME,
             policy_contents(&PolicyOptions {
                 launch: &launch,
                 network: self.config.network,
@@ -555,9 +565,9 @@ impl BaileySandbox {
                 extra: self.config.policy_extra.as_ref(),
                 env: self.egress_env().as_ref(),
                 path_extra: self.config.path_extra.as_deref(),
-            }),
+            })
+            .as_bytes(),
         )
-        .await
         .map_err(|error| SandboxLaunchError(error.to_string()))?;
 
         let trusted = self.call(&["trust", &policy]).await;
@@ -719,7 +729,9 @@ impl BaileySandbox {
     /// warns and continues without the policy, which would start a session
     /// with no project grant at all. A cheap confined command is run first so
     /// that case becomes a launch failure rather than a silently unconfined
-    /// session.
+    /// session. The check is one vendor's warning phrase plus the exit code,
+    /// not a proof: what it catches is the known shape of refusal, and a run
+    /// that failed outright.
     async fn verify_policy_applies(&self, policy: &str) -> Result<(), SandboxLaunchError> {
         let profile = if self.config.network == NetworkMode::None {
             OFFLINE_PROFILE
@@ -743,6 +755,12 @@ impl BaileySandbox {
             return Err(SandboxLaunchError(format!(
                 "bailey declined to apply the generated policy at {policy}, which would leave \
                  the session without its project grant: {}",
+                check.stderr.trim()
+            )));
+        }
+        if check.code != 0 {
+            return Err(SandboxLaunchError(format!(
+                "the confined check command failed at {policy}: {}",
                 check.stderr.trim()
             )));
         }

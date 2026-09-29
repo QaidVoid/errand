@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use crate::sandbox::paths;
 use crate::session::transcript::TRANSCRIPT_FILENAME;
 
 /// The directory holding a session's record, given its state directory.
@@ -35,8 +36,11 @@ pub fn transcript_path(state_dir: &str) -> PathBuf {
     if placed.is_file() {
         return placed;
     }
+    // Never follows: the legacy file sits where the session writes, so a link
+    // planted at the name is skipped rather than read through.
     let legacy = Path::new(state_dir).join(TRANSCRIPT_FILENAME);
-    if legacy.is_file() { legacy } else { placed }
+    let legacy_is_file = std::fs::symlink_metadata(&legacy).is_ok_and(|meta| meta.is_file());
+    if legacy_is_file { legacy } else { placed }
 }
 
 /// Makes the record directory, moving a transcript left in the older place.
@@ -75,8 +79,21 @@ pub fn prepare_record_dir(state_dir: &str) -> String {
 /// thing the two records have in common. A failure to write the corrected
 /// record is an error, not a matchless day.
 pub fn withdraw_from_record(state_dir: &str, message_id: &str) -> io::Result<Option<String>> {
-    let path = transcript_path(state_dir);
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    // The transcript is normally in the record directory, which nothing in a
+    // session reaches. The older place is inside the state one, which the
+    // session writes, so both the read and the write go through the kernel's
+    // own containment rather than the name, and a link at the older name is
+    // refused rather than read through.
+    let placed = record_dir(state_dir);
+    let legacy = Path::new(state_dir).join(TRANSCRIPT_FILENAME);
+    let (directory, name) = if !Path::new(&placed).join(TRANSCRIPT_FILENAME).is_file()
+        && std::fs::symlink_metadata(&legacy).is_ok_and(|meta| meta.is_file())
+    {
+        (state_dir.to_owned(), TRANSCRIPT_FILENAME.to_owned())
+    } else {
+        (placed, TRANSCRIPT_FILENAME.to_owned())
+    };
+    let Ok(text) = paths::read_beneath(&directory, &name) else {
         return Ok(None);
     };
 
@@ -118,7 +135,7 @@ pub fn withdraw_from_record(state_dir: &str, message_id: &str) -> io::Result<Opt
         return Ok(None);
     };
 
-    write_over(&path, &lines.join("\n"))?;
+    write_over(&directory, &name, &lines.join("\n"))?;
     Ok(Some(said))
 }
 
@@ -143,17 +160,35 @@ const WITHDRAWN_TEXT: &str = "[a message here was withdrawn by the person who se
 ///
 /// Returns whether anything was withdrawn.
 pub fn withdraw_from_agent_session(state_dir: &str, said: &str) -> io::Result<bool> {
-    let Ok(entries) = std::fs::read_dir(Path::new(state_dir).join("sessions")) else {
+    // The sessions directory is inside the grant, so a link in its place
+    // would redirect every read and write below. Refused rather than followed.
+    let directory = Path::new(state_dir).join("sessions");
+    let Ok(meta) = std::fs::symlink_metadata(&directory) else {
         return Ok(false);
     };
+    if meta.file_type().is_symlink() {
+        return Ok(false);
+    }
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return Ok(false);
+    };
+    let root = directory.to_string_lossy().into_owned();
 
     let mut withdrew = false;
     for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() || path.extension().is_none_or(|name| name != "jsonl") {
+        // Reported by the kernel without following, so a link planted at a
+        // session file is skipped rather than read through.
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if std::path::Path::new(&name)
+            .extension()
+            .is_none_or(|extension| extension != "jsonl")
+        {
+            continue;
+        }
+        let Ok(text) = paths::read_beneath(&root, &name) else {
             continue;
         };
 
@@ -181,7 +216,7 @@ pub fn withdraw_from_agent_session(state_dir: &str, said: &str) -> io::Result<bo
             continue;
         }
 
-        write_over(&path, &lines.join("\n"))?;
+        write_over(&root, &name, &lines.join("\n"))?;
         withdrew = true;
     }
     Ok(withdrew)
@@ -189,10 +224,19 @@ pub fn withdraw_from_agent_session(state_dir: &str, said: &str) -> io::Result<bo
 
 /// Writes a corrected file and renames it over the one it corrects, so a
 /// reader sees the whole of one version or the whole of the other.
-fn write_over(path: &Path, text: &str) -> io::Result<()> {
-    let staging = PathBuf::from(format!("{}.withdrawing", path.display()));
-    std::fs::write(&staging, text)?;
-    std::fs::rename(&staging, path)
+///
+/// The staging name is opened beneath `directory` with no link followed,
+/// because a session writes in these directories too: a link planted at the
+/// staging name would otherwise have this truncate whatever it points at,
+/// outside the sandbox. The rename is by name, and so replaces what it finds
+/// rather than following it.
+fn write_over(directory: &str, name: &str, text: &str) -> io::Result<()> {
+    let staging = format!("{name}.withdrawing");
+    paths::write_beneath(directory, &staging, text.as_bytes())?;
+    std::fs::rename(
+        Path::new(directory).join(staging),
+        Path::new(directory).join(name),
+    )
 }
 
 /// Whether a stored record is the user message that carried what was

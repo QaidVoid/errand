@@ -2600,6 +2600,49 @@ async fn a_link_planted_in_the_project_reads_nothing_through_cat() {
     .await;
 }
 
+/// The same link, met by `!file`. Uploading went by name alone, so a link
+/// planted in the project would have had the daemon read whatever it pointed
+/// at and post it to the channel as an attachment.
+#[tokio::test]
+async fn a_link_planted_in_the_project_uploads_nothing_through_file() {
+    let outside = tempfile::tempdir().expect("a temporary directory");
+    let secret = outside.path().join("id_ed25519");
+    std::fs::write(&secret, "the host's own key").expect("written");
+
+    with_session(SessionTestCase::default(), |harness| {
+        let secret = secret.clone();
+        Box::pin(async move {
+            let project = harness.session.project().path.clone();
+            std::fs::write(std::path::Path::new(&project).join("ordinary"), "mine")
+                .expect("written");
+            std::os::unix::fs::symlink(&secret, std::path::Path::new(&project).join("escape"))
+                .expect("linked");
+
+            harness
+                .session
+                .handle(message_from("!file ordinary", OWNER, "m2"))
+                .await;
+            assert_eq!(
+                harness.thread.uploads(),
+                vec![("ordinary".to_owned(), "mine".len())],
+                "an ordinary file still uploads"
+            );
+
+            harness
+                .session
+                .handle(message_from("!file escape", OWNER, "m3"))
+                .await;
+            let uploads = harness.thread.uploads();
+            assert_eq!(
+                uploads,
+                vec![("ordinary".to_owned(), "mine".len())],
+                "the link must not upload the host's file: {uploads:?}"
+            );
+        })
+    })
+    .await;
+}
+
 /// A message from somebody the owner never invited, carrying a file.
 fn from_stranger_with_a_file(content: &str, id: &str) -> IncomingMessage {
     let mut sent = message_from(content, STRANGER, id);

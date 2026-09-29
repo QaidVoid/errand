@@ -134,8 +134,13 @@ pub struct PolicyOptions<'a> {
 /// Builds the per-session policy.
 ///
 /// It is written into the session's state directory, never into the project.
-/// The agent can write to its project, so a policy living there would be a
-/// policy the agent could rewrite, which is not a policy.
+/// The state directory is granted too, because the agent keeps its home
+/// there, so the file sits somewhere the session can rewrite. Nothing reads
+/// it back as a policy: every launch regenerates it, and the tool is handed
+/// its path fresh each time. The one place the daemon reads it again is
+/// `errand threads revive`, which takes the project path out of it; that
+/// reader checks what it finds against the configured project root, so a
+/// rewritten policy cannot point a revived session anywhere else.
 ///
 /// `resolv_conf` is required rather than defaulted: a caller that forgot it
 /// would silently hand the session the host's own resolver.

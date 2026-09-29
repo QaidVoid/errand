@@ -126,7 +126,13 @@ fn workspace_grant(policy: &str) -> Option<String> {
 /// is the one thing on disk that still says where the work was. Nothing is
 /// guessed at: a policy that does not say returns nothing, and the caller
 /// refuses.
-fn project_of(state_dir: &str) -> Option<Project> {
+///
+/// The policy file sits in the state directory, which the session writes, so
+/// what it names is untrusted input. A project outside the configured root is
+/// refused, so a rewritten policy cannot revive a session onto a directory
+/// the operator never chose, and a root that does not resolve is refused
+/// rather than assumed.
+fn project_of(state_dir: &str, root: &str) -> Option<Project> {
     let policy =
         std::fs::read_to_string(std::path::Path::new(state_dir).join(POLICY_FILENAME)).ok()?;
     let path = workspace_grant(&policy)?;
@@ -134,7 +140,18 @@ fn project_of(state_dir: &str) -> Option<Project> {
         .file_name()?
         .to_string_lossy()
         .into_owned();
-    Some(Project { name, path })
+    let selection = crate::session::projects::ProjectSelection {
+        name: name.clone(),
+        path,
+        prompt: String::new(),
+        was_explicit: false,
+    };
+    crate::session::projects::ensure_project_directory(&selection, root)
+        .ok()
+        .map(|()| Project {
+            name,
+            path: selection.path,
+        })
 }
 
 async fn threads(args: &[String], env: &Vars, level: LogLevel) -> Result<i32, ConfigError> {
@@ -164,7 +181,13 @@ async fn threads(args: &[String], env: &Vars, level: LogLevel) -> Result<i32, Co
                 })
             }),
             state_root: config.state_dir,
-            project_of: Arc::new(|state_dir| Box::pin(async move { project_of(&state_dir) })),
+            project_of: {
+                let root = config.project_root;
+                Arc::new(move |state_dir: String| {
+                    let root = root.clone();
+                    Box::pin(async move { project_of(&state_dir, &root) })
+                })
+            },
             write: Arc::new(|line| println!("{line}")),
             now: Arc::new(now_ms),
         },
