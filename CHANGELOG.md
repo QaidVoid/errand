@@ -1,6 +1,12 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.2.5] - 2026-09-30
+
+
+### Fixes
+- (sandbox) Fix shell tool spawn failing ([1168577](https://github.com/QaidVoid/errand/commit/116857731ddbea465bb95e43ca92f317e52630d0))
+
 ## [0.2.4] - 2026-09-29
 
 
