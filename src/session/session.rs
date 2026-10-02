@@ -38,7 +38,7 @@ use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::ask::{Endpoint, HttpSender};
 use crate::provider::discover::Catalog;
-use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
+use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError, WORKSPACE_PATH};
 use crate::sandbox::paths;
 use crate::session::attachments::{self, RawAttachment, is_image, receive};
 use crate::session::commands::{
@@ -1106,6 +1106,7 @@ impl Running {
             self.log.clone(),
             self.options.config.timeouts.question_ms,
             None,
+            WORKSPACE_PATH,
         );
         tokio::spawn({
             let client = client.clone();

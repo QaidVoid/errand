@@ -1,10 +1,10 @@
-//! Tests for the protocol readers, ported from `protocol_test.ts`.
+//! Tests for the protocol readers and frame builders.
 
 use serde_json::json;
 
 use super::{
-    as_dialog_request, is_fire_and_forget, message_role, message_text, starts_thinking,
-    thinking_ended, tool_target, usage_of,
+    AcpUpdate, FrameKind, as_permission_ask, ask_option_ids, classify_frame, classify_update,
+    detail_of, stop_failure, tool_target, usage_of,
 };
 
 #[expect(
@@ -12,64 +12,207 @@ use super::{
     reason = "the fixtures hold values a f64 holds exactly"
 )]
 #[test]
-fn usage_is_read_off_a_record_counting_cache_reads_apart_from_input() {
+fn usage_is_read_off_an_update_with_cost_beside_it() {
     let usage = usage_of(&json!({
-        "message": {
-            "model": "glm-5.3",
-            "usage": { "input": 900, "output": 120, "cacheRead": 8000,
-                       "cacheWrite": 0, "totalTokens": 9020 },
-        },
+        "sessionUpdate": "usage_update",
+        "used": 900,
+        "size": 200_000,
+        "cost": { "amount": 0.02, "currency": "USD" },
     }))
     .expect("usage");
 
     assert_eq!(usage.input, 900.0);
-    assert_eq!(usage.cache_read, 8000.0);
-    assert_eq!(usage.model.as_deref(), Some("glm-5.3"));
+    assert_eq!(usage.total_tokens, 900.0);
+    assert_eq!(usage.cost, 0.02);
+    assert_eq!(usage.output, 0.0);
 }
 
 #[test]
-fn a_record_with_no_usage_reports_none_rather_than_zeroes() {
-    assert_eq!(usage_of(&json!({ "type": "agent_settled" })), None);
+fn an_update_with_no_used_reports_none_rather_than_zeroes() {
+    assert_eq!(usage_of(&json!({ "sessionUpdate": "usage_update" })), None);
+    assert_eq!(
+        usage_of(&json!({ "sessionUpdate": "agent_message_chunk" })),
+        None
+    );
 }
 
 #[test]
-fn a_dialog_the_agent_waits_on_is_recognised_with_its_options() {
-    let request = as_dialog_request(&json!({
-        "type": "extension_ui_request",
-        "id": "d-1",
-        "method": "select",
-        "title": "Which branch?",
-        "options": ["main", "dev", 7],
-    }))
-    .expect("a dialog");
+fn frames_sort_into_requests_notifications_answers_and_unknowns() {
+    assert_eq!(
+        classify_frame(&json!({
+            "jsonrpc": "2.0", "id": 7,
+            "method": "session/request_permission", "params": {},
+        })),
+        FrameKind::Request {
+            id: 7,
+            method: "session/request_permission".to_owned(),
+        }
+    );
+    assert_eq!(
+        classify_frame(&json!({
+            "jsonrpc": "2.0",
+            "method": "session/update", "params": {},
+        })),
+        FrameKind::Notification {
+            method: "session/update".to_owned(),
+        }
+    );
+    assert_eq!(
+        classify_frame(&json!({ "jsonrpc": "2.0", "id": 3, "result": {} })),
+        FrameKind::Success { id: 3 }
+    );
+    assert_eq!(
+        classify_frame(&json!({
+            "jsonrpc": "2.0", "id": 4, "error": { "code": -32601, "message": "no" },
+        })),
+        FrameKind::Failure { id: 4 }
+    );
+    assert_eq!(
+        classify_frame(&json!({ "jsonrpc": "2.0", "id": "rq-1", "result": {} })),
+        FrameKind::Unknown
+    );
+    assert_eq!(
+        classify_frame(&json!({ "jsonrpc": "2.0" })),
+        FrameKind::Unknown
+    );
+}
 
+#[test]
+fn a_permission_ask_becomes_a_select_over_named_options_with_ids() {
+    let params = json!({
+        "sessionId": "s1",
+        "toolCall": { "toolCallId": "c1", "title": "rm", "rawInput": { "command": "rm -rf /tmp/x" } },
+        "options": [
+            { "optionId": "allow", "name": "Allow", "kind": "allowOnce" },
+            { "optionId": "deny", "name": "Deny", "kind": "rejectOnce" },
+            { "name": "Nameless" },
+        ],
+    });
+    let request = as_permission_ask(9, &params).expect("a dialog");
+
+    assert_eq!(request.id, "9");
     assert_eq!(request.method.as_str(), "select");
-    assert_eq!(request.title, "Which branch?");
     assert_eq!(
         request.options,
-        Some(vec!["main".to_owned(), "dev".to_owned()])
+        Some(vec!["Allow".to_owned(), "Deny".to_owned()])
+    );
+    assert_eq!(
+        ask_option_ids(&params),
+        vec!["allow".to_owned(), "deny".to_owned()]
     );
 }
 
-/// Answering one of these would be answering a question nobody asked.
 #[test]
-fn an_informational_request_is_not_a_dialog() {
-    assert!(is_fire_and_forget(Some("notify")));
-    assert!(!is_fire_and_forget(Some("select")));
+fn a_plan_review_and_an_optionless_ask_are_not_dialogs() {
     assert_eq!(
-        as_dialog_request(&json!({
-            "type": "extension_ui_request", "id": "n-1", "method": "notify",
+        as_permission_ask(
+            1,
+            &json!({
+                "sessionId": "s1",
+                "toolCall": { "toolCallId": "c1" },
+                "options": [{ "optionId": "a", "name": "A", "kind": "allowOnce" }],
+                "_meta": { "kage": { "planReview": { "plan": "do it" } } },
+            })
+        ),
+        None
+    );
+    assert_eq!(
+        as_permission_ask(
+            2,
+            &json!({
+                "sessionId": "s1",
+                "toolCall": { "toolCallId": "c1" },
+                "options": [],
+            })
+        ),
+        None
+    );
+}
+
+#[test]
+fn updates_sort_into_text_thoughts_tools_usage_turns_and_compactions() {
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "type": "text", "text": "hello" },
         })),
-        None
+        AcpUpdate::AgentText("hello".to_owned())
     );
-}
-
-#[test]
-fn a_record_that_is_not_a_dialog_request_is_not_mistaken_for_one() {
-    assert_eq!(as_dialog_request(&json!({ "type": "agent_settled" })), None);
     assert_eq!(
-        as_dialog_request(&json!({ "type": "extension_ui_request", "method": "select" })),
-        None
+        classify_update(&json!({
+            "sessionUpdate": "agent_thought_chunk",
+            "content": { "type": "text", "text": "hmm" },
+        })),
+        AcpUpdate::ThoughtText("hmm".to_owned())
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "type": "text", "text": "   " },
+        })),
+        AcpUpdate::Ignored
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "c1", "title": "shell",
+            "rawInput": { "command": "ls" },
+        })),
+        AcpUpdate::ToolStart {
+            id: "c1".to_owned(),
+            title: "shell".to_owned(),
+            raw_input: Some(json!({ "command": "ls" })),
+        }
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "c1", "status": "inProgress",
+        })),
+        AcpUpdate::Ignored
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "c1", "status": "failed",
+            "content": [{ "type": "text", "text": "nope" }],
+        })),
+        AcpUpdate::ToolEnd {
+            id: "c1".to_owned(),
+            title: None,
+            failed: true,
+            output: "nope".to_owned(),
+        }
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "_kage/turn", "phase": "start",
+        })),
+        AcpUpdate::TurnStart
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "_kage/turn", "phase": "end",
+        })),
+        AcpUpdate::TurnEnd
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "_kage/compaction",
+            "kept": 2, "before": 9000, "after": 3000,
+        })),
+        AcpUpdate::CompactionInfo {
+            before: 9000.0,
+            after: 3000.0,
+        }
+    );
+    assert_eq!(
+        classify_update(&json!({ "sessionUpdate": "plan" })),
+        AcpUpdate::Ignored
+    );
+    assert_eq!(
+        classify_update(&json!({ "sessionUpdate": "subagent_update" })),
+        AcpUpdate::Ignored
     );
 }
 
@@ -92,50 +235,28 @@ fn a_tool_call_is_named_by_the_argument_a_reader_would_recognise() {
 }
 
 #[test]
-fn the_text_of_a_message_is_its_text_parts_in_order() {
-    let text = message_text(Some(&json!({
-        "content": [
-            { "type": "text", "text": "first " },
-            { "type": "tool_use", "id": "t1" },
-            { "type": "text", "text": "second" },
-        ],
-    })));
-
-    assert_eq!(text, "first second");
-    assert_eq!(message_text(Some(&json!({ "content": [] }))), "");
-    assert_eq!(message_text(None), "");
-}
-
-#[test]
-fn thinking_is_read_from_the_event_which_arrives_before_any_message() {
-    assert!(starts_thinking(&json!({
-        "assistantMessageEvent": { "type": "thinking_start" },
-    })));
-    assert!(!starts_thinking(&json!({
-        "assistantMessageEvent": { "type": "text_delta" },
-    })));
-    assert!(!starts_thinking(&json!({ "type": "agent_settled" })));
-
+fn failures_name_the_error_then_the_method() {
     assert_eq!(
-        thinking_ended(&json!({
-            "assistantMessageEvent": { "type": "thinking_end", "content": "weighed it" },
-        })),
-        Some("weighed it".to_owned())
+        detail_of(&json!({ "error": { "code": -32601, "message": "no such session" } })),
+        "no such session".to_owned()
     );
     assert_eq!(
-        thinking_ended(&json!({
-            "assistantMessageEvent": { "type": "thinking_start" },
-        })),
-        None
+        detail_of(&json!({ "method": "session/prompt" })),
+        "session/prompt".to_owned()
     );
 }
 
 #[test]
-fn the_role_of_a_message_is_read_when_it_has_one() {
+fn only_a_bad_stop_reason_fails_the_turn() {
+    assert_eq!(stop_failure(&json!({ "stopReason": "end_turn" })), None);
+    assert_eq!(stop_failure(&json!({ "stopReason": "max_tokens" })), None);
     assert_eq!(
-        message_role(Some(&json!({ "role": "assistant" }))),
-        Some("assistant".to_owned())
+        stop_failure(&json!({ "stopReason": "cancelled" })),
+        Some("the turn was cancelled".to_owned())
     );
-    assert_eq!(message_role(Some(&json!({}))), None);
-    assert_eq!(message_role(None), None);
+    assert_eq!(
+        stop_failure(&json!({ "stopReason": "refusal" })),
+        Some("the model refused".to_owned())
+    );
+    assert_eq!(stop_failure(&json!({})), None);
 }

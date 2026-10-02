@@ -102,13 +102,28 @@ impl QuietControls {
 impl AgentProcess for QuietAgent {
     fn write(&self, bytes: &[u8]) -> std::io::Result<()> {
         let line = String::from_utf8_lossy(bytes).trim().to_owned();
-        let id = serde_json::from_str::<Value>(&line)
-            .ok()
-            .and_then(|parsed| parsed.get("id").cloned());
+        let parsed = serde_json::from_str::<Value>(&line).ok();
+        let id = parsed
+            .as_ref()
+            .and_then(|parsed| parsed.get("id")?.as_u64());
+        let method = parsed
+            .as_ref()
+            .and_then(|parsed| parsed.get("method")?.as_str())
+            .unwrap_or_default()
+            .to_owned();
         self.written.lock().unwrap().push(line);
-        if let Some(id) = id {
+        // Answers the daemon's requests the way the agent would: the
+        // handshake opens one session, and commands succeed. Answers the
+        // agent sends itself carry no method and are left alone.
+        let result = match method.as_str() {
+            "initialize" => Some(json!({ "protocolVersion": 1 })),
+            "session/new" => Some(json!({ "sessionId": "s-1" })),
+            "session/set_config_option" | "_kage/session/compact" => Some(json!({})),
+            _ => None,
+        };
+        if let (Some(id), Some(result)) = (id, result) {
             self.queue.lock().unwrap().extend(
-                json!({ "type": "response", "id": id, "success": true })
+                json!({ "jsonrpc": "2.0", "id": id, "result": result })
                     .to_string()
                     .into_bytes(),
             );
@@ -193,15 +208,32 @@ impl FakeSandbox {
             .last()
             .map(|(_, controls)| controls.clone())
             .expect("no agent has been launched");
-        controls.send(&json!({ "type": "agent_start" }));
         controls.send(&json!({
-            "type": "message_end",
-            "message": { "role": "assistant", "content": [{ "type": "text", "text": "done" }] },
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": { "sessionId": "s-1", "update": {
+                "sessionUpdate": "_kage/turn", "phase": "start" } },
         }));
-        controls.send(&json!({ "type": "turn_end", "usage": {
-            "input": 1, "output": 1, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 2, "cost": 0,
-        } }));
-        controls.send(&json!({ "type": "agent_settled" }));
+        controls.send(&json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": { "sessionId": "s-1", "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": "done" } } },
+        }));
+        controls.send(&json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": { "sessionId": "s-1", "update": {
+                "sessionUpdate": "usage_update",
+                "used": 2, "size": 200_000, "cost": { "amount": 0 } } },
+        }));
+        controls.send(&json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": { "sessionId": "s-1", "update": {
+                "sessionUpdate": "_kage/turn", "phase": "end" } },
+        }));
     }
 }
 

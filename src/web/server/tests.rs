@@ -84,16 +84,33 @@ impl QuietControls {
 impl AgentProcess for QuietAgent {
     fn write(&self, bytes: &[u8]) -> std::io::Result<()> {
         let line = String::from_utf8_lossy(bytes).trim().to_owned();
-        let id = serde_json::from_str::<Value>(&line)
-            .ok()
-            .and_then(|parsed| parsed.get("id").cloned());
+        let parsed = serde_json::from_str::<Value>(&line).ok();
+        let id = parsed
+            .as_ref()
+            .and_then(|parsed| parsed.get("id")?.as_u64());
+        let method = parsed
+            .as_ref()
+            .and_then(|parsed| parsed.get("method")?.as_str())
+            .unwrap_or_default()
+            .to_owned();
         if let Some(id) = id {
-            self.queue.lock().unwrap().extend(
-                json!({ "type": "response", "id": id, "success": true })
-                    .to_string()
-                    .into_bytes(),
-            );
-            self.queue.lock().unwrap().push_back(b'\n');
+            // Answers the daemon's requests the way the agent would. Answers
+            // the agent sends itself carry no method and are left alone.
+            let result = match method.as_str() {
+                "initialize" => Some(json!({ "protocolVersion": 1 })),
+                "session/new" => Some(json!({ "sessionId": "s-1" })),
+                "session/set_config_option" | "_kage/session/compact" => Some(json!({})),
+                _ if method.is_empty() => None,
+                _ => Some(json!({})),
+            };
+            if let Some(result) = result {
+                self.queue.lock().unwrap().extend(
+                    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+                        .to_string()
+                        .into_bytes(),
+                );
+                self.queue.lock().unwrap().push_back(b'\n');
+            }
         }
         Ok(())
     }

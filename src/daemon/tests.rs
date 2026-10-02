@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::{
@@ -92,13 +92,30 @@ impl QuietControls {
 impl AgentProcess for QuietAgent {
     fn write(&self, bytes: &[u8]) -> std::io::Result<()> {
         let parsed: serde_json::Value = serde_json::from_slice(bytes).expect("a written command");
-        if let Some(id) = parsed.get("id") {
-            self.queue.lock().unwrap().extend(
-                json!({ "type": "response", "id": id })
-                    .to_string()
-                    .into_bytes(),
-            );
-            self.queue.lock().unwrap().push_back(b'\n');
+        let id = parsed.get("id").and_then(Value::as_u64);
+        let method = parsed
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if let Some(id) = id {
+            // Answers the daemon's requests the way the agent would. Answers
+            // the agent sends itself carry no method and are left alone.
+            let result = match method.as_str() {
+                "initialize" => Some(json!({ "protocolVersion": 1 })),
+                "session/new" => Some(json!({ "sessionId": "s-1" })),
+                "session/set_config_option" | "_kage/session/compact" => Some(json!({})),
+                _ if method.is_empty() => None,
+                _ => Some(json!({})),
+            };
+            if let Some(result) = result {
+                self.queue.lock().unwrap().extend(
+                    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+                        .to_string()
+                        .into_bytes(),
+                );
+                self.queue.lock().unwrap().push_back(b'\n');
+            }
         }
         Ok(())
     }

@@ -93,30 +93,56 @@ impl FakeControls {
         self.fake.written.lock().unwrap().len()
     }
 
-    /// Answers the most recent request, by its correlation id.
-    fn answer(&self, data: &Value) {
+    /// Answers the most recent request, by its numeric frame id.
+    fn answer(&self, result: &Value) {
         let written = self.written();
-        let last = written.iter().rev().find(|line| line.contains("\"id\""));
-        let id = last.and_then(|line| {
-            serde_json::from_str::<Value>(line)
-                .ok()
-                .and_then(|parsed| parsed.get("id").cloned())
+        let id = written.iter().rev().find_map(|line| {
+            let parsed: Value = serde_json::from_str(line).ok()?;
+            parsed.get("method")?;
+            parsed.get("id")?.as_u64()
         });
-        self.send(&json!({ "type": "response", "id": id, "success": true, "data": data }));
+        self.send(&json!({ "jsonrpc": "2.0", "id": id, "result": result }));
     }
 
-    /// Reports a whole turn: it starts, speaks, costs something, and settles.
+    /// Answers the handshake: initialize, then the session open. The agent
+    /// asks for the second only after the first is answered.
+    async fn shake_hands(&self) {
+        self.answer(&json!({ "protocolVersion": 1 }));
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        self.answer(&json!({ "sessionId": "s-1" }));
+    }
+
+    /// One turn notification, as the agent streams it.
+    fn update(&self, update: &Value) {
+        self.send(&json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": { "sessionId": "s-1", "update": update },
+        }));
+    }
+
+    /// Opens a turn the way a running model would.
+    fn turn_start(&self) {
+        self.update(&json!({ "sessionUpdate": "_kage/turn", "phase": "start" }));
+    }
+
+    /// Closes a turn the way a finished model would.
+    fn turn_end(&self) {
+        self.update(&json!({ "sessionUpdate": "_kage/turn", "phase": "end" }));
+    }
+
+    /// Reports a whole turn: it starts, speaks, costs something, and ends.
     fn run_turn_saying(&self, text: &str) {
-        self.send(&json!({ "type": "agent_start" }));
-        self.send(&json!({
-            "type": "message_end",
-            "message": { "role": "assistant", "content": [{ "type": "text", "text": text }] },
+        self.update(&json!({ "sessionUpdate": "_kage/turn", "phase": "start" }));
+        self.update(&json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "type": "text", "text": text },
         }));
-        self.send(&json!({
-            "type": "turn_end",
-            "usage": { "input": 10, "output": 2, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 12, "cost": 0.01 },
+        self.update(&json!({
+            "sessionUpdate": "usage_update",
+            "used": 12, "size": 200_000, "cost": { "amount": 0.01 },
         }));
-        self.send(&json!({ "type": "agent_settled" }));
+        self.update(&json!({ "sessionUpdate": "_kage/turn", "phase": "end" }));
     }
 
     /// Writes to stderr, as a dying process does.
@@ -768,9 +794,7 @@ async fn with_session(
             tokio::spawn(async move { session.start(first).await })
         };
         settle().await;
-        harness
-            .controls()
-            .answer(&json!({ "model": { "contextWindow": 200_000 } }));
+        harness.controls().shake_hands().await;
         let _ = starting.await.expect("start task joins");
     }
 
@@ -881,21 +905,30 @@ async fn a_turn_that_failed_after_speaking_says_why() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
             let controls = harness.controls();
-            controls.send(&json!({ "type": "agent_start" }));
             controls.send(&json!({
-                "type": "message_end",
-                "message": { "role": "assistant", "content": [{ "type": "text", "text": "Looking." }] },
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": { "sessionId": "s-1", "update": {
+                    "sessionUpdate": "_kage/turn", "phase": "start" } },
             }));
             controls.send(&json!({
-                "type": "message_end",
-                "message": {
-                    "role": "assistant",
-                    "content": [],
-                    "stopReason": "error",
-                    "errorMessage": "429 rate limit exceeded",
-                },
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": { "sessionId": "s-1", "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": { "type": "text", "text": "Looking." } } },
             }));
-            controls.send(&json!({ "type": "agent_settled" }));
+            let prompt = controls
+                .written()
+                .iter()
+                .rev()
+                .map(|line| serde_json::from_str::<Value>(line).expect("JSON"))
+                .find(|frame| frame.get("method").and_then(Value::as_str) == Some("session/prompt"))
+                .expect("the first prompt");
+            controls.send(&json!({
+                "jsonrpc": "2.0", "id": prompt["id"],
+                "error": { "code": -32000, "message": "429 rate limit exceeded" },
+            }));
             settle().await;
 
             let said = harness.thread.everything();
@@ -913,7 +946,7 @@ async fn a_turn_that_failed_after_speaking_says_why() {
 async fn a_message_during_a_running_turn_steers_it_rather_than_queueing() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
-            harness.controls().send(&json!({ "type": "agent_start" }));
+            harness.controls().turn_start();
             settle().await;
 
             harness
@@ -1546,7 +1579,7 @@ async fn the_agent_is_told_what_came_of_its_pull_request_next_turn() {
                     .controls()
                     .written()
                     .into_iter()
-                    .filter(|line| line.contains("\"type\":\"prompt\""))
+                    .filter(|line| line.contains("\"session/prompt\""))
                     .collect();
                 let retry = prompts
                     .iter()
@@ -1737,16 +1770,20 @@ async fn what_a_tool_did_is_reported_and_its_output_truncated() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
             harness.controls().send(&json!({
-                "type": "tool_execution_start",
-                "toolCallId": "t1",
-                "toolName": "bash",
-                "args": { "command": "ls -la" },
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": { "sessionId": "s-1", "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "t1", "title": "bash",
+                    "rawInput": { "command": "ls -la" } } },
             }));
             harness.controls().send(&json!({
-                "type": "tool_execution_end",
-                "toolCallId": "t1",
-                "toolName": "bash",
-                "result": { "content": [{ "type": "text", "text": "x".repeat(5_000) }] },
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": { "sessionId": "s-1", "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "t1", "status": "completed",
+                    "content": [{ "type": "text", "text": "x".repeat(5_000) }] } },
             }));
             settle().await;
 
@@ -1765,18 +1802,22 @@ async fn an_edit_is_shown_as_a_diff_of_what_actually_changed() {
             std::fs::write(&file, "const x = 1;\n").unwrap();
 
             harness.controls().send(&json!({
-                "type": "tool_execution_start",
-                "toolCallId": "t1",
-                "toolName": "edit",
-                "args": { "path": "/workspace/main.ts" },
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": { "sessionId": "s-1", "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "t1", "title": "edit",
+                    "rawInput": { "path": "/workspace/main.ts" } } },
             }));
             settle().await;
             std::fs::write(&file, "const x = 2;\n").unwrap();
             harness.controls().send(&json!({
-                "type": "tool_execution_end",
-                "toolCallId": "t1",
-                "toolName": "edit",
-                "result": { "content": [{ "type": "text", "text": "written" }] },
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": { "sessionId": "s-1", "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "t1", "status": "completed",
+                    "content": [{ "type": "text", "text": "written" }] } },
             }));
             settle().await;
 
@@ -1793,20 +1834,27 @@ async fn a_question_from_the_agent_is_asked_in_the_thread_and_answered_back() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
             harness.controls().send(&json!({
-                "type": "extension_ui_request",
-                "id": "d1",
-                "method": "confirm",
-                "title": "Delete the branch?",
+                "jsonrpc": "2.0",
+                "id": 71,
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": "s-1",
+                    "toolCall": { "toolCallId": "c1", "title": "Delete the branch?" },
+                    "options": [
+                        { "optionId": "allow", "name": "Allow", "kind": "allowOnce" },
+                        { "optionId": "deny", "name": "Deny", "kind": "rejectOnce" },
+                    ],
+                },
             }));
             settle().await;
 
             harness
                 .session
-                .handle(message_from("yes", OWNER, "m2"))
+                .handle(message_from("allow", OWNER, "m2"))
                 .await;
 
             assert!(harness.thread.everything().contains("Delete the branch?"));
-            assert!(harness.written().contains("extension_ui_response"));
+            assert!(harness.written().contains("\"outcome\""));
             assert_eq!(
                 harness.thread.final_reaction("m2"),
                 Some(ReactionOutcome::Accepted)
@@ -2139,7 +2187,9 @@ async fn a_model_that_can_see_is_handed_the_image_itself() {
                     .handle(with_image("what is this?", "m2"))
                     .await;
 
-                assert!(harness.written().contains("\"images\""));
+                // Images ride as content blocks on the prompt, not a
+                // separate key.
+                assert!(harness.written().contains("\"image/png\""));
             })
         },
     )
@@ -2361,7 +2411,7 @@ async fn asking_to_interrupt_again_does_not_start_a_second_wait() {
         Box::pin(async move {
             // A turn that starts and does not settle, so the session
             // stays busy.
-            harness.controls().send(&json!({ "type": "agent_start" }));
+            harness.controls().turn_start();
             settle().await;
 
             harness
@@ -2402,33 +2452,30 @@ async fn asking_to_interrupt_again_does_not_start_a_second_wait() {
 
 #[tokio::test]
 async fn an_interruption_the_agent_confirms_does_not_force_stop() {
-    with_session(
-        SessionTestCase::default(),
-        |harness| {
-            Box::pin(async move {
-                harness.controls().send(&json!({ "type": "agent_start" }));
-                settle().await;
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            settle().await;
 
-                harness
-                    .session
-                    .handle(message_from("!interrupt", OWNER, "m2"))
-                    .await;
+            harness
+                .session
+                .handle(message_from("!interrupt", OWNER, "m2"))
+                .await;
 
-                // The agent answers, so the turn settles well inside the
-                // deadline.
-                harness.controls().send(&json!({
-                    "type": "turn_end",
-                    "usage": { "input": 1, "output": 1, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 2, "cost": 0 },
-                }));
-                harness.controls().send(&json!({ "type": "agent_settled" }));
-                settle().await;
-                harness.timers.advance(200);
-                settle().await;
+            // The agent answers, so the turn settles well inside the
+            // deadline.
+            harness.controls().update(&json!({
+                "sessionUpdate": "usage_update",
+                "used": 2, "size": 200_000, "cost": { "amount": 0 },
+            }));
+            harness.controls().turn_end();
+            settle().await;
+            harness.timers.advance(200);
+            settle().await;
 
-                assert!(!harness.thread.everything().contains("force stopped"));
-            })
-        },
-    )
+            assert!(!harness.thread.everything().contains("force stopped"));
+        })
+    })
     .await;
 }
 
@@ -2504,7 +2551,7 @@ async fn a_turn_in_progress_survives_a_withdrawal() {
             seed_withdrawn_record(harness, said);
 
             // A turn starts and does not settle, so the session is busy.
-            harness.controls().send(&json!({ "type": "agent_start" }));
+            harness.controls().turn_start();
             settle().await;
 
             // Held, because the agent is appending to its conversation.
@@ -2665,11 +2712,17 @@ async fn a_stranger_answers_no_dialog_and_leaves_no_file_behind() {
         Box::pin(async move {
             let project = harness.session.project().path.clone();
             harness.controls().send(&json!({
-                "type": "extension_ui_request",
-                "id": "d1",
-                "method": "select",
-                "title": "which one?",
-                "options": ["a", "b"],
+                "jsonrpc": "2.0",
+                "id": 81,
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": "s-1",
+                    "toolCall": { "toolCallId": "c1", "title": "which one?" },
+                    "options": [
+                        { "optionId": "a", "name": "a", "kind": "allowOnce" },
+                        { "optionId": "b", "name": "b", "kind": "rejectOnce" },
+                    ],
+                },
             }));
             settle().await;
             assert!(
@@ -2695,13 +2748,14 @@ async fn a_stranger_answers_no_dialog_and_leaves_no_file_behind() {
                         == 0,
                 "a stranger's file reached the project"
             );
-            // The agent is still waiting, so the dialog was not answered.
+            // The agent is still waiting, so the dialog was not answered:
+            // answering one writes an outcome frame.
             assert!(
                 !harness
                     .controls()
                     .written()
                     .iter()
-                    .any(|line| line.contains("\"d1\"")),
+                    .any(|line| line.contains("\"outcome\"")),
                 "a stranger answered the dialog"
             );
         })
@@ -2927,7 +2981,7 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
 
     with_session(case, |harness| {
         Box::pin(async move {
-            harness.controls().send(&json!({ "type": "agent_settled" }));
+            harness.controls().turn_end();
             settle().await;
             let before = harness.controls().written().len();
 
@@ -2945,16 +2999,16 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
             let said: Vec<String> = harness.controls().written().split_off(before);
             let switch = said
                 .iter()
-                .find(|line| line.contains("set_model"))
+                .find(|line| line.contains("session/set_config_option"))
                 .expect("the switch is sent");
             assert!(
-                switch.contains("\"modelId\":\"musecringe\""),
-                "the agent is given the bare id, got {switch}"
+                switch.contains("\"value\":\"ajamxhacker/musecringe\""),
+                "the agent is given the qualified id, got {switch}"
             );
             assert!(
                 said.iter()
-                    .any(|line| line.contains("\"set_thinking_level\"")
-                        && line.contains("\"level\":\"max\"")),
+                    .any(|line| line.contains("\"configId\":\"thinking\"")
+                        && line.contains("\"value\":\"max\"")),
                 "the level is said on its own, got {said:?}"
             );
 
@@ -3006,7 +3060,7 @@ async fn a_refused_switch_is_not_reported_as_made() {
 
     with_session(case, |harness| {
         Box::pin(async move {
-            harness.controls().send(&json!({ "type": "agent_settled" }));
+            harness.controls().turn_end();
             settle().await;
 
             tokio::join!(
@@ -3021,16 +3075,17 @@ async fn a_refused_switch_is_not_reported_as_made() {
                             .written()
                             .iter()
                             .rev()
-                            .find(|line| line.contains("set_model"))
+                            .find(|line| line.contains("session/set_config_option"))
                             .expect("the switch is sent"),
                     )
                     .expect("JSON");
                     harness.controls().send(&json!({
-                        "type": "response",
+                        "jsonrpc": "2.0",
                         "id": asked["id"],
-                        "command": "set_model",
-                        "success": false,
-                        "error": "Model not found: zai-coding-cn/glm-5.3-flash",
+                        "error": {
+                            "code": -32602,
+                            "message": "Model not found: zai-coding-cn/glm-5.3-flash",
+                        },
                     }));
                 }
             );
@@ -3044,7 +3099,7 @@ async fn a_refused_switch_is_not_reported_as_made() {
                     .controls()
                     .written()
                     .iter()
-                    .any(|line| line.contains("set_thinking_level")),
+                    .any(|line| line.contains("\"configId\":\"thinking\"")),
                 "nothing follows a refused switch"
             );
             assert_eq!(
@@ -3118,21 +3173,22 @@ async fn the_thread_is_told_which_model_it_is_talking_to() {
                 harness.thread.notices()[0].0
             );
 
-            // The agent says what actually answered, which is what the done
-            // line reports rather than what the session asked for.
+            // The wire no longer attributes a turn to a model, so the done
+            // line names the session's running model.
             let controls = harness.controls();
-            controls.send(&json!({ "type": "agent_start" }));
+            controls.turn_start();
             controls.send(&json!({
-                "type": "message_end",
-                "message": { "role": "assistant", "content": [{ "type": "text", "text": "did it" }] },
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": { "sessionId": "s-1", "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": { "type": "text", "text": "did it" } } },
             }));
-            controls.send(&json!({
-                "type": "turn_end",
-                "model": "glm-5.3-flash",
-                "usage": { "input": 10, "output": 2, "cacheRead": 0, "cacheWrite": 0,
-                           "totalTokens": 12, "cost": 0.01 },
+            controls.update(&json!({
+                "sessionUpdate": "usage_update",
+                "used": 12, "size": 200_000, "cost": { "amount": 0.01 },
             }));
-            controls.send(&json!({ "type": "agent_settled" }));
+            controls.turn_end();
             settle().await;
 
             let done = harness
@@ -3142,7 +3198,7 @@ async fn the_thread_is_told_which_model_it_is_talking_to() {
                 .find(|(_, level)| *level == NoticeLevel::Done)
                 .expect("the turn ends")
                 .0;
-            assert!(done.contains("`glm-5.3-flash`"), "got {done}");
+            assert!(done.contains("`musecringe:max`"), "got {done}");
         })
     })
     .await;
@@ -3226,7 +3282,7 @@ async fn a_short_name_added_after_the_launch_is_known_to_a_running_session() {
 
     with_session(case, |harness| {
         Box::pin(async move {
-            harness.controls().send(&json!({ "type": "agent_settled" }));
+            harness.controls().turn_end();
             settle().await;
 
             // The configuration is edited and reloaded while the session runs.
@@ -3253,7 +3309,8 @@ async fn a_short_name_added_after_the_launch_is_known_to_a_running_session() {
 
             let said: Vec<String> = harness.controls().written().split_off(before);
             assert!(
-                said.iter().any(|line| line.contains("set_model")),
+                said.iter()
+                    .any(|line| line.contains("session/set_config_option")),
                 "a name added after the launch was refused: {said:?}"
             );
         })
