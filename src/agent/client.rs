@@ -21,8 +21,8 @@ use crate::agent::protocol::{
     AcpUpdate, AgentRecord, DialogMethod, DialogRequest, FrameKind, StreamingBehavior, Usage,
     as_permission_ask, ask_option_ids, cancel_ask_frame, cancel_frame, classify_frame,
     classify_update, compact_frame, detail_of, image_block, initialize_frame, is_retryable,
-    method_not_found_frame, new_session_frame, prompt_frame, select_option_frame,
-    set_config_option_frame, stop_failure, text_block, tool_target,
+    method_not_found_frame, new_session_frame, prompt_frame, resume_session_frame,
+    select_option_frame, set_config_option_frame, stop_failure, text_block, tool_target,
 };
 use crate::log::Logger;
 use crate::log::fields;
@@ -370,6 +370,31 @@ impl AgentClient {
     /// The handshake opens the session the whole client then speaks on: every
     /// later command names it, so nothing is sent before this resolves.
     pub async fn wait_until_ready(&self, timeout_ms: u64) -> Result<AgentRecord, String> {
+        self.open_session(None, timeout_ms).await
+    }
+
+    /// Waits until the agent answers and reopens its recorded session, so a
+    /// revived session carries on where its process left off. Falls back to
+    /// a fresh session when the agent no longer holds the recording.
+    pub async fn resume_until_ready(
+        &self,
+        kage_session_id: &str,
+        timeout_ms: u64,
+    ) -> Result<AgentRecord, String> {
+        self.open_session(Some(kage_session_id), timeout_ms).await
+    }
+
+    /// The agent's session id, once the handshake has opened one.
+    pub fn agent_session_id(&self) -> Option<String> {
+        self.session()
+    }
+
+    /// Runs the handshake and opens (or reopens) the agent's session.
+    async fn open_session(
+        &self,
+        resume: Option<&str>,
+        timeout_ms: u64,
+    ) -> Result<AgentRecord, String> {
         let init = self
             .request_frame(initialize_frame(self.take_id()), timeout_ms, "initialize")
             .await?;
@@ -377,14 +402,25 @@ impl AgentClient {
             return Err(detail_of(&init));
         }
         let cwd = self.inner.cwd.clone();
-        let opened = self
-            .request_frame(
-                new_session_frame(self.take_id(), &cwd),
-                timeout_ms,
-                "session/new",
-            )
-            .await?;
-        if opened.get("error").is_some() {
+        let id = self.take_id();
+        let (frame, kind) = match resume {
+            Some(previous) => (resume_session_frame(id, previous, &cwd), "session/resume"),
+            None => (new_session_frame(id, &cwd), "session/new"),
+        };
+        let mut opened = self.request_frame(frame, timeout_ms, kind).await?;
+        if opened.get("error").is_some() && resume.is_some() {
+            let retry = self
+                .request_frame(
+                    new_session_frame(self.take_id(), &cwd),
+                    timeout_ms,
+                    "session/new",
+                )
+                .await?;
+            if retry.get("error").is_some() {
+                return Err(detail_of(&retry));
+            }
+            opened = retry;
+        } else if opened.get("error").is_some() {
             return Err(detail_of(&opened));
         }
         let Some(session_id) = opened

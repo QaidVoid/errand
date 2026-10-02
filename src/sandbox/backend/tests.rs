@@ -2,58 +2,54 @@
 //! assertions in `bailey_test.ts` and `podman_test.ts`.
 
 use super::{
-    AgentCommand, SANDBOX_NAME_PREFIX, agent_command, disk_tmp_dir, fresh_disk_tmp,
-    placed_prompt_path, sandbox_name,
+    AgentCommand, KAGE_ROLE, SANDBOX_NAME_PREFIX, agent_command, disk_tmp_dir, fresh_disk_tmp,
+    sandbox_name,
 };
 
 #[test]
-fn the_agent_is_started_with_provider_model_and_session_directory() {
+fn the_agent_is_started_with_provider_model_and_memory() {
     let command = agent_command(&AgentCommand {
-        session_dir: "/state/sessions".to_owned(),
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
-        system_prompt_path: None,
-        resume: false,
+        system_text: Some("remember this".to_owned()),
     });
     let said = command.join(" ");
 
-    assert_eq!(command[..3], ["pi", "--mode", "rpc"]);
-    assert!(said.contains("--session-dir /state/sessions"));
-    assert!(said.contains("--provider zai-coding-cn"));
-    assert!(said.contains("--model glm-5.3"));
-    assert!(!command.contains(&"--continue".to_owned()));
+    assert_eq!(command[..2], ["kage", "rpc"]);
+    assert!(said.contains("-m zai-coding-cn/glm-5.3"));
+    assert!(said.contains("--system"));
+    assert!(said.contains("remember this"));
+    assert!(said.contains(KAGE_ROLE));
 }
 
 #[test]
-fn a_system_prompt_is_named_where_the_agent_will_read_it() {
+fn a_level_is_split_off_the_model_and_memory_may_be_absent() {
     let command = agent_command(&AgentCommand {
-        session_dir: "/state/sessions".to_owned(),
         provider: "zai-coding-cn".to_owned(),
-        model: None,
-        system_prompt_path: Some("/state/memory.md".to_owned()),
-        resume: false,
+        model: Some("glm-5.3-flash:max".to_owned()),
+        system_text: None,
     });
     let said = command.join(" ");
 
-    assert!(said.contains("--append-system-prompt /state/memory.md"));
-    // Without a model the flag is absent, so the provider default stands.
+    assert!(said.contains("-m zai-coding-cn/glm-5.3-flash"));
+    assert!(!said.contains("--system"));
     assert!(!said.contains("--model"));
+}
+
+#[test]
+fn without_a_model_the_flag_is_absent_so_the_provider_default_stands() {
+    let command = agent_command(&AgentCommand {
+        provider: "zai-coding-cn".to_owned(),
+        model: None,
+        system_text: None,
+    });
+
+    assert_eq!(command, ["kage", "rpc"]);
 }
 
 #[test]
 fn the_sandbox_is_named_after_the_session_it_belongs_to() {
     assert_eq!(sandbox_name("s-1"), format!("{SANDBOX_NAME_PREFIX}s-1"));
-}
-
-/// A host path is replaced by the placed one, so the agent never sees one.
-#[test]
-fn the_prompt_path_is_placed_and_ends_with_the_same_file() {
-    let host_path = Some("/home/operator/.local/state/errand/s-1/memory.md".to_owned());
-    assert_eq!(
-        placed_prompt_path(host_path.as_ref()),
-        Some("/state/memory.md".to_owned())
-    );
-    assert_eq!(placed_prompt_path(None), None);
 }
 
 /// A launch after the scratch filled starts on an empty `/tmp`, and a link

@@ -76,6 +76,7 @@ fn launch() -> SandboxLaunch {
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
         providers: serde_json::Map::new(),
+        credential_names: BTreeMap::new(),
         extensions: Vec::new(),
         resume: false,
     }
@@ -252,12 +253,8 @@ fn the_agent_is_started_with_its_provider_and_model_inside_the_image() {
         .expect("the image leads the command");
 
     assert!(image > 0);
-    assert!(
-        args[image..]
-            .join(" ")
-            .contains("pi --mode rpc --session-dir /state/sessions")
-    );
-    assert!(args.join(" ").contains("--provider zai-coding-cn"));
+    assert!(args[image..].join(" ").contains("kage rpc"));
+    assert!(args.join(" ").contains("-m zai-coding-cn/glm-5.3"));
 }
 
 #[test]

@@ -99,6 +99,14 @@ impl AgentProcess for QuietAgent {
             let result = match method.as_str() {
                 "initialize" => Some(json!({ "protocolVersion": 1 })),
                 "session/new" => Some(json!({ "sessionId": "s-1" })),
+                "session/resume" | "session/load" => Some(json!({
+                    "sessionId": parsed
+                        .as_ref()
+                        .and_then(|parsed| parsed.get("params"))
+                        .and_then(|params| params.get("sessionId"))
+                        .cloned()
+                        .unwrap_or_else(|| json!("s-1")),
+                })),
                 "session/set_config_option" | "_kage/session/compact" => Some(json!({})),
                 _ if method.is_empty() => None,
                 _ => Some(json!({})),

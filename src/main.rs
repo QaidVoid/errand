@@ -293,6 +293,7 @@ mod tests {
             provider: "zai-coding-cn".to_owned(),
             model: Some("glm-5.3".to_owned()),
             providers: serde_json::Map::new(),
+            credential_names: BTreeMap::new(),
             extensions: Vec::new(),
             resume: false,
         };

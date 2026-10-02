@@ -23,11 +23,10 @@ use crate::log::Logger;
 use crate::log::fields;
 use crate::sandbox::SandboxHandle;
 use crate::sandbox::agent_config::write_agent_config;
-use crate::sandbox::backend::placed_prompt_path;
 use crate::sandbox::backend::{
-    AGENT_HOME, AGENT_SESSIONS, AgentCommand, CapabilityReport, SESSION_LABEL, STATE_PATH,
-    SYSTEM_LABEL, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError, WORKSPACE_PATH,
-    agent_command, disk_tmp_dir, fresh_disk_tmp, sandbox_name,
+    AGENT_HOME, AgentCommand, CapabilityReport, SESSION_LABEL, STATE_PATH, SYSTEM_LABEL,
+    SandboxLaunch, SandboxLaunchError, SandboxUnavailableError, WORKSPACE_PATH, agent_command,
+    disk_tmp_dir, fresh_disk_tmp, sandbox_name,
 };
 use crate::sandbox::spawn::spawn_agent;
 
@@ -124,11 +123,12 @@ pub fn podman_args(config: &SandboxConfig, launch: &SandboxLaunch) -> Vec<String
 
     args.push(config.image.clone());
     args.extend(agent_command(&AgentCommand {
-        session_dir: AGENT_SESSIONS.to_owned(),
         provider: launch.provider.clone(),
         model: launch.model.clone(),
-        system_prompt_path: placed_prompt_path(launch.system_prompt_path.as_ref()),
-        resume: launch.resume,
+        system_text: launch
+            .system_prompt_path
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok()),
     }));
     args
 }
@@ -273,9 +273,15 @@ impl PodmanSandbox {
         if self.config.disk_tmp {
             fresh_disk_tmp(&launch.state_dir).await?;
         }
-        // No broker stands in front of a container, so each provider's key
-        // is written for the agent.
-        write_agent_config(launch, &BTreeMap::new(), &self.built_in, true).await?;
+        // The agent reads every provider's key from the environment, so each
+        // defined one travels there.
+        write_agent_config(
+            launch,
+            &BTreeMap::new(),
+            &self.built_in,
+            &launch.credential_names,
+        )
+        .await?;
         let name = sandbox_name(&launch.session_id);
         let args = podman_args(&self.config, launch);
         let spawned = spawn_agent("podman", &args, None, None)

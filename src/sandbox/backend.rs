@@ -31,9 +31,6 @@ pub const AGENT_HOME: &str = "/state/home";
 /// habit to break rather than a boundary to enforce.
 pub const AGENT_BIN: &str = "/state/home/bin";
 
-/// Where the session's agent history lives, as the agent sees it.
-pub const AGENT_SESSIONS: &str = "/state/sessions";
-
 /// Label marking every sandbox this system owns, for discovery and cleanup.
 pub const SYSTEM_LABEL: &str = "errand.system";
 
@@ -65,8 +62,12 @@ pub struct SandboxLaunch {
     /// Absent where the operator defined none, which is the ordinary case: the
     /// agent then knows only the providers it ships with.
     pub providers: Map<String, Value>,
-    /// Host directories of pi extensions, copied into the session so the
-    /// sandboxed agent loads them.
+    /// The variable each provider's key travels in, by provider, for those
+    /// that name one. The agent's configuration points keyless providers at
+    /// these variables.
+    pub credential_names: BTreeMap<String, String>,
+    /// Host directories of pi extensions. Kage reads no such thing, so naming
+    /// one fails the launch rather than starting a session without it.
     pub extensions: Vec<String>,
     /// Continue the conversation already stored in the state directory.
     pub resume: bool,
@@ -124,38 +125,51 @@ pub async fn fresh_disk_tmp(state_dir: &str) -> Result<(), SandboxLaunchError> {
     tokio::fs::create_dir_all(&dir).await.map_err(failed)
 }
 
+/// Where kage keeps everything it writes: sessions, configuration, caches.
+///
+/// One directory for all four XDG roots, so nothing it records escapes the
+/// session state. The daemon writes the provider configuration beneath the
+/// same directory on the host; kage adds its own `kage` segment under each
+/// root, so the file lands at `{KAGE_HOME}/kage/config.toml` as the agent
+/// sees it.
+pub const KAGE_HOME: &str = "/state/kage";
+
+/// The host-side directory holding what the agent reads as [`KAGE_HOME`]:
+/// joined onto the session state directory.
+pub const KAGE_DIR: &str = "kage";
+
+/// The role text kage runs with when nothing overrides it, from kage-loop's
+/// `DEFAULT_ROLE` at the pinned kage. Repeated here so memory can ride along:
+/// `--system` replaces the role rather than adding to it, so sending memory
+/// alone would drop the posture line the agent is built around. If kage
+/// rewords it, the worst case is a stale sentence, not a broken launch.
+pub const KAGE_ROLE: &str = "You are kage, a coding agent. Use the provided tools when they help and ask only when blocked.";
+
 /// What the agent is started with inside any sandbox.
 ///
 /// The provider is always passed. The agent picks its own default otherwise,
 /// which has nothing to do with whichever credential the configuration
 /// supplies, so omitting it yields a session that starts and then cannot reach
-/// a model.
+/// a model. History continues over ACP rather than on the command line, so
+/// resuming takes no flag.
 pub fn agent_command(launch: &AgentCommand) -> Vec<String> {
-    let mut command = vec![
-        "pi".to_owned(),
-        "--mode".to_owned(),
-        "rpc".to_owned(),
-        "--session-dir".to_owned(),
-        launch.session_dir.clone(),
-    ];
-    command.push("--provider".to_owned());
-    command.push(launch.provider.clone());
-    // Memory is appended to the system prompt from a file, which costs the
-    // agent no tool call to read and no round trip to a daemon it cannot
-    // reach.
-    if let Some(system_prompt_path) = &launch.system_prompt_path {
-        command.push("--append-system-prompt".to_owned());
-        command.push(system_prompt_path.clone());
+    let mut command = vec!["kage".to_owned(), "rpc".to_owned()];
+    if let Some(model) = launch.model.as_ref().filter(|model| !model.is_empty()) {
+        // Kage addresses `provider/model` and knows no `:level` suffix; the
+        // level rides a session option after the switch instead.
+        let (bare, _) = crate::session::model::split_level(model);
+        command.push("-m".to_owned());
+        command.push(format!("{}/{}", launch.provider, bare));
     }
-    if launch.model.as_ref().is_some_and(|model| !model.is_empty()) {
-        command.push("--model".to_owned());
-        command.push(launch.model.clone().expect("checked above"));
-    }
-    // The agent keeps its history in the session directory, so continuing
-    // there is what makes a resumed thread pick up the conversation rather
-    // than start a new one that happens to share a directory.
-    if launch.resume {
-        command.push("--continue".to_owned());
+    // Memory rides the system prompt, which costs the agent no tool call to
+    // read and no round trip to a daemon it cannot reach.
+    if let Some(system) = launch
+        .system_text
+        .as_ref()
+        .filter(|text| !text.trim().is_empty())
+    {
+        command.push("--system".to_owned());
+        command.push(format!("{KAGE_ROLE}\n\n{system}"));
     }
     command
 }
@@ -163,28 +177,13 @@ pub fn agent_command(launch: &AgentCommand) -> Vec<String> {
 /// What [`agent_command`] is built from.
 #[derive(Debug, Clone, Default)]
 pub struct AgentCommand {
-    /// Where the agent keeps its own history.
-    pub session_dir: String,
     /// The provider the agent is started with.
     pub provider: String,
-    /// The model asked for, or none for the provider's default.
+    /// The model asked for, with any `:level` still on it, or none for the
+    /// provider's default.
     pub model: Option<String>,
-    /// A file appended to the system prompt, or none.
-    pub system_prompt_path: Option<String>,
-    /// Whether the stored conversation continues.
-    pub resume: bool,
-}
-
-/// The path of a file inside the session state, as the agent sees it.
-///
-/// Written into the state directory by the daemon, so the agent reaches it
-/// where the state is placed rather than where the host keeps it.
-pub fn placed_prompt_path(system_prompt_path: Option<&String>) -> Option<String> {
-    let path = system_prompt_path?;
-    let filename = std::path::Path::new(path)
-        .file_name()
-        .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
-    Some(format!("{STATE_PATH}/{filename}"))
+    /// Memory for the system prompt, or none when there is nothing to say.
+    pub system_text: Option<String>,
 }
 
 #[cfg(test)]

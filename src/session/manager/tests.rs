@@ -113,11 +113,20 @@ impl AgentProcess for QuietAgent {
             .to_owned();
         self.written.lock().unwrap().push(line);
         // Answers the daemon's requests the way the agent would: the
-        // handshake opens one session, and commands succeed. Answers the
-        // agent sends itself carry no method and are left alone.
+        // handshake opens one session, and commands succeed. A resume
+        // reopens the recording it names. Answers the agent sends itself
+        // carry no method and are left alone.
         let result = match method.as_str() {
             "initialize" => Some(json!({ "protocolVersion": 1 })),
             "session/new" => Some(json!({ "sessionId": "s-1" })),
+            "session/resume" | "session/load" => Some(json!({
+                "sessionId": parsed
+                    .as_ref()
+                    .and_then(|parsed| parsed.get("params"))
+                    .and_then(|params| params.get("sessionId"))
+                    .cloned()
+                    .unwrap_or_else(|| json!("s-1")),
+            })),
             "session/set_config_option" | "_kage/session/compact" => Some(json!({})),
             _ => None,
         };

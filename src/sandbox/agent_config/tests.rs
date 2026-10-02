@@ -1,244 +1,137 @@
-//! Tests for what a sandboxed agent is told about providers and extensions.
+//! Tests for the kage provider configuration a sandbox reads.
 
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
+use serde_json::json;
 
-use super::{BrokeredProvider, copy_tree, provider_config, write_agent_config};
+use super::{BrokeredProvider, kage_config, write_agent_config};
 use crate::sandbox::backend::SandboxLaunch;
 
-/// A provider the agent has no entry for is only reachable because the
-/// operator defined it, so the broker's base URL must not replace that
-/// definition.
+/// A brokered provider kage knows is overridden in place: the broker's base
+/// URL is what changes, and the key never enters the file.
 #[test]
-fn an_operators_provider_definition_survives_the_brokers_base_url() {
-    let mut defined = serde_json::Map::new();
-    defined.insert(
-        "meta".to_owned(),
-        json!({
-            "baseUrl": "https://api.meta.example/v1",
-            "api": "openai-completions",
-            "credential": "the-real-meta-key",
-            "usage": "gateway",
-            "models": [{ "id": "muse-spark-1.3-contributor" }],
-        }),
+fn a_brokered_known_provider_is_overridden_with_the_brokers_url() {
+    let mut brokered = BTreeMap::new();
+    brokered.insert(
+        "anthropic".to_owned(),
+        BrokeredProvider {
+            base_url: "http://169.254.169.1:8443/provider/anthropic".to_owned(),
+        },
     );
+    let names = BTreeMap::from([("anthropic".to_owned(), "ANTHROPIC_API_KEY".to_owned())]);
+    let config = kage_config(&serde_json::Map::new(), &brokered, &BTreeMap::new(), &names);
 
+    assert!(config.contains("[providers.anthropic]"), "{config}");
+    assert!(
+        config.contains(r#"base_url = "http://169.254.169.1:8443/provider/anthropic""#),
+        "{config}"
+    );
+    assert!(!config.contains("api_key_env"), "{config}");
+    assert!(!config.contains("custom"), "{config}");
+}
+
+/// A brokered provider kage never heard of is registered custom, with the
+/// nonce's variable named and the store's models declared.
+#[test]
+fn a_brokered_unknown_provider_is_registered_custom_with_its_models() {
     let mut brokered = BTreeMap::new();
     brokered.insert(
         "meta".to_owned(),
         BrokeredProvider {
             base_url: "http://169.254.169.1:8443/provider/meta".to_owned(),
-            nonce: "n-meta".to_owned(),
         },
-    );
-    let merged = provider_config(&defined, &brokered, &BTreeMap::new(), false);
-    let providers = merged
-        .get("providers")
-        .and_then(Value::as_object)
-        .expect("the providers map");
-    let meta = providers.get("meta").expect("the merged provider");
-
-    // Only where it is reached changes; what it is stays.
-    assert_eq!(
-        meta.get("baseUrl").and_then(Value::as_str),
-        Some("http://169.254.169.1:8443/provider/meta")
-    );
-    assert_eq!(
-        meta.get("api").and_then(Value::as_str),
-        Some("openai-completions")
-    );
-    assert_eq!(
-        meta.get("models").and_then(Value::as_array).map(Vec::len),
-        Some(1)
-    );
-    // The key the agent is given is the nonce, and the real one never appears.
-    assert_eq!(meta.get("apiKey").and_then(Value::as_str), Some("n-meta"));
-    assert_eq!(meta.get("credential"), None);
-    // How the daemon asks about the window is not the agent's to read either.
-    assert_eq!(meta.get("usage"), None);
-    assert!(
-        !Value::Object(merged.clone())
-            .to_string()
-            .contains("the-real-meta-key")
-    );
-}
-
-#[test]
-fn a_provider_the_operator_never_defined_still_gets_its_base_url() {
-    let mut brokered = BTreeMap::new();
-    brokered.insert(
-        "zai-coding-cn".to_owned(),
-        BrokeredProvider {
-            base_url: "http://169.254.169.1:8443/provider/zai-coding-cn".to_owned(),
-            nonce: "n".to_owned(),
-        },
-    );
-    let merged = provider_config(&serde_json::Map::new(), &brokered, &BTreeMap::new(), false);
-    let providers = merged
-        .get("providers")
-        .and_then(Value::as_object)
-        .expect("the providers map");
-
-    assert_eq!(
-        providers.get("zai-coding-cn"),
-        Some(&json!({
-            "baseUrl": "http://169.254.169.1:8443/provider/zai-coding-cn",
-            "apiKey": "n",
-        }))
-    );
-}
-
-/// Under a broker the key stays with the daemon, even for a provider the
-/// broker has no route to.
-#[test]
-fn an_unbrokered_definition_passes_through_less_the_credential() {
-    let mut defined = serde_json::Map::new();
-    defined.insert(
-        "meta".to_owned(),
-        json!({ "baseUrl": "https://api.meta.example/v1", "credential": "k" }),
-    );
-    let merged = provider_config(&defined, &BTreeMap::new(), &BTreeMap::new(), false);
-    let providers = merged
-        .get("providers")
-        .and_then(Value::as_object)
-        .expect("the providers map");
-
-    assert_eq!(
-        providers.get("meta"),
-        Some(&json!({ "baseUrl": "https://api.meta.example/v1" }))
-    );
-}
-
-/// With no broker to put a key on, every provider carries its own, so the
-/// agent can switch to any of them. A key written as `apiKey` is kept.
-#[test]
-fn without_a_broker_each_credential_becomes_the_providers_key() {
-    let mut defined = serde_json::Map::new();
-    defined.insert(
-        "zai-coding-cn".to_owned(),
-        json!({ "credential": "z-key", "models": [{ "id": "glm-5.3" }] }),
-    );
-    defined.insert(
-        "meta".to_owned(),
-        json!({ "baseUrl": "https://api.meta.example/v1", "apiKey": "own-key", "credential": "k" }),
-    );
-    let merged = provider_config(&defined, &BTreeMap::new(), &BTreeMap::new(), true);
-
-    assert_eq!(
-        merged["providers"],
-        json!({
-            "zai-coding-cn": { "apiKey": "z-key", "models": [{ "id": "glm-5.3" }] },
-            "meta": { "baseUrl": "https://api.meta.example/v1", "apiKey": "own-key" },
-        })
-    );
-}
-
-/// An entry naming a model the agent already defines adjusts that model
-/// rather than replacing it with one that has forgotten how to think. A model
-/// the store does not know is left as written.
-#[test]
-fn an_entry_for_a_built_in_model_is_laid_over_its_definition() {
-    let mut defined = serde_json::Map::new();
-    defined.insert(
-        "zai-coding-cn".to_owned(),
-        json!({
-            "credential": "k",
-            "models": [
-                { "id": "glm-5.3-flash", "contextWindow": 256_000 },
-                { "id": "glm-6", "contextWindow": 128_000 },
-            ],
-        }),
     );
     let built_in = BTreeMap::from([(
-        "zai-coding-cn".to_owned(),
-        vec![json!({
-            "id": "glm-5.3-flash",
-            "provider": "zai-coding-cn",
-            "api": "openai-completions",
-            "baseUrl": "https://zai.example/v4",
-            "reasoning": true,
-            "thinkingLevelMap": { "max": "max" },
-            "contextWindow": 1_000_000,
-        })],
+        "meta".to_owned(),
+        vec![json!({ "id": "muse-spark-1.3", "name": "Muse Spark" })],
     )]);
-    let merged = provider_config(&defined, &BTreeMap::new(), &built_in, false);
+    let names = BTreeMap::from([("meta".to_owned(), "META_API_KEY".to_owned())]);
+    let config = kage_config(&serde_json::Map::new(), &brokered, &built_in, &names);
 
-    assert_eq!(
-        merged["providers"]["zai-coding-cn"]["models"],
-        json!([
-            {
-                "id": "glm-5.3-flash",
-                "api": "openai-completions",
-                "reasoning": true,
-                "thinkingLevelMap": { "max": "max" },
-                "contextWindow": 256_000,
-            },
-            { "id": "glm-6", "contextWindow": 128_000 },
-        ])
+    assert!(config.contains("[providers.custom.meta]"), "{config}");
+    assert!(
+        config.contains(r#"base_url = "http://169.254.169.1:8443/provider/meta""#),
+        "{config}"
     );
+    assert!(
+        config.contains(r#"api_key_env = "META_API_KEY""#),
+        "{config}"
+    );
+    assert!(
+        config.contains("[[providers.custom.meta.models]]"),
+        "{config}"
+    );
+    assert!(config.contains(r#"id = "muse-spark-1.3""#), "{config}");
 }
 
-/// An extension registers its own provider, so errand must not write a second
-/// definition for it into the agent's configuration.
+/// An operator definition contributes its base URL and nothing secret.
 #[test]
-fn an_extension_provider_is_left_out_of_what_is_written() {
+fn an_operator_base_url_passes_through_less_the_credential() {
     let mut defined = serde_json::Map::new();
     defined.insert(
-        "free-models".to_owned(),
-        json!({ "extension": true, "models": [{ "id": "free-fast" }] }),
-    );
-    defined.insert(
         "meta".to_owned(),
-        json!({ "baseUrl": "https://api.meta.example/v1", "credential": "k" }),
+        json!({ "baseUrl": "https://api.meta.example/v1", "credential": "real-meta-key-1" }),
     );
-    let merged = provider_config(&defined, &BTreeMap::new(), &BTreeMap::new(), false);
-    let providers = merged
-        .get("providers")
-        .and_then(Value::as_object)
-        .expect("the providers map");
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
 
+    assert!(config.contains("[providers.custom.meta]"), "{config}");
     assert!(
-        !providers.contains_key("free-models"),
-        "the extension owns it"
+        config.contains(r#"base_url = "https://api.meta.example/v1""#),
+        "{config}"
     );
-    assert!(
-        providers.contains_key("meta"),
-        "an ordinary provider still passes"
-    );
+    assert!(!config.contains("real-meta-key-1"), "{config}");
 }
 
-/// An extension is a directory the sandbox cannot see, so it is copied whole
-/// into the session, subdirectories and all.
-#[tokio::test]
-async fn an_extension_directory_is_copied_whole() {
-    let root = tempfile::tempdir().expect("a temp dir");
-    let from = root.path().join("free-models");
-    std::fs::create_dir_all(from.join("inner")).expect("made the source tree");
-    std::fs::write(from.join("index.ts"), b"export default () => {};").expect("wrote entry");
-    std::fs::write(from.join("inner/data.json"), b"{}").expect("wrote nested");
-
-    let to = root.path().join("placed");
-    copy_tree(&from, &to).await.expect("copied");
-
-    assert_eq!(
-        std::fs::read(to.join("index.ts")).expect("entry copied"),
-        b"export default () => {};"
+/// A provider with neither an endpoint nor models to declare is left out:
+/// its key still reaches the agent through the environment on its own.
+#[test]
+fn a_provider_with_nothing_to_say_is_left_out() {
+    let mut defined = serde_json::Map::new();
+    defined.insert("plain".to_owned(), json!({ "credential": "k" }));
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
     );
-    assert!(
-        to.join("inner/data.json").exists(),
-        "the nested file came too"
-    );
+
+    assert!(!config.contains("plain"), "{config}");
 }
 
-/// With no broker, as under podman, the agent's home is given every
-/// provider's key and every extension, where the agent reads them.
+/// An extension registers nothing kage reads, so naming one fails the launch
+/// rather than starting a session without the tools it promises.
 #[tokio::test]
-async fn the_agent_home_holds_the_providers_and_extensions() {
+async fn an_extension_fails_the_launch_loudly() {
+    let launch = SandboxLaunch {
+        state_dir: tempfile::tempdir()
+            .expect("a state directory")
+            .path()
+            .display()
+            .to_string(),
+        extensions: vec!["free-models".to_owned()],
+        ..SandboxLaunch::default()
+    };
+    let error = write_agent_config(
+        &launch,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .await
+    .expect_err("extensions have nowhere to go");
+    assert!(error.0.contains("free-models"), "{error:?}");
+}
+
+/// The written file holds endpoints and model declarations, and no real key
+/// anywhere in it.
+#[tokio::test]
+async fn the_written_file_holds_endpoints_and_no_keys() {
     let root = tempfile::tempdir().expect("a temp dir");
-    let extension = root.path().join("free-models");
-    std::fs::create_dir_all(&extension).expect("made the extension");
-    std::fs::write(extension.join("index.ts"), b"export default () => {};").expect("wrote it");
     let state = root.path().join("state");
 
     let mut providers = serde_json::Map::new();
@@ -246,21 +139,28 @@ async fn the_agent_home_holds_the_providers_and_extensions() {
         "gateway".to_owned(),
         json!({ "baseUrl": "https://gateway.example/v1", "credential": "g-key" }),
     );
+    let mut brokered = BTreeMap::new();
+    brokered.insert(
+        "anthropic".to_owned(),
+        BrokeredProvider {
+            base_url: "http://169.254.169.1:8443/provider/anthropic".to_owned(),
+        },
+    );
+    let names = BTreeMap::from([
+        ("gateway".to_owned(), "GATEWAY_API_KEY".to_owned()),
+        ("anthropic".to_owned(), "ANTHROPIC_API_KEY".to_owned()),
+    ]);
     let launch = SandboxLaunch {
         state_dir: state.display().to_string(),
         providers,
-        extensions: vec![extension.display().to_string()],
         ..SandboxLaunch::default()
     };
-    write_agent_config(&launch, &BTreeMap::new(), &BTreeMap::new(), true)
+    write_agent_config(&launch, &brokered, &BTreeMap::new(), &names)
         .await
         .expect("written");
 
-    let agent = state.join("home/.pi/agent");
-    let written: Value = serde_json::from_str(
-        &std::fs::read_to_string(agent.join("models.json")).expect("the models file"),
-    )
-    .expect("JSON");
-    assert_eq!(written["providers"]["gateway"]["apiKey"], "g-key");
-    assert!(agent.join("extensions/free-models/index.ts").exists());
+    let body = std::fs::read_to_string(state.join("kage/kage/config.toml")).expect("the config");
+    assert!(body.contains("[providers.anthropic]"), "{body}");
+    assert!(body.contains("[providers.custom.gateway]"), "{body}");
+    assert!(!body.contains("g-key"), "{body}");
 }

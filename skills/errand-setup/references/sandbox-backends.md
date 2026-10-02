@@ -12,7 +12,7 @@ Sessions use the host tools, so there is no image to build.
 It needs:
 
 - The `bailey` tool on PATH.
-- The `pi` agent on PATH. This backend runs the host install, so a host
+- The `kage` agent on PATH. This backend runs the host install, so a host
   without it is refused at startup rather than at the first session.
 - A kernel with Landlock and user namespaces. `bailey doctor` says what the
   host enforces.

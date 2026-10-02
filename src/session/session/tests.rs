@@ -104,12 +104,29 @@ impl FakeControls {
         self.send(&json!({ "jsonrpc": "2.0", "id": id, "result": result }));
     }
 
-    /// Answers the handshake: initialize, then the session open. The agent
-    /// asks for the second only after the first is answered.
+    /// Answers the handshake: initialize, then the session open. A resume is
+    /// answered with the recording it names. The agent asks for the second
+    /// only after the first is answered.
     async fn shake_hands(&self) {
         self.answer(&json!({ "protocolVersion": 1 }));
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        self.answer(&json!({ "sessionId": "s-1" }));
+        let reopened = self
+            .written()
+            .iter()
+            .rev()
+            .find_map(|line| {
+                let parsed: Value = serde_json::from_str(line).ok()?;
+                if parsed.get("method").and_then(Value::as_str) != Some("session/resume") {
+                    return None;
+                }
+                parsed
+                    .get("params")?
+                    .get("sessionId")?
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "s-1".to_owned());
+        self.answer(&json!({ "sessionId": reopened }));
     }
 
     /// One turn notification, as the agent streams it.
@@ -673,6 +690,8 @@ struct SessionTestCase {
     /// already running.
     catalog: Option<Catalog>,
     start: bool,
+    /// Starts as a revival: the agent reopens this recorded session.
+    resume_kage_session: Option<String>,
 }
 
 impl Default for SessionTestCase {
@@ -689,7 +708,16 @@ impl Default for SessionTestCase {
             available_models: Vec::new(),
             catalog: None,
             start: true,
+            resume_kage_session: None,
         }
+    }
+}
+
+/// Seeds the agent's recorded session for a revival, so the start reopens
+/// its history instead of opening a new recording.
+fn seed_kage_session(state_dir: &std::path::Path, previous: Option<&String>) {
+    if let Some(previous) = previous {
+        std::fs::write(state_dir.join("kage-session"), previous).expect("seeded recording");
     }
 }
 
@@ -766,7 +794,7 @@ async fn with_session(
         memory: case.memory.clone(),
         fetch_attachment: case.fetch_attachment.clone(),
         describe_images: case.describe_images.clone(),
-        resume: false,
+        resume: case.resume_kage_session.is_some(),
         on_ended: {
             let ended = Arc::clone(&ended);
             Arc::new(move |why| ended.lock().unwrap().push(why))
@@ -786,6 +814,7 @@ async fn with_session(
     };
 
     if case.start {
+        seed_kage_session(&state_dir, case.resume_kage_session.as_ref());
         // The start is waited on in the background, so the ready answer can
         // arrive while it runs.
         let starting = {
@@ -823,6 +852,37 @@ async fn a_session_starts_says_so_and_sends_its_first_prompt() {
     .await;
 }
 
+/// A revived session reopens its recorded agent session, and the new
+/// recording is stored for the next revival.
+#[tokio::test]
+async fn a_revived_session_reopens_the_agents_recorded_session() {
+    let case = SessionTestCase {
+        resume_kage_session: Some("s-old".to_owned()),
+        ..SessionTestCase::default()
+    };
+    with_session(case, |harness| {
+        Box::pin(async move {
+            let resumed = harness
+                .controls()
+                .written()
+                .into_iter()
+                .map(|line| serde_json::from_str::<Value>(&line).expect("JSON"))
+                .find(|frame| frame.get("method").and_then(Value::as_str) == Some("session/resume"))
+                .expect("the resume is sent");
+            assert_eq!(resumed["params"]["sessionId"], "s-old");
+            assert_eq!(
+                std::fs::read_to_string(
+                    std::path::Path::new(&harness.state_dir).join("kage-session")
+                )
+                .expect("the recording is stored")
+                .trim(),
+                "s-old"
+            );
+        })
+    })
+    .await;
+}
+
 /// The credential is the whole reason the agent can reach a model at all.
 #[tokio::test]
 async fn the_sandbox_is_launched_with_the_project_state_and_credential() {
@@ -833,6 +893,19 @@ async fn the_sandbox_is_launched_with_the_project_state_and_credential() {
             assert_eq!(
                 launched[0].env.get("ANTHROPIC_API_KEY"),
                 Some(&"secret".to_owned())
+            );
+            // Kage keeps everything it records under one directory inside
+            // the session state.
+            assert_eq!(
+                launched[0].env.get("XDG_DATA_HOME").map(String::as_str),
+                Some("/state/kage")
+            );
+            assert_eq!(
+                launched[0]
+                    .credential_names
+                    .get("anthropic")
+                    .map(String::as_str),
+                Some("ANTHROPIC_API_KEY")
             );
             assert!(!launched[0].resume);
         })

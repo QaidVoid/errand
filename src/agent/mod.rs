@@ -1,4 +1,4 @@
-//! The agent layer, which drives one `pi` subprocess over its JSONL protocol.
+//! The agent layer, which drives one `kage rpc` subprocess over ACP.
 
 /// Drives one agent process and reports what it says.
 pub mod client;

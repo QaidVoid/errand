@@ -150,6 +150,16 @@ pub fn new_session_frame(id: u64, cwd: &str) -> Value {
     })
 }
 
+/// Reopens a session the agent recorded earlier, continuing its history.
+pub fn resume_session_frame(id: u64, session_id: &str, cwd: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "session/resume",
+        "params": { "sessionId": session_id, "cwd": cwd, "mcpServers": [] },
+    })
+}
+
 /// One text block, the only prompt content this chat sends.
 pub fn text_block(text: &str) -> Value {
     json!({ "type": "text", "text": text })

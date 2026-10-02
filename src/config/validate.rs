@@ -834,12 +834,10 @@ fn validate_policy_extra(
     })
 }
 
-/// Reads the directories added to a session's PATH, if any.
-/// Reads the pi extension directories to place in every session, if any.
+/// Reads the extension directories named for every session, if any.
 ///
-/// Each is an absolute host directory. A session cannot see the host's own pi
-/// configuration, so an extension is only loaded when its directory is copied
-/// into the session; naming it here is what asks for that.
+/// Extensions have no kage equivalent: naming one fails the launch, and this
+/// only checks the directories are absolute host paths.
 fn validate_extensions(source: &Map<String, Value>, problems: &mut Problems) -> Vec<String> {
     if source.get("extensions").is_none() {
         return Vec::new();

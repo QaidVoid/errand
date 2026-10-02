@@ -20,8 +20,8 @@ use crate::sandbox::BaileyStop;
 use crate::sandbox::SandboxHandle;
 use crate::sandbox::agent_config::{BrokeredProvider, write_agent_config};
 use crate::sandbox::backend::{
-    AGENT_SESSIONS, AgentCommand, CapabilityReport, SandboxLaunch, SandboxLaunchError,
-    SandboxUnavailableError, agent_command, fresh_disk_tmp, placed_prompt_path, sandbox_name,
+    AgentCommand, CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
+    agent_command, fresh_disk_tmp, sandbox_name,
 };
 use crate::sandbox::paths;
 use crate::sandbox::policy::{
@@ -281,11 +281,12 @@ pub fn bailey_args(
     args.push(profile.to_owned());
     args.push("--".to_owned());
     args.extend(agent_command(&AgentCommand {
-        session_dir: AGENT_SESSIONS.to_owned(),
         provider: launch.provider.clone(),
         model: launch.model.clone(),
-        system_prompt_path: placed_prompt_path(launch.system_prompt_path.as_ref()),
-        resume: launch.resume,
+        system_text: launch
+            .system_prompt_path
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok()),
     }));
     args
 }
@@ -337,11 +338,10 @@ impl BaileySandbox {
         };
         brokering
             .nonces
-            .iter()
-            .map(|(name, nonce)| {
+            .keys()
+            .map(|name| {
                 let through = BrokeredProvider {
                     base_url: provider_broker_url(port, name),
-                    nonce: nonce.clone(),
                 };
                 (name.clone(), through)
             })
@@ -424,7 +424,7 @@ impl BaileySandbox {
             return Err(SandboxUnavailableError {
                 backend: SandboxBackend::Bailey,
                 reasons: vec![
-                    "the pi agent is not on PATH, and this backend runs the host's own \
+                    "the kage agent is not on PATH, and this backend runs the host's own \
                      installation"
                         .to_owned(),
                 ],
@@ -515,7 +515,7 @@ impl BaileySandbox {
         let lookup = self.lookup();
         let Some(runtime) = agent_runtime(&lookup) else {
             return Err(SandboxLaunchError(
-                "the pi agent is not on PATH, so there is nothing for a confined session to run"
+                "the kage agent is not on PATH, so there is nothing for a confined session to run"
                     .to_owned(),
             ));
         };
@@ -532,7 +532,7 @@ impl BaileySandbox {
             launch,
             &self.brokered_providers(),
             &self.options.built_in,
-            self.config.egress.mode != EgressMode::Proxy,
+            &launch.credential_names,
         )
         .await?;
         let env = match &self.options.brokering {

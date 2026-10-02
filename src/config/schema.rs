@@ -133,15 +133,13 @@ pub struct AgentConfig {
     ///
     /// Each entry carries the credential errand reaches that provider with,
     /// optionally the `credentialName` the agent reads it from, and whatever
-    /// else the agent's own configuration takes: `baseUrl`, `api`, `models`.
-    /// Written into the agent's configuration verbatim apart from the
-    /// credential, because that schema belongs to the agent. The credential
-    /// is put on at the broker under `egress.mode = proxy`, and is otherwise
-    /// written as the provider's `apiKey`. The exception to verbatim is
-    /// an entry of `models` naming a model the host's store already defines
-    /// for that provider: it is laid over that definition, so setting only
-    /// `contextWindow` keeps the model's reasoning, thinking levels, and
-    /// inputs.
+    /// else locates it: `baseUrl`, `api`, `models`. Endpoints reach the
+    /// agent's own configuration translated, because that schema belongs to
+    /// the agent; the credential never enters it, traveling in the
+    /// environment instead. The credential is swapped for a nonce at the
+    /// broker under `egress.mode = proxy`. An entry of `models` naming a
+    /// model the host's store already defines for that provider lends its
+    /// name and context to the declaration, so the agent can address it.
     ///
     /// `discover` asks the provider which models it serves, at startup, after
     /// a change to this file, and on `!models refresh`, under its `baseUrl`.
@@ -167,20 +165,14 @@ pub struct AgentConfig {
     /// when nobody says, and one on an entry of `models` says it for that
     /// model alone. Naming a model the host's store already lists says it for
     /// that model without listing it twice.
-    /// A provider entry may instead be marked `extension: true`, which means a
-    /// pi extension registers it. Such a provider needs no credential, is not
-    /// brokered, and is not written into the agent's configuration: the
-    /// extension owns it. Its `models` are read only so a session can list and
-    /// switch to them.
+    /// A provider entry may instead be marked `extension: true`, which meant a
+    /// pi extension registers it. Extensions have no kage equivalent, so such
+    /// an entry fails the launch: it needs no credential, is not brokered,
+    /// and is not written into the agent's configuration. Its `models` are
+    /// read only so a session can list and switch to them.
     pub providers: Map<String, serde_json::Value>,
-    /// Host directories of pi extensions, copied into every session's agent
-    /// directory so the sandboxed agent loads them.
-    ///
-    /// A session runs in a sandbox that cannot see the host's own pi
-    /// configuration, so an extension installed there is invisible to it.
-    /// Naming its directory here places a copy where the agent looks. An
-    /// extension that registers a provider is paired with an `extension: true`
-    /// entry under `providers`.
+    /// Host directories of pi extensions. Kage reads no such thing: naming
+    /// one fails the launch rather than starting a session without it.
     pub extensions: Vec<String>,
     /// Short names for models, so a session is started without spelling one.
     pub aliases: BTreeMap<String, String>,

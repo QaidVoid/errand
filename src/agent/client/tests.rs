@@ -258,6 +258,55 @@ async fn a_handshake_the_agent_refuses_is_not_readiness() {
 }
 
 #[tokio::test]
+async fn a_revived_session_reopens_the_recording_and_falls_back_to_fresh() {
+    let setup = client(AgentHandlers::default(), 300_000);
+    let asking = setup.agent.clone();
+    let ready = tokio::spawn(async move { asking.resume_until_ready("s-old", 1_000).await });
+    settle().await;
+    let first: Value =
+        serde_json::from_str(&setup.controls.written()[0]).expect("the handshake first");
+    setup
+        .controls
+        .send(&json!({ "jsonrpc": "2.0", "id": first["id"], "result": { "protocolVersion": 1 } }));
+    settle().await;
+    let second: Value =
+        serde_json::from_str(&setup.controls.written()[1]).expect("the handshake second");
+    assert_eq!(second["method"], "session/resume");
+    setup
+        .controls
+        .send(&json!({ "jsonrpc": "2.0", "id": second["id"], "result": { "sessionId": "s-old" } }));
+    ready.await.expect("driven").expect("resumed");
+    assert_eq!(setup.agent.agent_session_id(), Some("s-old".to_owned()));
+    setup.finish().await;
+
+    let setup = client(AgentHandlers::default(), 300_000);
+    let asking = setup.agent.clone();
+    let ready = tokio::spawn(async move { asking.resume_until_ready("s-gone", 1_000).await });
+    settle().await;
+    let first: Value =
+        serde_json::from_str(&setup.controls.written()[0]).expect("the handshake first");
+    setup
+        .controls
+        .send(&json!({ "jsonrpc": "2.0", "id": first["id"], "result": { "protocolVersion": 1 } }));
+    settle().await;
+    let second: Value =
+        serde_json::from_str(&setup.controls.written()[1]).expect("the handshake second");
+    setup.controls.send(&json!({
+        "jsonrpc": "2.0", "id": second["id"],
+        "error": { "code": -32602, "message": "unknown session s-gone" },
+    }));
+    settle().await;
+    let third: Value = serde_json::from_str(&setup.controls.written()[2]).expect("the fallback");
+    assert_eq!(third["method"], "session/new");
+    setup
+        .controls
+        .send(&json!({ "jsonrpc": "2.0", "id": third["id"], "result": { "sessionId": "s-2" } }));
+    ready.await.expect("driven").expect("fresh");
+    assert_eq!(setup.agent.agent_session_id(), Some("s-2".to_owned()));
+    setup.finish().await;
+}
+
+#[tokio::test]
 async fn a_turn_moves_the_agent_through_working_and_back_to_ready() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let start_seen = Arc::clone(&seen);

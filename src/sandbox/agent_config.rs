@@ -1,208 +1,230 @@
-//! What a sandboxed agent is told about providers and extensions.
+//! What a sandboxed agent is told about providers.
 //!
-//! Written into the agent's own configuration directory inside the session's
-//! state, which every backend gives the agent as its home, so a bailey session
-//! and a podman session read the same files.
+//! Written as kage's own configuration into the session's state, where the
+//! sandbox mounts it. Only endpoints travel in the file: credentials stay in
+//! the environment, under their usual names with a broker's nonces swapped
+//! in, which kage reads itself.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
+use crate::sandbox::backend::{KAGE_DIR, SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 
-/// Where the broker is reached, and the nonce standing in for the key.
+/// Where the broker is reached for one provider.
+///
+/// The nonce standing in for the key travels in the environment, not here:
+///
+/// [`super::bailey::brokered_env`] swaps it into the provider's variable.
 #[derive(Debug, Clone)]
 pub struct BrokeredProvider {
     /// The base URL the session is pointed at.
     pub base_url: String,
-    /// What stands in for the credential.
-    pub nonce: String,
 }
 
-/// The agent's provider configuration for one session.
+/// Provider ids kage already knows, from its built-ins (`anthropic`,
+/// `openai`, `openai-responses`, `gemini`) and its `COMPAT_PROVIDERS` table
+/// at the pinned kage. One of these is overridden in place, keeping its
+/// catalog models; anything else is registered as a custom provider with the
+/// store's models. A kage that learns a new id takes the custom path for it,
+/// which still reaches it but without catalog pricing, and says so in its
+/// startup warning.
+const KAGE_KNOWN: [&str; 20] = [
+    "anthropic",
+    "openai",
+    "openai-responses",
+    "gemini",
+    "zai",
+    "zai-coding-plan",
+    "zhipuai-coding-plan",
+    "deepseek",
+    "groq",
+    "mistral",
+    "cerebras",
+    "xai",
+    "openrouter",
+    "fireworks-ai",
+    "moonshotai",
+    "kimi-for-coding",
+    "xiaomi",
+    "xiaomi-token-plan-ams",
+    "xiaomi-token-plan-cn",
+    "xiaomi-token-plan-sgp",
+];
+
+/// A TOML basic string: backslashes, quotes, and line breaks escaped.
+fn toml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// A TOML table header segment: bare when the id allows, quoted otherwise.
+fn toml_key(id: &str) -> String {
+    if !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        id.to_owned()
+    } else {
+        toml_string(id)
+    }
+}
+
+/// One `[[models]]` entry from a store model, naming what kage needs to
+/// address it. Only the id is required; the name falls back to it and the
+/// context passes through when the store said it.
+fn kage_model(entry: &Value) -> Option<String> {
+    let id = entry.get("id")?.as_str()?;
+    let mut table = format!("id = {}", toml_string(id));
+    let _ = write!(
+        table,
+        "\nname = {}",
+        toml_string(entry.get("name").and_then(Value::as_str).unwrap_or(id))
+    );
+    let context = entry
+        .get("context")
+        .or_else(|| entry.get("contextWindow"))
+        .and_then(Value::as_u64);
+    if let Some(context) = context {
+        let _ = write!(table, "\ncontext = {context}");
+    }
+    Some(table)
+}
+
+/// The kage provider configuration for one session, as TOML.
 ///
-/// The operator's definitions first, then the broker's base URL over the one
-/// provider it stands in for. Merged rather than written over the top: a
-/// definition is how a provider with no built-in entry is reached at all, and
-/// replacing it wholesale would leave the agent with a provider it has never
-/// heard of. Only the base URL is taken from the broker, so everything else
-/// the operator said about that provider still stands.
-///
-/// Without a broker there is nothing to put a key on in transit, so with
-/// `hand_over_keys` each credential is written as the provider's `apiKey`.
-/// Otherwise only the provider the session starts on would have one, and the
-/// agent refuses to switch to any other.
-pub fn provider_config(
+/// Brokered providers point at the broker with the nonce's variable named,
+/// so what the file holds is worth nothing anywhere but this broker.
+/// Operator definitions contribute their base URL; their credentials never
+/// enter the file, traveling in the environment instead. Providers kage does
+/// not know are registered custom with the store's models.
+pub fn kage_config(
     defined: &Map<String, Value>,
     brokered: &BTreeMap<String, BrokeredProvider>,
     built_in: &BTreeMap<String, Vec<Value>>,
-    hand_over_keys: bool,
-) -> Map<String, Value> {
-    let mut providers = Map::new();
-    for (name, definition) in defined {
-        // An extension registers this provider itself, so writing a second
-        // definition here would collide with the one the extension makes.
-        if definition.get("extension").and_then(Value::as_bool) == Some(true) {
+    credential_names: &BTreeMap<String, String>,
+) -> String {
+    let mut out = String::from(
+        "# Written by the daemon for one session. Endpoints only: credentials\n\
+         # travel in the environment, with a broker's nonces swapped in.\n",
+    );
+    let names: Vec<&String> = defined
+        .keys()
+        .chain(brokered.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    for name in names {
+        let through = brokered.get(name);
+        let definition = defined
+            .get(name)
+            .and_then(Value::as_object)
+            .filter(|fields| fields.get("extension").and_then(Value::as_bool) != Some(true));
+        let base_url = through.map(|through| through.base_url.clone()).or_else(|| {
+            definition
+                .and_then(|fields| fields.get("baseUrl"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
+        if through.is_none() && definition.is_none() {
             continue;
         }
-        let mut fields = match definition {
-            Value::Object(fields) => fields.clone(),
-            _ => Map::new(),
+        // Nothing to tell kage: no endpoint override and no models to declare.
+        // The key still reaches it through the environment on its own.
+        let models: Vec<String> = if KAGE_KNOWN.contains(&name.as_str()) {
+            Vec::new()
+        } else {
+            defined
+                .get(name)
+                .and_then(|definition| definition.get("models"))
+                .and_then(Value::as_array)
+                .map(|written| written.iter().filter_map(kage_model).collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
+                .chain(
+                    built_in
+                        .get(name)
+                        .map(|known| known.iter().filter_map(kage_model).collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                )
+                .collect()
         };
-        // The credential is the daemon's record of how to reach the provider,
-        // not the agent's. Under a broker it is put on there instead.
-        let credential = fields.remove("credential");
-        if hand_over_keys
-            && !fields.contains_key("apiKey")
-            && let Some(credential) = credential
-        {
-            fields.insert("apiKey".to_owned(), credential);
+        if base_url.is_none() && models.is_empty() {
+            continue;
         }
-        // How the daemon asks about the window is the daemon's business too,
-        // and the agent's configuration would only report it as a field it
-        // does not know.
-        fields.remove("usage");
-        fields.remove("discover");
-        if let (Some(Value::Array(models)), Some(known)) =
-            (fields.get_mut("models"), built_in.get(name))
-        {
-            for model in models {
-                *model = over_built_in(model, known);
+        if KAGE_KNOWN.contains(&name.as_str()) {
+            let _ = writeln!(out, "\n[providers.{}]", toml_key(name));
+            if let Some(url) = base_url {
+                let _ = writeln!(out, "base_url = {}", toml_string(&url));
             }
+            continue;
         }
-        providers.insert(name.clone(), Value::Object(fields));
+        let _ = writeln!(out, "\n[providers.custom.{}]", toml_key(name));
+        out.push_str("kind = \"openai\"\n");
+        if let Some(url) = base_url {
+            let _ = writeln!(out, "base_url = {}", toml_string(&url));
+        }
+        let _ = writeln!(out, "display_name = {}", toml_string(name));
+        if let Some(env) = credential_names.get(name) {
+            let _ = writeln!(out, "api_key_env = {}", toml_string(env));
+        }
+        for model in models {
+            let _ = writeln!(
+                out,
+                "\n[[providers.custom.{}.models]]\n{model}",
+                toml_key(name)
+            );
+        }
     }
-
-    for (name, through) in brokered {
-        let mut fields = match providers.get(name) {
-            Some(Value::Object(fields)) => fields.clone(),
-            _ => Map::new(),
-        };
-        // The nonce stands in for the key, so what the agent holds is worth
-        // nothing anywhere but this broker.
-        fields.insert(
-            "baseUrl".to_owned(),
-            Value::String(through.base_url.clone()),
-        );
-        fields.insert("apiKey".to_owned(), Value::String(through.nonce.clone()));
-        providers.insert(name.clone(), Value::Object(fields));
-    }
-    // The agent reads its models from a file whose shape names the map, so
-    // the providers ride under that key rather than at the top level.
-    let mut wrapped = Map::new();
-    wrapped.insert("providers".to_owned(), Value::Object(providers));
-    wrapped
+    out
 }
 
-/// A model entry laid over the agent's own definition of that model.
+/// Writes the agent's provider configuration.
 ///
-/// The agent replaces a built-in model with an entry of the same id rather
-/// than merging the two, so an entry that only sets `contextWindow` would
-/// lose the rest, reasoning and thinking levels included. The store's
-/// definition goes underneath instead. Its `baseUrl` and `provider` are left
-/// out, so the model is still reached wherever its provider is, broker
-/// included. An entry the store does not know is left as written.
-fn over_built_in(entry: &Value, known: &[Value]) -> Value {
-    let id = entry.get("id").and_then(Value::as_str);
-    let Some(Value::Object(base)) = known
-        .iter()
-        .find(|model| id.is_some() && model.get("id").and_then(Value::as_str) == id)
-    else {
-        return entry.clone();
-    };
-    let mut merged = base.clone();
-    merged.remove("baseUrl");
-    merged.remove("provider");
-    if let Value::Object(fields) = entry {
-        merged.extend(fields.clone());
-    }
-    Value::Object(merged)
-}
-
-/// Copies a file or a directory tree from the host into the session.
-///
-/// Recursive and shallow-simple: pi extensions are a file or a small folder,
-/// so this walks directories and copies files, which is all one needs. A
-/// symlink is followed by the copy, which is what reading the named directory
-/// means.
-///
-/// A link already sitting at a destination is refused rather than copied
-/// over. The destination is inside the state directory, which the session
-/// writes, so a planted link would otherwise redirect the copy to wherever it
-/// points.
-pub(crate) async fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-    if let Ok(meta) = tokio::fs::symlink_metadata(to).await
-        && meta.file_type().is_symlink()
-    {
-        return Err(std::io::Error::other(format!(
-            "a link is in the way of {}",
-            to.display()
-        )));
-    }
-    let meta = tokio::fs::metadata(from).await?;
-    if meta.is_dir() {
-        tokio::fs::create_dir_all(to).await?;
-        let mut entries = tokio::fs::read_dir(from).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            Box::pin(copy_tree(&entry.path(), &to.join(entry.file_name()))).await?;
-        }
-    } else {
-        if let Some(parent) = to.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::copy(from, to).await?;
-    }
-    Ok(())
-}
-
-/// Writes the agent's provider configuration and places its extensions.
-///
-/// `brokered` is the broker's route for each provider it stands in front of,
-/// and `hand_over_keys` says that no broker puts keys on, so each provider's
-/// is written for the agent. The host's own pi configuration is invisible to
-/// a sandbox, so an extension installed there is copied into the `extensions`
-/// directory the agent scans. One that cannot be read fails the launch rather
-/// than being skipped: an extension the operator named that never loaded is
-/// a misconfiguration worth surfacing.
+/// Only endpoints and model declarations go in the file; credentials stay in
+/// the environment. Pi extensions have no kage equivalent, so naming one
+/// fails the launch rather than starting a session without the tools its
+/// configuration promises.
 pub async fn write_agent_config(
     launch: &SandboxLaunch,
     brokered: &BTreeMap<String, BrokeredProvider>,
     built_in: &BTreeMap<String, Vec<Value>>,
-    hand_over_keys: bool,
+    credential_names: &BTreeMap<String, String>,
 ) -> Result<(), SandboxLaunchError> {
+    if let Some(first) = launch.extensions.first() {
+        return Err(SandboxLaunchError(format!(
+            "extension {first} has no kage equivalent; remove it to start sessions on kage"
+        )));
+    }
     let failed = |error: std::io::Error| SandboxLaunchError(error.to_string());
-    let directory = Path::new(&launch.state_dir)
-        .join("home")
-        .join(".pi")
-        .join("agent");
-
-    if !brokered.is_empty() || !launch.providers.is_empty() {
-        let providers = provider_config(&launch.providers, brokered, built_in, hand_over_keys);
-        tokio::fs::create_dir_all(&directory)
-            .await
-            .map_err(failed)?;
-        let body = format!(
-            "{}\n",
-            serde_json::to_string_pretty(&providers).unwrap_or_default()
-        );
-        // Written beneath the directory rather than by name, for the same
-        // reason the policy is: the session writes here too, and a link
-        // planted at the file name would redirect the write.
-        paths::write_beneath(&directory.to_string_lossy(), "models.json", body.as_bytes())
-            .map_err(failed)?;
-    }
-
-    for source in &launch.extensions {
-        let source = Path::new(source);
-        let Some(name) = source.file_name() else {
-            continue;
-        };
-        copy_tree(source, &directory.join("extensions").join(name))
-            .await
-            .map_err(failed)?;
-    }
+    // The host side of `{KAGE_HOME}`, with kage's own `kage` segment under
+    // it where the configuration is read from.
+    let directory = Path::new(&launch.state_dir).join(KAGE_DIR).join("kage");
+    tokio::fs::create_dir_all(&directory)
+        .await
+        .map_err(failed)?;
+    let body = kage_config(&launch.providers, brokered, built_in, credential_names);
+    // Written beneath the directory rather than by name, for the same
+    // reason the policy is: the session writes here too, and a link
+    // planted at the file name would redirect the write.
+    paths::write_beneath(&directory.to_string_lossy(), "config.toml", body.as_bytes())
+        .map_err(failed)?;
     Ok(())
 }
 

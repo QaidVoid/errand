@@ -1040,35 +1040,7 @@ impl Running {
         self.write_agent_bin(github.as_ref());
         let system_prompt_path = self.write_memory_block();
 
-        let mut env = BTreeMap::new();
-        let agent = &self.options.config.agent;
-        // The provider this session starts on, which a named model or a
-        // switch may have made a different one from the standing default. A
-        // key for the provider it is not talking to reaches nothing.
-        let starting = self.provider();
-        if let Some(name) = agent.credential_name_of(&starting)
-            && let Some(credential) = agent.credential_of(&starting)
-        {
-            env.insert(name.to_owned(), credential.to_owned());
-        }
-        if let Some(github) = &github {
-            // The GitHub token crosses too. Reading issues and leaving
-            // comments is most of working on somebody's repository, and none
-            // of it is possible without one. Pull requests are still composed
-            // by the daemon.
-            env.insert(TOKEN_VARIABLE.to_owned(), github.token.clone());
-            for (name, value) in git_identity_env(github) {
-                env.insert(name, value);
-            }
-        }
-
-        // A fresh agent directory each session means pi's model-catalog
-        // cache never survives, so it would refetch every launch. Extensions
-        // pin their own catalog, so startup network is turned off: it stops
-        // the per-launch refresh without touching the turn's own requests.
-        if !self.options.config.agent.extensions.is_empty() {
-            env.insert("PI_OFFLINE".to_owned(), "1".to_owned());
-        }
+        let (env, credential_names) = self.launch_env(github.as_ref());
 
         let launch = SandboxLaunch {
             session_id: self.options.id.clone(),
@@ -1078,6 +1050,7 @@ impl Running {
             provider: self.provider(),
             model: self.model(),
             providers: self.options.catalog.providers(),
+            credential_names,
             extensions: self.options.config.agent.extensions.clone(),
             system_prompt_path,
             resume: self.options.resume,
@@ -1116,13 +1089,22 @@ impl Running {
         });
         self.client = Some(client);
 
-        if let Err(error) = self
-            .client
-            .as_ref()
-            .expect("the client was just made")
-            .wait_until_ready(self.options.config.timeouts.startup_ms)
-            .await
-        {
+        let client = self.client.as_ref().expect("the client was just made");
+        let ready = match self.kage_session_id() {
+            // A revived session carries on in its recorded session; a fresh
+            // one opens a new recording.
+            Some(previous) => {
+                client
+                    .resume_until_ready(&previous, self.options.config.timeouts.startup_ms)
+                    .await
+            }
+            None => {
+                client
+                    .wait_until_ready(self.options.config.timeouts.startup_ms)
+                    .await
+            }
+        };
+        if let Err(error) = ready {
             self.say(&format!(
                 "the agent did not become ready within {}ms: {error}",
                 self.options.config.timeouts.startup_ms
@@ -1131,6 +1113,7 @@ impl Running {
             self.finish(EndReason::StartupFailed).await;
             return false;
         }
+        self.remember_kage_session_id();
 
         // Which sandbox confines a session is not named in the thread. It
         // tells a reader nothing they can act on, and tells anyone else what
@@ -2286,6 +2269,76 @@ impl Running {
                 },
             })
             .await;
+    }
+
+    /// The environment one session starts in, with the variable each
+    /// provider's key travels in.
+    ///
+    /// Every defined provider's key crosses, so the agent can switch to any
+    /// of them. A broker swaps each for its nonce on the way in, and drops
+    /// the ones it has no route to, so no real key crosses there.
+    fn launch_env(
+        &self,
+        github: Option<&GithubConfig>,
+    ) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+        let mut env = BTreeMap::new();
+        let agent = &self.options.config.agent;
+        let credential_names: BTreeMap<String, String> = agent
+            .providers
+            .keys()
+            .filter_map(|provider| {
+                let name = agent.credential_name_of(provider)?;
+                let credential = agent.credential_of(provider)?;
+                env.insert(name.to_owned(), credential.to_owned());
+                Some((provider.clone(), name.to_owned()))
+            })
+            .collect();
+        if let Some(github) = github {
+            // The GitHub token crosses too. Reading issues and leaving
+            // comments is most of working on somebody's repository, and none
+            // of it is possible without one. Pull requests are still composed
+            // by the daemon.
+            env.insert(TOKEN_VARIABLE.to_owned(), github.token.clone());
+            for (name, value) in git_identity_env(github) {
+                env.insert(name, value);
+            }
+        }
+
+        // Kage keeps sessions, configuration, and caches under the XDG roots.
+        // Pointing all four at one directory inside the session state keeps
+        // everything it records beside the transcript, where a revived
+        // session finds it again.
+        for root in [
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_STATE_HOME",
+        ] {
+            env.insert(
+                root.to_owned(),
+                crate::sandbox::backend::KAGE_HOME.to_owned(),
+            );
+        }
+        (env, credential_names)
+    }
+
+    /// The agent's recorded session, when a previous start stored one, so a
+    /// revived session reopens its history instead of starting blank.
+    fn kage_session_id(&self) -> Option<String> {
+        std::fs::read_to_string(std::path::Path::new(&self.options.state_dir).join("kage-session"))
+            .ok()
+            .map(|id| id.trim().to_owned())
+            .filter(|id| !id.is_empty())
+    }
+
+    /// Stores the agent's recorded session beside the transcript, where the
+    /// next process finds it. The agent never sees this file; it lives
+    /// beside the state directory contents, not in them.
+    fn remember_kage_session_id(&self) {
+        let Some(id) = self.client.as_ref().and_then(AgentClient::agent_session_id) else {
+            return;
+        };
+        let _ = paths::write_beneath(&self.options.state_dir, "kage-session", id.as_bytes());
     }
 
     /// Records what the project already held, then watches how much the

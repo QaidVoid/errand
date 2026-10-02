@@ -40,10 +40,10 @@ else
 fi
 
 if [ "$backend" = bailey ]; then
-    if command -v pi >/dev/null 2>&1; then
-        report ok "pi agent at $(command -v pi)"
+    if command -v kage >/dev/null 2>&1; then
+        report ok "kage agent at $(command -v kage)"
     else
-        report missing "the pi agent on PATH: the bailey backend runs the host install"
+        report missing "the kage agent on PATH: the bailey backend runs the host install"
     fi
     if bailey doctor >/dev/null 2>&1; then
         printf '%s\n' '--- bailey doctor ---'

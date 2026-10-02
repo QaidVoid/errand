@@ -64,6 +64,7 @@ fn launch() -> SandboxLaunch {
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
         providers: serde_json::Map::new(),
+        credential_names: BTreeMap::new(),
         extensions: Vec::new(),
         resume: false,
     }
@@ -245,9 +246,8 @@ fn the_agent_args_lead_with_the_run_and_the_config() {
         ]
     );
     let said = args.join(" ");
-    assert!(said.contains("pi --mode rpc --session-dir /state/sessions"));
-    assert!(said.contains("--provider zai-coding-cn"));
-    assert!(said.contains("--model glm-5.3"));
+    assert!(said.contains("kage rpc"));
+    assert!(said.contains("-m zai-coding-cn/glm-5.3"));
     assert!(!args.contains(&"--continue".to_owned()));
 }
 
@@ -271,29 +271,33 @@ fn a_session_with_no_network_runs_under_the_offline_profile() {
 }
 
 #[test]
-fn a_resumed_session_continues_the_conversation_it_stored() {
+fn a_resumed_session_takes_no_flag_history_continues_over_the_protocol() {
     let resumed = SandboxLaunch {
         resume: true,
         ..launch()
     };
-    let args = bailey_args(&config(), &resumed, "/p.toml", None);
-    assert!(args.contains(&"--continue".to_owned()));
+    let fresh = bailey_args(&config(), &launch(), "/p.toml", None);
+    let resumed = bailey_args(&config(), &resumed, "/p.toml", None);
+    assert_eq!(fresh, resumed);
 }
 
-/// The agent reads it where the state is placed, not where the host keeps it.
+/// The agent reads memory in its system prompt, not from a host path it
+/// cannot see.
 #[test]
-fn the_system_prompt_is_named_at_the_path_the_agent_will_see() {
+fn the_system_prompt_is_embedded_where_no_host_path_leaks() {
+    let root = tempfile::tempdir().expect("a state directory");
+    let memory = root.path().join("memory.md");
+    std::fs::write(&memory, "remember this").expect("written");
     let with_prompt = SandboxLaunch {
-        system_prompt_path: Some("/home/operator/.local/state/errand/s-1/memory.md".to_owned()),
+        system_prompt_path: Some(memory.display().to_string()),
         ..launch()
     };
     let args = bailey_args(&config(), &with_prompt, "/p.toml", None);
 
-    assert!(
-        args.join(" ")
-            .contains("--append-system-prompt /state/memory.md")
-    );
-    assert!(!args.join(" ").contains("/home/operator"));
+    let said = args.join(" ");
+    assert!(said.contains("--system"), "{said}");
+    assert!(said.contains("remember this"), "{said}");
+    assert!(!said.contains(&root.path().display().to_string()), "{said}");
 }
 
 /// The daemon's own environment holds the chat token.
@@ -409,9 +413,9 @@ fn a_relative_operator_xdg_directory_falls_back_to_the_home() {
 }
 
 /// Stands in for an installed agent, so a probe does not depend on the host.
-/// CI has no pi on PATH, and these tests are about what the report says.
+/// CI has no kage on PATH, and these tests are about what the report says.
 fn fake_agent(name: &str) -> Option<String> {
-    (name == "pi").then(|| "/usr/local/bin/pi".to_owned())
+    (name == "kage").then(|| "/usr/local/bin/kage".to_owned())
 }
 
 /// The report must never describe a tighter boundary than the one applied.
