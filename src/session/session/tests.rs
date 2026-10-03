@@ -143,9 +143,36 @@ impl FakeControls {
         self.update(&json!({ "sessionUpdate": "_kage/turn", "phase": "start" }));
     }
 
-    /// Closes a turn the way a finished model would.
-    fn turn_end(&self) {
+    /// Answers the prompt that is outstanding, which is how a turn ends.
+    ///
+    /// The agent closes each iteration of its loop this way, so this is not
+    /// the end of a turn: it is the end of one step. What ends the turn is
+    /// the answer to the prompt, sent once the loop has nothing left to run.
+    fn iteration_end(&self) {
         self.update(&json!({ "sessionUpdate": "_kage/turn", "phase": "end" }));
+    }
+
+    /// Answers the outstanding prompt, ending the turn.
+    fn turn_end(&self) {
+        self.answer_prompt("end_turn");
+    }
+
+    /// Answers the outstanding prompt with a stop reason of its own.
+    fn answer_prompt(&self, stop_reason: &str) {
+        let asked = self
+            .written()
+            .iter()
+            .rev()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|frame| frame.get("method").and_then(Value::as_str) == Some("session/prompt"))
+            .and_then(|frame| frame["id"].as_u64());
+        if let Some(id) = asked {
+            self.send(&json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "stopReason": stop_reason },
+            }));
+        }
     }
 
     /// Reports a whole turn: it starts, speaks, costs something, and ends.
@@ -159,7 +186,7 @@ impl FakeControls {
             "sessionUpdate": "usage_update",
             "used": 12, "size": 200_000, "cost": { "amount": 0.01 },
         }));
-        self.update(&json!({ "sessionUpdate": "_kage/turn", "phase": "end" }));
+        self.turn_end();
     }
 
     /// Writes to stderr, as a dying process does.
@@ -962,6 +989,63 @@ async fn a_turn_is_reported_priced_and_closed_by_pinging_whoever_asked() {
                 Some(200_000)
             );
             assert!(!harness.thread.busy());
+            assert_eq!(
+                harness.thread.final_reaction("m1"),
+                Some(ReactionOutcome::Succeeded)
+            );
+        })
+    })
+    .await;
+}
+
+/// A turn that runs tools is announced once, when it is over, rather than at
+/// every step of it. The agent opens and closes an iteration per step, so
+/// treating each of those as the end reported the turn as finished while the
+/// tools were still running.
+#[tokio::test]
+async fn a_turn_that_runs_tools_is_pinged_once_when_it_is_over() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            let controls = harness.controls();
+            controls.turn_start();
+            settle().await;
+            controls.update(&json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": "let me look" },
+            }));
+            // The first iteration ends with a tool call still to run.
+            controls.iteration_end();
+            settle().await;
+
+            assert!(
+                harness.thread.busy(),
+                "the turn is still running after one iteration ends"
+            );
+            assert!(
+                !harness
+                    .thread
+                    .everything()
+                    .contains("the turn finished without producing any output"),
+                "an iteration ending is not a turn ending"
+            );
+
+            // The last iteration ends, and the prompt is answered with it.
+            controls.turn_start();
+            settle().await;
+            controls.turn_end();
+            settle().await;
+
+            assert!(!harness.thread.busy());
+            assert_eq!(
+                harness
+                    .thread
+                    .notices()
+                    .iter()
+                    .filter(|(text, _)| text.contains("finished"))
+                    .count(),
+                0,
+                "the turn produced output, so nothing says it finished without"
+            );
             assert_eq!(
                 harness.thread.final_reaction("m1"),
                 Some(ReactionOutcome::Succeeded)
@@ -1848,6 +1932,14 @@ async fn what_a_tool_did_is_reported_and_its_output_truncated() {
                 "params": { "sessionId": "s-1", "update": {
                     "sessionUpdate": "tool_call",
                     "toolCallId": "t1", "title": "bash",
+                    "rawInput": {} } },
+            }));
+            harness.controls().send(&json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": { "sessionId": "s-1", "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "t1", "status": "in_progress",
                     "rawInput": { "command": "ls -la" } } },
             }));
             harness.controls().send(&json!({
@@ -1860,7 +1952,13 @@ async fn what_a_tool_did_is_reported_and_its_output_truncated() {
             }));
             settle().await;
 
-            assert!(harness.thread.activity().join("\n").contains("`bash`"));
+            assert!(
+                harness
+                    .thread
+                    .activity()
+                    .join("\n")
+                    .contains("`bash` `ls -la`")
+            );
             assert!(harness.thread.results()[0].output.contains("truncated"));
         })
     })
@@ -1880,6 +1978,14 @@ async fn an_edit_is_shown_as_a_diff_of_what_actually_changed() {
                 "params": { "sessionId": "s-1", "update": {
                     "sessionUpdate": "tool_call",
                     "toolCallId": "t1", "title": "edit",
+                    "rawInput": { "path": "/workspace/main.ts" } } },
+            }));
+            harness.controls().send(&json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": { "sessionId": "s-1", "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "t1", "status": "in_progress",
                     "rawInput": { "path": "/workspace/main.ts" } } },
             }));
             settle().await;
@@ -3212,6 +3318,47 @@ async fn a_configured_model_naming_a_provider_starts_the_session_there() {
                 launched[0].env.get("AJAM_KEY"),
                 Some(&"other".to_owned()),
                 "the credential is the one that provider is reached with"
+            );
+        })
+    })
+    .await;
+}
+
+/// A provider that names no variable still gets one, and its key still
+/// crosses in it. Kage registers no provider whose variable is unset, so a
+/// session on such a provider would not start at all.
+#[tokio::test]
+async fn a_provider_naming_no_variable_is_still_reached_with_its_key() {
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "pg-oc",
+                "providers": {
+                    "pg-oc": {
+                        "credential": "secret",
+                        "baseUrl": "https://oc.example/v1",
+                        "models": [{ "id": "space-bunny-free" }],
+                    },
+                },
+            },
+        }))),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            let launched = harness.sandbox.launched.lock().unwrap();
+            assert_eq!(
+                launched[0]
+                    .credential_names
+                    .get("pg-oc")
+                    .map(String::as_str),
+                Some("ERRAND_PROVIDER_PG_OC_API_KEY")
+            );
+            assert_eq!(
+                launched[0].env.get("ERRAND_PROVIDER_PG_OC_API_KEY"),
+                Some(&"secret".to_owned()),
+                "the credential crosses in the variable the configuration names"
             );
         })
     })

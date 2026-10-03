@@ -261,6 +261,12 @@ pub enum AcpUpdate {
         title: String,
         raw_input: Option<Value>,
     },
+    /// A tool call began running, its input now complete. The start line
+    /// waits for this: a streaming call names nothing before it.
+    ToolExecute {
+        id: String,
+        raw_input: Option<Value>,
+    },
     /// A tool call finished, with whether it failed and what it said.
     ToolEnd {
         id: String,
@@ -364,14 +370,18 @@ pub fn classify_update(update: &Value) -> AcpUpdate {
             if id.is_empty() {
                 return AcpUpdate::Ignored;
             }
-            let finished = matches!(
-                update.get("status").and_then(Value::as_str),
-                Some("completed" | "failed")
-            );
+            let status = update.get("status").and_then(Value::as_str);
+            if status == Some("in_progress") {
+                return AcpUpdate::ToolExecute {
+                    id,
+                    raw_input: update.get("rawInput").cloned(),
+                };
+            }
+            let finished = matches!(status, Some("completed" | "failed"));
             if !finished {
                 return AcpUpdate::Ignored;
             }
-            let failed = update.get("status").and_then(Value::as_str) == Some("failed");
+            let failed = status == Some("failed");
             AcpUpdate::ToolEnd {
                 id,
                 title: update

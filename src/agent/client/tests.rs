@@ -157,6 +157,11 @@ impl TestSetup {
         self.controls.close(0);
         let _ = self.done.await;
     }
+
+    /// Runs the handshake so a turn can be sent on this client.
+    async fn ready(&self) {
+        handshake(self).await;
+    }
 }
 
 /// Drives the handshake: initialize answered, session opened.
@@ -197,6 +202,15 @@ fn turn_start() -> Value {
 
 fn turn_end() -> Value {
     update(&json!({ "sessionUpdate": "_kage/turn", "phase": "end" }))
+}
+
+/// The agent's answer to a prompt, which is what ends the turn.
+fn prompt_answer(id: u64) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": { "stopReason": "end_turn" },
+    })
 }
 
 fn text_chunk(text: &str) -> Value {
@@ -306,8 +320,11 @@ async fn a_revived_session_reopens_the_recording_and_falls_back_to_fresh() {
     setup.finish().await;
 }
 
+/// The agent opens and closes an iteration per step of one prompt, so an
+/// iteration end is not the end of the turn. The prompt's answer is, and it
+/// is what settles.
 #[tokio::test]
-async fn a_turn_moves_the_agent_through_working_and_back_to_ready() {
+async fn a_turn_settles_when_the_prompt_is_answered_not_when_an_iteration_ends() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let start_seen = Arc::clone(&seen);
     let settled_seen = Arc::clone(&seen);
@@ -326,20 +343,43 @@ async fn a_turn_moves_the_agent_through_working_and_back_to_ready() {
         },
         300_000,
     );
+    setup.ready().await;
 
+    assert!(setup.agent.prompt("do it", None, None));
+    settle().await;
+    let prompt_id = last_written(&setup.controls, "session/prompt")["id"]
+        .as_u64()
+        .expect("the prompt carries an id");
     setup.controls.send(&turn_start());
     settle().await;
-    assert_eq!(setup.agent.state(), super::AgentState::Working);
     assert!(setup.agent.is_working());
 
-    setup.controls.send(&text_chunk("done"));
+    // The first iteration ends with a tool call pending. The turn is not
+    // over: the tool has not run yet.
+    setup.controls.send(&text_chunk("working"));
     setup.controls.send(&turn_end());
+    settle().await;
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec!["start".to_owned()],
+        "an iteration end must not settle the turn"
+    );
+    assert!(setup.agent.is_working());
+
+    // The second iteration ends with nothing left to run, and the prompt is
+    // answered. That is the end of the turn.
+    setup.controls.send(&turn_start());
+    setup.controls.send(&prompt_answer(prompt_id));
     settle().await;
 
     assert_eq!(setup.agent.state(), super::AgentState::Ready);
     assert_eq!(
         *seen.lock().unwrap(),
-        vec!["start".to_owned(), "settled:true".to_owned()]
+        vec![
+            "start".to_owned(),
+            "start".to_owned(),
+            "settled:true".to_owned()
+        ]
     );
     setup.finish().await;
 }
@@ -360,7 +400,8 @@ async fn an_exit_during_a_turn_says_so_and_an_idle_exit_does_not() {
         },
         300_000,
     );
-    first.controls.send(&turn_start());
+    first.ready().await;
+    assert!(first.agent.prompt("do it", None, None));
     settle().await;
     first.controls.close(1);
     let _ = first.done.await;
@@ -409,6 +450,43 @@ async fn commands_are_dropped_once_the_agent_has_ended() {
 
     assert!(!setup.agent.prompt("anything", None, None));
     assert!(!setup.agent.is_alive());
+}
+
+/// A handshake that fails because the process is already gone reports the
+/// exit, not a refusal to listen. The two read the same to whoever is
+/// starting a session, and only one of them says what happened.
+#[tokio::test]
+async fn a_handshake_after_an_exit_reports_the_exit_rather_than_a_refusal() {
+    let setup = client(AgentHandlers::default(), 300_000);
+    settle().await;
+    setup.controls.close(1);
+    let _ = setup.done.await;
+
+    let error = setup
+        .agent
+        .wait_until_ready(300_000)
+        .await
+        .expect_err("the process is gone");
+    assert!(error.contains("exited with code 1"), "{error}");
+    assert!(!error.contains("not accepting commands"), "{error}");
+}
+
+/// The exit report names what the process last printed, which is the only
+/// part that separates the ways an agent fails to start.
+#[test]
+fn an_exit_report_carries_the_last_thing_the_agent_printed() {
+    assert_eq!(
+        super::describe_exit(1, "kage: rpc: no provider credentials found"),
+        "the agent exited with code 1: kage: rpc: no provider credentials found"
+    );
+    assert_eq!(
+        super::describe_exit(1, "a warning\nthe real reason\n"),
+        "the agent exited with code 1: the real reason"
+    );
+    assert_eq!(
+        super::describe_exit(137, ""),
+        "the agent exited with code 137 and said nothing about why"
+    );
 }
 
 #[tokio::test]
@@ -503,7 +581,7 @@ async fn compacting_reports_the_counts_from_the_compaction_update() {
 }
 
 #[tokio::test]
-async fn text_chunks_are_reported_as_they_arrive() {
+async fn text_fragments_are_reported_as_one_message_when_the_span_ends() {
     let said: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let text_seen = Arc::clone(&said);
     let setup = client(
@@ -516,11 +594,15 @@ async fn text_chunks_are_reported_as_they_arrive() {
         300_000,
     );
 
-    setup.controls.send(&text_chunk("the answer"));
+    setup.controls.send(&text_chunk("the "));
+    setup.controls.send(&text_chunk("answer"));
     setup.controls.send(&update(&json!({
         "sessionUpdate": "agent_message_chunk",
         "content": { "type": "image", "data": "aGk=", "mimeType": "image/png" },
     })));
+    // The span is still open here: nothing has ended it.
+    assert!(said.lock().unwrap().is_empty());
+    setup.controls.send(&turn_end());
     settle().await;
 
     assert_eq!(*said.lock().unwrap(), vec!["the answer".to_owned()]);
@@ -528,7 +610,7 @@ async fn text_chunks_are_reported_as_they_arrive() {
 }
 
 #[tokio::test]
-async fn thinking_is_reported_once_a_turn_and_each_thought_as_it_arrives() {
+async fn thinking_is_reported_once_a_turn_and_each_span_of_thought_as_it_ends() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let thinking_seen = Arc::clone(&seen);
     let thought_seen = Arc::clone(&seen);
@@ -554,14 +636,61 @@ async fn thinking_is_reported_once_a_turn_and_each_thought_as_it_arrives() {
         "sessionUpdate": "agent_thought_chunk",
         "content": { "type": "text", "text": "then this" },
     })));
+    setup.controls.send(&turn_end());
     settle().await;
 
     assert_eq!(
         *seen.lock().unwrap(),
         vec![
             "thinking".to_owned(),
-            "thought:weighed it".to_owned(),
-            "thought:then this".to_owned()
+            "thought:weighed itthen this".to_owned()
+        ]
+    );
+    setup.finish().await;
+}
+
+#[tokio::test]
+async fn interleaved_thought_and_text_are_reported_in_the_order_said() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let thought_seen = Arc::clone(&seen);
+    let text_seen = Arc::clone(&seen);
+    let setup = client(
+        AgentHandlers {
+            on_thought: Some(Box::new(move |text| {
+                thought_seen.lock().unwrap().push(format!("thought:{text}"));
+            })),
+            on_assistant_text: Some(Box::new(move |text| {
+                text_seen.lock().unwrap().push(format!("text:{text}"));
+            })),
+            ..AgentHandlers::default()
+        },
+        300_000,
+    );
+
+    let thought = |text: &str| {
+        update(&json!({
+            "sessionUpdate": "agent_thought_chunk",
+            "content": { "type": "text", "text": text },
+        }))
+    };
+    for frame in [
+        text_chunk("because"),
+        thought("the reason"),
+        text_chunk(" so"),
+        thought(" more"),
+    ] {
+        setup.controls.send(&frame);
+    }
+    setup.controls.send(&turn_end());
+    settle().await;
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            "text:because".to_owned(),
+            "thought:the reason".to_owned(),
+            "text: so".to_owned(),
+            "thought: more".to_owned(),
         ]
     );
     setup.finish().await;
@@ -598,6 +727,11 @@ async fn tool_calls_report_their_target_and_whether_they_failed() {
     setup.controls.send(&update(&json!({
         "sessionUpdate": "tool_call",
         "toolCallId": "t1", "title": "bash",
+        "rawInput": {},
+    })));
+    setup.controls.send(&update(&json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "t1", "status": "in_progress",
         "rawInput": { "command": "ls -la" },
     })));
     setup.controls.send(&update(&json!({
@@ -1063,5 +1197,55 @@ async fn a_notice_from_the_agent_is_reported_as_an_error() {
         *errors.lock().unwrap(),
         vec!["the provider dropped the connection".to_owned()]
     );
+    setup.finish().await;
+}
+
+#[tokio::test]
+async fn probe_a_real_kage_ask() {
+    let ask = |id: u64| {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "s-1",
+                "toolCall": {
+                    "toolCallId": "c1",
+                    "title": "Bash(cargo build)",
+                    "kind": "execute",
+                    "status": "pending",
+                    "rawInput": { "command": "cargo build" },
+                },
+                "options": [
+                    { "optionId": "allow", "name": "Allow Bash(cargo build)", "kind": "allowOnce" },
+                    { "optionId": "allow_session", "name": "Allow Bash(cargo build) for this session", "kind": "allowAlways" },
+                    { "optionId": "reject", "name": "Reject Bash(cargo build)", "kind": "rejectOnce" },
+                ],
+            },
+        })
+    };
+    let setup = client(AgentHandlers::default(), 300_000);
+    setup.controls.send(&ask(7));
+    settle().await;
+
+    let dialog = setup.agent.pending_dialog().expect("a dialog is pending");
+    println!("title: {:?}", dialog.title);
+    println!("message: {:?}", dialog.message);
+    println!("options: {:?}", dialog.options);
+    println!("--- the thread would show ---");
+    println!("{}", crate::chat::render::dialog_lines(&dialog));
+
+    let mut id = 20;
+    for reply in ["1", "2", "3", "allow", "yes", "ok"] {
+        id += 1;
+        let before = setup.controls.written().len();
+        setup.controls.send(&ask(id));
+        settle().await;
+        let pending = setup.agent.pending_dialog().expect("pending");
+        let outcome = setup.agent.answer_dialog(&pending.id, reply);
+        let wrote = setup.controls.written().len() - before;
+        let sent = setup.controls.written().last().cloned().unwrap_or_default();
+        println!("reply {reply:>6} -> {outcome:?} wrote={wrote} {sent}");
+    }
     setup.finish().await;
 }

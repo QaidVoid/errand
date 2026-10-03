@@ -209,6 +209,10 @@ impl FakeSandbox {
     }
 
     /// Settles the newest agent's turn, the way a finished model would.
+    ///
+    /// The prompt's answer is what ends a turn, so the outstanding
+    /// `session/prompt` is answered. An iteration end would only close one
+    /// step of the agent's loop.
     fn settle_latest(&self) {
         let controls = self
             .agents
@@ -237,12 +241,20 @@ impl FakeSandbox {
                 "sessionUpdate": "usage_update",
                 "used": 2, "size": 200_000, "cost": { "amount": 0 } } },
         }));
-        controls.send(&json!({
-            "jsonrpc": "2.0",
-            "method": "session/update",
-            "params": { "sessionId": "s-1", "update": {
-                "sessionUpdate": "_kage/turn", "phase": "end" } },
-        }));
+        let asked = self
+            .written()
+            .lines()
+            .rev()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|frame| frame.get("method").and_then(Value::as_str) == Some("session/prompt"))
+            .and_then(|frame| frame["id"].as_u64());
+        if let Some(id) = asked {
+            controls.send(&json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "stopReason": "end_turn" },
+            }));
+        }
     }
 }
 

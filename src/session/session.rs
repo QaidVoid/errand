@@ -38,7 +38,7 @@ use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::ask::{Endpoint, HttpSender};
 use crate::provider::discover::Catalog;
-use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError, WORKSPACE_PATH};
+use crate::sandbox::backend::{Denials, SandboxLaunch, SandboxLaunchError, WORKSPACE_PATH};
 use crate::sandbox::paths;
 use crate::session::attachments::{self, RawAttachment, is_image, receive};
 use crate::session::commands::{
@@ -1051,7 +1051,11 @@ impl Running {
             model: self.model(),
             providers: self.options.catalog.providers(),
             credential_names,
-            extensions: self.options.config.agent.extensions.clone(),
+            plugins: self.options.config.agent.plugins.clone(),
+            denied: Denials {
+                commands: self.options.config.agent.deny.clone(),
+                tools: self.options.config.agent.denied_tools.clone(),
+            },
             system_prompt_path,
             resume: self.options.resume,
         };
@@ -1105,11 +1109,22 @@ impl Running {
             }
         };
         if let Err(error) = ready {
-            self.say(&format!(
-                "the agent did not become ready within {}ms: {error}",
-                self.options.config.timeouts.startup_ms
-            ))
-            .await;
+            // An agent that has already exited failed to start, whatever the
+            // clock read. Reporting it as a timeout sends whoever reads it
+            // looking at the timeout instead of at the reason on stderr.
+            match client.exit_report() {
+                Some(report) => {
+                    self.say(&format!("this session could not start: {report}"))
+                        .await;
+                }
+                None => {
+                    self.say(&format!(
+                        "the agent did not become ready within {}ms: {error}",
+                        self.options.config.timeouts.startup_ms
+                    ))
+                    .await;
+                }
+            }
             self.finish(EndReason::StartupFailed).await;
             return false;
         }
@@ -2283,16 +2298,14 @@ impl Running {
     ) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
         let mut env = BTreeMap::new();
         let agent = &self.options.config.agent;
-        let credential_names: BTreeMap<String, String> = agent
-            .providers
-            .keys()
-            .filter_map(|provider| {
-                let name = agent.credential_name_of(provider)?;
-                let credential = agent.credential_of(provider)?;
-                env.insert(name.to_owned(), credential.to_owned());
-                Some((provider.clone(), name.to_owned()))
-            })
-            .collect();
+        let credential_names = agent.credential_vars();
+        for (provider, name) in &credential_names {
+            // The map holds only providers that have a key, so each has one.
+            let credential = agent
+                .credential_of(provider)
+                .expect("a provider given a variable has a key");
+            env.insert(name.clone(), credential.to_owned());
+        }
         if let Some(github) = github {
             // The GitHub token crosses too. Reading issues and leaving
             // comments is most of working on somebody's repository, and none

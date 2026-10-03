@@ -132,6 +132,22 @@ const STDERR_KEPT: usize = 2_000;
 const AFFIRMATIVE: [&str; 5] = ["yes", "y", "true", "ok", "confirm"];
 const NEGATIVE: [&str; 5] = ["no", "n", "false", "cancel", "deny"];
 
+/// How a process that has ended is described, for whoever has to act on it.
+///
+/// The exit code on its own is close to useless: an agent refused for want of
+/// a credential and one that hit a bug both exit with 1. Whatever it printed
+/// on its way out is the part that says which.
+fn describe_exit(code: i64, last_words: &str) -> String {
+    let words = last_words
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty());
+    match words {
+        Some(words) => format!("the agent exited with code {code}: {words}"),
+        None => format!("the agent exited with code {code} and said nothing about why"),
+    }
+}
+
 /// The reply to a dialog request, in the shapes the protocol carries.
 enum DialogReply {
     /// A choice or free text.
@@ -165,6 +181,32 @@ pub(crate) struct PendingDialog {
     pub(crate) timer: tokio::task::JoinHandle<()>,
 }
 
+/// One run of buffered speech: reasoning or an answer, as it arrived.
+/// Adjacent runs of the same kind merge on the flush; alternating kinds
+/// keep their order.
+pub(crate) enum SpeechSpan {
+    /// What the agent reasoned, not for the thread to read as an answer.
+    Thought(String),
+    /// What the agent said.
+    Text(String),
+}
+
+/// Which run of buffered speech the flush is filling.
+#[derive(Clone, Copy, PartialEq)]
+enum OpenRun {
+    Thought,
+    Text,
+}
+
+/// A tool call announced but not yet running: streaming input means the
+/// call's arguments are only complete once it begins to execute.
+pub(crate) struct PendingTool {
+    /// What the call is called, for the end that names no title.
+    pub(crate) title: String,
+    /// The call's input as last streamed, complete by execution.
+    pub(crate) raw_input: Option<Value>,
+}
+
 /// The client's mutable state, shared between the caller and the readers.
 ///
 /// The flags are independent one-bit facts read on different paths: whether
@@ -179,6 +221,10 @@ pub(crate) struct ClientState {
     pub(crate) lifecycle: AgentState,
     /// Whether the exit has already been reported, so it is reported once.
     pub(crate) exit_reported: bool,
+    /// How the process ended, once it has. Names the code, and whatever it
+    /// last printed, since the code alone says nothing about which of the
+    /// ways an agent fails to start it was.
+    pub(crate) exit_report: Option<String>,
     /// Whether this turn has already said the agent is thinking.
     pub(crate) thinking_reported: bool,
     /// The last thing the assistant said, for a turn that ends without more.
@@ -194,8 +240,13 @@ pub(crate) struct ClientState {
     pub(crate) context_window: Option<f64>,
     /// The agent's session, once `session/new` has answered.
     pub(crate) session_id: Option<String>,
-    /// Tool call titles by id, for ends that name no title.
-    pub(crate) tool_titles: BTreeMap<String, String>,
+    /// The speech buffered since a span last ended: the agent streams
+    /// reasoning and answers a fragment at a time, and the thread wants
+    /// each span as one message, in the order it was said.
+    pub(crate) speech: Vec<SpeechSpan>,
+    /// Tool calls seen but not yet running, by id: the title and the raw
+    /// input, which a streaming call only completes later.
+    pub(crate) tool_calls: BTreeMap<String, PendingTool>,
     /// The last compaction counts, for the compact answer.
     pub(crate) pending_compaction: Option<(f64, f64)>,
     /// Questions the agent is blocked on, by request id.
@@ -277,6 +328,7 @@ impl AgentClient {
                     framer: LineFramer::new(max_record_bytes.unwrap_or(8 * 1024 * 1024)),
                     lifecycle: AgentState::Starting,
                     exit_reported: false,
+                    exit_report: None,
                     thinking_reported: false,
                     last_words: String::new(),
                     produced_text: false,
@@ -284,7 +336,8 @@ impl AgentClient {
                     turn_failure: None,
                     context_window: None,
                     session_id: None,
-                    tool_titles: BTreeMap::new(),
+                    tool_calls: BTreeMap::new(),
+                    speech: Vec::new(),
                     pending_compaction: None,
                     dialogs: BTreeMap::new(),
                     requests: BTreeMap::new(),
@@ -309,6 +362,18 @@ impl AgentClient {
             .lock()
             .expect("the client lock")
             .last_words
+            .clone()
+    }
+
+    /// Why the agent's process ended, once it has.
+    ///
+    /// Nothing while it is still running.
+    pub fn exit_report(&self) -> Option<String> {
+        self.inner
+            .state
+            .lock()
+            .expect("the client lock")
+            .exit_report
             .clone()
     }
 
@@ -466,6 +531,9 @@ impl AgentClient {
         let delivery = behavior.and_then(StreamingBehavior::delivery);
         let id = self.take_id();
         let frame = prompt_frame(id, &session_id, &blocks, delivery);
+        // Before the frame goes out, so the state is fresh even if the agent
+        // answers before the writer returns.
+        self.begin_turn();
         if !self.send(&frame) {
             return false;
         }
@@ -476,6 +544,22 @@ impl AgentClient {
             .requests
             .insert(id, Awaited::Prompt);
         true
+    }
+
+    /// Marks the per-turn state fresh, so what one turn produced is not read
+    /// as what the next produced.
+    ///
+    /// Called once per prompt rather than once per iteration: the agent opens
+    /// an iteration per step of the same prompt, so resetting on its turn
+    /// start would clear the text the turn had already produced.
+    fn begin_turn(&self) {
+        let mut state = self.inner.state.lock().expect("the client lock");
+        state.lifecycle = AgentState::Working;
+        state.thinking_reported = false;
+        state.produced_text = false;
+        state.turn_done = false;
+        state.turn_failure = None;
+        state.speech.clear();
     }
 
     /// Redirects the turn that is already running.
@@ -678,7 +762,12 @@ impl AgentClient {
                 .expect("the client lock")
                 .requests
                 .remove(&id);
-            return Err("the agent is not accepting commands".to_owned());
+            // A process that has already gone is the reason there is no
+            // answer, and saying so beats a refusal that reads as though
+            // the agent were still running and choosing not to listen.
+            return Err(self
+                .exit_report()
+                .unwrap_or_else(|| "the agent is not accepting commands".to_owned()));
         }
 
         let outcome =
@@ -725,6 +814,7 @@ impl AgentClient {
             let mut state = self.inner.state.lock().expect("the client lock");
             let during_turn = state.lifecycle == AgentState::Working;
             state.lifecycle = AgentState::Ended;
+            state.exit_report = Some(describe_exit(code, &state.last_words));
             if state.exit_reported {
                 return;
             }
@@ -979,13 +1069,16 @@ impl Shared {
     /// Applies one turn update to the state and the handlers.
     fn apply_update(&self, update: AcpUpdate) {
         match update {
-            AcpUpdate::AgentText(text) => self.apply_text(text),
-            AcpUpdate::ThoughtText(text) => self.apply_thought(text),
+            AcpUpdate::AgentText(text) => self.apply_text(&text),
+            AcpUpdate::ThoughtText(text) => self.apply_thought(&text),
             AcpUpdate::ToolStart {
                 id,
                 title,
                 raw_input,
             } => self.apply_tool_start(&id, &title, raw_input.as_ref()),
+            AcpUpdate::ToolExecute { id, raw_input } => {
+                self.apply_tool_execute(&id, raw_input.as_ref());
+            }
             AcpUpdate::ToolEnd {
                 id,
                 title,
@@ -994,7 +1087,13 @@ impl Shared {
             } => self.apply_tool_end(id, title, failed, output),
             AcpUpdate::UsageInfo { usage, size } => self.apply_usage(usage, size),
             AcpUpdate::TurnStart => self.apply_turn_start(),
-            AcpUpdate::TurnEnd => self.settle_turn(),
+            // An iteration boundary, not the end of the turn: the agent opens
+            // and closes one per step of its loop, so a prompt that runs
+            // tools ends several of them before the tools have run. The
+            // prompt's answer is what settles it. The boundary still ends a
+            // span of speech, so what was said in the iteration reads now.
+            AcpUpdate::TurnEnd => self.flush_speech(),
+            AcpUpdate::Ignored => {}
             AcpUpdate::CompactionInfo { before, after } => {
                 self.state
                     .lock()
@@ -1006,60 +1105,140 @@ impl Shared {
                     on_error(text);
                 }
             }
-            AcpUpdate::Ignored => {}
         }
     }
 
-    /// Reports assistant text as it arrives, noting the turn said something.
-    fn apply_text(&self, text: String) {
+    /// Buffers a span of assistant text. The agent streams a span a
+    /// fragment at a time, and the thread wants whole messages, so the
+    /// span is assembled here and reported once it ends: when a tool,
+    /// a thought, or the turn itself follows it.
+    fn apply_text(&self, text: &str) {
+        let mut state = self.state.lock().expect("the client lock");
         if !text.trim().is_empty() {
-            self.state.lock().expect("the client lock").produced_text = true;
+            state.produced_text = true;
         }
-        if !text.is_empty()
-            && let Some(on_text) = &self.handlers.on_assistant_text
-        {
-            on_text(text);
+        match state.speech.last_mut() {
+            Some(SpeechSpan::Text(joined)) => joined.push_str(text),
+            _ => state.speech.push(SpeechSpan::Text(text.to_owned())),
         }
     }
 
-    /// Reports thinking once per turn, then each thought as it arrives.
-    fn apply_thought(&self, text: String) {
+    /// Buffers a span of reasoning the way [`Self::apply_text`] buffers
+    /// an answer, so a streaming thought reads as one block.
+    fn apply_thought(&self, text: &str) {
         let report = {
             let mut state = self.state.lock().expect("the client lock");
-            if state.thinking_reported {
-                false
-            } else {
-                state.thinking_reported = true;
-                true
+            let report = !state.thinking_reported;
+            state.thinking_reported = true;
+            match state.speech.last_mut() {
+                Some(SpeechSpan::Thought(joined)) => joined.push_str(text),
+                _ => state.speech.push(SpeechSpan::Thought(text.to_owned())),
             }
+            report
         };
         if report && let Some(on_thinking) = &self.handlers.on_thinking {
             on_thinking(());
         }
+    }
+
+    /// Reports the buffered speech: each run of reasoning, then each run
+    /// of answers, in the order it arrived. Called at every boundary a
+    /// span of speech can end at, so what the agent said before a tool
+    /// reads before what the tool did.
+    fn flush_speech(&self) {
+        let spans = {
+            let mut state = self.state.lock().expect("the client lock");
+            std::mem::take(&mut state.speech)
+        };
+        let mut thought = String::new();
+        let mut text = String::new();
+        let mut open = OpenRun::Thought;
+        for span in spans {
+            match span {
+                SpeechSpan::Thought(fragment) => {
+                    if open == OpenRun::Text {
+                        self.report_text(&text);
+                        text.clear();
+                        open = OpenRun::Thought;
+                    }
+                    thought.push_str(&fragment);
+                }
+                SpeechSpan::Text(fragment) => {
+                    if open == OpenRun::Thought {
+                        self.report_thought(&thought);
+                        thought.clear();
+                        open = OpenRun::Text;
+                    }
+                    text.push_str(&fragment);
+                }
+            }
+        }
+        self.report_thought(&thought);
+        self.report_text(&text);
+    }
+
+    /// Reports one run of reasoning, when it said anything.
+    fn report_thought(&self, text: &str) {
         if !text.trim().is_empty()
             && let Some(on_thought) = &self.handlers.on_thought
         {
-            on_thought(text);
+            on_thought(text.to_owned());
         }
     }
 
-    /// Reports a tool call start, remembering its title for the end.
+    /// Reports one run of answers, when it said anything. Whitespace is
+    /// kept: a run may begin or end mid-sentence, between two thoughts.
+    fn report_text(&self, text: &str) {
+        if !text.trim().is_empty()
+            && let Some(on_text) = &self.handlers.on_assistant_text
+        {
+            on_text(text.to_owned());
+        }
+    }
+
+    /// Remembers a tool call announced by the agent. The start line waits
+    /// until the call runs: a streaming call names no command before then.
     fn apply_tool_start(&self, id: &str, title: &str, raw_input: Option<&Value>) {
+        self.flush_speech();
         self.state
             .lock()
             .expect("the client lock")
-            .tool_titles
-            .insert(id.to_owned(), title.to_owned());
-        if let Some(on_tool_start) = &self.handlers.on_tool_start {
-            on_tool_start((id.to_owned(), title.to_owned(), tool_target(raw_input)));
+            .tool_calls
+            .insert(
+                id.to_owned(),
+                PendingTool {
+                    title: title.to_owned(),
+                    raw_input: raw_input.cloned(),
+                },
+            );
+    }
+
+    /// Reports a tool call that began running, under its remembered title
+    /// and with the input that is now complete.
+    fn apply_tool_execute(&self, id: &str, raw_input: Option<&Value>) {
+        self.flush_speech();
+        let held = {
+            let mut state = self.state.lock().expect("the client lock");
+            state.tool_calls.get_mut(id).map(|call| {
+                if raw_input.is_some() {
+                    call.raw_input = raw_input.cloned();
+                }
+                (call.title.clone(), tool_target(call.raw_input.as_ref()))
+            })
+        };
+        if let Some((title, target)) = held
+            && let Some(on_tool_start) = &self.handlers.on_tool_start
+        {
+            on_tool_start((id.to_owned(), title, target));
         }
     }
 
     /// Reports a tool call end under its remembered title.
     fn apply_tool_end(&self, id: String, title: Option<String>, failed: bool, output: String) {
+        self.flush_speech();
         let held = {
             let mut state = self.state.lock().expect("the client lock");
-            state.tool_titles.remove(&id)
+            state.tool_calls.remove(&id).map(|call| call.title)
         };
         if let Some(on_tool_end) = &self.handlers.on_tool_end {
             on_tool_end((
@@ -1081,15 +1260,9 @@ impl Shared {
         }
     }
 
-    /// Opens a turn, clearing the last one's outcome.
+    /// Notes that the agent began an iteration, so the thread's idle timer is
+    /// not read as an abandoned session while tools run.
     fn apply_turn_start(&self) {
-        let mut state = self.state.lock().expect("the client lock");
-        state.lifecycle = AgentState::Working;
-        state.thinking_reported = false;
-        state.produced_text = false;
-        state.turn_done = false;
-        state.turn_failure = None;
-        drop(state);
         if let Some(on_turn_start) = &self.handlers.on_turn_start {
             on_turn_start(());
         }
@@ -1100,9 +1273,11 @@ impl Shared {
         self.state.lock().expect("the client lock").context_window = Some(size);
     }
 
-    /// Settles the running turn the way the turn end means it: once, so a
-    /// failure answer and a late turn end cannot settle it twice.
+    /// Settles the running turn once: a failure answer and a late answer
+    /// cannot settle it twice.
     fn settle_turn(&self) {
+        // What the agent said last reads before the turn is called done.
+        self.flush_speech();
         let (produced, failure) = {
             let mut state = self.state.lock().expect("the client lock");
             if state.turn_done {
@@ -1138,8 +1313,14 @@ impl Shared {
         }
     }
 
-    /// Routes an answer to the request that waits on it, or records what a
-    /// prompt's answer says about the turn it ran.
+    /// Routes an answer to the request that waits on it, or ends the turn the
+    /// prompt's answer was waiting for.
+    ///
+    /// The prompt's answer is the only signal that comes once per prompt: the
+    /// agent emits a `_kage/turn` end for every iteration of its loop, so a
+    /// prompt that runs tools ends one of those mid-prompt, before the tools
+    /// have run. Settling on the answer instead is what makes the turn end
+    /// when the work does.
     fn dispatch_success(&self, id: u64, record: &AgentRecord) {
         let waiting = self
             .state
@@ -1154,6 +1335,7 @@ impl Shared {
             Some(Awaited::Prompt) => {
                 let result = record.get("result").unwrap_or(&Value::Null);
                 self.record_turn_failure(stop_failure(result));
+                self.settle_turn();
             }
             None => {}
         }
