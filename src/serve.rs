@@ -366,6 +366,11 @@ fn brokerable_providers(agent: &AgentConfig, store: Option<&str>) -> Vec<(String
         .providers
         .iter()
         .filter_map(|(name, definition)| {
+            // A provider whose key crosses whole has no route: the broker is
+            // not asked to front what the session holds anyway.
+            if !agent.is_brokered(name) {
+                return None;
+            }
             let credential = agent.credential_of(name)?;
             let upstream = definition
                 .get("baseUrl")
@@ -409,6 +414,20 @@ fn provider_routes(
         });
     }
     (routes, nonces)
+}
+
+/// The provider variables the broker rewrites or strips, by provider.
+///
+/// Every brokered provider with a credential. A provider whose key crosses
+/// whole (`broker: false`, or a plugin provider by default) is not the
+/// broker's to manage: its named variable is neither nonce-swapped here nor
+/// stripped as one the broker cannot route.
+fn brokering_credential_names(agent: &AgentConfig) -> BTreeMap<String, String> {
+    agent
+        .credential_vars()
+        .into_iter()
+        .filter(|(provider, _)| agent.is_brokered(provider))
+        .collect()
 }
 
 /// Warns at startup about a brokered provider this host cannot resolve.
@@ -645,15 +664,7 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
     let (routes, nonces) = provider_routes(&config.agent, store.as_deref());
     check_provider_names(&routes, config.sandbox.egress.allow_internal, log).await;
     let brokering = ProviderBrokering {
-        credential_names: config
-            .agent
-            .providers
-            .keys()
-            .filter_map(|provider| {
-                let name = config.agent.credential_name_of(provider)?;
-                Some((provider.clone(), name.to_owned()))
-            })
-            .collect(),
+        credential_names: brokering_credential_names(&config.agent),
         nonces,
     };
     let mut broker_instance = Broker::new(

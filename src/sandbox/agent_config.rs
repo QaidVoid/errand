@@ -3,7 +3,8 @@
 //! Written as kage's own configuration into the session's state, where the
 //! sandbox mounts it. Only endpoints travel in the file: credentials stay in
 //! the environment, under their usual names with a broker's nonces swapped
-//! in, which kage reads itself.
+//! in, which kage reads itself. Configured plugins are copied beside it, so
+//! the session loads what the operator named and nothing else.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -11,7 +12,8 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use crate::sandbox::backend::{KAGE_DIR, SandboxLaunch, SandboxLaunchError};
+use crate::config::schema::PluginConfig;
+use crate::sandbox::backend::{Denials, KAGE_DIR, SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 
 /// Where the broker is reached for one provider.
@@ -53,6 +55,29 @@ const KAGE_KNOWN: [&str; 20] = [
     "xiaomi-token-plan-ams",
     "xiaomi-token-plan-cn",
     "xiaomi-token-plan-sgp",
+];
+
+/// The tools the agent ships with, allowed so it never asks about one.
+///
+/// Named one by one because the agent's rules are keyed by literal tool
+/// name and an unlisted tool falls back to asking. A tool it gains later
+/// asks again, which costs a stalled turn rather than a wrong permission, so
+/// the list is read from what this build registers rather than guessed at.
+///
+/// Plugin and MCP tools are not here: they are covered by the wildcard
+/// under `permissions.mcp`, since their names carry a server prefix this
+/// list cannot know.
+const TOOLS_ALLOWED: [&str; 10] = [
+    "edit",
+    "find",
+    "grep",
+    "ls",
+    "read",
+    "shell",
+    "todo_list",
+    "web_fetch",
+    "web_search",
+    "write",
 ];
 
 /// A TOML basic string: backslashes, quotes, and line breaks escaped.
@@ -113,12 +138,17 @@ fn kage_model(entry: &Value) -> Option<String> {
 /// so what the file holds is worth nothing anywhere but this broker.
 /// Operator definitions contribute their base URL; their credentials never
 /// enter the file, traveling in the environment instead. Providers kage does
-/// not know are registered custom with the store's models.
+/// not know are registered custom with the store's models. A provider an
+/// extension registers (`extension: true`) is left out entirely: the plugin
+/// brings its own endpoint, and writing errand's would only disagree with
+/// it.
 pub fn kage_config(
     defined: &Map<String, Value>,
     brokered: &BTreeMap<String, BrokeredProvider>,
     built_in: &BTreeMap<String, Vec<Value>>,
     credential_names: &BTreeMap<String, String>,
+    plugins: &[PluginConfig],
+    denied: &Denials,
 ) -> String {
     let mut out = String::from(
         "# Written by the daemon for one session. Endpoints only: credentials\n\
@@ -145,9 +175,8 @@ pub fn kage_config(
         if through.is_none() && definition.is_none() {
             continue;
         }
-        // Nothing to tell kage: no endpoint override and no models to declare.
-        // The key still reaches it through the environment on its own.
-        let models: Vec<String> = if KAGE_KNOWN.contains(&name.as_str()) {
+        let known = KAGE_KNOWN.contains(&name.as_str());
+        let models: Vec<String> = if known {
             Vec::new()
         } else {
             defined
@@ -165,13 +194,28 @@ pub fn kage_config(
                 )
                 .collect()
         };
-        if base_url.is_none() && models.is_empty() {
+        // A custom provider kage does not know must declare both an endpoint and
+        // at least one model: it refuses the whole file when either is
+        // missing, which would cost every other provider their session too.
+        // One errand cannot describe completely is left out instead. A known
+        // provider needs neither, since kage already knows its endpoint and
+        // its models, so a variable alone is enough to have it written.
+        let known = KAGE_KNOWN.contains(&name.as_str());
+        let worth_writing = if known {
+            base_url.is_some() || credential_names.contains_key(name)
+        } else {
+            base_url.is_some() && !models.is_empty()
+        };
+        if !worth_writing {
             continue;
         }
-        if KAGE_KNOWN.contains(&name.as_str()) {
+        if known {
             let _ = writeln!(out, "\n[providers.{}]", toml_key(name));
             if let Some(url) = base_url {
                 let _ = writeln!(out, "base_url = {}", toml_string(&url));
+            }
+            if let Some(env) = credential_names.get(name) {
+                let _ = writeln!(out, "api_key_env = {}", toml_string(env));
             }
             continue;
         }
@@ -192,26 +236,97 @@ pub fn kage_config(
             );
         }
     }
+    out.push_str(&plugin_capabilities(plugins));
+    out.push_str(&permissions_section(denied));
     out
 }
 
-/// Writes the agent's provider configuration.
+/// The `[plugins.capabilities]` table for one session.
+///
+/// Keyed by the plugin file's stem, which is how kage names a grant. A
+/// plugin granted nothing writes nothing: kage then exposes it only the
+/// sandboxed base surface, and one left without what it needs disables
+/// itself at load, saying so.
+fn plugin_capabilities(plugins: &[PluginConfig]) -> String {
+    if plugins.iter().all(|plugin| plugin.capabilities.is_empty()) {
+        return String::new();
+    }
+    let mut out = String::from("\n[plugins.capabilities]\n");
+    for plugin in plugins {
+        if plugin.capabilities.is_empty() {
+            continue;
+        }
+        let stem = Path::new(&plugin.path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(plugin.path.as_str());
+        let grants = plugin
+            .capabilities
+            .iter()
+            .map(|name| toml_string(name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "{} = [{grants}]", toml_key(stem));
+    }
+    out
+}
+
+/// Every tool allowed, and what may not be used anyway.
+///
+/// The agent asks before running a tool, and sets its fallback to asking for
+/// every one of them. A thread cannot answer: the ask arrives as a request
+/// the agent blocks on, and nobody is watching a chat channel for it, so the
+/// session waits out its dialog timer and reports a question that was never
+/// really put to anybody. Allowing each tool by name is what stops that, and
+/// it stops it in the agent rather than by answering for it here.
+///
+/// MCP tools are covered by the wildcard, since errand starts no servers of
+/// its own but a plugin may bring some. The agent's own refusals are left
+/// intact: this only decides what may run without asking.
+fn permissions_section(denied: &Denials) -> String {
+    let mut out = String::from(
+        "\n# Every tool runs without asking: the thread cannot serve a permission\n\
+         # prompt, and an ask nobody sees is a session that waits. What the\n\
+         # operator refuses below is refused by the agent itself.\n",
+    );
+    let _ = writeln!(out, "\n[permissions.mcp]");
+    let _ = writeln!(out, "\"*\" = \"allow\"");
+    // One table per tool. A tool named twice is a TOML parse error, which
+    // ends the launch, so a tool is written once and decided there. A tool
+    // the operator refuses outright takes no denied commands: it runs
+    // nothing either way, so the patterns would say nothing.
+    let denied_tool = |tool: &str| denied.tools.iter().any(|denied| denied == tool);
+    for tool in TOOLS_ALLOWED.iter().filter(|tool| !denied_tool(tool)) {
+        let _ = writeln!(out, "\n[permissions.tools.{}]", toml_key(tool));
+        let _ = writeln!(out, "default = \"allow\"");
+        if tool == &"shell" {
+            // A list, which the schema requires: `deny` and `allow` take
+            // one entry each. A bare string here is a parse error, which
+            // ends the launch rather than the command.
+            for pattern in &denied.commands {
+                let _ = writeln!(out, "deny = [{}]", toml_string(pattern));
+            }
+        }
+    }
+    for tool in &denied.tools {
+        let _ = writeln!(out, "\n[permissions.tools.{}]", toml_key(tool));
+        let _ = writeln!(out, "default = \"deny\"");
+    }
+    out
+}
+
+/// Writes the agent's provider configuration and places its plugins.
 ///
 /// Only endpoints and model declarations go in the file; credentials stay in
-/// the environment. Pi extensions have no kage equivalent, so naming one
-/// fails the launch rather than starting a session without the tools its
-/// configuration promises.
+/// the environment. Each configured plugin is copied into the directory kage
+/// reads plugins from, so what the session loads is exactly what the
+/// configuration named, and its capability grants ride the same file.
 pub async fn write_agent_config(
     launch: &SandboxLaunch,
     brokered: &BTreeMap<String, BrokeredProvider>,
     built_in: &BTreeMap<String, Vec<Value>>,
     credential_names: &BTreeMap<String, String>,
 ) -> Result<(), SandboxLaunchError> {
-    if let Some(first) = launch.extensions.first() {
-        return Err(SandboxLaunchError(format!(
-            "extension {first} has no kage equivalent; remove it to start sessions on kage"
-        )));
-    }
     let failed = |error: std::io::Error| SandboxLaunchError(error.to_string());
     // The host side of `{KAGE_HOME}`, with kage's own `kage` segment under
     // it where the configuration is read from.
@@ -219,12 +334,64 @@ pub async fn write_agent_config(
     tokio::fs::create_dir_all(&directory)
         .await
         .map_err(failed)?;
-    let body = kage_config(&launch.providers, brokered, built_in, credential_names);
+    let body = kage_config(
+        &launch.providers,
+        brokered,
+        built_in,
+        credential_names,
+        &launch.plugins,
+        &launch.denied,
+    );
     // Written beneath the directory rather than by name, for the same
     // reason the policy is: the session writes here too, and a link
     // planted at the file name would redirect the write.
     paths::write_beneath(&directory.to_string_lossy(), "config.toml", body.as_bytes())
         .map_err(failed)?;
+    copy_plugins(&directory.join("plugins"), &launch.plugins).await
+}
+
+/// Copies the configured plugins into the directory kage reads plugins from.
+///
+/// The directory is emptied first, so the set the session loads is exactly
+/// what the configuration names now rather than whatever an earlier launch
+/// left. Each file is written beneath the directory rather than by name, as
+/// the configuration is. Two plugins copying to one name would have the
+/// second silently replace the first, so that is refused instead.
+async fn copy_plugins(
+    directory: &Path,
+    plugins: &[PluginConfig],
+) -> Result<(), SandboxLaunchError> {
+    let failed = |error: std::io::Error| SandboxLaunchError(error.to_string());
+    match tokio::fs::remove_dir_all(directory).await {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(failed(error)),
+        _ => {}
+    }
+    tokio::fs::create_dir_all(directory).await.map_err(failed)?;
+    let mut taken: BTreeMap<String, String> = BTreeMap::new();
+    for plugin in plugins {
+        let bytes = tokio::fs::read(&plugin.path).await.map_err(|error| {
+            SandboxLaunchError(format!("reading plugin {}: {error}", plugin.path))
+        })?;
+        let name = Path::new(&plugin.path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| Path::new(name).extension() == Some(std::ffi::OsStr::new("lua")))
+            .ok_or_else(|| {
+                SandboxLaunchError(format!(
+                    "plugin path {} does not name a .lua file",
+                    plugin.path
+                ))
+            })?
+            .to_owned();
+        if let Some(previous) = taken.get(&name) {
+            return Err(SandboxLaunchError(format!(
+                "two plugins copy to {name}: {previous} and {}; rename one",
+                plugin.path
+            )));
+        }
+        taken.insert(name.clone(), plugin.path.clone());
+        paths::write_beneath(&directory.to_string_lossy(), &name, &bytes).map_err(failed)?;
+    }
     Ok(())
 }
 

@@ -273,7 +273,7 @@ mod tests {
     use super::grant_pair;
     use super::workspace_grant;
     use crate::config::schema::NetworkMode;
-    use crate::sandbox::backend::SandboxLaunch;
+    use crate::sandbox::backend::{Denials, SandboxLaunch};
     use crate::sandbox::policy::{PolicyOptions, policy_contents};
     use crate::sandbox::runtime::AgentRuntime;
 
@@ -294,7 +294,8 @@ mod tests {
             model: Some("glm-5.3".to_owned()),
             providers: serde_json::Map::new(),
             credential_names: BTreeMap::new(),
-            extensions: Vec::new(),
+            plugins: Vec::new(),
+            denied: Denials::default(),
             resume: false,
         };
         let runtime = AgentRuntime {

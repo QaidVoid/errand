@@ -12,7 +12,7 @@ use crate::config::schema::{
 use crate::config::size::parse_size;
 use crate::log::{LogFields, Logger};
 use crate::sandbox::Run;
-use crate::sandbox::backend::{SYSTEM_LABEL, SandboxLaunch};
+use crate::sandbox::backend::{Denials, SYSTEM_LABEL, SandboxLaunch};
 
 /// Flags that would undo the isolation this backend exists to provide.
 const FORBIDDEN_ARGS: [&str; 8] = [
@@ -77,7 +77,8 @@ fn launch() -> SandboxLaunch {
         model: Some("glm-5.3".to_owned()),
         providers: serde_json::Map::new(),
         credential_names: BTreeMap::new(),
-        extensions: Vec::new(),
+        plugins: Vec::new(),
+        denied: Denials::default(),
         resume: false,
     }
 }

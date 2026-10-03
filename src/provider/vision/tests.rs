@@ -50,7 +50,9 @@ fn agent() -> AgentConfig {
                 "credential": "secret-key",
             }),
         )]),
-        extensions: Vec::new(),
+        plugins: Vec::new(),
+        deny: Vec::new(),
+        denied_tools: Vec::new(),
         aliases: BTreeMap::new(),
         fallback: Vec::new(),
     }

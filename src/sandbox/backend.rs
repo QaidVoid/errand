@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use crate::config::schema::SandboxBackend;
+use crate::config::schema::{PluginConfig, SandboxBackend};
 
 /// Where a session's project appears to the agent, under every backend.
 ///
@@ -66,11 +66,33 @@ pub struct SandboxLaunch {
     /// that name one. The agent's configuration points keyless providers at
     /// these variables.
     pub credential_names: BTreeMap<String, String>,
-    /// Host directories of pi extensions. Kage reads no such thing, so naming
-    /// one fails the launch rather than starting a session without it.
-    pub extensions: Vec<String>,
+    /// Kage plugins handed to the session: copied into the agent's own
+    /// plugin directory, with their capability grants written into the
+    /// agent's configuration.
+    pub plugins: Vec<PluginConfig>,
+    /// Commands and tools the agent may not use, written into the agent's
+    /// configuration as rules that refuse them.
+    ///
+    /// Every tool is allowed otherwise. The agent asks before running one,
+    /// and a thread has no way to answer: a chat prompt cannot be a modal
+    /// the agent waits on, and a permission ask nobody answers is a session
+    /// that stalls until it times out. These are what the prompt was for.
+    pub denied: Denials,
     /// Continue the conversation already stored in the state directory.
     pub resume: bool,
+}
+
+/// What the agent may not run, in the two shapes the agent refuses it in.
+///
+/// A command pattern is refused against the whole command line, which is
+/// what `rm -rf *` needs. A tool is refused whatever its input carries,
+/// which is the blunt end: refusing a capability rather than a call.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Denials {
+    /// Glob patterns refused against a command line.
+    pub commands: Vec<String>,
+    /// Tools refused whatever they are asked to do.
+    pub tools: Vec<String>,
 }
 
 /// What a backend can and cannot enforce on this host.

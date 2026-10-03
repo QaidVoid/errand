@@ -6,7 +6,7 @@
 //! This grows with the daemon. A field is added when something reads it, not
 //! in anticipation of something that might.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 use serde_json::Map;
@@ -107,6 +107,22 @@ pub struct DelegateConfig {
     pub base_url: Option<String>,
 }
 
+/// One kage plugin handed to every session.
+///
+/// The file is copied into the agent's own plugin directory at launch, where
+/// the sandbox mounts it, and its capabilities are granted in the
+/// configuration written for the agent. Capabilities are the operator's
+/// grant and are never guessed: a plugin left without the ones it needs
+/// disables itself at load.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginConfig {
+    /// Host path of the plugin file. Must name a `.lua` file.
+    pub path: String,
+    /// Capabilities granted to the plugin, by kage's capability names.
+    pub capabilities: Vec<String>,
+}
+
 /// Which model the agent talks to, and the credential it reaches it with.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,15 +181,15 @@ pub struct AgentConfig {
     /// when nobody says, and one on an entry of `models` says it for that
     /// model alone. Naming a model the host's store already lists says it for
     /// that model without listing it twice.
-    /// A provider entry may instead be marked `extension: true`, which meant a
-    /// pi extension registers it. Extensions have no kage equivalent, so such
-    /// an entry fails the launch: it needs no credential, is not brokered,
-    /// and is not written into the agent's configuration. Its `models` are
-    /// read only so a session can list and switch to them.
+    /// A provider entry may instead be marked `extension: true`, which means
+    /// a kage plugin registers it. Errand writes nothing for it into the
+    /// agent's configuration and does not broker it: the plugin holds the
+    /// endpoint, and a signing plugin needs the real credential, so that
+    /// travels whole in the environment under `credentialName`. Its `models`
+    /// are read only so a session can list and switch to them.
     pub providers: Map<String, serde_json::Value>,
-    /// Host directories of pi extensions. Kage reads no such thing: naming
-    /// one fails the launch rather than starting a session without it.
-    pub extensions: Vec<String>,
+    /// Kage plugins handed to every session.
+    pub plugins: Vec<PluginConfig>,
     /// Short names for models, so a session is started without spelling one.
     pub aliases: BTreeMap<String, String>,
     /// Models to start a session on instead, in order, when the provider it
@@ -181,6 +197,25 @@ pub struct AgentConfig {
     /// them, aliases included. The first whose provider has room is used; a
     /// session is turned away only when every one is spent too.
     pub fallback: Vec<String>,
+    /// Commands the agent may not run, whatever else is permitted.
+    ///
+    /// Sessions run with every tool allowed, since the chat cannot serve a
+    /// prompt the agent waits on and a permission ask nobody sees is a
+    /// session that stalls. This is what stands in for that prompt: glob
+    /// patterns matched against the command line, the same patterns kage's
+    /// own rules use. A match is refused by the agent itself and the reason
+    /// reaches the thread, so a refusal is visible rather than silent.
+    ///
+    /// Patterns are checked against the whole command line, so `rm -rf *`
+    /// covers the form that is actually typed. To refuse one tool outright
+    /// whatever it is asked to do, use `deniedTools`.
+    pub deny: Vec<String>,
+    /// Tools the agent may not call at all.
+    ///
+    /// Named by the tool kage calls it, such as `shell` or `write`. Refused
+    /// whatever their input carries, which is the blunt end: `deny` refuses
+    /// particular commands, this refuses a whole capability.
+    pub denied_tools: Vec<String>,
 }
 
 impl AgentConfig {
@@ -194,6 +229,24 @@ impl AgentConfig {
             == Some(true)
     }
 
+    /// Whether a provider's credential is swapped for a broker's nonce.
+    ///
+    /// One marked `broker: false` is not: its key crosses whole. One a plugin
+    /// registers is not either, by default, since a signing plugin needs the
+    /// real credential and cannot sign with a nonce; `broker: true` puts it
+    /// back on the broker for a plugin that reads the nonce and does not
+    /// sign. Everything else is brokered when the broker can route it.
+    pub fn is_brokered(&self, provider: &str) -> bool {
+        match self
+            .providers
+            .get(provider)
+            .and_then(|definition| definition.get("broker"))
+        {
+            Some(serde_json::Value::Bool(says)) => *says,
+            _ => !self.is_extension_provider(provider),
+        }
+    }
+
     /// What one provider is reached with, or nothing when it is not defined.
     pub fn credential_of(&self, provider: &str) -> Option<&str> {
         self.providers
@@ -203,30 +256,80 @@ impl AgentConfig {
             .filter(|credential| !credential.trim().is_empty())
     }
 
-    /// The variable the agent reads a provider's key from, when one is named.
+    /// The variable each provider's key is read from, by provider name.
     ///
-    /// A provider the agent already knows needs no variable: it is reached
-    /// through the base URL and key in the configuration errand writes.
-    pub fn credential_name_of(&self, provider: &str) -> Option<&str> {
-        self.providers
-            .get(provider)?
-            .get("credentialName")?
-            .as_str()
-            .filter(|name| !name.trim().is_empty())
+    /// A provider the operator names a variable for is read from that one.
+    /// One that names none is read from a variable errand picks, since kage
+    /// never takes a key from its own configuration file: it reads it from
+    /// the environment, and registers no provider whose variable is unset.
+    /// Only a provider that has a key gets a variable.
+    ///
+    /// Picked names carry a prefix errand owns, so they cannot be shadowed
+    /// by a variable meant for something else, and are kept apart from each
+    /// other: two provider ids that differ only in characters a variable
+    /// cannot hold get different variables rather than sharing one.
+    pub fn credential_vars(&self) -> BTreeMap<String, String> {
+        let named: BTreeMap<&String, &str> = self
+            .providers
+            .iter()
+            .filter_map(|(provider, fields)| {
+                Some((provider, fields.get("credentialName")?.as_str()?.trim()))
+            })
+            .filter(|(_, name)| !name.is_empty())
+            .collect();
+        let mut taken: BTreeSet<String> = named.values().map(|name| (*name).to_owned()).collect();
+        let mut vars = BTreeMap::new();
+        for provider in self.providers.keys() {
+            if let Some(name) = named.get(provider) {
+                vars.insert(provider.clone(), (*name).to_owned());
+                continue;
+            }
+            if self.credential_of(provider).is_none() {
+                continue;
+            }
+            let stem = credential_var_stem(provider);
+            let mut var = format!("{CREDENTIAL_VAR_PREFIX}{stem}");
+            for attempt in 2.. {
+                if taken.insert(var.clone()) {
+                    break;
+                }
+                var = format!("{CREDENTIAL_VAR_PREFIX}{stem}_{attempt}");
+            }
+            vars.insert(provider.clone(), var);
+        }
+        vars
     }
 
     /// What the provider a session starts on is reached with.
     pub fn credential(&self) -> &str {
         self.credential_of(&self.provider).unwrap_or_default()
     }
+}
 
-    /// Every variable a provider's key is read from, across all of them.
-    pub fn credential_names(&self) -> Vec<&str> {
-        self.providers
-            .keys()
-            .filter_map(|provider| self.credential_name_of(provider))
-            .collect()
+/// Marks a variable errand picked for itself, so it cannot collide with one
+/// the operator named for something else.
+const CREDENTIAL_VAR_PREFIX: &str = "ERRAND_PROVIDER_";
+
+/// A provider id as the tail of a variable name.
+///
+/// Every character a variable name cannot hold becomes an underscore, and
+/// the whole is uppercased so the name reads as one.
+fn credential_var_stem(provider: &str) -> String {
+    let mut stem = provider
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if stem.is_empty() {
+        stem.push('_');
     }
+    stem.push_str("_API_KEY");
+    stem
 }
 
 /// The GitHub identity a session works with, when one is configured.

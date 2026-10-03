@@ -13,8 +13,8 @@ use super::{is_absolute, resolve};
 use crate::config::discover::Discovery;
 use crate::config::schema::{
     self, AgentConfig, ChatConfig, Config, ConfigError, DelegateConfig, EgressConfig, EgressMode,
-    GithubConfig, GithubTrigger, LimitsConfig, NetworkMode, OutputConfig, PolicyExtraConfig,
-    SandboxBackend, SandboxConfig, ShutdownConfig, TimeoutsConfig, WebConfig,
+    GithubConfig, GithubTrigger, LimitsConfig, NetworkMode, OutputConfig, PluginConfig,
+    PolicyExtraConfig, SandboxBackend, SandboxConfig, ShutdownConfig, TimeoutsConfig, WebConfig,
 };
 use crate::config::size::parse_size;
 use crate::config::usage::UsageShape;
@@ -46,20 +46,23 @@ const KNOWN_CHAT: [&str; 6] = [
     "operatorUserIds",
     "startOnMention",
 ];
-const KNOWN_AGENT: [&str; 11] = [
+const KNOWN_AGENT: [&str; 14] = [
     "provider",
     "model",
     "visionModel",
     "delegate",
     "rulesPath",
     "providers",
-    "extensions",
+    "plugins",
     "aliases",
     "fallback",
+    "deny",
+    "deniedTools",
     // Known so that finding one is answered with where it went, rather than
     // with the spelling check an actual typo gets.
     "credential",
     "credentialName",
+    "extensions",
 ];
 const KNOWN_DELEGATE: [&str; 4] = ["model", "perTurn", "deadlineMs", "baseUrl"];
 const KNOWN_GITHUB: [&str; 4] = ["token", "userName", "userEmail", "trigger"];
@@ -536,6 +539,13 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
             ));
             continue;
         }
+        if let Some(flag) = definition.get("broker")
+            && !flag.is_boolean()
+        {
+            problems.add(format!(
+                "agent.providers.{name}.broker must be true or false"
+            ));
+        }
         match Discovery::of(name, definition) {
             Err(found) => {
                 for problem in found {
@@ -592,6 +602,92 @@ fn validate_fallback(source: &Map<String, Value>, problems: &mut Problems) -> Ve
         }
     }
     models
+}
+
+/// Reads a list of command patterns the agent may not run.
+///
+/// Each is checked as a glob here rather than left to the agent, which would
+/// only refuse a pattern that fails to compile when a tool call happens to
+/// reach it. An unusable pattern is a guard the operator believes is up.
+fn validate_deny(source: &Map<String, Value>, problems: &mut Problems) -> Vec<String> {
+    let Some(raw) = source.get("deny") else {
+        return Vec::new();
+    };
+    let Some(entries) = raw.as_array() else {
+        problems.add("agent.deny must be a list of command patterns");
+        return Vec::new();
+    };
+    let mut patterns = Vec::new();
+    for entry in entries {
+        let Some(pattern) = entry.as_str().map(str::trim) else {
+            problems.add("agent.deny contains an entry that does not name a command pattern");
+            continue;
+        };
+        if pattern.is_empty() {
+            problems.add("agent.deny contains an empty pattern, which would refuse everything");
+            continue;
+        }
+        if !compiles_as_glob(pattern) {
+            problems.add(format!(
+                "agent.deny entry {pattern:?} is not a usable pattern: a bracket, brace or \
+                 parenthesis is left open"
+            ));
+            continue;
+        }
+        patterns.push(pattern.to_owned());
+    }
+    patterns
+}
+
+/// Whether a glob's grouping is balanced.
+///
+/// A full glob compiler is not worth a dependency for one check, and this is
+/// the mistake worth catching: a pattern with an unclosed group is refused
+/// by the agent at launch, which ends the session rather than the command.
+/// Anything subtler is left to the agent, which refuses a pattern it cannot
+/// use the same way.
+fn compiles_as_glob(pattern: &str) -> bool {
+    let (mut square, mut curly, mut round) = (0_i32, 0_i32, 0_i32);
+    let mut characters = pattern.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            // An escaped bracket is a literal one, not a group.
+            '\\' => {
+                characters.next();
+            }
+            '[' => square += 1,
+            ']' => square -= 1,
+            '{' => curly += 1,
+            '}' => curly -= 1,
+            '(' => round += 1,
+            ')' => round -= 1,
+            _ => {}
+        }
+    }
+    square == 0 && curly == 0 && round == 0
+}
+
+/// Reads the tools the agent may not call at all.
+///
+/// Named as the agent calls them, so the set is checked against the tools
+/// this build of the agent registers. A typo would otherwise write a rule
+/// for a tool that does not exist and read as one that does.
+fn validate_denied_tools(source: &Map<String, Value>, problems: &mut Problems) -> Vec<String> {
+    let Some(raw) = source.get("deniedTools") else {
+        return Vec::new();
+    };
+    let Some(entries) = raw.as_array() else {
+        problems.add("agent.deniedTools must be a list of tool names");
+        return Vec::new();
+    };
+    let mut tools = Vec::new();
+    for entry in entries {
+        match entry.as_str().map(str::trim) {
+            Some(tool) if !tool.is_empty() => tools.push(tool.to_owned()),
+            _ => problems.add("agent.deniedTools contains an entry that does not name a tool"),
+        }
+    }
+    tools
 }
 
 /// Reads the short names for models, which must be names standing for text.
@@ -651,6 +747,12 @@ fn validate_agent(raw: &Map<String, Value>, problems: &mut Problems) -> AgentCon
             ));
         }
     }
+    // Same courtesy for the pi-era key: answered with where the idea went.
+    if source.contains_key("extensions") {
+        problems.add(
+            "agent.extensions is gone with pi. Name kage plugin files with agent.plugins instead",
+        );
+    }
 
     let agent = AgentConfig {
         provider: required_string(&source, "provider", "agent", problems),
@@ -659,9 +761,11 @@ fn validate_agent(raw: &Map<String, Value>, problems: &mut Problems) -> AgentCon
         delegate: validate_delegate(&source, problems),
         rules_path: optional_absolute_path(&source, "rulesPath", "agent", problems),
         providers: validate_providers(&source, problems),
-        extensions: validate_extensions(&source, problems),
+        plugins: validate_plugins(&source, problems),
         aliases: validate_aliases(&source, problems),
         fallback: validate_fallback(&source, problems),
+        deny: validate_deny(&source, problems),
+        denied_tools: validate_denied_tools(&source, problems),
     };
 
     // A provider a session starts on that nothing describes is a session that
@@ -834,15 +938,77 @@ fn validate_policy_extra(
     })
 }
 
-/// Reads the extension directories named for every session, if any.
+/// Reads the kage plugins named for every session, if any.
 ///
-/// Extensions have no kage equivalent: naming one fails the launch, and this
-/// only checks the directories are absolute host paths.
-fn validate_extensions(source: &Map<String, Value>, problems: &mut Problems) -> Vec<String> {
-    if source.get("extensions").is_none() {
+/// Each entry names one `.lua` file on the host and the capabilities the
+/// operator grants it. A missing grant is not refused: a plugin left without
+/// what it needs disables itself at load, saying so.
+fn validate_plugins(source: &Map<String, Value>, problems: &mut Problems) -> Vec<PluginConfig> {
+    let Some(Value::Array(entries)) = source.get("plugins") else {
+        if source.get("plugins").is_some() {
+            problems.add("agent.plugins must be a list of plugin entries");
+        }
         return Vec::new();
+    };
+    let mut plugins = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(fields) = entry.as_object() else {
+            problems.add(format!(
+                "agent.plugins[{index}] must be an object with a path"
+            ));
+            continue;
+        };
+        reject_unknown(
+            fields,
+            &["path", "capabilities"],
+            &format!("agent.plugins[{index}]"),
+            problems,
+        );
+        let Some(Value::String(path)) = fields.get("path") else {
+            problems.add(format!("agent.plugins[{index}].path is required"));
+            continue;
+        };
+        let path = path.trim();
+        if !is_absolute(path) {
+            problems.add(format!(
+                "agent.plugins[{index}].path must be an absolute path, got {path}"
+            ));
+            continue;
+        }
+        if std::path::Path::new(path).extension() != Some(std::ffi::OsStr::new("lua")) {
+            problems.add(format!(
+                "agent.plugins[{index}].path must name a .lua file, got {path}"
+            ));
+            continue;
+        }
+        let mut capabilities = Vec::new();
+        match fields.get("capabilities") {
+            None => {}
+            Some(Value::Array(grants)) => {
+                for grant in grants {
+                    match grant
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                    {
+                        Some(name) => capabilities.push(name.to_owned()),
+                        None => problems.add(format!(
+                            "agent.plugins[{index}].capabilities contains an entry that is not a \
+                             capability name"
+                        )),
+                    }
+                }
+            }
+            Some(_) => problems.add(format!(
+                "agent.plugins[{index}].capabilities must be a list of capability names"
+            )),
+        }
+        plugins.push(PluginConfig {
+            path: resolve(path),
+            capabilities,
+        });
     }
-    path_list(source, "extensions", "agent", problems)
+    plugins
 }
 
 fn validate_path_extra(
@@ -1265,7 +1431,7 @@ pub fn validate_config(parsed: &Value) -> Result<Config, ConfigError> {
     // Asked once both sections are read, since the name is the operator's own.
     // Shadowing it would authenticate the agent with whatever was set here.
     if let Some(env) = sandbox.env.as_ref() {
-        for name in agent.credential_names() {
+        for name in agent.credential_vars().values() {
             if env.contains_key(name) {
                 problems.add(format!(
                     "sandbox.env must not set {name}, which carries a provider credential"

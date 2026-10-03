@@ -756,6 +756,110 @@ fn a_starting_provider_nothing_describes_is_refused() {
     ));
 }
 
+/// A variable is picked for a provider that names none, since kage reads
+/// every key from the environment and registers nothing without one.
+#[test]
+fn a_provider_naming_no_variable_still_gets_one() {
+    let config = validate_config(&valid(json!({
+        "agent": {
+            "provider": "pg-oc",
+            "providers": {
+                "pg-oc": { "credential": "a", "models": [{ "id": "free" }] },
+                "pg-zai": { "credential": "b" },
+            },
+        },
+    })))
+    .expect("a provider needs no named variable");
+
+    let vars = config.agent.credential_vars();
+    assert_eq!(
+        vars.get("pg-oc").map(String::as_str),
+        Some("ERRAND_PROVIDER_PG_OC_API_KEY")
+    );
+    assert_eq!(
+        vars.get("pg-zai").map(String::as_str),
+        Some("ERRAND_PROVIDER_PG_ZAI_API_KEY")
+    );
+}
+
+/// A named variable wins, so an operator who sets one gets exactly that.
+#[test]
+fn a_named_variable_is_left_as_the_operator_wrote_it() {
+    let config = validate_config(&valid(json!({
+        "agent": {
+            "provider": "anthropic",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "a" },
+                "meta": { "credential": "b" },
+            },
+        },
+    })))
+    .expect("the configuration resolves");
+
+    let vars = config.agent.credential_vars();
+    assert_eq!(
+        vars.get("anthropic").map(String::as_str),
+        Some("ANTHROPIC_API_KEY")
+    );
+    assert_eq!(
+        vars.get("meta").map(String::as_str),
+        Some("ERRAND_PROVIDER_META_API_KEY")
+    );
+}
+
+/// Two ids that differ only where a variable cannot differ still get separate
+/// variables, or one provider would read the other's key.
+#[test]
+fn ids_that_cannot_differ_in_a_variable_are_kept_apart() {
+    let config = validate_config(&valid(json!({
+        "agent": {
+            "provider": "pg-oc",
+            "providers": {
+                "pg-oc": { "credential": "a" },
+                "pg.oc": { "credential": "b" },
+            },
+        },
+    })))
+    .expect("both providers describe themselves");
+
+    let vars = config.agent.credential_vars();
+    assert_ne!(vars.get("pg-oc"), vars.get("pg.oc"));
+}
+
+/// A picked variable cannot be shadowed through sandbox.env, which would
+/// authenticate the agent with whatever was set there.
+#[test]
+fn a_picked_variable_is_refused_in_sandbox_env() {
+    assert!(problems_contain(
+        &valid(json!({
+            "agent": {
+                "provider": "pg-oc",
+                "providers": { "pg-oc": { "credential": "a" } },
+            },
+            "sandbox": { "env": { "ERRAND_PROVIDER_PG_OC_API_KEY": "not-the-real-one" } },
+        })),
+        "sandbox.env must not set ERRAND_PROVIDER_PG_OC_API_KEY"
+    ));
+}
+
+/// A provider with no key gets no variable, so nothing is claimed on its
+/// behalf and kage's own default name still stands.
+#[test]
+fn a_provider_without_a_key_gets_no_variable() {
+    let config = validate_config(&valid(json!({
+        "agent": {
+            "provider": "anthropic",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "a" },
+                "free-models": { "extension": true, "models": [{ "id": "fast" }] },
+            },
+        },
+    })))
+    .expect("the configuration resolves");
+
+    assert!(!config.agent.credential_vars().contains_key("free-models"));
+}
+
 /// Every provider's variable is checked, not just the one a session starts on.
 #[test]
 fn a_shadowed_credential_variable_is_refused_for_any_provider() {
@@ -774,16 +878,16 @@ fn a_shadowed_credential_variable_is_refused_for_any_provider() {
     ));
 }
 
-/// A provider a pi extension registers needs no credential: it is anonymous or
-/// carries its own, and errand does not reach it. So a session may start on
-/// one without the credential an ordinary starting provider requires.
+/// A provider a plugin registers needs no credential to start: the plugin
+/// carries its own, and errand does not reach it. The credential an entry
+/// does name is delivered whole, since a signing plugin cannot sign with a
+/// nonce.
 #[test]
 fn an_extension_provider_starts_without_a_credential() {
     let resolved = validate_config(&valid(json!({
         "agent": {
             "provider": "free-models",
             "model": "free-fast",
-            "extensions": ["/home/somebody/.pi/extensions/free-models"],
             "providers": {
                 "free-models": {
                     "extension": true,
@@ -796,10 +900,113 @@ fn an_extension_provider_starts_without_a_credential() {
     let config = resolved.expect("an extension provider needs no credential");
     assert_eq!(config.agent.provider, "free-models");
     assert!(config.agent.is_extension_provider("free-models"));
-    assert_eq!(
-        config.agent.extensions,
-        ["/home/somebody/.pi/extensions/free-models"]
-    );
+}
+
+/// A provider's `broker` switch is a boolean: anything else is a typo worth
+/// naming rather than a default silently taken.
+#[test]
+fn a_providers_broker_switch_must_be_a_boolean() {
+    assert!(problems_contain(
+        &valid(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credential": "k", "broker": "no" },
+                },
+            },
+        })),
+        "agent.providers.anthropic.broker must be true or false"
+    ));
+}
+
+/// The pi-era extension list is answered with where the idea went.
+#[test]
+fn extensions_are_answered_with_plugins() {
+    assert!(problems_contain(
+        &valid(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {},
+                "extensions": ["/home/somebody/.pi/extensions/free-models"],
+            },
+        })),
+        "agent.extensions is gone with pi"
+    ));
+}
+
+/// Each plugin names one absolute `.lua` file and the capabilities granted
+/// it; anything else is refused with the entry named.
+#[test]
+fn plugins_are_validated_one_entry_at_a_time() {
+    let cases: Vec<(&str, serde_json::Value, &str)> = vec![
+        (
+            "relative",
+            json!([{ "path": "plugins/x.lua" }]),
+            "must be an absolute path",
+        ),
+        (
+            "not lua",
+            json!([{ "path": "/home/somebody/plugins/x" }]),
+            "must name a .lua file",
+        ),
+        (
+            "no path",
+            json!([{ "capabilities": ["net"] }]),
+            "path is required",
+        ),
+        (
+            "bad shape",
+            json!(["/home/somebody/plugins/x.lua"]),
+            "must be an object with a path",
+        ),
+        (
+            "bad capabilities",
+            json!([{ "path": "/home/somebody/plugins/x.lua", "capabilities": [3] }]),
+            "not a capability name",
+        ),
+        (
+            "unknown key",
+            json!([{ "path": "/home/somebody/plugins/x.lua", "enabled": true }]),
+            "is not a setting",
+        ),
+    ];
+    for (case, plugins, problem) in cases {
+        assert!(
+            problems_contain(
+                &valid(json!({
+                    "agent": {
+                        "provider": "anthropic",
+                        "providers": {
+                            "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+                        },
+                        "plugins": plugins,
+                    },
+                })),
+                problem
+            ),
+            "{case}: expected {problem}"
+        );
+    }
+
+    let resolved = validate_config(&valid(json!({
+        "agent": {
+            "provider": "anthropic",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+            },
+            "plugins": [
+                {
+                    "path": "/home/somebody/.config/kage/plugins/x.lua",
+                    "capabilities": ["env", "net"],
+                },
+                { "path": "/home/somebody/.config/kage/plugins/y.lua" },
+            ],
+        },
+    })))
+    .expect("well shaped plugins resolve");
+    assert_eq!(resolved.agent.plugins.len(), 2);
+    assert_eq!(resolved.agent.plugins[0].capabilities, ["env", "net"]);
+    assert!(resolved.agent.plugins[1].capabilities.is_empty());
 }
 
 /// An ordinary starting provider still must carry a credential; the relaxation
@@ -917,4 +1124,135 @@ fn a_github_trigger_names_who_may_ask_and_never_everybody() {
         &github(json!({ "allowedUsers": ["a"], "events": [] })),
         "github.trigger"
     ));
+}
+
+/// A denied command pattern is read as written, so the operator's list is
+/// what the agent is given to refuse.
+#[test]
+fn denied_commands_are_read_into_the_configuration() {
+    let config = validate_config(&valid(json!({
+        "agent": {
+            "provider": "anthropic",
+            "providers": { "anthropic": { "credential": "a" } },
+            "deny": ["rm -rf *", "git push --force*"],
+        },
+    })))
+    .expect("the configuration resolves");
+
+    assert_eq!(config.agent.deny, ["rm -rf *", "git push --force*"]);
+}
+
+/// A group that is closed early is caught too: a stray `]` leaves the count
+/// below zero, and a pattern the agent cannot compile is one it would refuse
+/// every call against.
+#[test]
+fn a_deny_pattern_with_unbalanced_grouping_is_refused() {
+    for case in ["rm -rf [unclosed", "rm -rf ]stray"] {
+        assert!(
+            problems_contain(
+                &valid(json!({
+                    "agent": {
+                        "provider": "anthropic",
+                        "providers": { "anthropic": { "credential": "a" } },
+                        "deny": [case],
+                    },
+                })),
+                "is not a usable pattern"
+            ),
+            "{case} was accepted"
+        );
+    }
+}
+
+/// An empty pattern would refuse every command, which is not what an empty
+/// entry means, and a list is what the key takes.
+#[test]
+fn a_deny_list_must_be_a_list_of_usable_patterns() {
+    assert!(problems_contain(
+        &valid(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": { "anthropic": { "credential": "a" } },
+                "deny": [""],
+            },
+        })),
+        "empty pattern"
+    ));
+    assert!(problems_contain(
+        &valid(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": { "anthropic": { "credential": "a" } },
+                "deny": "rm -rf *",
+            },
+        })),
+        "agent.deny must be a list"
+    ));
+}
+
+/// A refused tool is named as the agent names it, and an empty list is no
+/// list at all.
+#[test]
+fn denied_tools_are_read_into_the_configuration() {
+    let config = validate_config(&valid(json!({
+        "agent": {
+            "provider": "anthropic",
+            "providers": { "anthropic": { "credential": "a" } },
+            "deniedTools": ["web_search", "write"],
+        },
+    })))
+    .expect("the configuration resolves");
+
+    assert_eq!(config.agent.denied_tools, ["web_search", "write"]);
+    assert!(
+        validate_config(&valid(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": { "anthropic": { "credential": "a" } },
+            },
+        })))
+        .expect("the configuration resolves")
+        .agent
+        .denied_tools
+        .is_empty()
+    );
+    assert!(problems_contain(
+        &valid(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": { "anthropic": { "credential": "a" } },
+                "deniedTools": [""],
+            },
+        })),
+        "does not name a tool"
+    ));
+}
+
+/// A refused command is not refused by naming it alone: it must actually be
+/// matched. The gate walks the whole command line, so a pattern ending in a
+/// star covers the form that is typed.
+#[test]
+fn a_denied_command_reaches_the_agent_as_a_rule_it_can_match() {
+    use crate::sandbox::agent_config::kage_config;
+    use crate::sandbox::backend::Denials;
+
+    let config = kage_config(
+        &serde_json::Map::new(),
+        &std::collections::BTreeMap::new(),
+        &std::collections::BTreeMap::new(),
+        &std::collections::BTreeMap::new(),
+        &[],
+        &Denials {
+            commands: vec!["rm -rf *".to_owned()],
+            tools: vec!["web_search".to_owned()],
+        },
+    );
+
+    // The agent reads `deny` and `allow` as lists; a bare string is a parse
+    // error that ends the launch.
+    assert!(config.contains(r#"deny = ["rm -rf *"]"#), "{config}");
+    assert!(
+        config.contains("[permissions.tools.web_search]\ndefault = \"deny\""),
+        "{config}"
+    );
 }

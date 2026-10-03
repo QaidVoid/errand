@@ -9,7 +9,8 @@ use serde_json::json;
 use serenity::model::id::ChannelId;
 
 use super::{
-    BoxedGateRead, answer_in, brokerable_providers, read_usage, rebuild_catalog, usage_sources,
+    BoxedGateRead, answer_in, brokerable_providers, brokering_credential_names, read_usage,
+    rebuild_catalog, usage_sources,
 };
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
@@ -90,6 +91,123 @@ fn a_built_in_provider_is_brokered_from_the_store() {
                 "o-key".to_owned()
             ),
         ]
+    );
+}
+
+/// A provider a plugin registers is unbrokered by default: the plugin signs
+/// with the real credential, so its variable stays out of what the broker
+/// manages and crosses whole instead of being nonce-swapped or stripped as
+/// one the broker cannot route. `broker: true` opts one in, and
+/// `broker: false` takes an ordinary provider back out.
+#[test]
+fn an_extension_providers_credential_is_not_the_brokers_to_manage() {
+    let config = validate_config(&json!({
+        "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+        "agent": {
+            "provider": "gateway",
+            "providers": {
+                "gateway": { "baseUrl": "https://gateway.example/v1", "credential": "g-key" },
+                "zhipuai-coding-plan": {
+                    "extension": true,
+                    "credential": "z-key",
+                    "credentialName": "ZAI_CODING_API_KEY",
+                },
+                "signed-out": {
+                    "extension": true,
+                    "credential": "s-key",
+                    "credentialName": "SIGNED_KEY",
+                    "broker": true,
+                },
+                "plain-out": { "credential": "p-key", "broker": false },
+                "routed": { "credential": "r-key" },
+            },
+        },
+        "projectRoot": "/tmp/p",
+        "stateDir": "/tmp/s",
+    }))
+    .expect("resolves");
+
+    let names = brokering_credential_names(&config.agent);
+    // A plugin provider by default: the operator's named variable crosses
+    // whole, so the plugin can sign with it.
+    assert!(!names.contains_key("zhipuai-coding-plan"), "{names:?}");
+    // Opted in: the broker manages it again.
+    assert_eq!(
+        names.get("signed-out").map(String::as_str),
+        Some("SIGNED_KEY")
+    );
+    // An ordinary provider the operator took back out.
+    assert!(!names.contains_key("plain-out"), "{names:?}");
+    assert_eq!(
+        names.get("gateway").map(String::as_str),
+        Some("ERRAND_PROVIDER_GATEWAY_API_KEY")
+    );
+    // A credential provider the broker cannot route stays managed, so its
+    // key is still stripped rather than carried whole.
+    assert!(names.contains_key("routed"), "{names:?}");
+}
+
+/// A plugin provider is routed only when it says so: `broker: true` puts it
+/// on the broker like any other provider, while the default leaves it off
+/// whatever the model store resolves for it.
+#[test]
+fn a_plugin_provider_is_routed_only_when_it_opts_in() {
+    let store = tempfile::tempdir().expect("a store directory");
+    std::fs::write(
+        store.path().join(STORE_FILENAME),
+        json!({
+            "zhipuai-coding-plan": { "models": [
+                { "id": "glm-5.3-flash", "baseUrl": "https://zai.example/api/anthropic" },
+            ] },
+        })
+        .to_string(),
+    )
+    .expect("written");
+    let base = |broker: serde_json::Value| {
+        json!({
+            "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+            "agent": {
+                "provider": "gateway",
+                "providers": {
+                    "gateway": { "baseUrl": "https://gateway.example/v1", "credential": "g-key" },
+                    "zhipuai-coding-plan": {
+                        "extension": true,
+                        "credential": "z-key",
+                        "broker": broker,
+                    },
+                },
+            },
+            "projectRoot": "/tmp/p",
+            "stateDir": "/tmp/s",
+        })
+    };
+    let store_dir = store.path().display().to_string();
+
+    let config = validate_config(&base(json!(true))).expect("resolves");
+    assert_eq!(
+        brokerable_providers(&config.agent, Some(&store_dir)),
+        [
+            (
+                "gateway".to_owned(),
+                "https://gateway.example/v1".to_owned(),
+                "g-key".to_owned()
+            ),
+            (
+                "zhipuai-coding-plan".to_owned(),
+                "https://zai.example/api/anthropic".to_owned(),
+                "z-key".to_owned()
+            ),
+        ]
+    );
+
+    let config = validate_config(&base(json!(false))).expect("resolves");
+    assert_eq!(
+        brokerable_providers(&config.agent, Some(&store_dir)),
+        [(
+            "gateway".to_owned(),
+            "https://gateway.example/v1".to_owned(),
+            "g-key".to_owned()
+        )]
     );
 }
 
