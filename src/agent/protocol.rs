@@ -130,13 +130,21 @@ pub fn classify_frame(record: &Value) -> FrameKind {
     }
 }
 
-/// The `initialize` handshake: protocol version 1, like every other client.
+/// The `initialize` handshake: protocol version 1, like every other
+/// client, with the capability that says the session runs unattended.
+/// A tool with no `[permissions]` rule then runs instead of asking,
+/// which a chat thread could not answer anyway.
 pub fn initialize_frame(id: u64) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": id,
         "method": "initialize",
-        "params": { "protocolVersion": 1 },
+        "params": {
+            "protocolVersion": 1,
+            "clientCapabilities": {
+                "_meta": { "kage": { "unconfiguredTools": "allow" } },
+            },
+        },
     })
 }
 
