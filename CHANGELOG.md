@@ -1,6 +1,21 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.2.6] - 2026-10-03
+
+
+### Features
+- Register kage plugins and leave them unbrokered by default ([92bb231](https://github.com/QaidVoid/errand/commit/92bb23127bc3cd810aa61975104089517f05ba2e))
+- Run sessions on kage rpc instead of pi ([c4110ab](https://github.com/QaidVoid/errand/commit/c4110abf80c0402234d887e0bd86e341d3d113ae))
+
+### Fixes
+- Run unconfigured tools without asking in sessions ([f16179a](https://github.com/QaidVoid/errand/commit/f16179a876fe8b316ecde781a2cf4686244b0adf))
+- Render tool commands and whole spans of agent speech ([6914dc0](https://github.com/QaidVoid/errand/commit/6914dc0de00fd5546754fe7aeb541a66ea0ea021))
+- Widen the session resolver to three public resolvers ([02122a8](https://github.com/QaidVoid/errand/commit/02122a847b8bff2f7f0f4d627bacb8e2de7e061a))
+
+### Refactoring
+- (agent) Drive sessions over kage ACP at pi parity ([7402932](https://github.com/QaidVoid/errand/commit/7402932e618987b62850bfb98f0af8115ade606e))
+
 ## [0.2.5] - 2026-09-30
 
 
