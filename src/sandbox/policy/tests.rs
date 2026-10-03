@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use super::{PolicyOptions, RESOLV_CONF, policy_contents, policy_path};
 use crate::config::schema::{NetworkMode, PolicyExtraConfig};
-use crate::sandbox::backend::SandboxLaunch;
+use crate::sandbox::backend::{Denials, SandboxLaunch};
 use crate::sandbox::runtime::AgentRuntime;
 
 fn runtime() -> AgentRuntime {
@@ -26,7 +26,8 @@ fn launch() -> SandboxLaunch {
         model: Some("glm-5.3".to_owned()),
         providers: serde_json::Map::new(),
         credential_names: BTreeMap::new(),
-        extensions: Vec::new(),
+        plugins: Vec::new(),
+        denied: Denials::default(),
         resume: false,
     }
 }
@@ -152,9 +153,14 @@ fn the_hosts_own_resolver_is_never_granted() {
 }
 
 #[test]
-fn the_resolver_that_is_handed_over_names_a_public_one_not_the_hosts() {
+fn the_resolver_handed_over_names_public_resolvers_only() {
     assert!(RESOLV_CONF.contains("nameserver 1.1.1.1"));
+    assert!(RESOLV_CONF.contains("nameserver 8.8.8.8"));
+    assert!(RESOLV_CONF.contains("nameserver 9.9.9.9"));
+    assert!(RESOLV_CONF.contains("options timeout:1"));
     assert!(!RESOLV_CONF.contains("192.168."));
+    assert!(!RESOLV_CONF.contains("100.127."));
+    assert!(!RESOLV_CONF.contains("/etc/resolv.conf"));
 }
 
 /// The daemon's environment holds the chat token. Naming what crosses is the

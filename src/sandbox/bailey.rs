@@ -650,8 +650,8 @@ impl BaileySandbox {
 
     /// Writes the resolver a session is given, and returns its path.
     ///
-    /// Rewritten on every launch rather than once, so a daemon whose idea of
-    /// the resolver changed does not keep handing out the file it wrote first.
+    /// Rewritten on every launch rather than once, so a change to the
+    /// resolver does not keep handing out the file written first.
     async fn write_resolv_conf(&self) -> String {
         tokio::fs::create_dir_all(&self.state_root)
             .await

@@ -12,7 +12,7 @@ use crate::config::schema::PolicyExtraConfig;
 use crate::config::schema::{EgressConfig, EgressMode, SandboxBackend, SandboxConfig, defaults};
 use crate::log::{LogFields, Logger};
 use crate::sandbox::Run;
-use crate::sandbox::backend::SandboxLaunch;
+use crate::sandbox::backend::{Denials, SandboxLaunch};
 use tempfile::TempDir;
 
 fn config() -> SandboxConfig {
@@ -65,7 +65,8 @@ fn launch() -> SandboxLaunch {
         model: Some("glm-5.3".to_owned()),
         providers: serde_json::Map::new(),
         credential_names: BTreeMap::new(),
-        extensions: Vec::new(),
+        plugins: Vec::new(),
+        denied: Denials::default(),
         resume: false,
     }
 }
