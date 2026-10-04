@@ -19,6 +19,7 @@ use serenity::model::application::Interaction;
 use serenity::model::channel::{Attachment, Channel, Message};
 use serenity::model::gateway::Ready;
 use serenity::model::id::ChannelId;
+use serenity::model::sticker::{StickerFormatType, StickerItem};
 
 use crate::chat::commands::{TranslatedCommand, acknowledge, answer_deferred, defer, translate};
 use crate::chat::inbound::DeletionDecision;
@@ -101,6 +102,9 @@ pub fn is_permanent(error: &serenity::Error) -> bool {
 /// port this refuses nothing: the authorless-partial case it guarded against
 /// does not exist in this library.
 pub fn to_raw(message: &Message, parent_channel_id: Option<ChannelId>) -> RawMessage {
+    let mut attachments: Vec<RawAttachment> =
+        message.attachments.iter().map(attachment_of).collect();
+    attachments.extend(message.sticker_items.iter().filter_map(sticker_attachment));
     RawMessage {
         id: message.id.get().to_string(),
         author_id: message.author.id.get().to_string(),
@@ -113,7 +117,7 @@ pub fn to_raw(message: &Message, parent_channel_id: Option<ChannelId>) -> RawMes
         channel_id: message.channel_id.get().to_string(),
         parent_channel_id: parent_channel_id.map(|channel| channel.get().to_string()),
         content: message.content.clone(),
-        attachments: message.attachments.iter().map(attachment_of).collect(),
+        attachments,
     }
 }
 
@@ -126,6 +130,28 @@ fn attachment_of(file: &Attachment) -> RawAttachment {
         size: u64::from(file.size),
         content_type: file.content_type.clone(),
     }
+}
+
+/// Reduces a sticker to an attachment, so a sticker rides the same path a
+/// file does: fetched, saved under the project, and shown to the model.
+///
+/// None when Discord names no fetchable format for it. The size is unknown
+/// until the fetch, which is where the limit is checked against the bytes
+/// that actually arrived.
+fn sticker_attachment(item: &StickerItem) -> Option<RawAttachment> {
+    let url = item.image_url()?;
+    let (extension, content_type) = match item.format_type {
+        StickerFormatType::Gif => ("gif", "image/gif"),
+        StickerFormatType::Lottie => ("json", "application/json"),
+        _ => ("png", "image/png"),
+    };
+    Some(RawAttachment {
+        id: item.id.get().to_string(),
+        name: format!("{}.{extension}", item.name),
+        url,
+        size: 0,
+        content_type: Some(content_type.to_owned()),
+    })
 }
 
 #[cfg(test)]

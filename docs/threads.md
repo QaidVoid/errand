@@ -61,6 +61,9 @@ the agent is told where they went. A name that aims outside the project cannot
 get there: it is reduced to one path segment and then resolved by the same rule
 that confines the agent.
 
+Stickers are taken the same way as files. A picture sticker arrives as an image
+the agent is shown, and a Lottie sticker arrives as the JSON that draws it.
+
 An image is handed to the model as well as saved. If the session's model cannot
 see images, a cheaper one that can is asked to describe it first, and the agent
 is told plainly that it is reading a description. See [two models](/models).

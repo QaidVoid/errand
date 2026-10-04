@@ -146,3 +146,79 @@ fn an_author_without_a_display_name_is_named_by_the_account() {
     let raw = to_raw(&message, None);
     assert_eq!(raw.author_name.as_deref(), Some("amelia1"));
 }
+
+/// A sticker rides the same attachment list a file does, with the URL the
+/// CDN serves it at.
+#[test]
+fn a_picture_sticker_joins_the_attachments() {
+    let mut wire = wire_message();
+    wire["sticker_items"] = json!([
+        {"id": "600000000000000005", "name": "Cheer", "format_type": 1},
+    ]);
+    let message = library_message(wire);
+
+    let raw = to_raw(&message, None);
+    assert_eq!(raw.attachments.len(), 2);
+    let sticker = &raw.attachments[1];
+    assert_eq!(sticker.name, "Cheer.png");
+    assert_eq!(
+        sticker.url,
+        "https://cdn.discordapp.com/stickers/600000000000000005.png"
+    );
+    assert_eq!(sticker.content_type.as_deref(), Some("image/png"));
+    assert_eq!(sticker.id, "600000000000000005");
+    assert_eq!(sticker.size, 0);
+}
+
+/// A Lottie sticker is an animation described in JSON, so it arrives as the
+/// JSON the agent can read rather than an image the model is shown.
+#[test]
+fn a_lottie_sticker_is_taken_as_its_source() {
+    let mut wire = wire_message();
+    wire["attachments"] = json!([]);
+    wire["sticker_items"] = json!([
+        {"id": "600000000000000006", "name": "Wave", "format_type": 3},
+    ]);
+    let message = library_message(wire);
+
+    let raw = to_raw(&message, None);
+    assert_eq!(raw.attachments.len(), 1);
+    assert_eq!(raw.attachments[0].name, "Wave.json");
+    assert_eq!(
+        raw.attachments[0].content_type.as_deref(),
+        Some("application/json")
+    );
+}
+
+/// A format the library does not know has no URL to fetch, so it is left
+/// behind rather than invented.
+#[test]
+fn a_sticker_of_an_unknown_format_is_dropped() {
+    let mut wire = wire_message();
+    wire["attachments"] = json!([]);
+    wire["sticker_items"] = json!([
+        {"id": "600000000000000007", "name": "Mystery", "format_type": 99},
+    ]);
+    let message = library_message(wire);
+
+    let raw = to_raw(&message, None);
+    assert!(raw.attachments.is_empty());
+}
+
+/// A sticker on its own counts as content, so it is not refused as an empty
+/// message by the filter downstream.
+#[test]
+fn a_sticker_only_message_carries_an_attachment() {
+    let mut wire = wire_message();
+    wire["content"] = json!("");
+    wire["attachments"] = json!([]);
+    wire["sticker_items"] = json!([
+        {"id": "600000000000000005", "name": "Cheer", "format_type": 2},
+    ]);
+    let message = library_message(wire);
+
+    let raw = to_raw(&message, None);
+    assert_eq!(raw.content, "");
+    assert_eq!(raw.attachments.len(), 1);
+    assert_eq!(raw.attachments[0].name, "Cheer.png");
+}
