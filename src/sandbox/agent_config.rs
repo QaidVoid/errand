@@ -13,6 +13,7 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use crate::config::schema::PluginConfig;
+use crate::config::schema::defaults::{CUSTOM_PROVIDER_KIND, CUSTOM_PROVIDER_KINDS};
 use crate::sandbox::backend::{Denials, KAGE_DIR, SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 
@@ -111,6 +112,21 @@ fn toml_key(id: &str) -> String {
     }
 }
 
+/// The wire protocol one custom provider speaks, as kage names it.
+///
+/// Read from the definition's `kind`, which kage's own configuration also
+/// calls it, so an operator copies the word they already know. Anything else,
+/// including nothing, means the default: validation owns the refusal of a
+/// word kage would not accept, and this is also read on paths validation
+/// never saw.
+fn provider_kind(definition: Option<&Map<String, Value>>) -> &str {
+    definition
+        .and_then(|fields| fields.get("kind"))
+        .and_then(Value::as_str)
+        .filter(|kind| CUSTOM_PROVIDER_KINDS.contains(kind))
+        .unwrap_or(CUSTOM_PROVIDER_KIND)
+}
+
 /// One `[[models]]` entry from a store model, naming what kage needs to
 /// address it. Only the id is required; the name falls back to it and the
 /// context passes through when the store said it.
@@ -138,7 +154,8 @@ fn kage_model(entry: &Value) -> Option<String> {
 /// so what the file holds is worth nothing anywhere but this broker.
 /// Operator definitions contribute their base URL; their credentials never
 /// enter the file, traveling in the environment instead. Providers kage does
-/// not know are registered custom with the store's models. A provider an
+/// not know are registered custom with the store's models, and their `kind`
+/// says which wire protocol they speak, defaulting to `openai`. A provider an
 /// extension registers (`extension: true`) is left out entirely: the plugin
 /// brings its own endpoint, and writing errand's would only disagree with
 /// it.
@@ -220,7 +237,7 @@ pub fn kage_config(
             continue;
         }
         let _ = writeln!(out, "\n[providers.custom.{}]", toml_key(name));
-        out.push_str("kind = \"openai\"\n");
+        let _ = writeln!(out, "kind = {}", toml_string(provider_kind(definition)));
         if let Some(url) = base_url {
             let _ = writeln!(out, "base_url = {}", toml_string(&url));
         }

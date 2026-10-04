@@ -515,7 +515,8 @@ fn validate_chat(raw: &Map<String, Value>, problems: &mut Problems) -> ChatConfi
 /// are written.
 ///
 /// Each value is handed to the agent unread, so only the shape this depends on
-/// is checked: a name mapping to an object, and `discover` and `usage`,
+/// is checked: a name mapping to an object, `kind`, which errand translates
+/// into the agent's own configuration, and `discover` and `usage`,
 /// which errand reads itself. Naming the fields here would mean
 /// refusing one the agent had just learned, and this is not the schema's owner.
 fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> Map<String, Value> {
@@ -545,6 +546,17 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
             problems.add(format!(
                 "agent.providers.{name}.broker must be true or false"
             ));
+        }
+        if let Some(kind) = definition.get("kind") {
+            let known = kind
+                .as_str()
+                .is_some_and(|kind| schema::defaults::CUSTOM_PROVIDER_KINDS.contains(&kind));
+            if !known {
+                problems.add(format!(
+                    "agent.providers.{name}.kind must be one of: {}",
+                    schema::defaults::CUSTOM_PROVIDER_KINDS.join(", ")
+                ));
+            }
         }
         match Discovery::of(name, definition) {
             Err(found) => {

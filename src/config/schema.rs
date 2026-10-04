@@ -149,7 +149,10 @@ pub struct AgentConfig {
     ///
     /// Each entry carries the credential errand reaches that provider with,
     /// optionally the `credentialName` the agent reads it from, and whatever
-    /// else locates it: `baseUrl`, `api`, `models`. Endpoints reach the
+    /// else locates it: `baseUrl`, `kind`, `models`. A `kind` of `openai` or
+    /// `anthropic` says which wire protocol a provider kage does not already
+    /// know speaks, in kage's own words; omitted means `openai`. A provider
+    /// kage knows needs no `kind`, since its name already says it. Endpoints reach the
     /// agent's own configuration translated, because that schema belongs to
     /// the agent; the credential never enters it, traveling in the
     /// environment instead. The credential is swapped for a nonce at the
@@ -641,6 +644,10 @@ pub mod defaults {
     pub const DELEGATE_PER_TURN: u32 = 8;
     /// How long one delegation may take before it is abandoned.
     pub const DELEGATE_DEADLINE_MS: u64 = 60_000;
+    /// The wire protocols a custom provider may speak, as kage names them.
+    pub const CUSTOM_PROVIDER_KINDS: [&str; 2] = ["openai", "anthropic"];
+    /// The wire protocol a custom provider speaks when it names none.
+    pub const CUSTOM_PROVIDER_KIND: &str = "openai";
 
     /// The address the interface binds to.
     pub const WEB_HOST: &str = "127.0.0.1";

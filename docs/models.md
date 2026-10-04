@@ -37,7 +37,7 @@ when the daemon starts:
     "providers": {
       "gateway": {
         "baseUrl": "https://gateway.example/v1",
-        "api": "openai-completions",
+        "kind": "openai",
         "credential": "...",
         "discover": { "defaults": { "reasoning": true } },
         "models": [{ "id": "glm-5.3-flash", "contextWindow": 256000 }]
@@ -48,7 +48,9 @@ when the daemon starts:
 ```
 
 `true` reads the usual `/models` listing, with the sizes under
-`context_window` and `max_output_tokens`. A provider shaped otherwise says
+`context_window` and `max_output_tokens`. A provider speaking the Anthropic
+protocol instead of OpenAI's names `"kind": "anthropic"`, the same word
+kage's own configuration uses; omitted means `"openai"`. A provider shaped otherwise says
 where things are:
 
 ```json

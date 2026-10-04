@@ -676,7 +676,7 @@ fn provider_definitions_are_passed_through_and_their_shape_is_checked() {
                     "credentialName": "META_API_KEY",
                     "credential": "k",
                     "baseUrl": "https://api.meta.example/v1",
-                    "api": "openai-completions",
+                    "kind": "anthropic",
                     "models": [{ "id": "muse-spark-1.3-contributor", "reasoning": true }],
                 },
             },
@@ -684,20 +684,45 @@ fn provider_definitions_are_passed_through_and_their_shape_is_checked() {
     })))
     .expect("resolves");
 
-    // Handed to the agent as written, so a field this does not know is kept.
+    // The definition reaches the agent's configuration as written, kind included.
     let meta = config
         .agent
         .providers
         .get("meta")
         .expect("the meta provider");
     assert_eq!(
-        meta.get("api").and_then(Value::as_str),
-        Some("openai-completions")
+        meta.get("kind").and_then(Value::as_str),
+        Some("anthropic")
     );
     assert_eq!(
         meta.get("models").and_then(Value::as_array).map(Vec::len),
         Some(1)
     );
+}
+
+#[test]
+fn a_provider_naming_no_known_wire_protocol_is_refused() {
+    for kind in [json!("openai-completions"), json!("anthropic-messages"), json!(3)] {
+        let problems = problems_of(&valid(json!({
+            "agent": {
+                "provider": "meta",
+                "providers": {
+                    "meta": {
+                        "credential": "k",
+                        "baseUrl": "https://api.meta.example/v1",
+                        "kind": kind,
+                        "models": [{ "id": "muse-spark-1.3-contributor" }],
+                    },
+                },
+            },
+        })))
+        .join("\n");
+
+        assert!(
+            problems.contains("agent.providers.meta.kind must be one of: openai, anthropic"),
+            "{kind}: {problems}"
+        );
+    }
 }
 
 #[test]

@@ -138,6 +138,84 @@ fn an_operator_base_url_passes_through_less_the_credential() {
     assert!(!config.contains("real-meta-key-1"), "{config}");
 }
 
+/// A custom provider speaks `openai` unless its definition names another
+/// protocol, so existing configurations without a `kind` keep working.
+#[test]
+fn a_custom_provider_without_a_kind_speaks_openai() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "meta".to_owned(),
+        json!({
+            "baseUrl": "https://api.meta.example/v1",
+            "models": [{ "id": "muse-spark-1.3" }],
+        }),
+    );
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &[],
+        &Denials::default(),
+    );
+
+    assert!(config.contains("[providers.custom.meta]"), "{config}");
+    assert!(config.contains("kind = \"openai\""), "{config}");
+}
+
+/// A custom provider naming `anthropic` is written as one, so kage speaks its
+/// protocol rather than `openai`'s.
+#[test]
+fn a_custom_provider_naming_anthropic_is_written_anthropic() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "meta".to_owned(),
+        json!({
+            "baseUrl": "https://api.meta.example/v1",
+            "kind": "anthropic",
+            "models": [{ "id": "muse-spark-1.3" }],
+        }),
+    );
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &[],
+        &Denials::default(),
+    );
+
+    assert!(config.contains("[providers.custom.meta]"), "{config}");
+    assert!(config.contains("kind = \"anthropic\""), "{config}");
+    assert!(!config.contains("kind = \"openai\""), "{config}");
+}
+
+/// A provider kage already knows speaks its own protocol under its own id,
+/// so a `kind` on its definition has nothing to say and is left out.
+#[test]
+fn a_kind_on_a_known_provider_is_left_out() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "anthropic".to_owned(),
+        json!({
+            "baseUrl": "https://api.meta.example/v1",
+            "kind": "anthropic",
+        }),
+    );
+    let names = BTreeMap::from([("anthropic".to_owned(), "ANTHROPIC_API_KEY".to_owned())]);
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+    );
+
+    assert!(config.contains("[providers.anthropic]"), "{config}");
+    assert!(!config.contains("kind ="), "{config}");
+}
+
 /// A provider with no key, no endpoint, and no models has nothing to say and
 /// no variable to name, so it is left out.
 #[test]
