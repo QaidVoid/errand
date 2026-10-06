@@ -9,8 +9,8 @@ use tokio::net::TcpStream;
 
 use super::server::{Broker, dial, read_request_head};
 use super::{
-    NoAddress, ProviderRoute, Resolve, host_allowed, is_private_address, parse_connect,
-    parse_forward, public_addresses,
+    NoAddress, ProviderRoute, Resolve, carries_nonce, host_allowed, is_private_address,
+    parse_connect, parse_forward, public_addresses,
 };
 use crate::log::{LogFields, Logger};
 
@@ -242,17 +242,22 @@ TLS-CLIENT-HELLO";
     assert_eq!(String::from_utf8_lossy(reader), "TLS-CLIENT-HELLO");
 }
 
-/// A stand-in provider that reports what key it was actually handed.
+/// A stand-in provider that reports what key it was actually handed, under
+/// each header a session may send one in.
 async fn start_upstream(seen: Arc<Mutex<BTreeMap<String, String>>>, key: &'static str) -> u16 {
     let app = axum::Router::new().fallback(move |headers: axum::http::HeaderMap| {
         let seen = Arc::clone(&seen);
         async move {
-            let authorization = headers
-                .get(axum::http::header::AUTHORIZATION)
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("")
-                .to_owned();
-            seen.lock().unwrap().insert(key.to_owned(), authorization);
+            let header = |name: &str| {
+                headers
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("")
+                    .to_owned()
+            };
+            let mut seen = seen.lock().unwrap();
+            seen.insert(key.to_owned(), header("authorization"));
+            seen.insert(format!("{key}/x-api-key"), header("x-api-key"));
             (
                 [(axum::http::header::CONTENT_TYPE, "application/json")],
                 "{}",
@@ -308,6 +313,89 @@ async fn the_credential_is_put_on_at_the_broker_never_given_to_the_session() {
     let refused = client
         .post(format!("http://127.0.0.1:{port}/provider/chat/completions"))
         .header("authorization", "Bearer not-the-nonce")
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(refused.status().as_u16(), 401);
+    broker.close();
+}
+
+/// The session's key arrives in whichever header its provider kind sends one
+/// in: `Authorization` for an OpenAI-shaped provider, `x-api-key` for an
+/// Anthropic-shaped one.
+#[test]
+fn a_nonce_in_either_key_header_is_this_session() {
+    let keyed = |name: &str, value: &str| {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            name.parse::<axum::http::header::HeaderName>()
+                .expect("a header name"),
+            value
+                .parse::<axum::http::header::HeaderValue>()
+                .expect("a value"),
+        );
+        headers
+    };
+
+    assert!(carries_nonce(&keyed("authorization", "Bearer n"), "n"));
+    assert!(carries_nonce(&keyed("authorization", "n"), "n"));
+    assert!(carries_nonce(&keyed("x-api-key", "n"), "n"));
+    assert!(carries_nonce(&keyed("x-api-key", "Bearer n"), "n"));
+    assert!(!carries_nonce(&keyed("authorization", "Bearer x"), "n"));
+    assert!(!carries_nonce(&keyed("x-api-key", "x"), "n"));
+    assert!(!carries_nonce(&axum::http::HeaderMap::new(), "n"));
+}
+
+/// A session addressing an Anthropic-shaped provider sends its key in
+/// `x-api-key`. The broker accepts the nonce there too, and the provider
+/// receives the real key under both headers: its own in `x-api-key`, and the
+/// bearer errand always puts on.
+#[tokio::test]
+async fn a_session_key_in_x_api_key_is_accepted_and_translated() {
+    let seen: Arc<Mutex<BTreeMap<String, String>>> = Arc::new(Mutex::new(BTreeMap::new()));
+    let upstream_port = start_upstream(Arc::clone(&seen), "one").await;
+
+    let mut broker = Broker::new(
+        Vec::new(),
+        vec![443],
+        silent(),
+        vec![ProviderRoute {
+            prefix: "/provider".to_owned(),
+            upstream: format!("http://127.0.0.1:{upstream_port}/v1"),
+            nonce: "the-session-nonce".to_owned(),
+            credential: "the-real-key".to_owned(),
+        }],
+        true,
+    );
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+
+    let client = reqwest::Client::new();
+    let allowed = client
+        .post(format!("http://127.0.0.1:{port}/provider/v1/messages"))
+        .header("x-api-key", "the-session-nonce")
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(allowed.status().as_u16(), 200);
+    // The nonce never reaches the provider, whichever header carried it.
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.get("one/x-api-key").map(String::as_str),
+            Some("the-real-key")
+        );
+        assert_eq!(
+            seen.get("one").map(String::as_str),
+            Some("Bearer the-real-key")
+        );
+    }
+
+    // A key that is not this session's is refused in either header.
+    let refused = client
+        .post(format!("http://127.0.0.1:{port}/provider/v1/messages"))
+        .header("x-api-key", "not-the-nonce")
         .body("{}")
         .send()
         .await

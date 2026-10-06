@@ -184,6 +184,14 @@ const HOP_BY_HOP: [&str; 9] = [
     "host",
 ];
 
+/// The header an Anthropic-shaped provider reads its key from.
+///
+/// An OpenAI-shaped provider reads `Authorization` instead. The broker
+/// accepts the session's nonce in either, since which one arrives depends on
+/// the provider kind the session was pointed at, and puts the real
+/// credential back into whichever ones the session used.
+const API_KEY_HEADER: &str = "x-api-key";
+
 /// Compares without letting the time taken say how much of it matched.
 fn same_secret(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
@@ -196,6 +204,27 @@ fn same_secret(a: &str, b: &str) -> bool {
             accumulated | (left ^ right)
         });
     differences == 0
+}
+
+/// Whether a request carries this session's nonce as its key.
+///
+/// A session sends its key in whichever header its provider kind uses:
+/// `Authorization` for an OpenAI-shaped provider, `x-api-key` for an
+/// Anthropic-shaped one. Either form may carry a `Bearer ` prefix, as some
+/// clients add one unasked.
+fn carries_nonce(headers: &http::header::HeaderMap, nonce: &str) -> bool {
+    let nonce_of = |name: http::header::HeaderName| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.strip_prefix("Bearer ").unwrap_or(value))
+            .unwrap_or_default()
+    };
+    same_secret(nonce_of(http::header::AUTHORIZATION), nonce)
+        || same_secret(
+            nonce_of(http::header::HeaderName::from_static(API_KEY_HEADER)),
+            nonce,
+        )
 }
 
 /// Whether an IPv4 address is one the broker must not connect to.
@@ -503,14 +532,9 @@ pub(crate) async fn serve_provider_request(
         )
             .into_response();
     };
-    let offered = request
-        .headers()
-        .get(http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .to_owned();
-    let expected = format!("Bearer {}", route.nonce);
-    if !same_secret(&offered, &expected) {
+    // The session proves itself with the nonce this broker gave it, in
+    // whichever header its provider kind sends a key in.
+    if !carries_nonce(request.headers(), &route.nonce) {
         state.log.warn(
             "a provider call arrived without this session's key",
             &BTreeMap::new(),
@@ -641,9 +665,14 @@ fn build_forwarded(
             .unwrap_or(reqwest::Method::GET),
         target,
     );
+    // Whether the session sent its key the Anthropic way, which decides
+    // whether the provider is also given it that way below.
+    let sends_key = request.headers().contains_key(API_KEY_HEADER);
     for (name, value) in request.headers() {
-        // The credential is set on below, replacing whatever the session sent.
-        if name == http::header::AUTHORIZATION {
+        // Credentials are set on below, replacing whatever the session sent:
+        // the nonce is worth nothing past the broker, so it must never reach
+        // the provider, whichever header carried it.
+        if name == http::header::AUTHORIZATION || name.as_str() == API_KEY_HEADER {
             continue;
         }
         if !HOP_BY_HOP.contains(&name.as_str().to_lowercase().as_str()) {
@@ -654,6 +683,9 @@ fn build_forwarded(
         http::header::AUTHORIZATION,
         format!("Bearer {}", route.credential),
     );
+    if sends_key {
+        forwarded = forwarded.header(API_KEY_HEADER, route.credential.clone());
+    }
     let body = request.into_body();
     forwarded.body(reqwest::Body::wrap_stream(body.into_data_stream()))
 }

@@ -127,9 +127,23 @@ fn provider_kind(definition: Option<&Map<String, Value>>) -> &str {
         .unwrap_or(CUSTOM_PROVIDER_KIND)
 }
 
+/// The input kinds kage knows a model can take, as the store and the
+/// configuration name them.
+const KAGE_INPUTS: [&str; 5] = ["text", "image", "pdf", "audio", "video"];
+
+/// The thinking levels kage offers a model, as the configuration names them.
+const KAGE_EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
 /// One `[[models]]` entry from a store model, naming what kage needs to
 /// address it. Only the id is required; the name falls back to it and the
-/// context passes through when the store said it.
+/// context passes through when the store said it. The output limit, the
+/// inputs, and the thinking levels pass through too, in kage's own words:
+/// a model whose window was set without its output limit compacts at the
+/// wrong size, and one without its inputs never receives an image.
+///
+/// Anything kage does not know is left out rather than guessed at. A level it
+/// never heard of would fail the whole configuration file, which would cost
+/// every other provider their session too.
 fn kage_model(entry: &Value) -> Option<String> {
     let id = entry.get("id")?.as_str()?;
     let mut table = format!("id = {}", toml_string(id));
@@ -145,7 +159,71 @@ fn kage_model(entry: &Value) -> Option<String> {
     if let Some(context) = context {
         let _ = write!(table, "\ncontext = {context}");
     }
+    let max_output = entry
+        .get("max_output")
+        .or_else(|| entry.get("maxTokens"))
+        .and_then(Value::as_u64)
+        .filter(|max| u32::try_from(*max).is_ok() && *max > 0);
+    if let Some(max_output) = max_output {
+        let _ = write!(table, "\nmax_output = {max_output}");
+    }
+    if let Some(inputs) = model_inputs(entry) {
+        let _ = write!(table, "\ninput = [{inputs}]");
+    }
+    if let Some(reasoning) = model_reasoning(entry) {
+        let _ = write!(table, "\nreasoning = {reasoning}");
+    }
+    if let Some(efforts) = model_efforts(entry) {
+        let _ = write!(table, "\nefforts = [{efforts}]");
+    }
     Some(table)
+}
+
+/// The input kinds a model entry claims, as a TOML list, or nothing when it
+/// names none kage knows. Unknown kinds are dropped one by one: a gateway
+/// inventing a new one must not cost the model its images.
+fn model_inputs(entry: &Value) -> Option<String> {
+    let kinds = entry.get("input")?.as_array()?;
+    let mut known: Vec<&str> = Vec::new();
+    for kind in kinds.iter().filter_map(Value::as_str) {
+        if KAGE_INPUTS.contains(&kind) && !known.contains(&kind) {
+            known.push(kind);
+        }
+    }
+    (!known.is_empty()).then(|| {
+        known
+            .iter()
+            .map(|kind| toml_string(kind))
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
+}
+
+/// Whether a model entry says the model thinks, when it says anything at
+/// all. Read from `reasoning`, kage's own word for it.
+fn model_reasoning(entry: &Value) -> Option<bool> {
+    entry.get("reasoning")?.as_bool()
+}
+
+/// The thinking levels a model entry claims, as a TOML list, or nothing when
+/// it names none kage offers. Unknown levels are dropped one by one, for the
+/// same reason unknown inputs are: a model that lists levels stays addressable
+/// at the ones kage knows.
+fn model_efforts(entry: &Value) -> Option<String> {
+    let levels = entry.get("efforts")?.as_array()?;
+    let mut known: Vec<&str> = Vec::new();
+    for level in levels.iter().filter_map(Value::as_str) {
+        if KAGE_EFFORTS.contains(&level) && !known.contains(&level) {
+            known.push(level);
+        }
+    }
+    (!known.is_empty()).then(|| {
+        known
+            .iter()
+            .map(|level| toml_string(level))
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
 }
 
 /// The kage provider configuration for one session, as TOML.
@@ -154,8 +232,10 @@ fn kage_model(entry: &Value) -> Option<String> {
 /// so what the file holds is worth nothing anywhere but this broker.
 /// Operator definitions contribute their base URL; their credentials never
 /// enter the file, traveling in the environment instead. Providers kage does
-/// not know are registered custom with the store's models, and their `kind`
-/// says which wire protocol they speak, defaulting to `openai`. A provider an
+/// not know are registered custom with the store's models: the id, the name,
+/// and, when the store says them, the context window, the output limit, the
+/// inputs, and the thinking levels. A `kind` on the definition says which
+/// wire protocol they speak, defaulting to `openai`. A provider an
 /// extension registers (`extension: true`) is left out entirely: the plugin
 /// brings its own endpoint, and writing errand's would only disagree with
 /// it.

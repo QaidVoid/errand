@@ -690,10 +690,7 @@ fn provider_definitions_are_passed_through_and_their_shape_is_checked() {
         .providers
         .get("meta")
         .expect("the meta provider");
-    assert_eq!(
-        meta.get("kind").and_then(Value::as_str),
-        Some("anthropic")
-    );
+    assert_eq!(meta.get("kind").and_then(Value::as_str), Some("anthropic"));
     assert_eq!(
         meta.get("models").and_then(Value::as_array).map(Vec::len),
         Some(1)
@@ -702,7 +699,11 @@ fn provider_definitions_are_passed_through_and_their_shape_is_checked() {
 
 #[test]
 fn a_provider_naming_no_known_wire_protocol_is_refused() {
-    for kind in [json!("openai-completions"), json!("anthropic-messages"), json!(3)] {
+    for kind in [
+        json!("openai-completions"),
+        json!("anthropic-messages"),
+        json!(3),
+    ] {
         let problems = problems_of(&valid(json!({
             "agent": {
                 "provider": "meta",

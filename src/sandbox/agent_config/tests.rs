@@ -138,6 +138,107 @@ fn an_operator_base_url_passes_through_less_the_credential() {
     assert!(!config.contains("real-meta-key-1"), "{config}");
 }
 
+/// A model entry carries what kage needs beyond the id: the name, and, when
+/// said, the context window, the output limit, the inputs, and the thinking
+/// levels. Unknown inputs and levels are dropped one by one rather than
+/// refusing the model.
+#[test]
+fn a_model_entry_carries_its_sizes_inputs_and_levels() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "meta".to_owned(),
+        json!({
+            "baseUrl": "https://api.meta.example/v1",
+            "models": [{
+                "id": "muse-spark-1.3",
+                "name": "Muse Spark",
+                "contextWindow": 256_000,
+                "maxTokens": 128_000,
+                "input": ["text", "image", "smell-o-vision"],
+                "reasoning": true,
+                "efforts": ["low", "max", "overdrive"],
+            }],
+        }),
+    );
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &[],
+        &Denials::default(),
+    );
+
+    assert!(config.contains(r#"id = "muse-spark-1.3""#), "{config}");
+    assert!(config.contains(r#"name = "Muse Spark""#), "{config}");
+    assert!(config.contains("context = 256000"), "{config}");
+    assert!(config.contains("max_output = 128000"), "{config}");
+    assert!(config.contains(r#"input = ["text", "image"]"#), "{config}");
+    assert!(config.contains("reasoning = true"), "{config}");
+    assert!(config.contains(r#"efforts = ["low", "max"]"#), "{config}");
+    assert!(!config.contains("smell-o-vision"), "{config}");
+    assert!(!config.contains("overdrive"), "{config}");
+}
+
+/// A model entry naming no sizes, inputs, or levels is written with the id
+/// and the name alone: kage then decides what the model can do.
+#[test]
+fn a_bare_model_entry_writes_no_sizes_inputs_or_levels() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "meta".to_owned(),
+        json!({
+            "baseUrl": "https://api.meta.example/v1",
+            "models": [{ "id": "muse-spark-1.3" }],
+        }),
+    );
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &[],
+        &Denials::default(),
+    );
+
+    let entry = config
+        .split("[[providers.custom.meta.models]]")
+        .nth(1)
+        .expect("the model is written");
+    assert!(entry.contains(r#"id = "muse-spark-1.3""#), "{entry}");
+    assert!(!entry.contains("context ="), "{entry}");
+    assert!(!entry.contains("max_output ="), "{entry}");
+    assert!(!entry.contains("input ="), "{entry}");
+    assert!(!entry.contains("reasoning ="), "{entry}");
+    assert!(!entry.contains("efforts ="), "{entry}");
+}
+
+/// A model entry whose `maxTokens` names nothing kage accepts as an output
+/// limit leaves it out: zero, or more than a `u32` holds.
+#[test]
+fn an_unusable_output_limit_is_left_out() {
+    for max in [json!(0), json!(9_999_999_999_u64)] {
+        let mut defined = serde_json::Map::new();
+        defined.insert(
+            "meta".to_owned(),
+            json!({
+                "baseUrl": "https://api.meta.example/v1",
+                "models": [{ "id": "muse-spark-1.3", "maxTokens": max }],
+            }),
+        );
+        let config = kage_config(
+            &defined,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &[],
+            &Denials::default(),
+        );
+
+        assert!(!config.contains("max_output ="), "{max}: {config}");
+    }
+}
+
 /// A custom provider speaks `openai` unless its definition names another
 /// protocol, so existing configurations without a `kind` keep working.
 #[test]
