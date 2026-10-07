@@ -287,12 +287,17 @@ pub async fn current_branch(run: &Run, project_path: &str) -> Result<String, Pul
     Ok(branch.to_owned())
 }
 
-/// The upstream this work came from, read from the remote the agent cloned.
-pub async fn upstream(run: &Run, project_path: &str) -> Result<Repo, PullRequestError> {
+/// The repository the work was cloned from, which origin names.
+///
+/// Not always where a pull request from it belongs: a session that cloned its
+/// fork of something still means the work for that something, and the opening
+/// reads the fork relationship off GitHub rather than assuming it.
+pub async fn origin_remote(run: &Run, project_path: &str) -> Result<Repo, PullRequestError> {
     let remote = git(run, project_path, &["remote", "get-url", "origin"], None).await;
     if remote.code != 0 {
         return Err(PullRequestError(
-            "this project has no origin remote to open a pull request against".to_owned(),
+            "this project has no origin remote, so there is nowhere to open a pull request from"
+                .to_owned(),
         ));
     }
     parse_remote(&remote.stdout).ok_or_else(|| {
@@ -446,15 +451,27 @@ pub fn find_repository(
 pub const FORK_WAIT_MS: u64 = 30_000;
 const FORK_POLL_MS: u64 = 1_000;
 
-/// Whether the account this token belongs to can already push to the target.
+/// What one look at the cloned repository says about opening the work.
+struct Looked {
+    /// Whether the account this token belongs to can push to it.
+    can_push: bool,
+    /// The repository this one was forked from, when it is a fork. A pull
+    /// request from a fork is made against its parent, so this, and not the
+    /// clone, is where work from a fork is meant to land.
+    parent: Option<Repo>,
+}
+
+/// Looks at the repository the session cloned, before anything is pushed.
 ///
-/// GitHub refuses to fork a repository into the account that owns it, so a
-/// session working in one of the bot's own repositories could never open a
-/// pull request: the fork answered 403 and the session reported that it could
-/// not fork. Asked first, so the fork is attempted only where it is possible.
-async fn can_push_to(api: &Api, token: &str, target: &Repo) -> bool {
+/// One answer carries both facts the opening turns on: whether the bot can
+/// push to the clone itself, and, when the clone is of a fork, where the work
+/// is meant for. Whether a fork is possible is read here too, since GitHub
+/// refuses to fork a repository into the account that owns it, and a session
+/// working in one of the bot's own repositories would otherwise only learn
+/// that from a 403 after being told the opening failed.
+async fn look_at(api: &Api, token: &str, repo: &Repo) -> Looked {
     let answer = api(
-        format!("/repos/{}/{}", target.owner, target.name),
+        format!("/repos/{}/{}", repo.owner, repo.name),
         ApiCall {
             method: "GET".to_owned(),
             token: token.to_owned(),
@@ -462,13 +479,16 @@ async fn can_push_to(api: &Api, token: &str, target: &Repo) -> bool {
         },
     )
     .await;
-    answer.status == 200
-        && answer
-            .body
-            .get("permissions")
-            .and_then(|permissions| permissions.get("push"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
+    Looked {
+        can_push: answer.status == 200
+            && answer
+                .body
+                .get("permissions")
+                .and_then(|permissions| permissions.get("push"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        parent: answer.body.get("parent").and_then(named),
+    }
 }
 
 /// Reads a repository out of an API answer that describes one.
@@ -563,7 +583,7 @@ async fn fork_of(
     }
 }
 
-/// What the upstream merges into, which is not always `main`.
+/// What the base repository merges into, which is not always `main`.
 async fn default_branch(api: &Api, token: &str, repo: &Repo) -> String {
     let answer = api(
         format!("/repos/{}/{}", repo.owner, repo.name),
@@ -669,9 +689,11 @@ async fn push_work(
 
 /// Opens the pull request, and returns where it is.
 ///
-/// The fork is made first and pushed to, rather than pushing to the upstream:
-/// a bot that never needs write access to somebody else's repository cannot
-/// lose it.
+/// A pull request from a fork is made against its parent, so a session that
+/// cloned its fork still lands the work on the repository it came from, and
+/// the fork is only where the branch lives. Where the branch cannot be pushed
+/// already, a fork of the base is made first: a bot that never needs write
+/// access to somebody else's repository cannot lose it.
 pub async fn open_pull_request(
     request: &Request,
     run: &Run,
@@ -681,17 +703,14 @@ pub async fn open_pull_request(
     let project_path = find_repository(&request.project_path, request.repository.as_deref())?;
     assert_contained(run, &project_path).await?;
     let branch = current_branch(run, &project_path).await?;
-    let target = upstream(run, &project_path).await?;
+    let origin = origin_remote(run, &project_path).await?;
 
-    // Forking is for somebody else's repository. On one the bot can already
-    // push to, the branch goes straight to the upstream and the request is a
-    // same-repository one; the least-privilege reason for forking stands
-    // everywhere it applies, which is everywhere the bot has no write access.
-    let own = can_push_to(api, &request.github.token, &target).await;
-    let pushing_to = if own {
-        target.clone()
+    let looked = look_at(api, &request.github.token, &origin).await;
+    let base = looked.parent.unwrap_or_else(|| origin.clone());
+    let pushing_to = if looked.can_push {
+        origin
     } else {
-        fork_of(api, &request.github.token, &target, sleep).await?
+        fork_of(api, &request.github.token, &base, sleep).await?
     };
 
     let summary = push_work(
@@ -707,15 +726,15 @@ pub async fn open_pull_request(
     .await?;
 
     let created = api(
-        format!("/repos/{}/{}/pulls", target.owner, target.name),
+        format!("/repos/{}/{}/pulls", base.owner, base.name),
         ApiCall {
             method: "POST".to_owned(),
             token: request.github.token.clone(),
             body: Some(make_pull(
                 &request.title,
-                (!own).then_some(pushing_to.owner.as_str()),
+                (pushing_to != base).then_some(pushing_to.owner.as_str()),
                 &branch,
-                &default_branch(api, &request.github.token, &target).await,
+                &default_branch(api, &request.github.token, &base).await,
                 &pull_request_body(&summary, &request.requested_by, &request.links),
             )),
         },

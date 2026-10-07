@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use super::{
     Api, ApiCall, ApiReply, PullRequestError, Ran, Repo, Request, Run, Sleep, current_branch,
-    find_repository, open_pull_request, parse_remote, pull_request_body, upstream,
+    find_repository, open_pull_request, origin_remote, parse_remote, pull_request_body,
 };
 use crate::config::schema::GithubConfig;
 use crate::session::github::SessionLinks;
@@ -429,7 +429,7 @@ async fn a_project_with_no_origin_cannot_say_what_to_open_against() {
         },
     )]));
 
-    let error = upstream(&run, "/p").await.unwrap_err();
+    let error = origin_remote(&run, "/p").await.unwrap_err();
     assert!(error.to_string().contains("no origin remote"));
 }
 
@@ -992,4 +992,154 @@ async fn somebody_elses_repository_is_still_forked_first() {
         head.contains(':'),
         "a cross-repository head is qualified: {head}"
     );
+}
+
+/// A session that cloned its fork still means the work for the original. The
+/// pull request is made against the fork's parent, the branch stays on the
+/// fork the bot can push to, and nothing new is forked.
+#[tokio::test]
+async fn a_pull_request_from_a_fork_is_opened_against_its_parent() {
+    let kept = with_repo();
+    let (git, run) = fake_git(BTreeMap::from([
+        ("rev-parse".to_owned(), ok("feature/thing\n")),
+        (
+            "remote".to_owned(),
+            ok("https://github.com/errand-bot-login/project.git\n"),
+        ),
+        ("log".to_owned(), ok("what changed and why\n")),
+    ]));
+    let (api_fake, api) = fake_api(BTreeMap::from([
+        (
+            "GET /repos/errand-bot-login/project".to_owned(),
+            (
+                200,
+                serde_json::json!({
+                    "default_branch": "main",
+                    "permissions": { "push": true },
+                    "parent": {"name": "project", "owner": {"login": "upstream"}},
+                }),
+            ),
+        ),
+        (
+            "GET /repos/upstream/project".to_owned(),
+            (200, serde_json::json!({"default_branch": "trunk"})),
+        ),
+        (
+            "POST /repos/upstream/project/pulls".to_owned(),
+            (
+                201,
+                serde_json::json!({"html_url": "https://github.com/upstream/project/pull/5"}),
+            ),
+        ),
+    ]));
+
+    let url = open_pull_request(
+        &request(&kept.project, "Do the thing", "amelia"),
+        &run,
+        &api,
+        &immediate_sleep(),
+    )
+    .await
+    .expect("a pull request against the parent");
+
+    assert_eq!(url, "https://github.com/upstream/project/pull/5");
+    let paths = api_fake.paths.lock().unwrap().join("\n");
+    assert!(!paths.contains("forks"), "nothing was forked: {paths}");
+    assert!(
+        paths.contains("POST /repos/upstream/project/pulls"),
+        "{paths}"
+    );
+
+    // The branch went to the fork, and the request names it as the fork's.
+    let pushed = git
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|call| call.args.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        pushed.contains("https://github.com/errand-bot-login/project.git"),
+        "{pushed}"
+    );
+    let sent = api_fake.bodies.lock().unwrap().clone();
+    let pull = sent
+        .iter()
+        .find(|body| body.get("head").is_some())
+        .expect("a pull request body");
+    assert_eq!(
+        pull.get("head"),
+        Some(&serde_json::json!("errand-bot-login:feature/thing"))
+    );
+    assert_eq!(pull.get("base"), Some(&serde_json::json!("trunk")));
+}
+
+/// A fork of somebody else's is not forked itself. The bot forks the parent
+/// the work is for and opens the request there.
+#[tokio::test]
+async fn somebodys_fork_is_forked_from_its_parent_not_itself() {
+    let kept = with_repo();
+    let (_git, run) = fake_git(BTreeMap::from([
+        ("rev-parse".to_owned(), ok("feature/thing\n")),
+        (
+            "remote".to_owned(),
+            ok("https://github.com/bywalker/project.git\n"),
+        ),
+        ("log".to_owned(), ok("what changed and why\n")),
+    ]));
+    let (api_fake, api) = fake_api(BTreeMap::from([
+        (
+            "GET /repos/bywalker/project".to_owned(),
+            (
+                200,
+                serde_json::json!({
+                    "default_branch": "main",
+                    "parent": {"name": "project", "owner": {"login": "upstream"}},
+                }),
+            ),
+        ),
+        ("POST /repos/upstream/project/forks".to_owned(), forked()),
+        (
+            "GET /repos/errand-bot-login/project-1".to_owned(),
+            (200, serde_json::json!({})),
+        ),
+        (
+            "GET /repos/upstream/project".to_owned(),
+            (200, serde_json::json!({"default_branch": "trunk"})),
+        ),
+        (
+            "POST /repos/upstream/project/pulls".to_owned(),
+            (201, serde_json::json!({"html_url": "https://x/2"})),
+        ),
+    ]));
+
+    open_pull_request(
+        &request(&kept.project, "t", "amelia"),
+        &run,
+        &api,
+        &immediate_sleep(),
+    )
+    .await
+    .expect("a pull request through a fork of the parent");
+
+    let paths = api_fake.paths.lock().unwrap().join("\n");
+    assert!(
+        paths.contains("POST /repos/upstream/project/forks"),
+        "{paths}"
+    );
+    assert!(
+        !paths.contains("POST /repos/bywalker/project/forks"),
+        "{paths}"
+    );
+    let sent = api_fake.bodies.lock().unwrap().clone();
+    let pull = sent
+        .iter()
+        .find(|body| body.get("head").is_some())
+        .expect("a pull request body");
+    assert_eq!(
+        pull.get("head"),
+        Some(&serde_json::json!("errand-bot-login:feature/thing"))
+    );
+    assert_eq!(pull.get("base"), Some(&serde_json::json!("trunk")));
 }
