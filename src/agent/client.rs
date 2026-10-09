@@ -488,15 +488,21 @@ impl AgentClient {
         } else if opened.get("error").is_some() {
             return Err(detail_of(&opened));
         }
-        let Some(session_id) = opened
+        // A resume answers with the session's config options alone: the
+        // ACP shape names a session id only on `session/new`, since the
+        // client already holds the id it asked to reopen. A fresh open
+        // must name one, or nothing was opened.
+        let session_id = opened
             .get("result")
             .and_then(|result| result.get("sessionId"))
             .and_then(Value::as_str)
-        else {
+            .map(str::to_owned)
+            .or_else(|| resume.map(str::to_owned));
+        let Some(session_id) = session_id else {
             return Err("the agent opened no session".to_owned());
         };
         let mut state = self.inner.state.lock().expect("the client lock");
-        state.session_id = Some(session_id.to_owned());
+        state.session_id = Some(session_id.clone());
         if state.lifecycle == AgentState::Starting {
             state.lifecycle = AgentState::Ready;
         }

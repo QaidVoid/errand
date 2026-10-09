@@ -271,6 +271,33 @@ async fn a_handshake_the_agent_refuses_is_not_readiness() {
     setup.finish().await;
 }
 
+/// Only a fresh `session/new` must name the session it opened. A resume
+/// keeps the id it was asked to reopen; a fresh open naming none opened
+/// nothing, and readiness must not be claimed over it.
+#[tokio::test]
+async fn a_fresh_session_without_an_id_is_no_session() {
+    let setup = client(AgentHandlers::default(), 300_000);
+    let asking = setup.agent.clone();
+    let ready = tokio::spawn(async move { asking.wait_until_ready(1_000).await });
+    settle().await;
+    let first: Value =
+        serde_json::from_str(&setup.controls.written()[0]).expect("the handshake first");
+    setup
+        .controls
+        .send(&json!({ "jsonrpc": "2.0", "id": first["id"], "result": { "protocolVersion": 1 } }));
+    settle().await;
+    let second: Value =
+        serde_json::from_str(&setup.controls.written()[1]).expect("the handshake second");
+    setup
+        .controls
+        .send(&json!({ "jsonrpc": "2.0", "id": second["id"], "result": {} }));
+    let error = ready.await.expect("driven").expect_err("no session");
+    assert!(error.contains("opened no session"), "{error}");
+    assert_eq!(setup.agent.agent_session_id(), None);
+
+    setup.finish().await;
+}
+
 #[tokio::test]
 async fn a_revived_session_reopens_the_recording_and_falls_back_to_fresh() {
     let setup = client(AgentHandlers::default(), 300_000);
@@ -286,9 +313,11 @@ async fn a_revived_session_reopens_the_recording_and_falls_back_to_fresh() {
     let second: Value =
         serde_json::from_str(&setup.controls.written()[1]).expect("the handshake second");
     assert_eq!(second["method"], "session/resume");
+    // The ACP resume answer carries config options alone: the session id is
+    // the one the client asked to reopen.
     setup
         .controls
-        .send(&json!({ "jsonrpc": "2.0", "id": second["id"], "result": { "sessionId": "s-old" } }));
+        .send(&json!({ "jsonrpc": "2.0", "id": second["id"], "result": {} }));
     ready.await.expect("driven").expect("resumed");
     assert_eq!(setup.agent.agent_session_id(), Some("s-old".to_owned()));
     setup.finish().await;

@@ -1111,20 +1111,12 @@ impl Running {
         if let Err(error) = ready {
             // An agent that has already exited failed to start, whatever the
             // clock read. Reporting it as a timeout sends whoever reads it
-            // looking at the timeout instead of at the reason on stderr.
-            match client.exit_report() {
-                Some(report) => {
-                    self.say(&format!("this session could not start: {report}"))
-                        .await;
-                }
-                None => {
-                    self.say(&format!(
-                        "the agent did not become ready within {}ms: {error}",
-                        self.options.config.timeouts.startup_ms
-                    ))
-                    .await;
-                }
-            }
+            // looking at the timeout instead of at the reason on stderr. The
+            // other errors name their own reason too, the timeout included,
+            // so none of them is wrapped in a clock reading here.
+            let reason = client.exit_report().unwrap_or(error);
+            self.say(&format!("this session could not start: {reason}"))
+                .await;
             self.finish(EndReason::StartupFailed).await;
             return false;
         }

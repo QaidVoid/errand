@@ -105,28 +105,31 @@ impl FakeControls {
     }
 
     /// Answers the handshake: initialize, then the session open. A resume is
-    /// answered with the recording it names. The agent asks for the second
-    /// only after the first is answered.
+    /// answered with the recording's config options alone, the shape the real
+    /// agent sends; the session keeps the id it was asked to reopen. A fresh
+    /// open names the session it made. The agent asks for the second only
+    /// after the first is answered.
     async fn shake_hands(&self) {
         self.answer(&json!({ "protocolVersion": 1 }));
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        let reopened = self
+        let fresh = self
             .written()
             .iter()
             .rev()
             .find_map(|line| {
                 let parsed: Value = serde_json::from_str(line).ok()?;
-                if parsed.get("method").and_then(Value::as_str) != Some("session/resume") {
-                    return None;
+                match parsed.get("method")?.as_str()? {
+                    "session/resume" => Some(false),
+                    "session/new" => Some(true),
+                    _ => None,
                 }
-                parsed
-                    .get("params")?
-                    .get("sessionId")?
-                    .as_str()
-                    .map(str::to_owned)
             })
-            .unwrap_or_else(|| "s-1".to_owned());
-        self.answer(&json!({ "sessionId": reopened }));
+            .unwrap_or(true);
+        if fresh {
+            self.answer(&json!({ "sessionId": "s-1" }));
+        } else {
+            self.answer(&json!({}));
+        }
     }
 
     /// One turn notification, as the agent streams it.
