@@ -1,6 +1,14 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.3.1] - 2026-10-16
+
+
+### Fixes
+- (session) End the session task once the session ends ([#30](https://github.com/QaidVoid/errand/pull/30)) ([c3da504](https://github.com/QaidVoid/errand/commit/c3da504b6b6cd3da88e28da89e10dbaf76c5f886))
+- (usage) Read kage's token totals and show tok/s ([#31](https://github.com/QaidVoid/errand/pull/31)) ([f47a0c3](https://github.com/QaidVoid/errand/commit/f47a0c31f99d7d3a43399b28764aac2410bc6860))
+- (usage) Let a mapped provider bill past a spent window ([#28](https://github.com/QaidVoid/errand/pull/28)) ([880c34d](https://github.com/QaidVoid/errand/commit/880c34d3709b49ceda4df5e2b7964514ce8373e7))
+
 ## [0.3.0] - 2026-10-10
 
 
