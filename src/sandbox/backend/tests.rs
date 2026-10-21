@@ -15,7 +15,7 @@ fn the_agent_is_started_with_provider_model_and_memory() {
     });
     let said = command.join(" ");
 
-    assert_eq!(command[..2], ["kage", "rpc"]);
+    assert_eq!(command[..3], ["kage", "rpc", "--yolo"]);
     assert!(said.contains("-m zai-coding-cn/glm-5.3"));
     assert!(said.contains("--system"));
     assert!(said.contains("remember this"));
@@ -44,7 +44,7 @@ fn without_a_model_the_flag_is_absent_so_the_provider_default_stands() {
         system_text: None,
     });
 
-    assert_eq!(command, ["kage", "rpc"]);
+    assert_eq!(command, ["kage", "rpc", "--yolo"]);
 }
 
 #[test]

@@ -23,7 +23,7 @@ use crate::agent::client::AnswerOutcome;
 use crate::agent::client::{AgentClient, AgentHandlers, AgentProcess};
 use crate::agent::delegate::{DelegationOutcome, TurnDelegations};
 use crate::agent::delegation::Sources;
-use crate::agent::protocol::{AgentImage, DialogRequest, StreamingBehavior, Usage};
+use crate::agent::protocol::{AgentImage, DialogRequest, ProducedImage, StreamingBehavior, Usage};
 use crate::agent::requests::{
     DELEGATE_COMMAND, RECALL_COMMAND, delegate_command_contents, recall_command_contents,
 };
@@ -178,6 +178,11 @@ const EDITING_TOOLS: [&str; 5] = ["edit", "write", "create", "str_replace", "mul
 
 /// Largest file diffed. Beyond this the change is summarised, not shown.
 const MAX_DIFFABLE_BYTES: u64 = 512 * 1024;
+
+/// Most images the agent made that one turn posts to the thread, or reports
+/// as not posted. The rest stay in the project, so an agent generating in a
+/// loop cannot flood it.
+const MAX_IMAGES_PER_TURN: usize = 4;
 
 /// Said when a session ends for a limit it could carry on past.
 ///
@@ -465,7 +470,9 @@ enum Signal {
         name: String,
         failed: bool,
         output: String,
+        images: Vec<ProducedImage>,
     },
+    AgentImage(ProducedImage),
     Thinking,
     Thought(String),
     Usage(Usage),
@@ -659,6 +666,9 @@ struct Running {
     /// Output tokens the session had produced when this turn opened, so the
     /// turn's own share can be told apart from the running total.
     turn_output_from: u64,
+    /// Images the agent made that this turn posted or reported as not posted,
+    /// so the thread hears of at most [`MAX_IMAGES_PER_TURN`] of them.
+    turn_images: usize,
     idle_timer: Option<u64>,
     disk_timer: Option<u64>,
     delegating_timer: Option<u64>,
@@ -758,6 +768,7 @@ impl Running {
             turn_started_at: None,
             turn_first_output_at: None,
             turn_output_from: 0,
+            turn_images: 0,
             idle_timer: None,
             disk_timer: None,
             delegating_timer: None,
@@ -887,8 +898,14 @@ impl Running {
                     name,
                     failed,
                     output,
+                    images,
                 } => {
-                    self.on_tool_end(&id, &name, failed, &output).await;
+                    self.on_tool_end(&id, &name, failed, &output, &images).await;
+                }
+                Signal::AgentImage(image) => {
+                    if self.options.config.output.post_images {
+                        self.post_image(&image).await;
+                    }
                 }
                 Signal::Thought(text) => {
                     self.views.send(SessionEvent::Thinking { text }).await;
@@ -1503,6 +1520,7 @@ impl Running {
         self.turn_started_at = Some(now_ms());
         self.turn_first_output_at = None;
         self.turn_output_from = self.usage.output;
+        self.turn_images = 0;
         self.views.send(SessionEvent::Waiting { text: None }).await;
         self.views.send(SessionEvent::Busy { busy: true }).await;
         let content = match self.pull_request_outcome.take() {
@@ -1721,19 +1739,20 @@ impl Running {
         )| {
             Signal::ToolStart { id, name, target }
         });
-        on!(on_tool_end, (String, String, bool, String), |(
-            id,
-            name,
-            failed,
-            output,
-        )| {
-            Signal::ToolEnd {
-                id,
-                name,
-                failed,
-                output,
+        on!(
+            on_tool_end,
+            (String, String, bool, String, Vec<ProducedImage>),
+            |(id, name, failed, output, images)| {
+                Signal::ToolEnd {
+                    id,
+                    name,
+                    failed,
+                    output,
+                    images,
+                }
             }
-        });
+        );
+        on!(on_agent_image, ProducedImage, Signal::AgentImage);
         on!(on_thought, String, Signal::Thought);
         on!(on_usage, Usage, Signal::Usage);
         on!(on_error, String, Signal::Error);
@@ -1889,9 +1908,21 @@ impl Running {
         self.reset_idle_timer();
     }
 
-    async fn on_tool_end(&mut self, id: &str, name: &str, failed: bool, output: &str) {
+    async fn on_tool_end(
+        &mut self,
+        id: &str,
+        name: &str,
+        failed: bool,
+        output: &str,
+        images: &[ProducedImage],
+    ) {
         if !failed && EDITING_TOOLS.contains(&name) {
             self.report_edit(name, id).await;
+        }
+        if !failed && self.options.config.output.post_images {
+            for image in images {
+                self.post_image(image).await;
+            }
         }
 
         // Kept whole rather than truncated as the thread shows it: a

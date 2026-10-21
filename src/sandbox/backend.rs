@@ -173,9 +173,12 @@ pub const KAGE_ROLE: &str = "You are kage, a coding agent. Use the provided tool
 /// which has nothing to do with whichever credential the configuration
 /// supplies, so omitting it yields a session that starts and then cannot reach
 /// a model. History continues over ACP rather than on the command line, so
-/// resuming takes no flag.
+/// resuming takes no flag. `--yolo` runs every tool without asking, since a
+/// thread cannot answer a permission prompt; what the operator refuses is
+/// written into the agent's configuration, and a configured deny still
+/// refuses.
 pub fn agent_command(launch: &AgentCommand) -> Vec<String> {
-    let mut command = vec!["kage".to_owned(), "rpc".to_owned()];
+    let mut command = vec!["kage".to_owned(), "rpc".to_owned(), "--yolo".to_owned()];
     if let Some(model) = launch.model.as_ref().filter(|model| !model.is_empty()) {
         // Kage addresses `provider/model` and knows no `:level` suffix; the
         // level rides a session option after the switch instead.

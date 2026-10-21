@@ -181,10 +181,16 @@ pub struct OpenOptions {
 }
 
 impl OpenOptions {
-    /// Opens an existing file for reading.
+    /// Opens an existing file for reading, without waiting.
+    ///
+    /// `O_NONBLOCK` changes nothing for a file or a directory. A pipe the
+    /// agent planted at the name opens at once, instead of blocking until
+    /// something opens it to write: a caller that checks for a file refuses
+    /// it, and one that reads it whole gets nothing or an error rather than
+    /// waiting.
     pub fn read() -> Self {
         Self {
-            flags: OFlag::O_RDONLY.bits(),
+            flags: (OFlag::O_RDONLY | OFlag::O_NONBLOCK).bits(),
             mode: None,
         }
     }

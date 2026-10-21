@@ -28,6 +28,7 @@ export default defineConfig({
           { text: "Instructions", link: "/instructions" },
           { text: "Memory", link: "/memory" },
           { text: "Two models", link: "/models" },
+          { text: "Images", link: "/images" },
         ],
       },
       {

@@ -131,9 +131,7 @@ pub fn classify_frame(record: &Value) -> FrameKind {
 }
 
 /// The `initialize` handshake: protocol version 1, like every other
-/// client, with the capability that says the session runs unattended.
-/// A tool with no `[permissions]` rule then runs instead of asking,
-/// which a chat thread could not answer anyway.
+/// client.
 pub fn initialize_frame(id: u64) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -141,9 +139,7 @@ pub fn initialize_frame(id: u64) -> Value {
         "method": "initialize",
         "params": {
             "protocolVersion": 1,
-            "clientCapabilities": {
-                "_meta": { "kage": { "unconfiguredTools": "allow" } },
-            },
+            "clientCapabilities": {},
         },
     })
 }
@@ -261,6 +257,8 @@ pub fn method_not_found_frame(id: u64, method: &str) -> Value {
 pub enum AcpUpdate {
     /// Assistant text, to report as it arrives.
     AgentText(String),
+    /// An image the model drew into its reply.
+    AgentImage(ProducedImage),
     /// Reasoning text, to report as it arrives.
     ThoughtText(String),
     /// A tool call started, with its raw input for the target line.
@@ -275,12 +273,14 @@ pub enum AcpUpdate {
         id: String,
         raw_input: Option<Value>,
     },
-    /// A tool call finished, with whether it failed and what it said.
+    /// A tool call finished, with whether it failed, what it said, and the
+    /// images it returned.
     ToolEnd {
         id: String,
         title: Option<String>,
         failed: bool,
         output: String,
+        images: Vec<ProducedImage>,
     },
     /// Context usage, for the usage line and the window size.
     UsageInfo { usage: Usage, size: f64 },
@@ -295,6 +295,88 @@ pub enum AcpUpdate {
     /// Anything else: plans, modes, notices, subagent and swarm traffic, and
     /// shapes this build does not know. Subagents arrive in a later change.
     Ignored,
+}
+
+/// An image the agent produced: one a tool call returned, such as kage's
+/// `generate_image`, or one the model drew into its reply.
+///
+/// Everything here is the agent's word. The daemon reads the image's type
+/// from its bytes before anything is posted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProducedImage {
+    /// The image's bytes.
+    pub bytes: Vec<u8>,
+    /// What the image's server said about it, such as a fallback to another
+    /// model, when it said anything.
+    pub note: Option<String>,
+    /// Where the tool also saved it, as a path on the agent's side.
+    pub path: Option<String>,
+}
+
+/// The images a completed tool call returned.
+///
+/// Each `image` block in its content, which is how kage hands a client the
+/// image a tool made. The `note` and `path` an object `rawOutput` carries
+/// ride on each, so they can be shown beside the picture.
+fn produced_images(update: &Value) -> Vec<ProducedImage> {
+    let raw = |field: &str| {
+        update
+            .get("rawOutput")
+            .and_then(|raw| raw.get(field))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let (note, path) = (raw("note"), raw("path"));
+    update
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part.get("content"))
+        .filter_map(image_bytes)
+        .map(|bytes| ProducedImage {
+            bytes,
+            note: note.clone(),
+            path: path.clone(),
+        })
+        .collect()
+}
+
+/// The bytes of an `image` content block, or nothing for another block or
+/// data that is not base64.
+fn image_bytes(block: &Value) -> Option<Vec<u8>> {
+    if block.get("type").and_then(Value::as_str) != Some("image") {
+        return None;
+    }
+    decode_base64(block.get("data")?.as_str()?)
+}
+
+/// Decodes standard base64, padded or not. Nothing for any other character.
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let digits = text.trim_end_matches('=').as_bytes();
+    let mut out = Vec::with_capacity(digits.len() / 4 * 3 + 2);
+    for chunk in digits.chunks(4) {
+        if chunk.len() == 1 {
+            return None;
+        }
+        let mut combined = 0u32;
+        for (at, &c) in chunk.iter().enumerate() {
+            combined |= u32::from(value(c)?) << (18 - 6 * at);
+        }
+        let [_, a, b, c] = combined.to_be_bytes();
+        out.extend_from_slice(&[a, b, c][..chunk.len() - 1]);
+    }
+    Some(out)
 }
 
 /// Reads the text of a content block, or nothing when it carries no words.
@@ -336,15 +418,26 @@ fn tool_output_text(content: Option<&Value>) -> String {
     out
 }
 
+/// A piece of the agent's reply: its words, or an image the model drew.
+fn message_chunk(content: Option<&Value>) -> AcpUpdate {
+    if let Some(bytes) = content.and_then(image_bytes) {
+        return AcpUpdate::AgentImage(ProducedImage {
+            bytes,
+            note: None,
+            path: None,
+        });
+    }
+    content
+        .and_then(block_text)
+        .filter(|text| !text.trim().is_empty())
+        .map_or(AcpUpdate::Ignored, AcpUpdate::AgentText)
+}
+
 /// Classifies one `session/update` notification body.
 pub fn classify_update(update: &Value) -> AcpUpdate {
     let kind = update.get("sessionUpdate").and_then(Value::as_str);
     match kind {
-        Some("agent_message_chunk") => update
-            .get("content")
-            .and_then(block_text)
-            .filter(|text| !text.trim().is_empty())
-            .map_or(AcpUpdate::Ignored, AcpUpdate::AgentText),
+        Some("agent_message_chunk") => message_chunk(update.get("content")),
         Some("agent_thought_chunk") => update
             .get("content")
             .and_then(block_text)
@@ -402,6 +495,11 @@ pub fn classify_update(update: &Value) -> AcpUpdate {
                         .get("rawOutput")
                         .and_then(Value::as_str)
                         .unwrap_or_default(),
+                images: if failed {
+                    Vec::new()
+                } else {
+                    produced_images(update)
+                },
             }
         }
         Some("usage_update") => match usage_of(update) {

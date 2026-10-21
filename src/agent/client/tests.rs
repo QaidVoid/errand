@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
-use super::{AgentClient, AgentHandlers, AgentProcess, AnswerOutcome};
+use super::{AgentClient, AgentHandlers, AgentProcess, AnswerOutcome, without_inline_images};
 use crate::agent::protocol::DialogRequest;
+use crate::agent::protocol::ProducedImage;
 use crate::agent::protocol::Usage;
 use crate::log::{LogFields, Logger};
 
@@ -741,11 +742,17 @@ async fn tool_calls_report_their_target_and_whether_they_failed() {
                 },
             )),
             on_tool_end: Some(Box::new(
-                move |(id, _name, failed, output): (String, String, bool, String)| {
+                move |(id, _name, failed, output, images): (
+                    String,
+                    String,
+                    bool,
+                    String,
+                    Vec<ProducedImage>,
+                )| {
                     end_seen
                         .lock()
                         .unwrap()
-                        .push(format!("end:{id}:{failed}:{output}"));
+                        .push(format!("end:{id}:{failed}:{output}:{}", images.len()));
                 },
             )),
             ..AgentHandlers::default()
@@ -774,10 +781,77 @@ async fn tool_calls_report_their_target_and_whether_they_failed() {
         *seen.lock().unwrap(),
         vec![
             "start:t1:bash:ls -la".to_owned(),
-            "end:t1:true:no such file".to_owned(),
+            "end:t1:true:no such file:0".to_owned(),
         ]
     );
     setup.finish().await;
+}
+
+#[tokio::test]
+async fn images_reach_the_tool_end_and_agent_image_handlers() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let (end_seen, reply_seen) = (Arc::clone(&seen), Arc::clone(&seen));
+    let setup = client(
+        AgentHandlers {
+            on_tool_end: Some(Box::new(
+                move |(_, _, _, _, images): (String, String, bool, String, Vec<ProducedImage>)| {
+                    for image in images {
+                        end_seen
+                            .lock()
+                            .unwrap()
+                            .push(format!("tool:{}", image.bytes.len()));
+                    }
+                },
+            )),
+            on_agent_image: Some(Box::new(move |image: ProducedImage| {
+                reply_seen
+                    .lock()
+                    .unwrap()
+                    .push(format!("reply:{}", image.bytes.len()));
+            })),
+            ..AgentHandlers::default()
+        },
+        300_000,
+    );
+    setup.controls.send(&update(&json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "t2", "status": "completed",
+        "content": [
+            { "type": "content", "content": { "type": "text", "text": "Generated an image" } },
+            { "type": "content", "content": {
+                "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png",
+            } },
+        ],
+    })));
+    setup.controls.send(&update(&json!({
+        "sessionUpdate": "agent_message_chunk",
+        "content": { "type": "image", "data": "aGVsbG8=", "mimeType": "image/png" },
+    })));
+    settle().await;
+
+    assert_eq!(*seen.lock().unwrap(), ["tool:8", "reply:5"]);
+    setup.finish().await;
+}
+
+#[test]
+fn a_long_inline_image_is_replaced_by_its_size() {
+    let payload = "A".repeat(2_000_000);
+    let text = format!("Here it is:\n![image](data:image/png;base64,{payload})\nDone.");
+    let folded = without_inline_images(&text);
+    assert_eq!(
+        folded,
+        "Here it is:\n![image]([inline image omitted: 1500 kB])\nDone."
+    );
+
+    let icon = format!("tiny data:image/svg+xml;base64,{} icon", "B".repeat(100));
+    assert_eq!(without_inline_images(&icon), icon);
+    let unrelated = "data:image/png is a scheme, and data:text/plain;base64,QQ== is not an image";
+    assert_eq!(without_inline_images(unrelated), unrelated);
+    let two = format!("a data:image/jpeg;base64,{payload} b data:image/webp;base64,{payload}");
+    assert_eq!(
+        without_inline_images(&two),
+        "a [inline image omitted: 1500 kB] b [inline image omitted: 1500 kB]"
+    );
 }
 
 #[tokio::test]

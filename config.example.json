@@ -72,7 +72,8 @@
   },
   "output": {
     "forwardToolOutput": false,
-    "postDiffs": true
+    "postDiffs": true,
+    "postImages": true
   },
   "shutdown": {
     "allowedUserIds": []

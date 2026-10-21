@@ -244,17 +244,19 @@ fn what_reaches_a_thread_has_documented_defaults() {
     );
     assert_eq!(config.output.max_upload_bytes, defaults::MAX_UPLOAD_BYTES);
     assert_eq!(config.output.post_diffs, defaults::POST_DIFFS);
+    assert_eq!(config.output.post_images, defaults::POST_IMAGES);
 }
 
 #[test]
 fn what_reaches_a_thread_can_be_turned_up_or_down() {
     let config = validate_config(&valid(json!({
-        "output": { "forwardToolOutput": true, "postDiffs": false, "maxToolOutputChars": 4000, "maxUploadBytes": 8_388_608 },
+        "output": { "forwardToolOutput": true, "postDiffs": false, "postImages": false, "maxToolOutputChars": 4000, "maxUploadBytes": 8_388_608 },
     })))
     .expect("resolves");
 
     assert!(config.output.forward_tool_output);
     assert!(!config.output.post_diffs);
+    assert!(!config.output.post_images);
     assert_eq!(config.output.max_tool_output_chars, 4000);
     assert_eq!(config.output.max_upload_bytes, 8_388_608);
     assert_eq!(
@@ -724,6 +726,91 @@ fn a_provider_naming_no_known_wire_protocol_is_refused() {
         assert!(
             problems.contains("agent.providers.meta.kind must be one of: openai, anthropic"),
             "{kind}: {problems}"
+        );
+    }
+}
+
+/// A configuration whose providers are `providers`, starting on `chat`.
+fn with_providers(providers: &Value) -> Value {
+    valid(json!({
+        "agent": { "provider": "chat", "providers": providers },
+    }))
+}
+
+#[test]
+fn a_provider_may_carry_images_for_the_agent_to_generate_through() {
+    let config = validate_config(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        "pictures": {
+            "credential": "k2",
+            "baseUrl": "https://images.example/v1",
+            "images": { "model": "image" },
+        },
+    })))
+    .expect("resolves");
+
+    assert_eq!(
+        config.agent.providers["pictures"]["images"]["model"],
+        json!("image")
+    );
+}
+
+#[test]
+fn images_name_a_model_and_only_what_errand_reads() {
+    let problems = problems_of(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        "a": { "credential": "k", "baseUrl": "https://a.example/v1", "images": { "models": ["x"], "modle": "y" } },
+        "b": { "credential": "k", "baseUrl": "https://b.example/v1", "images": "image" },
+    })))
+    .join("\n");
+
+    for wanted in [
+        "agent.providers.a.images.model is required and must be a non-empty string",
+        "agent.providers.a.images.models is not a setting",
+        "agent.providers.a.images.modle is not a setting",
+        "agent.providers.b.images must be an object naming a model",
+        "only one provider may carry images, and a, b do",
+    ] {
+        assert!(problems.contains(wanted), "{wanted}: {problems}");
+    }
+}
+
+#[test]
+fn images_need_an_openai_endpoint_errand_can_name() {
+    let problems = problems_of(&with_providers(&json!({
+        "chat": {
+            "credential": "k", "baseUrl": "https://chat.example", "kind": "anthropic",
+            "models": [{ "id": "m" }], "images": { "model": "image" },
+        },
+    })))
+    .join("\n");
+    assert!(
+        problems.contains("the Anthropic API has no images endpoint"),
+        "{problems}"
+    );
+
+    let problems = problems_of(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        "plugged": { "extension": true, "credential": "k", "images": { "model": "image" } },
+    })))
+    .join("\n");
+    assert!(
+        problems.contains("a provider a plugin registers has none"),
+        "{problems}"
+    );
+
+    // kage knows these by name, whatever `kind` says, and none of them
+    // serves images.
+    for name in ["anthropic", "openai-responses"] {
+        let mut providers = json!({
+            "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        });
+        providers[name] =
+            json!({ "credential": "k", "kind": "openai", "images": { "model": "image" } });
+        let problems = problems_of(&with_providers(&providers)).join("\n");
+        assert!(
+            problems.contains(&format!("cannot use kage's own {name} provider")),
+            "{name}: {problems}"
         );
     }
 }

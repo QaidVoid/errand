@@ -92,13 +92,14 @@ const KNOWN_EGRESS: [&str; 3] = ["mode", "allow", "allowInternal"];
 const KNOWN_POLICY_EXTRA: [&str; 3] = ["read", "write", "execute"];
 const KNOWN_SHUTDOWN: [&str; 1] = ["allowedUserIds"];
 const KNOWN_WEB: [&str; 4] = ["host", "port", "observer", "publicUrl"];
-const KNOWN_OUTPUT: [&str; 6] = [
+const KNOWN_OUTPUT: [&str; 7] = [
     "forwardToolOutput",
     "maxToolOutputChars",
     "maxAttachmentBytes",
     "maxAttachmentsPerMessage",
     "maxUploadBytes",
     "postDiffs",
+    "postImages",
 ];
 const KNOWN_LIMITS: [&str; 4] = [
     "maxConcurrentTurns",
@@ -516,8 +517,8 @@ fn validate_chat(raw: &Map<String, Value>, problems: &mut Problems) -> ChatConfi
 /// are written.
 ///
 /// Each value is handed to the agent unread, so only the shape this depends on
-/// is checked: a name mapping to an object, `kind`, which errand translates
-/// into the agent's own configuration, and `discover` and `usage`,
+/// is checked: a name mapping to an object, `kind` and `images`, which errand
+/// translates into the agent's own configuration, and `discover` and `usage`,
 /// which errand reads itself. Naming the fields here would mean
 /// refusing one the agent had just learned, and this is not the schema's owner.
 fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> Map<String, Value> {
@@ -559,6 +560,7 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
                 ));
             }
         }
+        validate_images(name, definition, problems);
         match Discovery::of(name, definition) {
             Err(found) => {
                 for problem in found {
@@ -595,7 +597,61 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
         }
         defined.insert(name.trim().to_owned(), definition.clone());
     }
+    let imaging: Vec<&str> = defined
+        .iter()
+        .filter(|(_, definition)| definition.get("images").is_some())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    if imaging.len() > 1 {
+        problems.add(format!(
+            "agent.providers: only one provider may carry images, and {} do",
+            imaging.join(", ")
+        ));
+    }
     defined
+}
+
+/// kage's own providers, which it knows by these names whatever `kind` says,
+/// that its image tool cannot reach: their APIs are not the `OpenAI` one it
+/// calls.
+const NO_IMAGES_ENDPOINT: [&str; 2] = ["anthropic", "openai-responses"];
+
+/// Reads what generating images through one provider needs, which errand
+/// translates into the agent's own configuration: an object naming the model
+/// every call asks for.
+///
+/// The endpoint must speak the `OpenAI` Images API, which an `anthropic` kind
+/// and the providers in [`NO_IMAGES_ENDPOINT`] do not, and errand must be able
+/// to name it, which it cannot for a provider a plugin registers.
+fn validate_images(name: &str, definition: &Value, problems: &mut Problems) {
+    let Some(images) = definition.get("images") else {
+        return;
+    };
+    let place = format!("agent.providers.{name}.images");
+    let Some(fields) = images.as_object() else {
+        problems.add(format!("{place} must be an object naming a model"));
+        return;
+    };
+    reject_unknown(fields, &["model"], &place, problems);
+    let _ = required_string(fields, "model", &place, problems);
+    if definition.get("extension").and_then(Value::as_bool) == Some(true) {
+        problems.add(format!(
+            "{place} needs an endpoint errand writes for the agent, and a provider a plugin \
+             registers has none"
+        ));
+    }
+    if NO_IMAGES_ENDPOINT.contains(&name.trim()) {
+        problems.add(format!(
+            "{place} cannot use kage's own {} provider: the image tool reaches only openai and \
+             OpenAI-compatible providers",
+            name.trim()
+        ));
+    } else if definition.get("kind").and_then(Value::as_str) == Some("anthropic") {
+        problems.add(format!(
+            "{place} needs a provider that speaks the OpenAI API: the Anthropic API has no \
+             images endpoint"
+        ));
+    }
 }
 
 /// Reads the models a session falls back to, each a name for one.
@@ -1308,6 +1364,13 @@ fn validate_output(raw: &Map<String, Value>, problems: &mut Problems) -> OutputC
             &source,
             "postDiffs",
             schema::defaults::POST_DIFFS,
+            "output",
+            problems,
+        ),
+        post_images: flag(
+            &source,
+            "postImages",
+            schema::defaults::POST_IMAGES,
             "output",
             problems,
         ),

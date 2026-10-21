@@ -717,7 +717,7 @@ pub fn delegation_line(delegated: &Delegated) -> String {
 /// Widens a whole count for the renderer, where a byte count beyond what an
 /// f64 carries is beyond any real file.
 #[expect(clippy::cast_precision_loss)]
-fn widen(count: u64) -> f64 {
+pub(crate) fn widen(count: u64) -> f64 {
     count as f64
 }
 

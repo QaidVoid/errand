@@ -1,6 +1,6 @@
 //! Tests for path containment, ported from `paths_test.ts`.
 
-use super::{host_path_under, read_beneath, truncate_beneath, within};
+use super::{OpenOptions, host_path_under, open_beneath, read_beneath, truncate_beneath, within};
 
 const ROOT: &str = "/projects/demo";
 
@@ -144,6 +144,24 @@ fn a_link_part_way_along_the_path_is_refused() {
         .expect("linked");
 
     assert!(read_beneath(&root.path().display().to_string(), "hop/secret").is_err());
+}
+
+/// The agent can make a pipe where a file should be. Opening it to read must
+/// not wait for a writer that never comes, so the caller gets to see that it
+/// is not a file and refuse it.
+#[test]
+fn a_planted_pipe_opens_at_once_and_is_not_a_file() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    nix::unistd::mkfifo(
+        &root.path().join("pipe"),
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .expect("a pipe");
+    let inside = root.path().display().to_string();
+
+    let opened = open_beneath(&inside, "pipe", &OpenOptions::read()).expect("opened at once");
+    assert!(!opened.metadata().expect("its metadata").is_file());
+    assert_eq!(read_beneath(&inside, "pipe").expect("nothing to read"), "");
 }
 
 /// Emptying a notes file must empty that file, not whatever it points at.

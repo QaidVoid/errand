@@ -58,29 +58,6 @@ const KAGE_KNOWN: [&str; 20] = [
     "xiaomi-token-plan-sgp",
 ];
 
-/// The tools the agent ships with, allowed so it never asks about one.
-///
-/// Named one by one because the agent's rules are keyed by literal tool
-/// name and an unlisted tool falls back to asking. A tool it gains later
-/// asks again, which costs a stalled turn rather than a wrong permission, so
-/// the list is read from what this build registers rather than guessed at.
-///
-/// Plugin and MCP tools are not here: they are covered by the wildcard
-/// under `permissions.mcp`, since their names carry a server prefix this
-/// list cannot know.
-const TOOLS_ALLOWED: [&str; 10] = [
-    "edit",
-    "find",
-    "grep",
-    "ls",
-    "read",
-    "shell",
-    "todo_list",
-    "web_fetch",
-    "web_search",
-    "write",
-];
-
 /// A TOML basic string: backslashes, quotes, and line breaks escaped.
 fn toml_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
@@ -127,9 +104,9 @@ fn provider_kind(definition: Option<&Map<String, Value>>) -> &str {
         .unwrap_or(CUSTOM_PROVIDER_KIND)
 }
 
-/// The input kinds kage knows a model can take, as the store and the
-/// configuration name them.
-const KAGE_INPUTS: [&str; 5] = ["text", "image", "pdf", "audio", "video"];
+/// The kinds of media kage knows a model can take or produce, as the store
+/// and the configuration name them.
+const KAGE_MODALITIES: [&str; 5] = ["text", "image", "pdf", "audio", "video"];
 
 /// The thinking levels kage offers a model, as the configuration names them.
 const KAGE_EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -137,9 +114,11 @@ const KAGE_EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xh
 /// One `[[models]]` entry from a store model, naming what kage needs to
 /// address it. Only the id is required; the name falls back to it and the
 /// context passes through when the store said it. The output limit, the
-/// inputs, and the thinking levels pass through too, in kage's own words:
-/// a model whose window was set without its output limit compacts at the
-/// wrong size, and one without its inputs never receives an image.
+/// inputs, what it produces, and the thinking levels pass through too, in
+/// kage's own words: a model whose window was set without its output limit
+/// compacts at the wrong size, one without its inputs never receives an
+/// image, and one that draws without `produces` never hands its pictures
+/// over.
 ///
 /// Anything kage does not know is left out rather than guessed at. A level it
 /// never heard of would fail the whole configuration file, which would cost
@@ -167,8 +146,11 @@ fn kage_model(entry: &Value) -> Option<String> {
     if let Some(max_output) = max_output {
         let _ = write!(table, "\nmax_output = {max_output}");
     }
-    if let Some(inputs) = model_inputs(entry) {
+    if let Some(inputs) = model_modalities(entry, "input") {
         let _ = write!(table, "\ninput = [{inputs}]");
+    }
+    if let Some(produces) = model_modalities(entry, "produces") {
+        let _ = write!(table, "\nproduces = [{produces}]");
     }
     if let Some(reasoning) = model_reasoning(entry) {
         let _ = write!(table, "\nreasoning = {reasoning}");
@@ -179,14 +161,15 @@ fn kage_model(entry: &Value) -> Option<String> {
     Some(table)
 }
 
-/// The input kinds a model entry claims, as a TOML list, or nothing when it
-/// names none kage knows. Unknown kinds are dropped one by one: a gateway
-/// inventing a new one must not cost the model its images.
-fn model_inputs(entry: &Value) -> Option<String> {
-    let kinds = entry.get("input")?.as_array()?;
+/// The kinds of media a model entry claims under `field`, `input` or
+/// `produces`, as a TOML list, or nothing when it names none kage knows.
+/// Unknown kinds are dropped one by one: a gateway inventing a new one must
+/// not cost the model its images.
+fn model_modalities(entry: &Value, field: &str) -> Option<String> {
+    let kinds = entry.get(field)?.as_array()?;
     let mut known: Vec<&str> = Vec::new();
     for kind in kinds.iter().filter_map(Value::as_str) {
-        if KAGE_INPUTS.contains(&kind) && !known.contains(&kind) {
+        if KAGE_MODALITIES.contains(&kind) && !known.contains(&kind) {
             known.push(kind);
         }
     }
@@ -238,7 +221,7 @@ fn model_efforts(entry: &Value) -> Option<String> {
 /// wire protocol they speak, defaulting to `openai`. A provider an
 /// extension registers (`extension: true`) is left out entirely: the plugin
 /// brings its own endpoint, and writing errand's would only disagree with
-/// it.
+/// it. The provider carrying `images` also gives the agent its image tool.
 pub fn kage_config(
     defined: &Map<String, Value>,
     brokered: &BTreeMap<String, BrokeredProvider>,
@@ -257,6 +240,10 @@ pub fn kage_config(
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
+    // Where each provider is reached, and which ones the agent is told about,
+    // for the image tool to reuse below.
+    let mut endpoints: BTreeMap<&str, String> = BTreeMap::new();
+    let mut written: Vec<&str> = Vec::new();
     for name in names {
         let through = brokered.get(name);
         let definition = defined
@@ -271,6 +258,9 @@ pub fn kage_config(
         });
         if through.is_none() && definition.is_none() {
             continue;
+        }
+        if let Some(url) = &base_url {
+            endpoints.insert(name.as_str(), url.clone());
         }
         let known = KAGE_KNOWN.contains(&name.as_str());
         let models: Vec<String> = if known {
@@ -306,6 +296,7 @@ pub fn kage_config(
         if !worth_writing {
             continue;
         }
+        written.push(name.as_str());
         if known {
             let _ = writeln!(out, "\n[providers.{}]", toml_key(name));
             if let Some(url) = base_url {
@@ -333,8 +324,60 @@ pub fn kage_config(
             );
         }
     }
+    out.push_str(&generate_image(
+        defined,
+        &written,
+        &endpoints,
+        credential_names,
+    ));
     out.push_str(&plugin_capabilities(plugins));
     out.push_str(&permissions_section(denied));
+    out
+}
+
+/// The `[tools.generate_image]` table, for the provider whose definition
+/// carries `images`, or nothing when none does.
+///
+/// A provider the agent is already told about is named, and lends the tool
+/// its endpoint and key the way the agent reaches it, broker and nonce
+/// included. One that lists no models is not told about above, since the
+/// agent refuses a provider without models and image models must not be
+/// offered for chat: it is named by its endpoint and the variable its key is
+/// read from instead, which under the broker are the broker's address and the
+/// nonce. One with neither is left out, and the session runs without the tool.
+fn generate_image(
+    defined: &Map<String, Value>,
+    written: &[&str],
+    endpoints: &BTreeMap<&str, String>,
+    credential_names: &BTreeMap<String, String>,
+) -> String {
+    let Some((name, images)) = defined
+        .iter()
+        .filter(|(_, fields)| fields.get("extension").and_then(Value::as_bool) != Some(true))
+        .find_map(|(name, fields)| Some((name, fields.get("images")?.as_object()?)))
+    else {
+        return String::new();
+    };
+    let Some(model) = images
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    else {
+        return String::new();
+    };
+    let mut out = String::from("\n[tools.generate_image]\n");
+    if written.contains(&name.as_str()) {
+        let _ = writeln!(out, "provider = {}", toml_string(name));
+    } else if let Some(url) = endpoints.get(name.as_str()) {
+        let _ = writeln!(out, "base_url = {}", toml_string(url));
+        if let Some(env) = credential_names.get(name) {
+            let _ = writeln!(out, "api_key_env = {}", toml_string(env));
+        }
+    } else {
+        return String::new();
+    }
+    let _ = writeln!(out, "model = {}", toml_string(model));
     out
 }
 
@@ -368,42 +411,21 @@ fn plugin_capabilities(plugins: &[PluginConfig]) -> String {
     out
 }
 
-/// Every tool allowed, and what may not be used anyway.
+/// What the operator refuses, refused by the agent itself.
 ///
-/// The agent asks before running a tool, and sets its fallback to asking for
-/// every one of them. A thread cannot answer: the ask arrives as a request
-/// the agent blocks on, and nobody is watching a chat channel for it, so the
-/// session waits out its dialog timer and reports a question that was never
-/// really put to anybody. Allowing each tool by name is what stops that, and
-/// it stops it in the agent rather than by answering for it here.
-///
-/// MCP tools are covered by the wildcard, since errand starts no servers of
-/// its own but a plugin may bring some. The agent's own refusals are left
-/// intact: this only decides what may run without asking.
+/// The agent runs with `--yolo`, so every tool runs without asking: a thread
+/// cannot serve a permission prompt, and an ask nobody sees is a session that
+/// waits out its dialog timer. A configured deny still refuses under it, so
+/// only the operator's refusals are written.
 fn permissions_section(denied: &Denials) -> String {
-    let mut out = String::from(
-        "\n# Every tool runs without asking: the thread cannot serve a permission\n\
-         # prompt, and an ask nobody sees is a session that waits. What the\n\
-         # operator refuses below is refused by the agent itself.\n",
-    );
-    let _ = writeln!(out, "\n[permissions.mcp]");
-    let _ = writeln!(out, "\"*\" = \"allow\"");
-    // One table per tool. A tool named twice is a TOML parse error, which
-    // ends the launch, so a tool is written once and decided there. A tool
-    // the operator refuses outright takes no denied commands: it runs
-    // nothing either way, so the patterns would say nothing.
+    let mut out = String::new();
     let denied_tool = |tool: &str| denied.tools.iter().any(|denied| denied == tool);
-    for tool in TOOLS_ALLOWED.iter().filter(|tool| !denied_tool(tool)) {
-        let _ = writeln!(out, "\n[permissions.tools.{}]", toml_key(tool));
-        let _ = writeln!(out, "default = \"allow\"");
-        if tool == &"shell" {
-            // A list, which the schema requires: `deny` and `allow` take
-            // one entry each. A bare string here is a parse error, which
-            // ends the launch rather than the command.
-            for pattern in &denied.commands {
-                let _ = writeln!(out, "deny = [{}]", toml_string(pattern));
-            }
-        }
+    // A tool refused outright takes no denied commands: it runs nothing
+    // either way, and a second table for it is a TOML parse error.
+    if !denied.commands.is_empty() && !denied_tool("shell") {
+        let patterns: Vec<String> = denied.commands.iter().map(|c| toml_string(c)).collect();
+        let _ = writeln!(out, "\n[permissions.tools.shell]");
+        let _ = writeln!(out, "deny = [{}]", patterns.join(", "));
     }
     for tool in &denied.tools {
         let _ = writeln!(out, "\n[permissions.tools.{}]", toml_key(tool));

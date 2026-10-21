@@ -1,12 +1,16 @@
 //! Reading and showing the project from a thread.
 //!
 //! The containment rule is `crate::sandbox::paths`. This is the session half:
-//! resolving what somebody typed, deciding what is small enough to show, and
-//! reporting an edit as a diff rather than as a name.
+//! resolving what somebody typed, deciding what is small enough to show,
+//! reporting an edit as a diff rather than as a name, and posting an image the
+//! agent made as an upload rather than as a path.
 
-use super::{MAX_DIFFABLE_BYTES, MAX_INLINE, Running};
+use std::fmt::Write as _;
+
+use super::{MAX_DIFFABLE_BYTES, MAX_IMAGES_PER_TURN, MAX_INLINE, Running};
+use crate::agent::protocol::ProducedImage;
 use crate::chat::diff::file_diff;
-use crate::chat::render::{directory_listing, file_view};
+use crate::chat::render::{bytes as byte_count, directory_listing, file_view, widen};
 use crate::log::{LogValue, fields};
 use crate::sandbox::paths;
 use crate::session::event::SessionEvent;
@@ -247,4 +251,122 @@ impl Running {
             })
             .await;
     }
+
+    /// Posts an image the agent made as an upload, captioned with its size,
+    /// where the tool saved it when it did, and what its server said about
+    /// it. One that cannot be posted is reported in the thread with the
+    /// reason instead, so somebody told that an image was made is not left
+    /// waiting for it. Either way it counts toward the turn's cap.
+    pub(super) async fn post_image(&mut self, image: &ProducedImage) {
+        if self.turn_images >= MAX_IMAGES_PER_TURN {
+            if self.turn_images == MAX_IMAGES_PER_TURN {
+                self.say(&format!(
+                    "the agent made more than {MAX_IMAGES_PER_TURN} images this turn, so the \
+                     rest were not posted"
+                ))
+                .await;
+            }
+            self.turn_images += 1;
+            return;
+        }
+        self.turn_images += 1;
+        let saved = image
+            .path
+            .as_deref()
+            .filter(|path| self.host_path(path).is_some())
+            .map(|path| self.display_path(path));
+        let size = u64::try_from(image.bytes.len()).unwrap_or(u64::MAX);
+        let limit = self.options.config.output.max_upload_bytes;
+        let refusal = if size > limit {
+            Some(format!(
+                "the agent made a {} image, over the {} upload limit, so it was not posted",
+                byte_count(widen(size)),
+                byte_count(widen(limit))
+            ))
+        } else if image_extension(&image.bytes).is_none() {
+            Some(
+                "the agent made an image that is not a PNG, JPEG, GIF or WebP, so it was not \
+                 posted"
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            self.log.warn(
+                "an image the agent made was not posted",
+                &fields([("reason", LogValue::from(refusal.as_str()))]),
+            );
+            self.say(&refusal).await;
+            return;
+        }
+        let name = saved
+            .as_deref()
+            .and_then(|path| path.rsplit('/').next())
+            .filter(|name| !name.is_empty())
+            .map_or_else(
+                || format!("image.{}", image_extension(&image.bytes).unwrap_or("png")),
+                str::to_owned,
+            );
+        self.log.info(
+            "posting an image the agent made",
+            &fields([("name", LogValue::from(name.as_str()))]),
+        );
+        let caption = image_caption(saved.as_deref(), widen(size), image.note.as_deref());
+        self.views
+            .send(SessionEvent::Upload {
+                name,
+                bytes: image.bytes.clone(),
+                caption,
+            })
+            .await;
+    }
+}
+
+/// The longest part of an image server's note shown in a caption.
+const MAX_NOTE_CHARS: usize = 300;
+
+/// The file extension of the image `bytes` declare themselves, for a type a
+/// chat service shows as a picture: PNG, JPEG, GIF or WebP.
+fn image_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
+/// The caption an image the agent made is posted with: where the tool saved
+/// it when it did, its size, and in brackets what its server said, such as a
+/// fallback to another model, so a reader sees it beside the picture.
+///
+/// The note is the server's free text: it is kept to printable ASCII on one
+/// line and cut short, with `...` where it was cut, so it cannot carry
+/// control characters or a wall of text into the thread.
+fn image_caption(saved: Option<&str>, size: f64, note: Option<&str>) -> String {
+    let mut caption = match saved {
+        Some(path) => format!("generated `{path}` {}", byte_count(size)),
+        None => format!("generated an image, {}", byte_count(size)),
+    };
+    let printable: String = note
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_ascii_graphic() { c } else { ' ' })
+        .collect();
+    let whole = printable.split_whitespace().collect::<Vec<_>>().join(" ");
+    let note = if whole.len() > MAX_NOTE_CHARS {
+        format!("{}...", whole[..MAX_NOTE_CHARS].trim_end())
+    } else {
+        whole
+    };
+    if !note.is_empty() {
+        let _ = write!(caption, " [{note}]");
+    }
+    caption
 }
