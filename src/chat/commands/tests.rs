@@ -59,6 +59,22 @@ fn a_command_naming_an_account_carries_the_account_id() {
     assert_eq!(command.content, "!allow 900000000000000002");
 }
 
+/// The prompt of an image generation is the command's whole argument, as an
+/// in-thread `!gen-image` would carry it.
+#[test]
+fn an_image_generation_carries_its_prompt() {
+    let command = translate(
+        "gen-image",
+        &[text_option("prompt", "a lighthouse in the fog")],
+        "thread-1",
+        true,
+        "u1",
+        "amelia",
+    );
+
+    assert_eq!(command.content, "!gen-image a lighthouse in the fog");
+}
+
 #[test]
 fn a_command_with_no_argument_is_just_the_command() {
     let command = translate("status", &[], "chan", false, "u1", "amelia");

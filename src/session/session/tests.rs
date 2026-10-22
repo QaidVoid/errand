@@ -3552,6 +3552,250 @@ async fn a_refused_switch_is_not_reported_as_made() {
     .await;
 }
 
+/// `!gen-image` borrows the configured image model for one prompt: it
+/// switches, says the level apart like `!model` does, runs the prompt, and
+/// puts the session back on its own model when the turn settles.
+#[tokio::test]
+async fn an_image_generation_runs_one_prompt_then_switches_back() {
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "model": "sonnet",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                    "ajamxhacker": { "credential": "secret" },
+                },
+                "imageGen": "pic:max",
+            },
+        }))),
+        available_models: vec![
+            AvailableModel {
+                provider: "anthropic".to_owned(),
+                id: "sonnet".to_owned(),
+                default_level: None,
+            },
+            AvailableModel {
+                provider: "ajamxhacker".to_owned(),
+                id: "pic".to_owned(),
+                default_level: None,
+            },
+        ],
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+            let before = harness.controls().written().len();
+
+            tokio::join!(
+                harness
+                    .session
+                    .handle(message_from("!gen-image a lighthouse", OWNER, "m2")),
+                async {
+                    settle().await;
+                    harness.controls().answer(&json!({}));
+                }
+            );
+            settle().await;
+
+            // The prompt ran on the image model, so ending it settles the
+            // turn and the restore goes out; the agent answers that too.
+            harness.controls().turn_end();
+            settle().await;
+            harness.controls().answer(&json!({}));
+            settle().await;
+
+            let said: Vec<String> = harness.controls().written().split_off(before);
+            let switches: Vec<&String> = said
+                .iter()
+                .filter(|line| {
+                    line.contains("session/set_config_option")
+                        && line.contains("\"configId\":\"model\"")
+                })
+                .collect();
+            assert_eq!(switches.len(), 2, "one switch out, one back: {said:?}");
+            assert!(
+                switches[0].contains("\"value\":\"ajamxhacker/pic\""),
+                "the prompt runs on the image model, got {}",
+                switches[0]
+            );
+            assert!(
+                switches[1].contains("\"value\":\"anthropic/sonnet\""),
+                "the session goes back to its own model, got {}",
+                switches[1]
+            );
+            assert!(
+                said.iter()
+                    .any(|line| line.contains("\"configId\":\"thinking\"")
+                        && line.contains("\"value\":\"max\"")),
+                "the effort from the configuration is said on its own, got {said:?}"
+            );
+            assert!(
+                said.iter()
+                    .any(|line| line.contains("session/prompt") && line.contains("a lighthouse")),
+                "the prompt itself is sent, got {said:?}"
+            );
+            assert!(
+                harness
+                    .thread
+                    .replies()
+                    .iter()
+                    .any(|(text, _)| text.contains("generating this on `pic:max`")),
+                "the thread is told which model draws, got {:?}",
+                harness.thread.replies()
+            );
+            assert_eq!(
+                harness.thread.final_reaction("m2"),
+                Some(ReactionOutcome::Succeeded)
+            );
+        })
+    })
+    .await;
+}
+
+/// A session that has not settled on a model of its own has nothing to go
+/// back to, and is told so rather than left to find out from the next reply.
+#[tokio::test]
+async fn an_image_generation_without_a_model_of_its_own_says_it_stays() {
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                    "ajamxhacker": { "credential": "secret" },
+                },
+                "imageGen": "pic",
+            },
+        }))),
+        available_models: vec![AvailableModel {
+            provider: "ajamxhacker".to_owned(),
+            id: "pic".to_owned(),
+            default_level: None,
+        }],
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+
+            tokio::join!(
+                harness
+                    .session
+                    .handle(message_from("!gen-image a lighthouse", OWNER, "m2")),
+                async {
+                    settle().await;
+                    harness.controls().answer(&json!({}));
+                }
+            );
+            settle().await;
+            harness.controls().turn_end();
+            settle().await;
+
+            let said = harness.thread.everything();
+            assert!(
+                said.contains("it had no model of its own yet"),
+                "the thread is told there was nothing to go back to, got {said}"
+            );
+            assert!(
+                !harness
+                    .controls()
+                    .written()
+                    .iter()
+                    .any(|line| line.contains("\"value\":\"anthropic/")),
+                "no model is restored when none was running, got {:?}",
+                harness.controls().written()
+            );
+        })
+    })
+    .await;
+}
+
+/// Nothing is configured to draw with, and the command says so rather than
+/// sending the prompt to whatever model the session happens to run on.
+#[tokio::test]
+async fn an_image_generation_without_a_configured_model_is_refused() {
+    let case = SessionTestCase::default();
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+            let before = harness.controls().written().len();
+
+            harness
+                .session
+                .handle(message_from("!gen-image a lighthouse", OWNER, "m2"))
+                .await;
+            settle().await;
+
+            let said = harness.thread.everything();
+            assert!(said.contains("no image model is configured"), "{said}");
+            assert!(
+                !harness
+                    .controls()
+                    .written()
+                    .split_off(before)
+                    .iter()
+                    .any(|line| line.contains("session/prompt")),
+                "nothing is sent to the agent"
+            );
+            assert_eq!(
+                harness.thread.final_reaction("m2"),
+                Some(ReactionOutcome::Failed)
+            );
+        })
+    })
+    .await;
+}
+
+/// The image model is read as `!model` reads a name, so one nothing lists is
+/// refused here, where it costs nothing, rather than as a failed turn.
+#[tokio::test]
+async fn an_image_generation_naming_an_unknown_model_is_refused() {
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                },
+                "imageGen": "missing",
+            },
+        }))),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+
+            harness
+                .session
+                .handle(message_from("!gen-image a lighthouse", OWNER, "m2"))
+                .await;
+            settle().await;
+
+            let said = harness.thread.everything();
+            assert!(
+                said.contains("does not list a model called `missing`"),
+                "{said}"
+            );
+            assert_eq!(
+                harness.thread.final_reaction("m2"),
+                Some(ReactionOutcome::Failed)
+            );
+        })
+    })
+    .await;
+}
+
 /// The configured model may name its provider, and that is where the session
 /// starts: on that provider's credential, with the model named bare. Reading
 /// the standing `provider` instead sends the wrong key to the wrong host.

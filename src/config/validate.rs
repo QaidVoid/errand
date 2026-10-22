@@ -46,10 +46,11 @@ const KNOWN_CHAT: [&str; 6] = [
     "operatorUserIds",
     "startOnMention",
 ];
-const KNOWN_AGENT: [&str; 14] = [
+const KNOWN_AGENT: [&str; 15] = [
     "provider",
     "model",
     "visionModel",
+    "imageGen",
     "delegate",
     "rulesPath",
     "providers",
@@ -827,6 +828,7 @@ fn validate_agent(raw: &Map<String, Value>, problems: &mut Problems) -> AgentCon
         provider: required_string(&source, "provider", "agent", problems),
         model: optional_string(&source, "model", "agent", problems),
         vision_model: optional_string(&source, "visionModel", "agent", problems),
+        image_gen: optional_string(&source, "imageGen", "agent", problems),
         delegate: validate_delegate(&source, problems),
         rules_path: optional_absolute_path(&source, "rulesPath", "agent", problems),
         providers: validate_providers(&source, problems),

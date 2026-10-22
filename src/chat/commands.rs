@@ -44,6 +44,7 @@ const TEXT_OPTION: &[(&str, &str, &str, bool)] = &[
     ("!steer", "instruction", "what to do instead", true),
     ("!then", "instruction", "what to do after this turn", true),
     ("!pr", "title", "title for the pull request", true),
+    ("!gen-image", "prompt", "what to generate", true),
 ];
 
 /// Commands that name an account, so the client offers a member picker.
@@ -53,7 +54,7 @@ const USER_OPTION: &[(&str, &str)] = &[
 ];
 
 /// The names of the options whose values are read back in `translate`.
-const OPTION_NAMES: [&str; 3] = ["path", "instruction", "title"];
+const OPTION_NAMES: [&str; 4] = ["path", "instruction", "title", "prompt"];
 
 /// Raised when the service will not accept the commands, with what to do.
 #[derive(Debug, thiserror::Error)]

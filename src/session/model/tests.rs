@@ -175,6 +175,7 @@ fn the_configured_model_may_name_its_provider_too() {
         provider: "zai-coding-cn".to_owned(),
         model: Some("ajamxhacker/musecringe:max".to_owned()),
         vision_model: None,
+        image_gen: None,
         delegate: None,
         rules_path: None,
         providers: serde_json::Map::from_iter([

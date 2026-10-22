@@ -993,6 +993,49 @@ fn a_shadowed_credential_variable_is_refused_for_any_provider() {
     ));
 }
 
+/// The image model `!gen-image` asks for is taken as written: an alias, a
+/// level on the end and all, since what it names is settled when the command
+/// is used and a name nothing lists is refused there.
+#[test]
+fn an_image_model_is_taken_as_written_and_absent_stays_absent() {
+    let config = validate_config(&valid(json!({
+        "agent": {
+            "provider": "anthropic",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+            },
+            "imageGen": "image:max",
+        },
+    })))
+    .expect("an image model is accepted");
+
+    assert_eq!(config.agent.image_gen.as_deref(), Some("image:max"));
+    assert_eq!(
+        validate_config(&valid(json!({})))
+            .expect("a minimal file resolves")
+            .agent
+            .image_gen,
+        None
+    );
+}
+
+/// An image model that is not a string is a typo worth naming.
+#[test]
+fn an_image_model_that_is_not_a_string_is_refused() {
+    assert!(problems_contain(
+        &valid(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+                },
+                "imageGen": 7,
+            },
+        })),
+        "agent.imageGen"
+    ));
+}
+
 /// A provider a plugin registers needs no credential to start: the plugin
 /// carries its own, and errand does not reach it. The credential an entry
 /// does name is delivered whole, since a signing plugin cannot sign with a

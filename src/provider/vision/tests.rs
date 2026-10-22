@@ -41,6 +41,7 @@ fn agent() -> AgentConfig {
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
         vision_model: None,
+        image_gen: None,
         delegate: None,
         rules_path: None,
         providers: serde_json::Map::from_iter([(

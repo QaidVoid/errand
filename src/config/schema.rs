@@ -141,6 +141,14 @@ pub struct AgentConfig {
     pub model: Option<String>,
     /// Model an image is shown to when the working model cannot see one.
     pub vision_model: Option<String>,
+    /// Model `!gen-image` runs one prompt on, or none.
+    ///
+    /// Named as `!model` names them: an alias, `provider/id`, or a bare model
+    /// id, with the effort to use as a level on the end, as `image:max`. A
+    /// name nothing lists is refused when the command is used, not here. Only
+    /// the one prompt runs on it: the session goes back to the model it was
+    /// on when the turn settles.
+    pub image_gen: Option<String>,
     /// A cheaper model to ask about one artefact, or none.
     pub delegate: Option<DelegateConfig>,
     /// File of standing instructions given to every session, or none.

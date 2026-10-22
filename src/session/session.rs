@@ -637,6 +637,16 @@ impl SessionHandle {
     }
 }
 
+/// The model a session ran on before `!gen-image` moved it for one turn.
+#[derive(Debug, Clone)]
+struct PreviousModel {
+    /// The provider it is served by.
+    provider: String,
+    /// What it is called, level included, as `!model` shows it. None when
+    /// the session had not settled on one yet.
+    model: Option<String>,
+}
+
 /// The session's whole state, owned by its one task.
 ///
 /// The flags mirror the original's fields one for one; gathering them into
@@ -706,6 +716,8 @@ struct Running {
     guests: HashSet<String>,
     /// Where a `!model` moved this session, which outlives the command.
     switched: Option<(String, String)>,
+    /// The model `!gen-image` puts back when the turn it started settles.
+    restoring: Option<PreviousModel>,
     /// Speakers whose memory has already been given to the agent this session.
     introduced: HashSet<String>,
     /// Whoever spoke most recently, so a recorded fact is attributed to them.
@@ -739,6 +751,7 @@ impl Running {
             delegated_tokens: 0,
             delegated_kept_out: 0,
             switched: None,
+            restoring: None,
             last_speaker_id: None,
             ended: false,
             last_active: now_ms(),
@@ -1674,6 +1687,12 @@ impl Running {
         self.current_author_id = None;
         if let Some(message_id) = message_id {
             self.react(&message_id, outcome).await;
+        }
+
+        // Every end of a turn passes through here, so this is where the
+        // model `!gen-image` borrowed for one prompt goes back.
+        if let Some(previous) = self.restoring.take() {
+            self.restore_model(&previous).await;
         }
     }
 

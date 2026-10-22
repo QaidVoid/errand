@@ -122,6 +122,15 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
             argument: Some("[name]"),
         },
     ),
+    (
+        "!gen-image",
+        CommandMeta {
+            access: Guest,
+            group: Session,
+            summary: "generate with the image model",
+            argument: Some("<prompt>"),
+        },
+    ),
     // Who may take part. The owner's alone, for the same reason.
     (
         "!allow",
