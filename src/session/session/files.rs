@@ -14,8 +14,9 @@ use crate::chat::render::{
     bytes as byte_count, connection_line, directory_listing, file_view, widen,
 };
 use crate::log::{LogValue, fields};
-use crate::provider::images::{endpoint_for, image_extension};
+use crate::provider::images::{endpoint_with_effort, image_extension};
 use crate::sandbox::paths;
+use crate::session::commands::image_args;
 use crate::session::event::{ReactionOutcome, SessionEvent};
 use crate::session::files::{NotAFileError, read_directory, read_file_for_display};
 
@@ -263,17 +264,28 @@ impl Running {
     /// `/chat/completions` and come back as a link in prose instead of a
     /// picture.
     ///
-    /// The model is `agent.imageGen`, read as `!model` reads a name, so an
-    /// alias and a `provider/id` both work. The level on it is the effort to
-    /// generate at.
+    /// The model is `agent.imageGen` unless the command names one, read as
+    /// `!model` reads a name, so an alias and a `provider/id` both work. The
+    /// effort is a level, asked for on the command or carried by the name, and
+    /// one asked for replaces the other.
     pub(super) async fn generate_image(&mut self, rest: &str, message: &IncomingMessage) {
-        let prompt = rest.trim();
-        if prompt.is_empty() {
-            self.say("say what to generate, as `!gen-image <prompt>`")
-                .await;
+        let asked = match image_args(rest) {
+            Ok(asked) => asked,
+            Err(refused) => {
+                self.say(&refused).await;
+                self.react(&message.id, ReactionOutcome::Failed).await;
+                return;
+            }
+        };
+        if asked.prompt.is_empty() {
+            self.say(
+                "say what to generate, as `!gen-image [--effort <level>] [<model>:<level>] <prompt>`",
+            )
+            .await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
             return;
         }
-        let named = self
+        let configured = self
             .options
             .config
             .agent
@@ -281,7 +293,9 @@ impl Running {
             .as_deref()
             .map(str::trim)
             .filter(|named| !named.is_empty());
-        let Some(named) = named else {
+        // A model named on the command is the more specific thing to have
+        // said, so it beats the configured one.
+        let Some(named) = asked.model.or(configured) else {
             self.say("no image model is configured; name one with `agent.imageGen`")
                 .await;
             self.react(&message.id, ReactionOutcome::Failed).await;
@@ -295,11 +309,12 @@ impl Running {
 
         // Read from the catalog rather than this session's own copy of the
         // configuration, so a name added since it was launched still works.
-        let endpoint = match endpoint_for(
+        let endpoint = match endpoint_with_effort(
             &self.options.config.agent,
             &self.options.catalog.models(),
             named,
             &self.options.catalog.aliases(),
+            asked.effort.as_deref(),
         ) {
             Ok(endpoint) => endpoint,
             Err(refused) => {
@@ -308,6 +323,7 @@ impl Running {
                 return;
             }
         };
+        let prompt = asked.prompt.to_owned();
 
         self.react(&message.id, ReactionOutcome::Accepted).await;
         self.say(&connection_line(&format!(
@@ -316,7 +332,7 @@ impl Running {
         )))
         .await;
 
-        let drawn = match draw_image(endpoint.clone(), prompt.to_owned()).await {
+        let drawn = match draw_image(endpoint.clone(), prompt).await {
             Ok(drawn) => drawn,
             Err(refused) => {
                 self.say(&refused).await;

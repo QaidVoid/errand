@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use crate::config::schema::AgentConfig;
 use crate::provider::models::{AvailableModel, Matched, match_model};
-use crate::session::model::{expand_alias, known_providers, resolve_model};
+use crate::session::model::{expand_alias, known_providers, resolve_model, split_level};
 
 /// The largest answer read, so a runaway body cannot be held in memory. A
 /// 1.5 MB PNG is about 2 MB of base64, which leaves room for a large picture.
@@ -65,11 +65,18 @@ pub struct ImageError(pub String);
 /// The endpoint is the provider's own `baseUrl`. A provider whose key the
 /// daemon does not hold cannot be reached at all, and that is said rather than
 /// attempted with an empty one.
-pub fn endpoint_for(
+///
+/// The effort is a level, and the images endpoint takes it as part of the
+/// model id, as `image:max`. One asked for on the command replaces the level
+/// the name has, since somebody typing one is being more specific than the
+/// configuration was. None leaves the name as it is, which is how the
+/// configuration's own level survives.
+pub fn endpoint_with_effort(
     agent: &AgentConfig,
     available: &[AvailableModel],
     named: &str,
     aliases: &BTreeMap<String, String>,
+    effort: Option<&str>,
 ) -> Result<Endpoint, ImageError> {
     let expanded = expand_alias(named, aliases);
     // The provider is where the request goes; the model is what the endpoint
@@ -106,6 +113,12 @@ pub fn endpoint_for(
             ))
         })?;
     let credential = agent.credential_of(&provider).unwrap_or_default();
+    // The level goes on the bare id, so an effort asked for on the command
+    // replaces the one the name carried rather than stacking beside it.
+    let model = match effort {
+        Some(effort) => format!("{}:{effort}", split_level(&model).0),
+        None => model,
+    };
     Ok(Endpoint {
         base_url: base_url.to_owned(),
         model,

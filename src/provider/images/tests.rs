@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use serde_json::{Value, json};
 
 use super::{
-    Drawn, Endpoint, ImageError, Post, Request, Response, decode_base64, draw, endpoint_for,
+    Drawn, Endpoint, ImageError, Post, Request, Response, decode_base64, draw, endpoint_with_effort,
 };
 use crate::provider::models::AvailableModel;
 
@@ -389,7 +389,8 @@ fn the_endpoint_is_the_provider_that_serves_the_named_model() {
     }));
 
     let endpoint =
-        endpoint_for(&configured, &[], "pictures/pic:max", &BTreeMap::new()).expect("an endpoint");
+        endpoint_with_effort(&configured, &[], "pictures/pic:max", &BTreeMap::new(), None)
+            .expect("an endpoint");
 
     assert_eq!(endpoint.base_url, "https://images.example/v1");
     assert_eq!(endpoint.model, "pic:max");
@@ -411,7 +412,8 @@ fn a_short_name_is_expanded_before_it_is_looked_up() {
         "aliases": { "pic": "pictures/image-large" },
     }));
 
-    let endpoint = endpoint_for(&configured, &[], "pic", &configured.aliases).expect("an endpoint");
+    let endpoint = endpoint_with_effort(&configured, &[], "pic", &configured.aliases, None)
+        .expect("an endpoint");
 
     assert_eq!(endpoint.model, "image-large");
     assert_eq!(endpoint.base_url, "https://images.example/v1");
@@ -430,8 +432,8 @@ fn a_bare_name_is_served_by_the_configured_provider() {
         },
     }));
 
-    let endpoint =
-        endpoint_for(&configured, &[], "image-small", &BTreeMap::new()).expect("an endpoint");
+    let endpoint = endpoint_with_effort(&configured, &[], "image-small", &BTreeMap::new(), None)
+        .expect("an endpoint");
 
     assert_eq!(endpoint.base_url, "https://images.example/v1");
     assert_eq!(endpoint.model, "image-small");
@@ -473,7 +475,8 @@ fn a_bare_image_model_is_served_by_the_provider_that_lists_it() {
     ];
 
     let endpoint =
-        endpoint_for(&configured, &available, "image:max", &BTreeMap::new()).expect("an endpoint");
+        endpoint_with_effort(&configured, &available, "image:max", &BTreeMap::new(), None)
+            .expect("an endpoint");
 
     // The images host, with its own key, and the level kept on the model.
     assert_eq!(endpoint.base_url, "https://image.pg.ai.ajam.dev/v1");
@@ -507,7 +510,7 @@ fn a_name_two_providers_serve_is_refused_with_both_named() {
         },
     ];
 
-    let refused = endpoint_for(&configured, &available, "image", &BTreeMap::new())
+    let refused = endpoint_with_effort(&configured, &available, "image", &BTreeMap::new(), None)
         .expect_err("two providers serve it");
 
     assert!(
@@ -543,8 +546,8 @@ fn the_provider_the_session_runs_on_is_preferred_when_it_serves_the_name() {
         },
     ];
 
-    let endpoint =
-        endpoint_for(&configured, &available, "image", &BTreeMap::new()).expect("an endpoint");
+    let endpoint = endpoint_with_effort(&configured, &available, "image", &BTreeMap::new(), None)
+        .expect("an endpoint");
 
     assert_eq!(endpoint.base_url, "https://one.example/v1");
     assert_eq!(endpoint.model, "image");
@@ -576,11 +579,106 @@ fn a_bare_image_name_resolves_through_the_catalog_the_daemon_builds() {
     let available = crate::provider::models::available_models(&configured, None);
 
     let endpoint =
-        endpoint_for(&configured, &available, "image:max", &BTreeMap::new()).expect("an endpoint");
+        endpoint_with_effort(&configured, &available, "image:max", &BTreeMap::new(), None)
+            .expect("an endpoint");
 
     assert_eq!(endpoint.base_url, "https://image.pg.ai.ajam.dev/v1");
     assert_eq!(endpoint.model, "image:max");
     assert_eq!(endpoint.credential, "image-key");
+}
+
+/// An effort asked for on the command goes on the model id, which is where
+/// the endpoint reads it.
+#[test]
+fn an_effort_asked_for_goes_on_the_model_id() {
+    let configured = agent(&json!({
+        "provider": "pg-oc",
+        "providers": {
+            "pg-oc": { "credential": "k", "baseUrl": "https://oc.example" },
+            "pg-image": {
+                "credential": "k",
+                "baseUrl": "https://image.pg.ai.ajam.dev/v1",
+                "models": [{ "id": "image", "produces": ["text", "image"] }],
+            },
+        },
+    }));
+    let available = vec![AvailableModel {
+        provider: "pg-image".to_owned(),
+        id: "image".to_owned(),
+        default_level: None,
+    }];
+
+    let endpoint = endpoint_with_effort(
+        &configured,
+        &available,
+        "image",
+        &BTreeMap::new(),
+        Some("max"),
+    )
+    .expect("an endpoint");
+
+    assert_eq!(endpoint.model, "image:max");
+}
+
+/// An effort replaces the level the name already carries rather than stacking
+/// a second colon beside it.
+#[test]
+fn an_effort_replaces_a_level_the_name_already_carries() {
+    let configured = agent(&json!({
+        "provider": "pg-oc",
+        "providers": {
+            "pg-oc": { "credential": "k", "baseUrl": "https://oc.example" },
+            "pg-image": {
+                "credential": "k",
+                "baseUrl": "https://image.pg.ai.ajam.dev/v1",
+                "models": [{ "id": "image:high", "produces": ["text", "image"] }],
+            },
+        },
+    }));
+    let available = vec![AvailableModel {
+        provider: "pg-image".to_owned(),
+        id: "image:high".to_owned(),
+        default_level: None,
+    }];
+
+    let endpoint = endpoint_with_effort(
+        &configured,
+        &available,
+        "image:high",
+        &BTreeMap::new(),
+        Some("low"),
+    )
+    .expect("an endpoint");
+
+    assert_eq!(endpoint.model, "image:low");
+}
+
+/// With no effort asked for, the level the name carries is kept, which is how
+/// the configuration's own level survives.
+#[test]
+fn no_effort_keeps_the_level_the_name_carries() {
+    let configured = agent(&json!({
+        "provider": "pg-oc",
+        "providers": {
+            "pg-oc": { "credential": "k", "baseUrl": "https://oc.example" },
+            "pg-image": {
+                "credential": "k",
+                "baseUrl": "https://image.pg.ai.ajam.dev/v1",
+                "models": [{ "id": "image:max", "produces": ["text", "image"] }],
+            },
+        },
+    }));
+    let available = vec![AvailableModel {
+        provider: "pg-image".to_owned(),
+        id: "image:max".to_owned(),
+        default_level: None,
+    }];
+
+    let endpoint =
+        endpoint_with_effort(&configured, &available, "image:max", &BTreeMap::new(), None)
+            .expect("an endpoint");
+
+    assert_eq!(endpoint.model, "image:max");
 }
 
 /// A provider with no endpoint has nowhere to send the request, and saying
@@ -592,8 +690,8 @@ fn a_provider_without_an_endpoint_is_refused() {
         "providers": { "pictures": { "credential": "k" } },
     }));
 
-    let refused =
-        endpoint_for(&configured, &[], "image-small", &BTreeMap::new()).expect_err("no endpoint");
+    let refused = endpoint_with_effort(&configured, &[], "image-small", &BTreeMap::new(), None)
+        .expect_err("no endpoint");
 
     assert!(
         refused.0.contains("no endpoint is configured"),
@@ -615,8 +713,14 @@ fn a_provider_without_a_credential_sends_none() {
         },
     }));
 
-    let endpoint =
-        endpoint_for(&configured, &[], "local/image-small", &BTreeMap::new()).expect("an endpoint");
+    let endpoint = endpoint_with_effort(
+        &configured,
+        &[],
+        "local/image-small",
+        &BTreeMap::new(),
+        None,
+    )
+    .expect("an endpoint");
 
     assert_eq!(endpoint.base_url, "http://localhost:8080/v1");
     assert_eq!(endpoint.credential, "");

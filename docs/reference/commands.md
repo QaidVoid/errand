@@ -19,7 +19,7 @@ aside: everyone in the thread sees it and the agent is never told.
 | `!pr [--repo <directory>] <title>` | the owner and operators | open a pull request for the work on this branch |
 | `!compact` | the owner and operators | summarise the conversation so far to free up context |
 | `!model [name]` | the owner and operators | show the models available, or switch to one |
-| `!gen-image <prompt>` | the owner and whoever they invited | generate with the image model |
+| `!gen-image <prompt>` | the owner and whoever they invited | draw with the image model |
 
 ## Who takes part
 

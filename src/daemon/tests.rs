@@ -726,6 +726,84 @@ async fn an_image_generation_in_the_channel_draws_and_posts_it() {
     .await;
 }
 
+/// An effort asked for in the channel reaches the request too, as part of the
+/// model id.
+#[tokio::test]
+async fn an_image_generation_in_the_channel_passes_the_effort_it_was_asked_for() {
+    let (asked, draw) = drawing();
+    with_daemon(image_case("ajamxhacker/pic", Some(draw)), |harness| {
+        Box::pin(async move {
+            harness
+                .daemon
+                .handle(
+                    raw("!gen-image --effort xhigh a lighthouse"),
+                    InboundDecision::Start,
+                )
+                .await;
+
+            assert_eq!(
+                asked.lock().unwrap().as_slice(),
+                [("pic:xhigh".to_owned(), "a lighthouse".to_owned())]
+            );
+            assert_eq!(harness.files.lock().unwrap().len(), 1);
+        })
+    })
+    .await;
+}
+
+/// An effort nothing would understand is refused in the channel it was asked
+/// in, rather than drawn at the default.
+#[tokio::test]
+async fn an_unknown_effort_in_the_channel_is_refused() {
+    let (asked, draw) = drawing();
+    with_daemon(image_case("ajamxhacker/pic", Some(draw)), |harness| {
+        Box::pin(async move {
+            harness
+                .daemon
+                .handle(
+                    raw("!gen-image --effort extreme a lighthouse"),
+                    InboundDecision::Start,
+                )
+                .await;
+
+            assert!(
+                harness.said().contains("is not an effort"),
+                "{}",
+                harness.said()
+            );
+            assert!(asked.lock().unwrap().is_empty(), "nothing is drawn");
+            assert!(harness.files.lock().unwrap().is_empty());
+        })
+    })
+    .await;
+}
+
+/// A slash command's effort arrives as the same flag, and lands the same way.
+#[tokio::test]
+async fn a_slash_image_generation_passes_its_effort() {
+    let (asked, draw) = drawing();
+    with_daemon(image_case("ajamxhacker/pic", Some(draw)), |harness| {
+        Box::pin(async move {
+            let answer = harness
+                .daemon
+                .run_command(&SlashCommand {
+                    thread_id: None,
+                    user_id: OWNER.to_owned(),
+                    user_name: "amelia".to_owned(),
+                    content: "!gen-image --effort low a lighthouse".to_owned(),
+                })
+                .await;
+
+            assert!(answer.contains("the picture is in the channel"), "{answer}");
+            assert_eq!(
+                asked.lock().unwrap().as_slice(),
+                [("pic:low".to_owned(), "a lighthouse".to_owned())]
+            );
+        })
+    })
+    .await;
+}
+
 /// Nothing is configured to draw with, and the command says so rather than
 /// drawing with whatever the provider defaults to.
 #[tokio::test]

@@ -2,7 +2,7 @@
 
 use super::{
     COMMANDS, CommandAccess, Standing, answer_without_session, argument_of, asks_for_pull_request,
-    help_text, is_addressed_to_bot, is_aside, is_command, may_run, parse_user_id,
+    help_text, image_args, is_addressed_to_bot, is_aside, is_command, may_run, parse_user_id,
     pull_request_args,
 };
 use crate::chat::render::MESSAGE_LIMIT;
@@ -167,6 +167,10 @@ fn help_groups_the_commands_and_says_which_are_not_open_to_all() {
 /// `!help` reaches a slash command as a single interaction response, and the
 /// service refuses one over its message limit rather than truncating it. A
 /// command added to the table must not push the list past that.
+///
+/// The list sat at 1993 of 2000 characters when `!gen-image` last changed, so
+/// the next command or argument added here needs something else shortened to
+/// make room. This test is what says so.
 #[test]
 fn the_help_list_fits_one_message() {
     let text = help_text();
@@ -220,4 +224,84 @@ fn a_pull_request_names_its_repository_only_by_flag() {
         pull_request_args("--repository x"),
         (None, "--repository x")
     );
+}
+
+/// A prompt alone asks for nothing but the picture.
+#[test]
+fn an_image_prompt_alone_names_no_model_and_no_effort() {
+    let asked = image_args("a lighthouse in the fog").expect("read");
+
+    assert_eq!(asked.model, None);
+    assert_eq!(asked.effort, None);
+    assert_eq!(asked.prompt, "a lighthouse in the fog");
+}
+
+/// The effort may be a flag, which is how a slash command says it.
+#[test]
+fn an_effort_flag_is_read_and_kept_off_the_prompt() {
+    let asked = image_args("--effort max a lighthouse").expect("read");
+
+    assert_eq!(asked.effort.as_deref(), Some("max"));
+    assert_eq!(asked.prompt, "a lighthouse");
+    assert_eq!(asked.model, None);
+}
+
+/// The effort may also be a level on the model, which is how `!model` says it.
+#[test]
+fn a_model_with_a_level_names_both_the_model_and_the_effort() {
+    let asked = image_args("image:xhigh a lighthouse").expect("read");
+
+    assert_eq!(asked.model, Some("image:xhigh"));
+    assert_eq!(asked.effort.as_deref(), Some("xhigh"));
+    assert_eq!(asked.prompt, "a lighthouse");
+}
+
+/// A flag beats a level when both are given, since it is the more explicit.
+#[test]
+fn a_flag_beats_a_level_on_the_model() {
+    let asked = image_args("--effort low image:max a lighthouse").expect("read");
+
+    assert_eq!(asked.model, Some("image:max"));
+    assert_eq!(asked.effort.as_deref(), Some("low"));
+    assert_eq!(asked.prompt, "a lighthouse");
+}
+
+/// A prompt that happens to begin with a word is the prompt, not a model: only
+/// a word whose end is a level this host knows names one.
+#[test]
+fn a_first_word_that_is_not_a_level_stays_in_the_prompt() {
+    let asked = image_args("draw a lighthouse").expect("read");
+
+    assert_eq!(asked.model, None);
+    assert_eq!(asked.prompt, "draw a lighthouse");
+
+    // A colon that introduces no level is part of the word.
+    let asked = image_args("note: this is prose").expect("read");
+    assert_eq!(asked.model, None);
+    assert_eq!(asked.prompt, "note: this is prose");
+}
+
+/// An effort nothing would understand is refused here rather than passed on.
+#[test]
+fn an_unknown_effort_is_refused_naming_the_ones_that_work() {
+    let refused = image_args("--effort extreme a lighthouse").expect_err("not a level");
+
+    assert!(refused.contains("extreme"), "{refused}");
+    assert!(refused.contains("xhigh"), "{refused}");
+}
+
+/// A flag with nothing after it says what to type instead of drawing nothing.
+#[test]
+fn an_effort_flag_with_no_level_says_what_to_type() {
+    let refused = image_args("--effort").expect_err("no level");
+
+    assert!(refused.contains("--effort"), "{refused}");
+}
+
+/// The effort is taken in any case, as a level on a model is.
+#[test]
+fn an_effort_is_read_case_insensitively() {
+    let asked = image_args("--effort MAX a lighthouse").expect("read");
+
+    assert_eq!(asked.effort.as_deref(), Some("max"));
 }

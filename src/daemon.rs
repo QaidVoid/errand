@@ -20,7 +20,7 @@ use crate::config::schema::{ALLOW_EVERY_USER, ChatConfig, Config, SandboxBackend
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::{MemoryStore, Scope};
 use crate::provider::discover::Catalog;
-use crate::provider::images::{Picture, endpoint_for};
+use crate::provider::images::{Picture, endpoint_with_effort};
 use crate::sandbox::Backend;
 use crate::sandbox::backend::{CapabilityReport, SandboxUnavailableError};
 use crate::sandbox::bailey::BaileyOptions;
@@ -30,6 +30,7 @@ use crate::sandbox::bailey::run_bailey_arc;
 use crate::sandbox::podman::PodmanSandbox;
 use crate::sandbox::podman::run_podman_arc;
 use crate::session::attachments::RawAttachment;
+use crate::session::commands::image_args;
 use crate::session::commands::{
     answer_without_session, argument_of, first_word, is_addressed_to_bot, is_aside, parse_user_id,
 };
@@ -741,16 +742,25 @@ impl Daemon {
     /// is one call, and opening a conversation to make one is what used to
     /// send the prompt to a chat model instead.
     async fn draw_into_channel(&self, message: &IncomingMessage) {
-        let prompt = argument_of(&message.content, IMAGE_GENERATION).trim();
-        if prompt.is_empty() {
+        let asked = match image_args(argument_of(&message.content, IMAGE_GENERATION)) {
+            Ok(asked) => asked,
+            Err(refused) => {
+                (self.options.reply_in_channel)(message.clone(), refused).await;
+                return;
+            }
+        };
+        if asked.prompt.is_empty() {
             (self.options.reply_in_channel)(
                 message.clone(),
-                "say what to generate, as `!gen-image <prompt>`".to_owned(),
+                "say what to generate, as `!gen-image [--effort <level>] <prompt>`".to_owned(),
             )
             .await;
             return;
         }
-        match self.draw(prompt).await {
+        match self
+            .draw(asked.model, asked.effort.as_deref(), asked.prompt)
+            .await
+        {
             Ok(drawn) => {
                 (self.options.reply_with_file)(
                     message.clone(),
@@ -766,30 +776,37 @@ impl Daemon {
         }
     }
 
-    /// Draws one picture, with the model the configuration names.
+    /// Draws one picture, with the model and effort it was asked for.
     ///
     /// The endpoint is resolved from the configuration in force rather than a
     /// copy taken at startup, so a model or a provider changed in the file is
-    /// one this already draws with.
-    async fn draw(&self, prompt: &str) -> Result<Picture, String> {
+    /// one this already draws with. A model named on the command beats the
+    /// configured one, and an effort asked for beats the level it carries.
+    async fn draw(
+        &self,
+        named: Option<&str>,
+        effort: Option<&str>,
+        prompt: &str,
+    ) -> Result<Picture, String> {
         let config = self.options.config.get();
-        let named = config
+        let configured = config
             .agent
             .image_gen
             .as_deref()
             .map(str::trim)
-            .filter(|named| !named.is_empty())
-            .ok_or_else(|| {
-                "no image model is configured; name one with `agent.imageGen`".to_owned()
-            })?;
+            .filter(|named| !named.is_empty());
+        let Some(named) = named.or(configured) else {
+            return Err("no image model is configured; name one with `agent.imageGen`".to_owned());
+        };
         let Some(draw_image) = self.options.draw_image.clone() else {
             return Err("this host has no way to draw an image".to_owned());
         };
-        let endpoint = endpoint_for(
+        let endpoint = endpoint_with_effort(
             &config.agent,
             &self.options.catalog.models(),
             named,
             &config.agent.aliases,
+            effort,
         )
         .map_err(|refused| refused.0)?;
         let drawn = draw_image(endpoint.clone(), prompt.to_owned()).await?;
@@ -825,13 +842,15 @@ impl Daemon {
         // interaction was already claimed, and the picture follows in the
         // channel it was asked in.
         if command.thread_id.is_none() && first_word(&command.content) == IMAGE_GENERATION {
-            let prompt = argument_of(&command.content, IMAGE_GENERATION)
-                .trim()
-                .to_owned();
-            if prompt.is_empty() {
+            let asked = match image_args(argument_of(&command.content, IMAGE_GENERATION)) {
+                Ok(asked) => asked,
+                Err(refused) => return refused,
+            };
+            if asked.prompt.is_empty() {
                 return "say what to generate, as `/gen-image <prompt>`".to_owned();
             }
-            let asked = IncomingMessage {
+            let prompt = asked.prompt.to_owned();
+            let where_to = IncomingMessage {
                 id: format!("slash-{}", command.user_id),
                 author_id: command.user_id.clone(),
                 channel_id: String::new(),
@@ -839,11 +858,18 @@ impl Daemon {
                 content: command.content.clone(),
                 attachments: Vec::new(),
             };
-            let drawing = self.draw(&prompt).await;
+            let drawing = self
+                .draw(asked.model, asked.effort.as_deref(), &prompt)
+                .await;
             return match drawing {
                 Ok(drawn) => {
-                    (self.options.reply_with_file)(asked, drawn.name, drawn.bytes, drawn.caption)
-                        .await;
+                    (self.options.reply_with_file)(
+                        where_to,
+                        drawn.name,
+                        drawn.bytes,
+                        drawn.caption,
+                    )
+                    .await;
                     "drew it; the picture is in the channel".to_owned()
                 }
                 Err(reason) => reason,

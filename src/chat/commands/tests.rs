@@ -75,6 +75,43 @@ fn an_image_generation_carries_its_prompt() {
     assert_eq!(command.content, "!gen-image a lighthouse in the fog");
 }
 
+/// The effort is written as the flag the in-thread command reads, so both
+/// front doors run one parser.
+#[test]
+fn an_image_generation_carries_its_effort_as_a_flag() {
+    let command = translate(
+        "gen-image",
+        &[
+            text_option("prompt", "a lighthouse in the fog"),
+            text_option("effort", "max"),
+        ],
+        "chan",
+        false,
+        "u1",
+        "amelia",
+    );
+
+    assert_eq!(
+        command.content,
+        "!gen-image --effort max a lighthouse in the fog"
+    );
+}
+
+/// With no effort picked, the command is what it always was.
+#[test]
+fn an_image_generation_with_no_effort_carries_only_its_prompt() {
+    let command = translate(
+        "gen-image",
+        &[text_option("prompt", "a lighthouse in the fog")],
+        "chan",
+        false,
+        "u1",
+        "amelia",
+    );
+
+    assert_eq!(command.content, "!gen-image a lighthouse in the fog");
+}
+
 #[test]
 fn a_command_with_no_argument_is_just_the_command() {
     let command = translate("status", &[], "chan", false, "u1", "amelia");

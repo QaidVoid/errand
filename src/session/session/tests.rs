@@ -3660,6 +3660,156 @@ async fn an_image_generation_draws_and_posts_it() {
     .await;
 }
 
+/// An effort asked for on the command reaches the request as part of the
+/// model id, which is how the images endpoint reads it.
+#[tokio::test]
+async fn an_image_generation_passes_the_effort_it_was_asked_for() {
+    let (asked, draw) = drawing();
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                    "pictures": {
+                        "credential": "secret",
+                        "baseUrl": "https://images.example/v1",
+                        "models": [{ "id": "pic", "produces": ["text", "image"] }],
+                    },
+                },
+                "imageGen": "pictures/pic",
+            },
+        }))),
+        draw_image: Some(draw),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+
+            harness
+                .session
+                .handle(message_from(
+                    "!gen-image --effort max a lighthouse",
+                    OWNER,
+                    "m2",
+                ))
+                .await;
+            settle().await;
+
+            assert_eq!(
+                asked.lock().unwrap().as_slice(),
+                [("pic:max".to_owned(), "a lighthouse".to_owned())]
+            );
+        })
+    })
+    .await;
+}
+
+/// The level may ride on the model name instead, as `!model` writes it, and
+/// lands the same way.
+#[tokio::test]
+async fn an_image_generation_reads_a_level_on_the_model_name() {
+    let (asked, draw) = drawing();
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                    "pictures": {
+                        "credential": "secret",
+                        "baseUrl": "https://images.example/v1",
+                        "models": [{ "id": "pic:low", "produces": ["text", "image"] }],
+                    },
+                },
+                "imageGen": "pictures/pic",
+            },
+        }))),
+        available_models: vec![AvailableModel {
+            provider: "pictures".to_owned(),
+            id: "pic:low".to_owned(),
+            default_level: None,
+        }],
+        draw_image: Some(draw),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+
+            harness
+                .session
+                .handle(message_from("!gen-image pic:low a lighthouse", OWNER, "m2"))
+                .await;
+            settle().await;
+
+            assert_eq!(
+                asked.lock().unwrap().as_slice(),
+                [("pic:low".to_owned(), "a lighthouse".to_owned())]
+            );
+        })
+    })
+    .await;
+}
+
+/// An effort nothing would understand is refused here, where it costs
+/// nothing, rather than drawn at whatever the default is.
+#[tokio::test]
+async fn an_unknown_effort_is_refused_before_anything_is_drawn() {
+    let (asked, draw) = drawing();
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                    "pictures": {
+                        "credential": "secret",
+                        "baseUrl": "https://images.example/v1",
+                    },
+                },
+                "imageGen": "pictures/pic",
+            },
+        }))),
+        draw_image: Some(draw),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+
+            harness
+                .session
+                .handle(message_from(
+                    "!gen-image --effort extreme a lighthouse",
+                    OWNER,
+                    "m2",
+                ))
+                .await;
+            settle().await;
+
+            assert!(
+                harness.thread.everything().contains("is not an effort"),
+                "{}",
+                harness.thread.everything()
+            );
+            assert!(asked.lock().unwrap().is_empty(), "nothing is drawn");
+            assert_eq!(
+                harness.thread.final_reaction("m2"),
+                Some(ReactionOutcome::Failed)
+            );
+        })
+    })
+    .await;
+}
+
 /// A short name stands for the same model here as it does at a start.
 #[tokio::test]
 async fn an_image_generation_reads_a_short_name() {

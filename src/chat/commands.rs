@@ -47,6 +47,17 @@ const TEXT_OPTION: &[(&str, &str, &str, bool)] = &[
     ("!gen-image", "prompt", "what to generate", true),
 ];
 
+/// Commands with a second, optional string option.
+///
+/// `/gen-image` asks for the effort beside the prompt rather than as a level on
+/// a model name, since a slash command has no name to put one on.
+const EXTRA_OPTION: &[(&str, &str, &str, &str)] = &[(
+    "!gen-image",
+    "effort",
+    "how hard to work: off, low, medium, high, xhigh or max",
+    "effort",
+)];
+
 /// Commands that name an account, so the client offers a member picker.
 const USER_OPTION: &[(&str, &str)] = &[
     ("!allow", "who may take part in this thread"),
@@ -100,6 +111,24 @@ pub fn build_commands() -> Vec<CreateCommand> {
                             *description,
                         )
                         .required(*required),
+                    );
+                }
+            }
+            for (command, option_name, description, _) in EXTRA_OPTION {
+                if *command == *name {
+                    builder = builder.add_option(
+                        CreateCommandOption::new(
+                            serenity::model::application::CommandOptionType::String,
+                            *option_name,
+                            *description,
+                        )
+                        .required(false)
+                        .add_string_choice("off", "off")
+                        .add_string_choice("low", "low")
+                        .add_string_choice("medium", "medium")
+                        .add_string_choice("high", "high")
+                        .add_string_choice("xhigh", "xhigh")
+                        .add_string_choice("max", "max"),
                     );
                 }
             }
@@ -172,15 +201,29 @@ pub fn translate(
         })
         .unwrap_or_default();
 
+    // An optional second option is written as the flag the in-thread command
+    // reads, so both front doors run the same parser.
+    let extra = EXTRA_OPTION
+        .iter()
+        .find(|(command, ..)| slash_name(command) == command_name)
+        .and_then(|(_, _, _, flag)| string_named("effort").map(|effort| (*flag, effort)))
+        .filter(|(_, effort)| !effort.trim().is_empty())
+        .map(|(flag, effort)| format!("--{flag} {}", effort.trim()))
+        .unwrap_or_default();
+
+    let mut content = format!("!{command_name}");
+    for part in [extra, argument]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+    {
+        content.push(' ');
+        content.push_str(&part);
+    }
     TranslatedCommand {
         thread_id: is_thread.then(|| channel_id.to_owned()),
         user_id: user_id.to_owned(),
         user_name: user_name.to_owned(),
-        content: if argument.is_empty() {
-            format!("!{command_name}")
-        } else {
-            format!("!{command_name} {argument}")
-        },
+        content,
     }
 }
 

@@ -5,6 +5,8 @@
 //! lifecycle. Everything here is pure, so the access rule can be tested
 //! against every command without a session, a sandbox, or a connection.
 
+use crate::session::model::{LEVELS, split_level};
+
 use CommandAccess::{Anyone, Guest, Host, Owner};
 use CommandGroup::{People, Project, Session, You};
 
@@ -127,7 +129,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Guest,
             group: Session,
-            summary: "generate with the image model",
+            summary: "draw with the image model",
             argument: Some("<prompt>"),
         },
     ),
@@ -396,6 +398,82 @@ pub fn pull_request_args(rest: &str) -> (Option<&str>, &str) {
     let after = after.trim_start();
     let (directory, title) = after.split_once(char::is_whitespace).unwrap_or((after, ""));
     (Some(directory), title.trim())
+}
+
+/// Splits `!gen-image [--effort <level>] [<model>:<level>] <prompt>` into the
+/// effort asked for, the model named, and the prompt.
+///
+/// Two ways to say the effort, because both are already used elsewhere: a
+/// trailing `:level` on a model is how `!model` and `-m` say it, and a flag is
+/// how `!pr` says `--repo`. A flag wins when both are given, since it is the
+/// more explicit of the two.
+///
+/// The model is only taken when its last word carries a level this host knows,
+/// so a prompt that happens to begin with a word is left as the prompt. An
+/// effort that is not a level is refused rather than passed through, since
+/// nothing would use it.
+pub fn image_args(rest: &str) -> Result<ImageArgs<'_>, String> {
+    let mut rest = rest.trim();
+    let mut effort: Option<String> = None;
+    // A bare `--effort` with nothing after it is a flag nobody finished, not a
+    // prompt, so it is refused rather than drawn as the words "--effort".
+    if rest == "--effort" {
+        return Err("say how hard to work, as `!gen-image --effort <level> <prompt>`".to_owned());
+    }
+    if let Some(after) = rest
+        .strip_prefix("--effort")
+        .filter(|after| after.starts_with(char::is_whitespace))
+    {
+        let after = after.trim_start();
+        let (level, remaining) = after.split_once(char::is_whitespace).unwrap_or((after, ""));
+        if level.is_empty() {
+            return Err(
+                "say how hard to work, as `!gen-image --effort <level> <prompt>`".to_owned(),
+            );
+        }
+        let named = level.to_lowercase();
+        if !LEVELS.contains(&named.as_str()) {
+            return Err(format!(
+                "`{level}` is not an effort; name one of {}",
+                LEVELS.join(", ")
+            ));
+        }
+        effort = Some(named);
+        rest = remaining.trim();
+    }
+
+    // A first word carrying a known level names the model to draw with, and
+    // the effort it asks for. Anything else is the prompt, untouched.
+    let mut model: Option<&str> = None;
+    let mut prompt = rest;
+    if let Some((first, remaining)) = rest.split_once(char::is_whitespace) {
+        let (_, level) = split_level(first);
+        if !level.is_empty() {
+            model = Some(first);
+            if effort.is_none() {
+                effort = Some(level.trim_start_matches(':').to_lowercase());
+            }
+            prompt = remaining.trim();
+        }
+    }
+
+    Ok(ImageArgs {
+        model,
+        effort,
+        prompt,
+    })
+}
+
+/// What `!gen-image` was asked for, after its arguments were read.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageArgs<'a> {
+    /// The model named on the command, with its level still on it, when one
+    /// was. None leaves `agent.imageGen`.
+    pub model: Option<&'a str>,
+    /// How hard to work, lowercased, when it was asked for.
+    pub effort: Option<String>,
+    /// What to draw.
+    pub prompt: &'a str,
 }
 
 /// Whether a message asks for a pull request.

@@ -108,7 +108,7 @@ pub fn resolve_model(value: &str, known: &[&str]) -> ChosenModel {
 ///
 /// Named so that a colon in a model id is not mistaken for one. Only a suffix
 /// that is actually a level is split off; anything else is part of the name.
-const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+pub const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// Splits a trailing `:level` from a model, when the suffix really is one.
 ///

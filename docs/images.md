@@ -128,6 +128,28 @@ The command works in a thread and in the channel. In a thread it draws into the
 thread; in the channel it draws into the channel. Either way it opens no
 session, launches no sandbox, and leaves the session's model alone.
 
+## Effort
+
+The effort is a thinking level, and there are two ways to ask for one:
+
+```
+!gen-image --effort max a lighthouse
+!gen-image image:max a lighthouse
+```
+
+Both put `image:max` in the request, since the level is part of the model id the
+images endpoint is asked for. A flag wins when both are given, being the more
+explicit of the two. `/gen-image` offers the effort as its own option, and
+writes it as the flag.
+
+With neither given, the level written into `agent.imageGen` is used, and with
+none there the provider decides. A level asked for on the command replaces the
+configured one for that picture rather than stacking beside it.
+
+The levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh` and `max`. One
+that is not a level is refused before anything is drawn, since a provider would
+either reject it or ignore it.
+
 A server that answers with a link instead of bytes is refused rather than
 followed, since fetching it would be a second request to a host nobody
 configured. An `anthropic` provider cannot be used, because that API has no

@@ -146,8 +146,10 @@ pub struct AgentConfig {
     /// Named as `!model` names them: an alias, `provider/id`, or a bare model
     /// id, with the effort to use as a level on the end, as `image:max`. The
     /// level stays on the model, because it is part of the name the images
-    /// endpoint is asked for. A name nothing lists is refused when the command
-    /// is used, not here.
+    /// endpoint is asked for. It is the standing effort: one asked for on the
+    /// command, as `--effort <level>` or a level on a model named there,
+    /// replaces it for that picture. A name nothing lists is refused when the
+    /// command is used, not here.
     ///
     /// The command calls the provider's own `POST /images/generations` with
     /// this model and the prompt, and posts what comes back as an upload. The
