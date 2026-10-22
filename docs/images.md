@@ -104,9 +104,25 @@ link: a chat model asked for an image answers in prose, which is not one.
 ```
 
 The name is read as `!model` reads one, so an alias or a bare id works too. The
-provider is the one that serves the model, and its `baseUrl` is where the
-request goes. A level on the name stays on it, since it is part of the model id
-the endpoint is asked for: `image:max` is sent as written.
+provider is the one whose `models` list the model appears on, and its `baseUrl`
+is where the request goes. A bare id is not read as the provider a session runs
+on, which is a chat host and serves no images route. A name two providers list
+is refused, naming both, rather than guessed at. A level on the name stays on
+it, since it is part of the model id the endpoint is asked for: `image:max` is
+sent as written.
+
+The provider must list the model under `models` for a bare name to find it:
+
+```json
+"pictures": {
+  "baseUrl": "https://images.example/v1",
+  "credential": "...",
+  "models": [{ "id": "image-max", "input": ["text"], "produces": ["text", "image"] }]
+}
+```
+
+Naming the provider in `imageGen`, as `pictures/image-max`, resolves without the
+list, because the name says where the model lives.
 
 The command works in a thread and in the channel. In a thread it draws into the
 thread; in the channel it draws into the channel. Either way it opens no

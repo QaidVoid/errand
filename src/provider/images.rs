@@ -16,6 +16,7 @@ use std::future::Future;
 use serde_json::{Value, json};
 
 use crate::config::schema::AgentConfig;
+use crate::provider::models::{AvailableModel, Matched, match_model};
 use crate::session::model::{expand_alias, known_providers, resolve_model};
 
 /// The largest answer read, so a runaway body cannot be held in memory. A
@@ -53,23 +54,45 @@ pub struct ImageError(pub String);
 /// The name is read as `!model` reads one: a short name from `aliases`, a
 /// `provider/id`, or a bare id, with the effort to use as a level on the end.
 /// The level stays on the model, because it is part of the name the images
-/// endpoint is asked for, as `image:max`. The provider is the one that serves
-/// the model, which is where the request goes, so a model named on a provider
-/// other than the configured one is reached at that provider's endpoint.
+/// endpoint is asked for, as `image:max`.
 ///
-/// The endpoint is the provider's own `baseUrl`, since that is the host that
-/// answers `POST /images/generations`. A provider whose key the daemon does
-/// not hold cannot be reached at all, and that is said rather than attempted
-/// with an empty one.
+/// The provider is the one the catalog says serves the model, which is where
+/// the request goes. A bare id is not read as the provider a session runs on:
+/// that is a chat host, and sending an image request there reaches a route it
+/// does not serve. Only a catalog that lists nothing leaves the name to the
+/// configured provider, since then there is nothing better to go on.
+///
+/// The endpoint is the provider's own `baseUrl`. A provider whose key the
+/// daemon does not hold cannot be reached at all, and that is said rather than
+/// attempted with an empty one.
 pub fn endpoint_for(
     agent: &AgentConfig,
+    available: &[AvailableModel],
     named: &str,
     aliases: &BTreeMap<String, String>,
 ) -> Result<Endpoint, ImageError> {
     let expanded = expand_alias(named, aliases);
-    let known = known_providers(agent);
-    let chosen = resolve_model(&expanded, &known);
-    let provider = chosen.provider.unwrap_or_else(|| agent.provider.clone());
+    // The provider is where the request goes; the model is what the endpoint
+    // is asked for, which is the id without the provider's name on it.
+    let (provider, model) = match match_model(available, &expanded, &agent.provider) {
+        Matched::One(found) => (found.provider, found.id),
+        Matched::Several(options) => {
+            return Err(ImageError(format!(
+                "more than one provider serves `{expanded}`. Name one of these as `agent.imageGen`: {}",
+                options.join(", ")
+            )));
+        }
+        // Nothing lists it, so the name is all there is to go on: a
+        // `provider/id` still names its provider, and a bare id falls back to
+        // the configured one.
+        Matched::None => {
+            let chosen = resolve_model(&expanded, &known_providers(agent));
+            (
+                chosen.provider.unwrap_or_else(|| agent.provider.clone()),
+                chosen.model,
+            )
+        }
+    };
     let base_url = agent
         .providers
         .get(&provider)
@@ -85,7 +108,7 @@ pub fn endpoint_for(
     let credential = agent.credential_of(&provider).unwrap_or_default();
     Ok(Endpoint {
         base_url: base_url.to_owned(),
-        model: chosen.model,
+        model,
         credential: credential.to_owned(),
     })
 }

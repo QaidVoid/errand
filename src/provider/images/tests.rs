@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::{
     Drawn, Endpoint, ImageError, Post, Request, Response, decode_base64, draw, endpoint_for,
 };
+use crate::provider::models::AvailableModel;
 
 /// Builds an agent configuration from the settings a test writes.
 fn agent(agent: &Value) -> crate::config::schema::AgentConfig {
@@ -388,7 +389,7 @@ fn the_endpoint_is_the_provider_that_serves_the_named_model() {
     }));
 
     let endpoint =
-        endpoint_for(&configured, "pictures/pic:max", &BTreeMap::new()).expect("an endpoint");
+        endpoint_for(&configured, &[], "pictures/pic:max", &BTreeMap::new()).expect("an endpoint");
 
     assert_eq!(endpoint.base_url, "https://images.example/v1");
     assert_eq!(endpoint.model, "pic:max");
@@ -410,7 +411,7 @@ fn a_short_name_is_expanded_before_it_is_looked_up() {
         "aliases": { "pic": "pictures/image-large" },
     }));
 
-    let endpoint = endpoint_for(&configured, "pic", &configured.aliases).expect("an endpoint");
+    let endpoint = endpoint_for(&configured, &[], "pic", &configured.aliases).expect("an endpoint");
 
     assert_eq!(endpoint.model, "image-large");
     assert_eq!(endpoint.base_url, "https://images.example/v1");
@@ -429,10 +430,157 @@ fn a_bare_name_is_served_by_the_configured_provider() {
         },
     }));
 
-    let endpoint = endpoint_for(&configured, "image-small", &BTreeMap::new()).expect("an endpoint");
+    let endpoint =
+        endpoint_for(&configured, &[], "image-small", &BTreeMap::new()).expect("an endpoint");
 
     assert_eq!(endpoint.base_url, "https://images.example/v1");
     assert_eq!(endpoint.model, "image-small");
+}
+
+/// A bare image model is served by whichever provider the catalog lists it
+/// on, not by the provider a session runs on.
+///
+/// This is the bug that made `!gen-image` reach a chat host: `imageGen` named
+/// `image:max` bare, the session ran on `pg-oc`, and the request went to that
+/// host's `/images/generations`, which it does not serve.
+#[test]
+fn a_bare_image_model_is_served_by_the_provider_that_lists_it() {
+    let configured = agent(&json!({
+        "provider": "pg-oc",
+        "providers": {
+            "pg-oc": {
+                "credential": "chat-key",
+                "baseUrl": "https://oc-free.pg.ai.ajam.dev",
+            },
+            "pg-image": {
+                "credential": "image-key",
+                "baseUrl": "https://image.pg.ai.ajam.dev/v1",
+                "images": { "model": "image" },
+            },
+        },
+    }));
+    let available = vec![
+        AvailableModel {
+            provider: "pg-oc".to_owned(),
+            id: "free".to_owned(),
+            default_level: None,
+        },
+        AvailableModel {
+            provider: "pg-image".to_owned(),
+            id: "image:max".to_owned(),
+            default_level: None,
+        },
+    ];
+
+    let endpoint =
+        endpoint_for(&configured, &available, "image:max", &BTreeMap::new()).expect("an endpoint");
+
+    // The images host, with its own key, and the level kept on the model.
+    assert_eq!(endpoint.base_url, "https://image.pg.ai.ajam.dev/v1");
+    assert_eq!(endpoint.model, "image:max");
+    assert_eq!(endpoint.credential, "image-key");
+}
+
+/// A name the catalog serves from more than one provider is refused rather
+/// than sent to whichever one was looked at first, when the provider a
+/// session runs on is not one of them.
+#[test]
+fn a_name_two_providers_serve_is_refused_with_both_named() {
+    let configured = agent(&json!({
+        "provider": "chat",
+        "providers": {
+            "chat": { "credential": "k", "baseUrl": "https://chat.example/v1" },
+            "one": { "credential": "k", "baseUrl": "https://one.example/v1" },
+            "two": { "credential": "k", "baseUrl": "https://two.example/v1" },
+        },
+    }));
+    let available = vec![
+        AvailableModel {
+            provider: "one".to_owned(),
+            id: "image".to_owned(),
+            default_level: None,
+        },
+        AvailableModel {
+            provider: "two".to_owned(),
+            id: "image".to_owned(),
+            default_level: None,
+        },
+    ];
+
+    let refused = endpoint_for(&configured, &available, "image", &BTreeMap::new())
+        .expect_err("two providers serve it");
+
+    assert!(
+        refused.0.contains("more than one provider"),
+        "{}",
+        refused.0
+    );
+    assert!(refused.0.contains("one/image"), "{}", refused.0);
+    assert!(refused.0.contains("two/image"), "{}", refused.0);
+}
+
+/// When the provider a session runs on serves the name too, that one is used:
+/// staying where you are is the ordinary case and needs no qualification.
+#[test]
+fn the_provider_the_session_runs_on_is_preferred_when_it_serves_the_name() {
+    let configured = agent(&json!({
+        "provider": "one",
+        "providers": {
+            "one": { "credential": "k", "baseUrl": "https://one.example/v1" },
+            "two": { "credential": "k", "baseUrl": "https://two.example/v1" },
+        },
+    }));
+    let available = vec![
+        AvailableModel {
+            provider: "one".to_owned(),
+            id: "image".to_owned(),
+            default_level: None,
+        },
+        AvailableModel {
+            provider: "two".to_owned(),
+            id: "image".to_owned(),
+            default_level: None,
+        },
+    ];
+
+    let endpoint =
+        endpoint_for(&configured, &available, "image", &BTreeMap::new()).expect("an endpoint");
+
+    assert_eq!(endpoint.base_url, "https://one.example/v1");
+    assert_eq!(endpoint.model, "image");
+}
+
+/// The catalog is what makes a bare name resolvable, and it is built from the
+/// providers' own `models` lists. Proved through `available_models` rather
+/// than a hand-built list, since that is what the daemon actually passes in.
+#[test]
+fn a_bare_image_name_resolves_through_the_catalog_the_daemon_builds() {
+    let configured = agent(&json!({
+        "provider": "pg-oc",
+        "providers": {
+            "pg-oc": {
+                "credential": "chat-key",
+                "baseUrl": "https://oc-free.pg.ai.ajam.dev",
+            },
+            "pg-image": {
+                "credential": "image-key",
+                "baseUrl": "https://image.pg.ai.ajam.dev/v1",
+                "images": { "model": "image" },
+                "models": [
+                    { "id": "image", "input": ["text"], "produces": ["text", "image"] },
+                    { "id": "image:max", "input": ["text"], "produces": ["text", "image"] },
+                ],
+            },
+        },
+    }));
+    let available = crate::provider::models::available_models(&configured, None);
+
+    let endpoint =
+        endpoint_for(&configured, &available, "image:max", &BTreeMap::new()).expect("an endpoint");
+
+    assert_eq!(endpoint.base_url, "https://image.pg.ai.ajam.dev/v1");
+    assert_eq!(endpoint.model, "image:max");
+    assert_eq!(endpoint.credential, "image-key");
 }
 
 /// A provider with no endpoint has nowhere to send the request, and saying
@@ -445,7 +593,7 @@ fn a_provider_without_an_endpoint_is_refused() {
     }));
 
     let refused =
-        endpoint_for(&configured, "image-small", &BTreeMap::new()).expect_err("no endpoint");
+        endpoint_for(&configured, &[], "image-small", &BTreeMap::new()).expect_err("no endpoint");
 
     assert!(
         refused.0.contains("no endpoint is configured"),
@@ -468,7 +616,7 @@ fn a_provider_without_a_credential_sends_none() {
     }));
 
     let endpoint =
-        endpoint_for(&configured, "local/image-small", &BTreeMap::new()).expect("an endpoint");
+        endpoint_for(&configured, &[], "local/image-small", &BTreeMap::new()).expect("an endpoint");
 
     assert_eq!(endpoint.base_url, "http://localhost:8080/v1");
     assert_eq!(endpoint.credential, "");

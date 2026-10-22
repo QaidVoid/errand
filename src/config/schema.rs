@@ -151,8 +151,10 @@ pub struct AgentConfig {
     ///
     /// The command calls the provider's own `POST /images/generations` with
     /// this model and the prompt, and posts what comes back as an upload. The
-    /// provider is the one that serves the model, so its `baseUrl` is where
-    /// the request goes. A provider with no `baseUrl` cannot draw.
+    /// provider is the one that lists the model, so its `baseUrl` is where the
+    /// request goes, and a name two providers list is refused rather than
+    /// guessed at. The provider a session runs on is preferred when it lists
+    /// the name too. A provider with no `baseUrl` cannot draw.
     pub image_gen: Option<String>,
     /// A cheaper model to ask about one artefact, or none.
     pub delegate: Option<DelegateConfig>,

@@ -297,6 +297,7 @@ impl Running {
         // configuration, so a name added since it was launched still works.
         let endpoint = match endpoint_for(
             &self.options.config.agent,
+            &self.options.catalog.models(),
             named,
             &self.options.catalog.aliases(),
         ) {

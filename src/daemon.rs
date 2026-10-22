@@ -785,8 +785,13 @@ impl Daemon {
         let Some(draw_image) = self.options.draw_image.clone() else {
             return Err("this host has no way to draw an image".to_owned());
         };
-        let endpoint = endpoint_for(&config.agent, named, &config.agent.aliases)
-            .map_err(|refused| refused.0)?;
+        let endpoint = endpoint_for(
+            &config.agent,
+            &self.options.catalog.models(),
+            named,
+            &config.agent.aliases,
+        )
+        .map_err(|refused| refused.0)?;
         let drawn = draw_image(endpoint.clone(), prompt.to_owned()).await?;
         drawn
             .into_picture(&endpoint.model, config.output.max_upload_bytes)
