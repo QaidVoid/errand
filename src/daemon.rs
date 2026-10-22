@@ -20,6 +20,7 @@ use crate::config::schema::{ALLOW_EVERY_USER, ChatConfig, Config, SandboxBackend
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::{MemoryStore, Scope};
 use crate::provider::discover::Catalog;
+use crate::provider::images::{Picture, endpoint_for};
 use crate::sandbox::Backend;
 use crate::sandbox::backend::{CapabilityReport, SandboxUnavailableError};
 use crate::sandbox::bailey::BaileyOptions;
@@ -39,7 +40,7 @@ use crate::session::manager::{
 };
 use crate::session::model::{configured_model, split_level};
 use crate::session::registry::ThreadRegistry;
-use crate::session::session::{DescribeImages, IncomingMessage};
+use crate::session::session::{DescribeImages, DrawImage, IncomingMessage};
 
 /// Raised when the backend cannot enforce what configuration demands.
 #[derive(Debug, thiserror::Error)]
@@ -207,6 +208,16 @@ pub type RefreshModels =
 pub type ReplyInChannel =
     Arc<dyn Fn(IncomingMessage, String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
+/// Posts a file back to the channel, outside any thread, with its caption.
+pub type ReplyWithFile = Arc<
+    dyn Fn(IncomingMessage, String, Vec<u8>, String) -> Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// The one command that starts work from the channel itself.
+const IMAGE_GENERATION: &str = "!gen-image";
+
 /// Everything the daemon needs, with the transport injected for testability.
 pub struct DaemonOptions {
     /// The configuration every session is started from, and which a change to
@@ -220,6 +231,8 @@ pub struct DaemonOptions {
     pub log: Logger,
     /// Posts a refusal back to the channel, outside any thread.
     pub reply_in_channel: ReplyInChannel,
+    /// Posts a file back to the channel, outside any thread.
+    pub reply_with_file: ReplyWithFile,
     /// Memory, or none when it is switched off.
     pub memory: Option<Arc<MemoryStore>>,
     /// Powers the host off, or none when `!shutdown` is not offered.
@@ -231,6 +244,8 @@ pub struct DaemonOptions {
     /// Describes an attached image for a session whose model cannot see one,
     /// or none when every session's model can.
     pub describe_images: Option<DescribeImages>,
+    /// Draws a picture with the image model, or none when the host cannot.
+    pub draw_image: Option<DrawImage>,
     /// Where the interface is published, when it is.
     pub public_url: Option<String>,
     /// The provider definitions sessions launch with and the models `!model`
@@ -293,6 +308,7 @@ impl Daemon {
             operator_ids: options.operator_ids.clone(),
             memory: options.memory.clone(),
             describe_images: options.describe_images.clone(),
+            draw_image: options.draw_image.clone(),
             public_url: options.public_url.clone(),
             catalog: options.catalog.clone(),
             delegate_base_url: options.delegate_base_url.clone(),
@@ -698,6 +714,13 @@ impl Daemon {
             return;
         }
 
+        // A picture needs no conversation to live in, so the channel draws
+        // it here rather than opening a thread and a sandbox for one turn.
+        if first_word(&message.content) == IMAGE_GENERATION {
+            self.draw_into_channel(&message).await;
+            return;
+        }
+
         // Another bot's command, or one of this system's that needs a session.
         // Either way it is not work to start, and the channel is shared, so it
         // is left alone rather than answered.
@@ -709,6 +732,65 @@ impl Daemon {
         if let StartOutcome::Refused { reason } = outcome {
             (self.options.reply_in_channel)(message, reason).await;
         }
+    }
+
+    /// Draws a picture asked for in the channel, and posts it there.
+    ///
+    /// One request to the provider's images endpoint, answered as bytes and
+    /// posted as an upload. No session, no thread, and no sandbox: a picture
+    /// is one call, and opening a conversation to make one is what used to
+    /// send the prompt to a chat model instead.
+    async fn draw_into_channel(&self, message: &IncomingMessage) {
+        let prompt = argument_of(&message.content, IMAGE_GENERATION).trim();
+        if prompt.is_empty() {
+            (self.options.reply_in_channel)(
+                message.clone(),
+                "say what to generate, as `!gen-image <prompt>`".to_owned(),
+            )
+            .await;
+            return;
+        }
+        match self.draw(prompt).await {
+            Ok(drawn) => {
+                (self.options.reply_with_file)(
+                    message.clone(),
+                    drawn.name,
+                    drawn.bytes,
+                    drawn.caption,
+                )
+                .await;
+            }
+            Err(reason) => {
+                (self.options.reply_in_channel)(message.clone(), reason).await;
+            }
+        }
+    }
+
+    /// Draws one picture, with the model the configuration names.
+    ///
+    /// The endpoint is resolved from the configuration in force rather than a
+    /// copy taken at startup, so a model or a provider changed in the file is
+    /// one this already draws with.
+    async fn draw(&self, prompt: &str) -> Result<Picture, String> {
+        let config = self.options.config.get();
+        let named = config
+            .agent
+            .image_gen
+            .as_deref()
+            .map(str::trim)
+            .filter(|named| !named.is_empty())
+            .ok_or_else(|| {
+                "no image model is configured; name one with `agent.imageGen`".to_owned()
+            })?;
+        let Some(draw_image) = self.options.draw_image.clone() else {
+            return Err("this host has no way to draw an image".to_owned());
+        };
+        let endpoint = endpoint_for(&config.agent, named, &config.agent.aliases)
+            .map_err(|refused| refused.0)?;
+        let drawn = draw_image(endpoint.clone(), prompt.to_owned()).await?;
+        drawn
+            .into_picture(&endpoint.model, config.output.max_upload_bytes)
+            .map_err(|refused| refused.0)
     }
 
     /// Runs a slash command, which is the same command an in-thread message
@@ -731,6 +813,36 @@ impl Daemon {
         // back to the person who ran it and nowhere else.
         if let Some(listed) = answer_without_session(&command.content) {
             return listed;
+        }
+
+        // A picture needs no session, so outside a thread it is drawn here
+        // and posted to the channel. The acknowledgement is the answer: the
+        // interaction was already claimed, and the picture follows in the
+        // channel it was asked in.
+        if command.thread_id.is_none() && first_word(&command.content) == IMAGE_GENERATION {
+            let prompt = argument_of(&command.content, IMAGE_GENERATION)
+                .trim()
+                .to_owned();
+            if prompt.is_empty() {
+                return "say what to generate, as `/gen-image <prompt>`".to_owned();
+            }
+            let asked = IncomingMessage {
+                id: format!("slash-{}", command.user_id),
+                author_id: command.user_id.clone(),
+                channel_id: String::new(),
+                author_name: Some(command.user_name.clone()),
+                content: command.content.clone(),
+                attachments: Vec::new(),
+            };
+            let drawing = self.draw(&prompt).await;
+            return match drawing {
+                Ok(drawn) => {
+                    (self.options.reply_with_file)(asked, drawn.name, drawn.bytes, drawn.caption)
+                        .await;
+                    "drew it; the picture is in the channel".to_owned()
+                }
+                Err(reason) => reason,
+            };
         }
 
         let Some(thread_id) = &command.thread_id else {

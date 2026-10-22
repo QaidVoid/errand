@@ -7,13 +7,16 @@
 
 use std::fmt::Write as _;
 
-use super::{MAX_DIFFABLE_BYTES, MAX_IMAGES_PER_TURN, MAX_INLINE, Running};
+use super::{IncomingMessage, MAX_DIFFABLE_BYTES, MAX_IMAGES_PER_TURN, MAX_INLINE, Running};
 use crate::agent::protocol::ProducedImage;
 use crate::chat::diff::file_diff;
-use crate::chat::render::{bytes as byte_count, directory_listing, file_view, widen};
+use crate::chat::render::{
+    bytes as byte_count, connection_line, directory_listing, file_view, widen,
+};
 use crate::log::{LogValue, fields};
+use crate::provider::images::{endpoint_for, image_extension};
 use crate::sandbox::paths;
-use crate::session::event::SessionEvent;
+use crate::session::event::{ReactionOutcome, SessionEvent};
 use crate::session::files::{NotAFileError, read_directory, read_file_for_display};
 
 impl Running {
@@ -252,6 +255,100 @@ impl Running {
             .await;
     }
 
+    /// Draws a picture with the image model the configuration names.
+    ///
+    /// One request to `POST {baseUrl}/images/generations`, answered as bytes,
+    /// which are posted to the thread as an upload. Deliberately not a turn:
+    /// sending the prompt to a chat model is what used to reach
+    /// `/chat/completions` and come back as a link in prose instead of a
+    /// picture.
+    ///
+    /// The model is `agent.imageGen`, read as `!model` reads a name, so an
+    /// alias and a `provider/id` both work. The level on it is the effort to
+    /// generate at.
+    pub(super) async fn generate_image(&mut self, rest: &str, message: &IncomingMessage) {
+        let prompt = rest.trim();
+        if prompt.is_empty() {
+            self.say("say what to generate, as `!gen-image <prompt>`")
+                .await;
+            return;
+        }
+        let named = self
+            .options
+            .config
+            .agent
+            .image_gen
+            .as_deref()
+            .map(str::trim)
+            .filter(|named| !named.is_empty());
+        let Some(named) = named else {
+            self.say("no image model is configured; name one with `agent.imageGen`")
+                .await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
+            return;
+        };
+        let Some(draw_image) = self.options.draw_image.clone() else {
+            self.say("this host has no way to draw an image").await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
+            return;
+        };
+
+        // Read from the catalog rather than this session's own copy of the
+        // configuration, so a name added since it was launched still works.
+        let endpoint = match endpoint_for(
+            &self.options.config.agent,
+            named,
+            &self.options.catalog.aliases(),
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(refused) => {
+                self.say(&refused.0).await;
+                self.react(&message.id, ReactionOutcome::Failed).await;
+                return;
+            }
+        };
+
+        self.react(&message.id, ReactionOutcome::Accepted).await;
+        self.say(&connection_line(&format!(
+            "drawing this on `{}`",
+            endpoint.model
+        )))
+        .await;
+
+        let drawn = match draw_image(endpoint.clone(), prompt.to_owned()).await {
+            Ok(drawn) => drawn,
+            Err(refused) => {
+                self.say(&refused).await;
+                self.react(&message.id, ReactionOutcome::Failed).await;
+                return;
+            }
+        };
+        let limit = self.options.config.output.max_upload_bytes;
+        let picture = match drawn.into_picture(&endpoint.model, limit) {
+            Ok(picture) => picture,
+            Err(refused) => {
+                self.say(&refused.0).await;
+                self.react(&message.id, ReactionOutcome::Failed).await;
+                return;
+            }
+        };
+
+        self.log.info(
+            "posting a picture the command drew",
+            &fields([
+                ("model", LogValue::from(endpoint.model.as_str())),
+                ("bytes", LogValue::from(picture.bytes.len())),
+            ]),
+        );
+        self.views
+            .send(SessionEvent::Upload {
+                name: picture.name,
+                bytes: picture.bytes,
+                caption: picture.caption,
+            })
+            .await;
+    }
+
     /// Posts an image the agent made as an upload, captioned with its size,
     /// where the tool saved it when it did, and what its server said about
     /// it. One that cannot be posted is reported in the thread with the
@@ -325,22 +422,6 @@ impl Running {
 
 /// The longest part of an image server's note shown in a caption.
 const MAX_NOTE_CHARS: usize = 300;
-
-/// The file extension of the image `bytes` declare themselves, for a type a
-/// chat service shows as a picture: PNG, JPEG, GIF or WebP.
-fn image_extension(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
-        Some("png")
-    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        Some("jpg")
-    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        Some("gif")
-    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        Some("webp")
-    } else {
-        None
-    }
-}
 
 /// The caption an image the agent made is posted with: where the tool saved
 /// it when it did, its size, and in brackets what its server said, such as a

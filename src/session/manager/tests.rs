@@ -572,6 +572,7 @@ async fn with_models(
             Arc::new(MemoryStore::open(root.path().join("memory.db")).expect("the store opens"))
         }),
         describe_images: None,
+        draw_image: None,
         public_url: None,
         catalog,
         delegate_base_url: None,

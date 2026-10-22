@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
 use super::{
-    DescribeImages, FetchAttachment, FetchBox, IncomingMessage, Launcher, OpenPullRequest,
-    RunningBox, SessionHandle, SessionOptions, SessionTimer, Signal, Timers, Unavailable,
+    DescribeImages, DrawImage, Drawn, FetchAttachment, FetchBox, IncomingMessage, Launcher,
+    OpenPullRequest, RunningBox, SessionHandle, SessionOptions, SessionTimer, Signal, Timers,
+    Unavailable,
 };
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
@@ -19,6 +20,7 @@ use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
 use crate::memory::store::{MemoryStore, Scope};
 use crate::provider::discover::Catalog;
+use crate::provider::images::Endpoint as ImageEndpoint;
 use crate::provider::models::AvailableModel;
 use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
@@ -378,6 +380,19 @@ impl FakeThread {
         })
     }
 
+    /// The last file posted, with its bytes and caption.
+    fn upload(&self) -> Option<(String, Vec<u8>, String)> {
+        self.pick(|event| match event {
+            SessionEvent::Upload {
+                name,
+                bytes,
+                caption,
+            } => Some((name.clone(), bytes.clone(), caption.clone())),
+            _ => None,
+        })
+        .pop()
+    }
+
     fn turns(&self) -> Vec<u32> {
         self.pick(|event| match event {
             SessionEvent::BeginTurn { turn } => Some(*turn),
@@ -711,6 +726,7 @@ struct SessionTestCase {
     guest_ids: Vec<String>,
     memory: Option<Arc<MemoryStore>>,
     describe_images: Option<DescribeImages>,
+    draw_image: Option<DrawImage>,
     fetch_attachment: Option<FetchAttachment>,
     open_pull_request: Option<OpenPullRequest>,
     unavailable: Option<Unavailable>,
@@ -732,6 +748,7 @@ impl Default for SessionTestCase {
             guest_ids: Vec::new(),
             memory: None,
             describe_images: None,
+            draw_image: None,
             fetch_attachment: None,
             open_pull_request: None,
             unavailable: None,
@@ -824,6 +841,7 @@ async fn with_session(
         memory: case.memory.clone(),
         fetch_attachment: case.fetch_attachment.clone(),
         describe_images: case.describe_images.clone(),
+        draw_image: case.draw_image.clone(),
         resume: case.resume_kage_session.is_some(),
         on_ended: {
             let ended = Arc::clone(&ended);
@@ -3552,11 +3570,34 @@ async fn a_refused_switch_is_not_reported_as_made() {
     .await;
 }
 
-/// `!gen-image` borrows the configured image model for one prompt: it
-/// switches, says the level apart like `!model` does, runs the prompt, and
-/// puts the session back on its own model when the turn settles.
+/// A whole PNG header, so a posted picture is bytes a channel shows as one.
+const DRAWN_PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+
+/// What a draw was asked for, and the drawer that answers it.
+type Drawing = (Arc<Mutex<Vec<(String, String)>>>, DrawImage);
+
+/// Draws a fixed picture, recording what it was asked for.
+fn drawing() -> Drawing {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&asked);
+    let draw: DrawImage = Arc::new(move |endpoint: ImageEndpoint, prompt: String| {
+        seen.lock().unwrap().push((endpoint.model.clone(), prompt));
+        Box::pin(async move {
+            Ok(Drawn {
+                bytes: DRAWN_PNG.to_vec(),
+                revised_prompt: None,
+            }) as Result<Drawn, String>
+        }) as Pin<Box<dyn Future<Output = Result<Drawn, String>> + Send>>
+    });
+    (asked, draw)
+}
+
+/// `!gen-image` draws one picture and posts it, without touching the
+/// session's model: a picture is one call to the images endpoint, and the
+/// conversation stays where it was.
 #[tokio::test]
-async fn an_image_generation_runs_one_prompt_then_switches_back() {
+async fn an_image_generation_draws_and_posts_it() {
+    let (asked, draw) = drawing();
     let case = SessionTestCase {
         config: Some(config_with(&json!({
             "agent": {
@@ -3564,23 +3605,15 @@ async fn an_image_generation_runs_one_prompt_then_switches_back() {
                 "model": "sonnet",
                 "providers": {
                     "anthropic": { "credential": "secret" },
-                    "ajamxhacker": { "credential": "secret" },
+                    "pictures": {
+                        "credential": "secret",
+                        "baseUrl": "https://images.example/v1",
+                    },
                 },
-                "imageGen": "pic:max",
+                "imageGen": "pictures/pic:max",
             },
         }))),
-        available_models: vec![
-            AvailableModel {
-                provider: "anthropic".to_owned(),
-                id: "sonnet".to_owned(),
-                default_level: None,
-            },
-            AvailableModel {
-                provider: "ajamxhacker".to_owned(),
-                id: "pic".to_owned(),
-                default_level: None,
-            },
-        ],
+        draw_image: Some(draw),
         ..SessionTestCase::default()
     };
 
@@ -3590,92 +3623,63 @@ async fn an_image_generation_runs_one_prompt_then_switches_back() {
             settle().await;
             let before = harness.controls().written().len();
 
-            tokio::join!(
-                harness
-                    .session
-                    .handle(message_from("!gen-image a lighthouse", OWNER, "m2")),
-                async {
-                    settle().await;
-                    harness.controls().answer(&json!({}));
-                }
-            );
+            harness
+                .session
+                .handle(message_from("!gen-image a lighthouse", OWNER, "m2"))
+                .await;
             settle().await;
 
-            // The prompt ran on the image model, so ending it settles the
-            // turn and the restore goes out; the agent answers that too.
-            harness.controls().turn_end();
-            settle().await;
-            harness.controls().answer(&json!({}));
-            settle().await;
-
+            // The model stays where it was: no switch, and no prompt sent to
+            // the agent as a chat turn.
             let said: Vec<String> = harness.controls().written().split_off(before);
-            let switches: Vec<&String> = said
-                .iter()
-                .filter(|line| {
-                    line.contains("session/set_config_option")
-                        && line.contains("\"configId\":\"model\"")
-                })
-                .collect();
-            assert_eq!(switches.len(), 2, "one switch out, one back: {said:?}");
             assert!(
-                switches[0].contains("\"value\":\"ajamxhacker/pic\""),
-                "the prompt runs on the image model, got {}",
-                switches[0]
+                !said.iter().any(|line| line.contains("set_config_option")),
+                "no model is switched, got {said:?}"
             );
             assert!(
-                switches[1].contains("\"value\":\"anthropic/sonnet\""),
-                "the session goes back to its own model, got {}",
-                switches[1]
+                !said.iter().any(|line| line.contains("session/prompt")),
+                "no chat turn is run, got {said:?}"
             );
-            assert!(
-                said.iter()
-                    .any(|line| line.contains("\"configId\":\"thinking\"")
-                        && line.contains("\"value\":\"max\"")),
-                "the effort from the configuration is said on its own, got {said:?}"
+
+            assert_eq!(
+                asked.lock().unwrap().as_slice(),
+                [("pic:max".to_owned(), "a lighthouse".to_owned())]
             );
-            assert!(
-                said.iter()
-                    .any(|line| line.contains("session/prompt") && line.contains("a lighthouse")),
-                "the prompt itself is sent, got {said:?}"
-            );
-            assert!(
-                harness
-                    .thread
-                    .replies()
-                    .iter()
-                    .any(|(text, _)| text.contains("generating this on `pic:max`")),
-                "the thread is told which model draws, got {:?}",
-                harness.thread.replies()
-            );
+            let (name, bytes, caption) = harness.thread.upload().expect("the picture was posted");
+            assert_eq!(name, "image.png");
+            assert_eq!(bytes, DRAWN_PNG);
+            assert!(caption.contains("pic:max"), "{caption}");
+            // No turn runs, so the reaction settles at accepted rather than
+            // succeeded, as `!file` does.
             assert_eq!(
                 harness.thread.final_reaction("m2"),
-                Some(ReactionOutcome::Succeeded)
+                Some(ReactionOutcome::Accepted)
             );
         })
     })
     .await;
 }
 
-/// A session that has not settled on a model of its own has nothing to go
-/// back to, and is told so rather than left to find out from the next reply.
+/// A short name stands for the same model here as it does at a start.
 #[tokio::test]
-async fn an_image_generation_without_a_model_of_its_own_says_it_stays() {
+async fn an_image_generation_reads_a_short_name() {
+    let (asked, draw) = drawing();
     let case = SessionTestCase {
         config: Some(config_with(&json!({
             "agent": {
                 "provider": "anthropic",
                 "providers": {
                     "anthropic": { "credential": "secret" },
-                    "ajamxhacker": { "credential": "secret" },
+                    "pictures": {
+                        "credential": "secret",
+                        "baseUrl": "https://images.example/v1",
+                    },
                 },
+                "aliases": { "pic": "pictures/image-large" },
                 "imageGen": "pic",
             },
         }))),
-        available_models: vec![AvailableModel {
-            provider: "ajamxhacker".to_owned(),
-            id: "pic".to_owned(),
-            default_level: None,
-        }],
+        draw_image: Some(draw),
         ..SessionTestCase::default()
     };
 
@@ -3684,32 +3688,15 @@ async fn an_image_generation_without_a_model_of_its_own_says_it_stays() {
             harness.controls().turn_end();
             settle().await;
 
-            tokio::join!(
-                harness
-                    .session
-                    .handle(message_from("!gen-image a lighthouse", OWNER, "m2")),
-                async {
-                    settle().await;
-                    harness.controls().answer(&json!({}));
-                }
-            );
-            settle().await;
-            harness.controls().turn_end();
+            harness
+                .session
+                .handle(message_from("!gen-image a lighthouse", OWNER, "m2"))
+                .await;
             settle().await;
 
-            let said = harness.thread.everything();
-            assert!(
-                said.contains("it had no model of its own yet"),
-                "the thread is told there was nothing to go back to, got {said}"
-            );
-            assert!(
-                !harness
-                    .controls()
-                    .written()
-                    .iter()
-                    .any(|line| line.contains("\"value\":\"anthropic/")),
-                "no model is restored when none was running, got {:?}",
-                harness.controls().written()
+            assert_eq!(
+                asked.lock().unwrap().as_slice(),
+                [("image-large".to_owned(), "a lighthouse".to_owned())]
             );
         })
     })
@@ -3720,7 +3707,11 @@ async fn an_image_generation_without_a_model_of_its_own_says_it_stays() {
 /// sending the prompt to whatever model the session happens to run on.
 #[tokio::test]
 async fn an_image_generation_without_a_configured_model_is_refused() {
-    let case = SessionTestCase::default();
+    let (asked, draw) = drawing();
+    let case = SessionTestCase {
+        draw_image: Some(draw),
+        ..SessionTestCase::default()
+    };
 
     with_session(case, |harness| {
         Box::pin(async move {
@@ -3745,6 +3736,7 @@ async fn an_image_generation_without_a_configured_model_is_refused() {
                     .any(|line| line.contains("session/prompt")),
                 "nothing is sent to the agent"
             );
+            assert!(asked.lock().unwrap().is_empty(), "nothing is drawn");
             assert_eq!(
                 harness.thread.final_reaction("m2"),
                 Some(ReactionOutcome::Failed)
@@ -3754,20 +3746,75 @@ async fn an_image_generation_without_a_configured_model_is_refused() {
     .await;
 }
 
-/// The image model is read as `!model` reads a name, so one nothing lists is
-/// refused here, where it costs nothing, rather than as a failed turn.
+/// A provider with nowhere to send the call is refused before anything is
+/// attempted against an empty URL.
 #[tokio::test]
-async fn an_image_generation_naming_an_unknown_model_is_refused() {
+async fn an_image_generation_on_a_provider_without_an_endpoint_is_refused() {
+    let (asked, draw) = drawing();
     let case = SessionTestCase {
         config: Some(config_with(&json!({
             "agent": {
                 "provider": "anthropic",
                 "providers": {
                     "anthropic": { "credential": "secret" },
+                    "pictures": { "credential": "secret" },
                 },
-                "imageGen": "missing",
+                "imageGen": "pictures/pic",
             },
         }))),
+        draw_image: Some(draw),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+
+            harness
+                .session
+                .handle(message_from("!gen-image a lighthouse", OWNER, "m2"))
+                .await;
+            settle().await;
+
+            assert!(
+                harness
+                    .thread
+                    .everything()
+                    .contains("no endpoint is configured"),
+                "{}",
+                harness.thread.everything()
+            );
+            assert!(asked.lock().unwrap().is_empty(), "nothing is drawn");
+        })
+    })
+    .await;
+}
+
+/// A server that refuses is reported in the thread in its own words, so a
+/// picture that was not drawn is never mistaken for one that was.
+#[tokio::test]
+async fn a_refusal_to_draw_is_said_in_the_thread() {
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                    "pictures": {
+                        "credential": "secret",
+                        "baseUrl": "https://images.example/v1",
+                    },
+                },
+                "imageGen": "pictures/pic",
+            },
+        }))),
+        draw_image: Some(Arc::new(|_: ImageEndpoint, _: String| {
+            Box::pin(async move {
+                Err("pictures refused to draw it: no credit left".to_owned())
+                    as Result<Drawn, String>
+            }) as Pin<Box<dyn Future<Output = Result<Drawn, String>> + Send>>
+        })),
         ..SessionTestCase::default()
     };
 
@@ -3783,10 +3830,8 @@ async fn an_image_generation_naming_an_unknown_model_is_refused() {
             settle().await;
 
             let said = harness.thread.everything();
-            assert!(
-                said.contains("does not list a model called `missing`"),
-                "{said}"
-            );
+            assert!(said.contains("no credit left"), "{said}");
+            assert!(harness.thread.upload().is_none(), "nothing is posted");
             assert_eq!(
                 harness.thread.final_reaction("m2"),
                 Some(ReactionOutcome::Failed)

@@ -38,6 +38,7 @@ use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::ask::{Endpoint, HttpSender};
 use crate::provider::discover::Catalog;
+use crate::provider::images::{Drawn, Endpoint as ImageEndpoint};
 use crate::sandbox::backend::{Denials, SandboxLaunch, SandboxLaunchError, WORKSPACE_PATH};
 use crate::sandbox::paths;
 use crate::session::attachments::{self, RawAttachment, is_image, receive};
@@ -297,6 +298,17 @@ pub type DescribeImages = Arc<
         + Sync,
 >;
 
+/// Draws a picture with the image model, for `!gen-image`.
+///
+/// The endpoint is resolved by the caller, which owns the configuration and
+/// the catalog the name is read from; this only puts the prompt to it. Its
+/// error is words worth posting into a thread.
+pub type DrawImage = Arc<
+    dyn Fn(ImageEndpoint, String) -> Pin<Box<dyn Future<Output = Result<Drawn, String>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Everything the manager gives a session at construction.
 pub struct SessionOptions {
     /// This session's own identifier, which also names its sandbox.
@@ -357,6 +369,8 @@ pub struct SessionOptions {
     pub fetch_attachment: Option<FetchAttachment>,
     /// Describes an image this session's model cannot see.
     pub describe_images: Option<DescribeImages>,
+    /// Draws a picture with the image model, or none when the host cannot.
+    pub draw_image: Option<DrawImage>,
     /// Continue the agent conversation already stored in the state directory.
     pub resume: bool,
     /// Called once the session is finished with, so the manager can forget it.
@@ -637,16 +651,6 @@ impl SessionHandle {
     }
 }
 
-/// The model a session ran on before `!gen-image` moved it for one turn.
-#[derive(Debug, Clone)]
-struct PreviousModel {
-    /// The provider it is served by.
-    provider: String,
-    /// What it is called, level included, as `!model` shows it. None when
-    /// the session had not settled on one yet.
-    model: Option<String>,
-}
-
 /// The session's whole state, owned by its one task.
 ///
 /// The flags mirror the original's fields one for one; gathering them into
@@ -716,8 +720,6 @@ struct Running {
     guests: HashSet<String>,
     /// Where a `!model` moved this session, which outlives the command.
     switched: Option<(String, String)>,
-    /// The model `!gen-image` puts back when the turn it started settles.
-    restoring: Option<PreviousModel>,
     /// Speakers whose memory has already been given to the agent this session.
     introduced: HashSet<String>,
     /// Whoever spoke most recently, so a recorded fact is attributed to them.
@@ -751,7 +753,6 @@ impl Running {
             delegated_tokens: 0,
             delegated_kept_out: 0,
             switched: None,
-            restoring: None,
             last_speaker_id: None,
             ended: false,
             last_active: now_ms(),
@@ -1687,12 +1688,6 @@ impl Running {
         self.current_author_id = None;
         if let Some(message_id) = message_id {
             self.react(&message_id, outcome).await;
-        }
-
-        // Every end of a turn passes through here, so this is where the
-        // model `!gen-image` borrowed for one prompt goes back.
-        if let Some(previous) = self.restoring.take() {
-            self.restore_model(&previous).await;
         }
     }
 

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::{
-    Daemon, DaemonOptions, SlashCommand, StartError, create_sandbox, inert_settings,
+    Daemon, DaemonOptions, DrawImage, SlashCommand, StartError, create_sandbox, inert_settings,
     render_startup_report,
 };
 use crate::agent::client::AgentProcess;
@@ -22,6 +22,7 @@ use crate::config::validate::validate_config;
 use crate::log::{LogFields, LogLevel, Logger};
 use crate::memory::store::{MemoryStore, Scope};
 use crate::provider::discover::Catalog;
+use crate::provider::images::{Drawn, Endpoint as ImageEndpoint};
 use crate::provider::models::AvailableModel;
 use crate::sandbox::Backend;
 use crate::sandbox::backend::{
@@ -362,7 +363,10 @@ fn raw_with(content: &str, id: &str, author_id: &str) -> RawMessage {
 struct Harness {
     daemon: Daemon,
     threads: Arc<FakeThreads>,
+    sandbox: Arc<FakeSandbox>,
     replies: Arc<Mutex<Vec<(String, String)>>>,
+    /// Files posted to the channel: the name, the bytes, and the caption.
+    files: PostedFiles,
     lines: Arc<Mutex<Vec<(LogLevel, String)>>>,
     /// The configuration in force, so a test can change it the way a change
     /// to the file does.
@@ -397,6 +401,7 @@ struct DaemonCase {
     settings: Option<serde_json::Value>,
     power_off: Option<super::PowerOff>,
     describe_usage: Option<super::DescribeUsage>,
+    draw_image: Option<DrawImage>,
     refresh_models: Option<super::RefreshModels>,
     report: Option<CapabilityReport>,
     start: bool,
@@ -410,6 +415,7 @@ impl Default for DaemonCase {
             settings: None,
             power_off: None,
             describe_usage: None,
+            draw_image: None,
             refresh_models: None,
             report: None,
             start: true,
@@ -441,6 +447,7 @@ async fn with_daemon(
     });
     let sandbox = FakeSandbox::new(case.report.clone());
     let replies = Arc::new(Mutex::new(Vec::new()));
+    let files = Arc::new(Mutex::new(Vec::new()));
     let lines = Arc::new(Mutex::new(Vec::new()));
 
     let config = LiveConfig::new(config);
@@ -465,6 +472,18 @@ async fn with_daemon(
                 Box::pin(async move { replies.lock().unwrap().push((message.channel_id, text)) })
             })
         },
+        reply_with_file: {
+            let files = Arc::clone(&files);
+            Arc::new(
+                move |_message: IncomingMessage, name: String, bytes: Vec<u8>, caption: String| {
+                    let files = Arc::clone(&files);
+                    Box::pin(async move {
+                        files.lock().unwrap().push((name, bytes, caption));
+                    })
+                },
+            )
+        },
+        draw_image: case.draw_image.clone(),
         memory: case.memory.clone(),
         power_off: case.power_off.clone(),
         describe_usage: case.describe_usage.clone(),
@@ -479,7 +498,9 @@ async fn with_daemon(
     let harness = Harness {
         daemon,
         threads,
+        sandbox,
         replies,
+        files,
         lines,
         config: config.clone(),
         _root: root,
@@ -624,6 +645,208 @@ async fn a_command_needing_a_session_is_left_alone_in_the_channel() {
             assert!(harness.replies.lock().unwrap().is_empty());
         })
     })
+    .await;
+}
+
+/// What a file posted to the channel is, as a test reads it: its name, its
+/// bytes, and its caption.
+type PostedFiles = Arc<Mutex<Vec<(String, Vec<u8>, String)>>>;
+
+/// What a draw was asked for, and the drawer that answers it.
+type Drawing = (Arc<Mutex<Vec<(String, String)>>>, DrawImage);
+
+/// A PNG's signature, so a posted picture is bytes a channel shows.
+const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+
+/// Draws a fixed picture, recording what it was asked for.
+fn drawing() -> Drawing {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&asked);
+    let draw: DrawImage = Arc::new(move |endpoint: ImageEndpoint, prompt: String| {
+        seen.lock().unwrap().push((endpoint.model.clone(), prompt));
+        Box::pin(async move {
+            Ok(Drawn {
+                bytes: PNG.to_vec(),
+                revised_prompt: None,
+            }) as Result<Drawn, String>
+        }) as Pin<Box<dyn Future<Output = Result<Drawn, String>> + Send>>
+    });
+    (asked, draw)
+}
+
+/// An image generation is drawn, not started: one request to the provider's
+/// images endpoint, and the bytes posted to the channel as an upload.
+fn image_case(image_gen: &str, draw: Option<DrawImage>) -> DaemonCase {
+    DaemonCase {
+        settings: Some(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "ajamxhacker": {
+                        "credentialName": "AJAM_KEY",
+                        "credential": "other",
+                        "baseUrl": "https://images.example/v1",
+                    },
+                },
+                "imageGen": image_gen,
+            },
+        })),
+        draw_image: draw,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn an_image_generation_in_the_channel_draws_and_posts_it() {
+    let (asked, draw) = drawing();
+    with_daemon(image_case("ajamxhacker/pic:max", Some(draw)), |harness| {
+        Box::pin(async move {
+            harness
+                .daemon
+                .handle(raw("!gen-image a lighthouse"), InboundDecision::Start)
+                .await;
+
+            // No thread and no sandbox: a picture is one call.
+            assert!(created(&harness.threads).is_empty());
+            assert!(harness.sandbox.launched.lock().unwrap().is_empty());
+
+            assert_eq!(
+                asked.lock().unwrap().as_slice(),
+                [("pic:max".to_owned(), "a lighthouse".to_owned())]
+            );
+            let files = harness.files.lock().unwrap();
+            let (name, bytes, caption) = files.first().expect("a picture was posted");
+            assert_eq!(name, "image.png");
+            assert_eq!(bytes, PNG);
+            assert!(caption.contains("pic:max"), "{caption}");
+            assert!(harness.replies.lock().unwrap().is_empty());
+        })
+    })
+    .await;
+}
+
+/// Nothing is configured to draw with, and the command says so rather than
+/// drawing with whatever the provider defaults to.
+#[tokio::test]
+async fn an_image_generation_in_the_channel_without_a_configured_model_says_so() {
+    let (asked, draw) = drawing();
+    with_daemon(
+        DaemonCase {
+            draw_image: Some(draw),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("!gen-image a lighthouse"), InboundDecision::Start)
+                    .await;
+
+                assert!(created(&harness.threads).is_empty());
+                assert!(harness.said().contains("no image model is configured"));
+                assert!(asked.lock().unwrap().is_empty(), "nothing is drawn");
+                assert!(harness.files.lock().unwrap().is_empty());
+            })
+        },
+    )
+    .await;
+}
+
+/// A provider with nowhere to send the call is refused before anything is
+/// attempted against an empty URL.
+#[tokio::test]
+async fn an_image_generation_on_a_provider_without_an_endpoint_is_refused() {
+    let (asked, draw) = drawing();
+    with_daemon(
+        DaemonCase {
+            settings: Some(json!({
+                "agent": {
+                    "provider": "anthropic",
+                    "providers": {
+                        "anthropic": { "credential": "secret" },
+                        "pictures": { "credential": "k" },
+                    },
+                    "imageGen": "pictures/pic",
+                },
+            })),
+            draw_image: Some(draw),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("!gen-image a lighthouse"), InboundDecision::Start)
+                    .await;
+
+                assert!(harness.said().contains("no endpoint is configured"));
+                assert!(asked.lock().unwrap().is_empty(), "nothing is drawn");
+            })
+        },
+    )
+    .await;
+}
+
+/// A host that cannot draw says so rather than failing silently.
+#[tokio::test]
+async fn an_image_generation_on_a_host_that_cannot_draw_says_so() {
+    with_daemon(image_case("ajamxhacker/pic", None), |harness| {
+        Box::pin(async move {
+            harness
+                .daemon
+                .handle(raw("!gen-image a lighthouse"), InboundDecision::Start)
+                .await;
+
+            assert!(harness.said().contains("no way to draw"));
+            assert!(harness.files.lock().unwrap().is_empty());
+        })
+    })
+    .await;
+}
+
+/// A server that refuses is reported in the channel it was asked in, in its
+/// own words.
+#[tokio::test]
+async fn a_refusal_to_draw_is_said_in_the_channel_where_it_was_asked() {
+    with_daemon(
+        DaemonCase {
+            settings: Some(json!({
+                "agent": {
+                    "provider": "pictures",
+                    "providers": {
+                        "pictures": {
+                            "credential": "k",
+                            "baseUrl": "https://images.example/v1",
+                        },
+                    },
+                    "imageGen": "pic",
+                },
+            })),
+            draw_image: Some(Arc::new(|_: ImageEndpoint, _: String| {
+                Box::pin(async move {
+                    Err("pictures refused to draw it: no credit left".to_owned())
+                        as Result<Drawn, String>
+                }) as Pin<Box<dyn Future<Output = Result<Drawn, String>> + Send>>
+            })),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("!gen-image a lighthouse"), InboundDecision::Start)
+                    .await;
+
+                assert!(
+                    harness.said().contains("no credit left"),
+                    "{}",
+                    harness.said()
+                );
+                assert!(harness.files.lock().unwrap().is_empty());
+            })
+        },
+    )
     .await;
 }
 
@@ -969,6 +1192,59 @@ async fn a_slash_command_outside_a_thread_says_where_to_use_it() {
                 .await;
 
             assert!(answer.contains("post in the channel to start one"));
+        })
+    })
+    .await;
+}
+
+/// `/gen-image` is the exception to the thread rule: a picture needs no
+/// session, so it is drawn and posted to the channel wherever it was typed.
+#[tokio::test]
+async fn a_slash_image_generation_outside_a_thread_draws_and_posts_it() {
+    let (asked, draw) = drawing();
+    with_daemon(image_case("ajamxhacker/pic:max", Some(draw)), |harness| {
+        Box::pin(async move {
+            let answer = harness
+                .daemon
+                .run_command(&SlashCommand {
+                    thread_id: None,
+                    user_id: OWNER.to_owned(),
+                    user_name: "amelia".to_owned(),
+                    content: "!gen-image a lighthouse".to_owned(),
+                })
+                .await;
+
+            assert!(answer.contains("the picture is in the channel"), "{answer}");
+            assert!(created(&harness.threads).is_empty());
+            assert_eq!(
+                asked.lock().unwrap().as_slice(),
+                [("pic:max".to_owned(), "a lighthouse".to_owned())]
+            );
+            assert_eq!(harness.files.lock().unwrap().len(), 1);
+        })
+    })
+    .await;
+}
+
+/// A prompt with nothing in it draws nothing, and says what to type.
+#[tokio::test]
+async fn a_slash_image_generation_without_a_prompt_says_what_to_type() {
+    let (asked, draw) = drawing();
+    with_daemon(image_case("ajamxhacker/pic:max", Some(draw)), |harness| {
+        Box::pin(async move {
+            let answer = harness
+                .daemon
+                .run_command(&SlashCommand {
+                    thread_id: None,
+                    user_id: OWNER.to_owned(),
+                    user_name: "amelia".to_owned(),
+                    content: "!gen-image".to_owned(),
+                })
+                .await;
+
+            assert!(answer.contains("say what to generate"), "{answer}");
+            assert!(created(&harness.threads).is_empty());
+            assert!(asked.lock().unwrap().is_empty(), "nothing is drawn");
         })
     })
     .await;

@@ -3,9 +3,7 @@
 //! The table of commands, who may run each, and what they say is
 //! `crate::session::commands`. This is the half that acts on one.
 
-use super::{
-    Attached, IncomingMessage, PreviousModel, Running, SessionTimer, display_name, end_reason_name,
-};
+use super::{Attached, IncomingMessage, Running, SessionTimer, display_name, end_reason_name};
 use crate::chat::render::grouped_by_provider;
 use crate::chat::render::{bytes as byte_count, compaction_line, connection_line};
 use crate::log::{LogValue, fields};
@@ -391,125 +389,6 @@ impl Running {
         )))
         .await;
         self.react(&message.id, ReactionOutcome::Accepted).await;
-    }
-
-    /// Runs one prompt on the image model the configuration names, then
-    /// switches back.
-    ///
-    /// The model is `agent.imageGen`, read as `!model` reads a name, so an
-    /// alias and a level on the end both work, the level being the effort to
-    /// generate at. Only the one prompt runs on it: where the session was is
-    /// put back when the turn settles, so a picture costs the conversation
-    /// none of its own model.
-    async fn generate_image(&mut self, rest: &str, message: &IncomingMessage) {
-        let prompt = rest.trim();
-        if prompt.is_empty() {
-            self.say("say what to generate, as `!gen-image <prompt>`")
-                .await;
-            return;
-        }
-        let named = self
-            .options
-            .config
-            .agent
-            .image_gen
-            .as_deref()
-            .map(str::trim)
-            .filter(|named| !named.is_empty());
-        let Some(named) = named else {
-            self.say("no image model is configured; name one with `agent.imageGen`")
-                .await;
-            self.react(&message.id, ReactionOutcome::Failed).await;
-            return;
-        };
-        if self.ticket.is_some() {
-            self.say("a turn is running; wait for it, or stop it with `!interrupt`")
-                .await;
-            self.react(&message.id, ReactionOutcome::Failed).await;
-            return;
-        }
-
-        let expanded = expand_alias(named, &self.options.catalog.aliases());
-        let (wanted, asked_level) = split_level(&expanded);
-        let Some((chosen, asked_level)) = self.pick_model(&wanted, &asked_level).await else {
-            self.react(&message.id, ReactionOutcome::Failed).await;
-            return;
-        };
-        let wanted = chosen.with_level(&asked_level);
-
-        // Where the session goes back to, read before the switch is made:
-        // once `switched` holds the image model, this session's own idea of
-        // what it runs on is the image model.
-        let previous = PreviousModel {
-            provider: self.provider(),
-            model: self.running_model(),
-        };
-        if !self.change_model(&chosen, &wanted).await {
-            self.react(&message.id, ReactionOutcome::Failed).await;
-            return;
-        }
-        self.restoring = Some(previous);
-
-        self.say(&connection_line(&format!("generating this on `{wanted}`")))
-            .await;
-        self.submit_prompt(prompt, message.clone(), true, Attached::default())
-            .await;
-    }
-
-    /// Puts the session back on the model it ran on before `!gen-image`.
-    ///
-    /// Said when it cannot: a restore the agent refuses leaves the session
-    /// on the image model, and the thread is better told that than left to
-    /// find out from the next reply.
-    pub(super) async fn restore_model(&mut self, previous: &PreviousModel) {
-        let Some(model) = &previous.model else {
-            self.say(
-                "this session stays on the image model: it had no model of its own yet; \
-                 `!model` lists what to switch to",
-            )
-            .await;
-            return;
-        };
-        let Some(client) = self.client.clone() else {
-            return;
-        };
-        let (bare, level) = split_level(model);
-        match client
-            .set_model(
-                &previous.provider,
-                &bare,
-                self.options.config.timeouts.question_ms,
-            )
-            .await
-        {
-            Ok(()) => {
-                if let Some(level) = level.strip_prefix(':') {
-                    client.set_thinking_level(level);
-                }
-                self.switched = Some((previous.provider.clone(), model.clone()));
-                if let Some(changed) = &self.options.on_model_changed {
-                    changed(&previous.provider, model);
-                }
-            }
-            Err(error) => {
-                self.log.warn(
-                    "the agent refused the switch back",
-                    &fields([
-                        (
-                            "model",
-                            LogValue::from(format!("{}/{}", previous.provider, bare)),
-                        ),
-                        ("detail", LogValue::from(error.as_str())),
-                    ]),
-                );
-                self.say(&format!(
-                    "this session stays on the image model: the agent refused \
-                     `{}/{bare}`: {error}",
-                    previous.provider
-                ))
-                .await;
-            }
-        }
     }
 
     #[expect(

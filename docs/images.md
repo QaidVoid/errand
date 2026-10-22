@@ -79,3 +79,40 @@ is posted. Anything else is refused, and the thread is told that a picture was
 not posted, and why. A picture larger than `output.maxUploadBytes` is named
 instead of posted. A turn posts at most four. Setting `output.postImages` to
 `false` turns the uploads off.
+
+## `!gen-image`
+
+`!gen-image <prompt>` draws one picture with the model `agent.imageGen` names,
+and posts it as an upload. It does not go through the agent: errand calls the
+provider's own `POST /images/generations` with the model and the prompt, and
+posts the bytes that come back. That is the difference between a picture and a
+link: a chat model asked for an image answers in prose, which is not one.
+
+```json
+{
+  "agent": {
+    "imageGen": "pictures/image-large",
+    "providers": {
+      "pictures": {
+        "baseUrl": "https://images.example/v1",
+        "credential": "...",
+        "images": { "model": "image-large" }
+      }
+    }
+  }
+}
+```
+
+The name is read as `!model` reads one, so an alias or a bare id works too. The
+provider is the one that serves the model, and its `baseUrl` is where the
+request goes. A level on the name stays on it, since it is part of the model id
+the endpoint is asked for: `image:max` is sent as written.
+
+The command works in a thread and in the channel. In a thread it draws into the
+thread; in the channel it draws into the channel. Either way it opens no
+session, launches no sandbox, and leaves the session's model alone.
+
+A server that answers with a link instead of bytes is refused rather than
+followed, since fetching it would be a second request to a host nobody
+configured. An `anthropic` provider cannot be used, because that API has no
+images endpoint.

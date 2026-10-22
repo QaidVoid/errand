@@ -141,13 +141,18 @@ pub struct AgentConfig {
     pub model: Option<String>,
     /// Model an image is shown to when the working model cannot see one.
     pub vision_model: Option<String>,
-    /// Model `!gen-image` runs one prompt on, or none.
+    /// Model `!gen-image` draws with, or none.
     ///
     /// Named as `!model` names them: an alias, `provider/id`, or a bare model
-    /// id, with the effort to use as a level on the end, as `image:max`. A
-    /// name nothing lists is refused when the command is used, not here. Only
-    /// the one prompt runs on it: the session goes back to the model it was
-    /// on when the turn settles.
+    /// id, with the effort to use as a level on the end, as `image:max`. The
+    /// level stays on the model, because it is part of the name the images
+    /// endpoint is asked for. A name nothing lists is refused when the command
+    /// is used, not here.
+    ///
+    /// The command calls the provider's own `POST /images/generations` with
+    /// this model and the prompt, and posts what comes back as an upload. The
+    /// provider is the one that serves the model, so its `baseUrl` is where
+    /// the request goes. A provider with no `baseUrl` cannot draw.
     pub image_gen: Option<String>,
     /// A cheaper model to ask about one artefact, or none.
     pub delegate: Option<DelegateConfig>,

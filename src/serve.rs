@@ -46,6 +46,7 @@ use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
 use crate::provider::discover::{Catalog, Outcome, discover};
 use crate::provider::gateway::fetch_gateway_usage;
+use crate::provider::images::{Drawn, Endpoint as ImageEndpoint, HttpPost as HttpImagePost, draw};
 use crate::provider::mapped::fetch_mapped;
 use crate::provider::models::{
     agent_directory, common_base_url, model_by_id, read_models, read_store, store_entries,
@@ -72,6 +73,7 @@ use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
 use crate::session::model::{configured_model, split_level};
 use crate::session::pr::{ApiCall, call_api};
 use crate::session::session::DescribeImages;
+use crate::session::session::DrawImage;
 use crate::session::session::IncomingMessage;
 use crate::session::session::Unavailable;
 use crate::session::views::SessionView;
@@ -1187,6 +1189,35 @@ async fn run(
                 })
             })
         },
+        reply_with_file: {
+            let http = Arc::clone(&http);
+            let live = live.clone();
+            let log = log.clone();
+            let served = *served_channel;
+            Arc::new(
+                move |message: IncomingMessage, name: String, bytes: Vec<u8>, caption: String| {
+                    let http = Arc::clone(&http);
+                    let live = live.clone();
+                    let log = log.clone();
+                    Box::pin(async move {
+                        let secrets = secret_values(&live.get());
+                        send_file_in_channel(
+                            &http,
+                            &log,
+                            &secrets,
+                            served,
+                            &message,
+                            PostedFile {
+                                name: &name,
+                                bytes,
+                                caption: &caption,
+                            },
+                        )
+                        .await;
+                    })
+                },
+            )
+        },
         memory: Some(Arc::clone(&memory)),
         power_off: Some(Arc::new(|| {
             Box::pin(power_off()) as Pin<Box<dyn Future<Output = Option<String>> + Send>>
@@ -1216,6 +1247,13 @@ async fn run(
                 }) as Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
             }) as DescribeImages
         }),
+        draw_image: Some(Arc::new(|endpoint: ImageEndpoint, prompt: String| {
+            Box::pin(async move {
+                draw(&endpoint, &prompt, &HttpImagePost)
+                    .await
+                    .map_err(|error| error.to_string())
+            }) as Pin<Box<dyn Future<Output = Result<Drawn, String>> + Send>>
+        }) as DrawImage),
         public_url: config.web.as_ref().and_then(|web| web.public_url.clone()),
         operator_ids: Some(operator_ids),
         catalog: catalog.clone(),
@@ -1543,6 +1581,50 @@ async fn reply_in_channel(
     let Ok(thread) = thread else { return };
     for chunk in chunks {
         let _ = thread.send_message(http, plain(&chunk)).await.map_err(said);
+    }
+}
+
+/// A file on its way to the channel: what to call it, its bytes, and the
+/// caption it is posted with.
+struct PostedFile<'a> {
+    name: &'a str,
+    bytes: Vec<u8>,
+    caption: &'a str,
+}
+
+/// Posts a file into the channel it was asked for, with its caption.
+///
+/// A picture is an upload rather than a link: the channel shows it, and
+/// nobody has to follow anything. The caption is redacted the same way a
+/// reply is, so a credential cannot ride out on it.
+async fn send_file_in_channel(
+    http: &serenity::http::Http,
+    log: &Logger,
+    secrets: &[String],
+    served: ChannelId,
+    message: &IncomingMessage,
+    file: PostedFile<'_>,
+) {
+    let PostedFile {
+        name,
+        bytes,
+        caption,
+    } = file;
+    let channel_id = answer_in(&message.channel_id, served);
+    let caption = redact_text(caption, secrets);
+    let sent = channel_id
+        .send_message(
+            http,
+            plain(&caption).files(vec![serenity::builder::CreateAttachment::bytes(
+                bytes, name,
+            )]),
+        )
+        .await;
+    if let Err(error) = sent {
+        log.warn(
+            "the file could not be sent",
+            &fields([("detail", LogValue::from(error.to_string()))]),
+        );
     }
 }
 

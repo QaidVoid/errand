@@ -32,8 +32,8 @@ use crate::session::registry::{ThreadRecord, ThreadRegistry};
 use crate::session::rules::house_rules_text;
 pub use crate::session::session::Unavailable;
 use crate::session::session::{
-    DescribeImages, IncomingMessage, Launcher, OnGuestsChanged, OnModelChanged, OpenPullRequest,
-    RunningBox, SessionHandle, SessionOptions,
+    DescribeImages, DrawImage, IncomingMessage, Launcher, OnGuestsChanged, OnModelChanged,
+    OpenPullRequest, RunningBox, SessionHandle, SessionOptions,
 };
 use crate::session::transcript::{TRANSCRIPT_FILENAME, Transcript};
 use crate::session::views::{Attached, DEFAULT_TRANSCRIPT_LIMIT, Held, SessionView, ViewFanOut};
@@ -164,6 +164,8 @@ pub struct ManagerOptions {
     pub memory: Option<Arc<MemoryStore>>,
     /// Describes an image for a session whose model cannot be shown one.
     pub describe_images: Option<DescribeImages>,
+    /// Draws a picture with the image model, or none when the host cannot.
+    pub draw_image: Option<DrawImage>,
     /// Where the interface is published, when it is.
     pub public_url: Option<String>,
     /// The provider definitions sessions launch with and the models `!model`
@@ -183,6 +185,7 @@ struct Shared {
     operator_ids: Vec<String>,
     memory: Option<Arc<MemoryStore>>,
     describe_images: Option<DescribeImages>,
+    draw_image: Option<DrawImage>,
     public_url: Option<String>,
     catalog: Catalog,
     delegate_base_url: Option<String>,
@@ -220,6 +223,7 @@ impl SessionManager {
                 .unwrap_or_else(|| starting.chat.operator_user_ids.clone()),
             memory: options.memory.clone(),
             describe_images: options.describe_images.clone(),
+            draw_image: options.draw_image.clone(),
             public_url: options.public_url.clone(),
             catalog: options.catalog.clone(),
             delegate_base_url: options.delegate_base_url.clone(),
@@ -667,6 +671,7 @@ impl SessionManager {
             memory: self.shared.memory.clone(),
             fetch_attachment: None,
             describe_images: self.shared.describe_images.clone(),
+            draw_image: self.shared.draw_image.clone(),
             resume: false,
             on_ended: on_ended(
                 Arc::clone(&self.state),
@@ -874,6 +879,7 @@ impl SessionManager {
             memory: self.shared.memory.clone(),
             fetch_attachment: None,
             describe_images: self.shared.describe_images.clone(),
+            draw_image: self.shared.draw_image.clone(),
             resume: true,
             on_ended: on_ended(
                 Arc::clone(&self.state),
