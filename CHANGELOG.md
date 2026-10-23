@@ -1,6 +1,20 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.3.2] - 2026-10-23
+
+
+### Features
+- Address a channel picture to whoever asked for it ([715e9b0](https://github.com/QaidVoid/errand/commit/715e9b0b777a54d3f8e7dc7a9e358945c6798dc3))
+- Let !gen-image name an effort ([38323ab](https://github.com/QaidVoid/errand/commit/38323ab48c38d2c2f4c92d6c3c82032e2f3a0067))
+- Add !gen-image to run one prompt on the image model ([b87e048](https://github.com/QaidVoid/errand/commit/b87e048b748a354911231a1a7036a917f3d89c75))
+- Generate images and post them to the thread ([#35](https://github.com/QaidVoid/errand/pull/35)) ([4a8011c](https://github.com/QaidVoid/errand/commit/4a8011cd3668b94a72aea9dbffbd2d3ab16d4f18))
+
+### Fixes
+- (session) Quote the failing line when a sandbox runs out of disk ([206fc5a](https://github.com/QaidVoid/errand/commit/206fc5ae53f53e645731f706dae327251c9247cf))
+- Resolve an image model to the provider that lists it ([ad61174](https://github.com/QaidVoid/errand/commit/ad611748f1297eedc1e1df0489df54245df216e5))
+- Draw with the images endpoint, not a chat model ([29d046c](https://github.com/QaidVoid/errand/commit/29d046c3280d4a304c0752326ab58196ff154d27))
+
 ## [0.3.1] - 2026-10-18
 
 
