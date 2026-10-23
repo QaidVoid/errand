@@ -3327,8 +3327,9 @@ fn a_host_that_lists_nothing_refuses_a_name_rather_than_accepting_it() {
     ));
 }
 
-/// The listing is grouped, and the session's own provider comes first so the
-/// models it can switch to without qualifying are the ones at the top.
+/// The listing names every model as `provider/model`, and the session's own
+/// provider comes first so the models it could switch to without qualifying
+/// are the ones at the top.
 #[test]
 fn the_listing_says_what_somebody_can_type_back() {
     let available = vec![
@@ -3349,15 +3350,13 @@ fn the_listing_says_what_somebody_can_type_back() {
         ("glm-5.3".to_owned(), "zai/glm-5.3".to_owned()),
     ]);
 
-    let lines = crate::chat::render::grouped_by_provider(&available, "zai", "glm-5.3", &aliases);
+    let lines = crate::chat::render::listed_models(&available, "zai", "glm-5.3", &aliases);
 
     assert_eq!(
         lines,
         [
-            "**zai**",
-            "  `glm-5.3`  (running, `glm`, thinks high)",
-            "**openrouter**",
-            "  `a`",
+            "  `zai/glm-5.3`  (running, `glm`, thinks high)",
+            "  `openrouter/a`",
         ]
     );
 }
@@ -3492,11 +3491,11 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
             let said = harness.thread.replies();
             let listing = &said.last().expect("a listing").0;
             assert!(
-                listing.contains("this session runs on `musecringe:max`"),
+                listing.contains("this session runs on `ajamxhacker/musecringe:max`"),
                 "got {listing}"
             );
             assert!(
-                listing.contains("`musecringe`  (running, `muse`)"),
+                listing.contains("`ajamxhacker/musecringe`  (running, `muse`)"),
                 "the model it was switched to is the one marked, got {listing}"
             );
         })

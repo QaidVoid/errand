@@ -460,35 +460,36 @@ pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
     format!("```\n{}\n```", lines.join("\n"))
 }
 
-/// Every model, under a heading per provider, the current one first.
+/// Every model this host can run, one per line, named as `provider/model`.
 ///
-/// A name somebody can type back is the point, so a short name is shown
-/// beside the model it stands for, the current one is marked, and a level
+/// The qualified name is what is listed, because it is the name that always
+/// works: a bare id is unique only within its provider, so two providers
+/// listing the same one make it a name that has to be finished before it
+/// means anything. A list of ids is a list of names that fail.
+///
+/// The session's own provider comes first, so the models it could switch to
+/// without qualifying are the ones at the top, and the one it is on is
+/// marked. A short name is shown beside the model it stands for, and a level
 /// that applies without being asked for is spelled out: a list that never
 /// says `muse` cannot be used without reading the configuration first.
 ///
 /// Shared because a session lists from its own model and the daemon lists
 /// from the catalog, and the two must not drift apart.
-pub fn grouped_by_provider(
+pub fn listed_models(
     available: &[AvailableModel],
     current_provider: &str,
     current_model: &str,
     aliases: &BTreeMap<String, String>,
 ) -> Vec<String> {
-    let mut providers: Vec<&str> = Vec::new();
-    for model in available {
-        if !providers.contains(&model.provider.as_str()) {
-            providers.push(&model.provider);
-        }
-    }
-    providers.sort_by_key(|provider| (*provider != current_provider, *provider));
+    let mut ordered: Vec<&AvailableModel> = available.iter().collect();
+    // Stable, so the order a provider lists its models in survives.
+    ordered.sort_by_key(|model| (model.provider != current_provider, &model.provider));
 
-    let mut lines = Vec::new();
-    for provider in providers {
-        lines.push(format!("**{provider}**"));
-        for model in available.iter().filter(|model| model.provider == provider) {
+    ordered
+        .into_iter()
+        .map(|model| {
             let mut notes = Vec::new();
-            if provider == current_provider && model.id == current_model {
+            if model.provider == current_provider && model.id == current_model {
                 notes.push("running".to_owned());
             }
             notes.extend(short_names(aliases, model));
@@ -500,10 +501,9 @@ pub fn grouped_by_provider(
             } else {
                 format!("  ({})", notes.join(", "))
             };
-            lines.push(format!("  `{}`{said}", model.id));
-        }
-    }
-    lines
+            format!("  `{}`{said}", model.qualified())
+        })
+        .collect()
 }
 
 /// The short names that stand for one model, in the order they were written.

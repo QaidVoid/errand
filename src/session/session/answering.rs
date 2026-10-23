@@ -4,7 +4,7 @@
 //! `crate::session::commands`. This is the half that acts on one.
 
 use super::{Attached, IncomingMessage, Running, SessionTimer, display_name, end_reason_name};
-use crate::chat::render::grouped_by_provider;
+use crate::chat::render::listed_models;
 use crate::chat::render::{bytes as byte_count, compaction_line, connection_line};
 use crate::log::{LogValue, fields};
 
@@ -229,19 +229,25 @@ impl Running {
     /// Says which model this session runs on and which it can switch to.
     async fn list_models(&mut self) {
         let available = &self.options.catalog.models();
-        let running = self
-            .running_model()
-            .unwrap_or_else(|| "the provider default".to_owned());
+        let provider = self.provider();
+        let running = self.running_model();
+        // Shown qualified, because that is how the list below names it, and
+        // the qualified name is the one that always resolves.
+        let shown = running.as_deref().map_or_else(
+            || "the provider default".to_owned(),
+            |model| format!("{provider}/{model}"),
+        );
+        let current = split_level(running.as_deref().unwrap_or_default()).0;
         self.say(&if available.is_empty() {
-            format!("this session runs on `{running}`; the host lists no others to switch to")
+            format!("this session runs on `{shown}`; the host lists no others to switch to")
         } else {
             let mut lines = vec![format!(
-                "this session runs on `{running}`. Switch with `!model <name>`:"
+                "this session runs on `{shown}`. Switch with `!model <name>`:"
             )];
-            lines.extend(grouped_by_provider(
+            lines.extend(listed_models(
                 available,
-                &self.provider(),
-                &split_level(&running).0,
+                &provider,
+                &current,
                 &self.options.catalog.aliases(),
             ));
             lines.join("\n")

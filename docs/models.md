@@ -166,9 +166,11 @@ spent too is the session turned away.
 
 ## Switching the model a session runs on
 
-`!model` lists what this host knows the provider serves. `!model <name>` moves
-the session to that one, **keeping the conversation**: what was said stays said,
-and the next turn is answered by the model named.
+`!model` lists every model this host can run, each named `provider/model`, with
+the session's own provider first and the model it is on marked. That is the
+name to type back: it resolves whatever else serves the same id. `!model <name>`
+moves the session to that one, **keeping the conversation**: what was said stays
+said, and the next turn is answered by the model named.
 
 That is the useful shape for "plan on the capable model, carry it out on the
 cheap one". The cheap model works in the same thread, with the same tools, in

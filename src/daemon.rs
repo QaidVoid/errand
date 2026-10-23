@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::admission::scheduler::{Scheduler, SystemClock};
 use crate::chat::inbound::{InboundDecision, RawMessage};
-use crate::chat::render::grouped_by_provider;
+use crate::chat::render::listed_models;
 use crate::config::live::LiveConfig;
 use crate::config::redact::redact_config;
 use crate::config::schema::defaults::IMAGE;
@@ -530,18 +530,26 @@ impl Daemon {
             .as_ref()
             .and_then(|chosen| chosen.provider.clone())
             .unwrap_or_else(|| agent.provider.clone());
-        let running = chosen.map_or_else(|| agent.provider.clone(), |chosen| chosen.model);
+        // Shown qualified, the way the list below names it: the qualified name
+        // is the one that always resolves.
+        let (shown, current) = match chosen {
+            Some(chosen) => {
+                let current = split_level(&chosen.model).0;
+                (format!("{provider}/{}", chosen.model), current)
+            }
+            None => ("the provider default".to_owned(), String::new()),
+        };
 
         Some(if available.is_empty() {
             "this host lists no models to switch to".to_owned()
         } else {
             let mut lines = vec![format!(
-                "a new session runs on `{running}`. Switch with `!model <name>` in a session thread:"
+                "a new session runs on `{shown}`. Switch with `!model <name>` in a session thread:"
             )];
-            lines.extend(grouped_by_provider(
+            lines.extend(listed_models(
                 &available,
                 &provider,
-                &split_level(&running).0,
+                &current,
                 &self.options.catalog.aliases(),
             ));
             lines.join("\n")

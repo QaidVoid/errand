@@ -1706,9 +1706,8 @@ async fn the_models_on_this_host_are_listed_without_starting_a_session() {
                     .await;
 
                 let said = harness.said();
-                assert!(said.contains("**zai**"), "{said}");
-                assert!(said.contains("`glm-5.3`"), "{said}");
-                assert!(said.contains("**openrouter**"), "{said}");
+                assert!(said.contains("`zai/glm-5.3`"), "{said}");
+                assert!(said.contains("`openrouter/a`"), "{said}");
                 assert!(created(&harness.threads).is_empty());
             })
         },
