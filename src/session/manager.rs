@@ -203,6 +203,20 @@ struct ManagerState {
     views: Mutex<HashMap<String, Arc<ViewFanOut>>>,
 }
 
+/// What naming a model came to.
+///
+/// Three outcomes rather than two, because a name that several providers
+/// serve is neither a model nor a name nothing answers to: saying it does not
+/// exist sends somebody looking for a model that is right there.
+enum Named {
+    /// Exactly one model answers to the name.
+    One(ChosenModel),
+    /// Nothing the host lists answers to it.
+    None,
+    /// Several providers serve it, qualified for a reply.
+    Several(Vec<String>),
+}
+
 /// Owns every live session and the mapping from threads to them.
 pub struct SessionManager {
     options: ManagerOptions,
@@ -406,18 +420,25 @@ impl SessionManager {
     /// default one, which turns a typo into a turn that fails at the provider
     /// instead of a refusal here that costs nothing.
     ///
+    /// A name several providers serve is not nothing, and it is not a name to
+    /// pick from on the person's behalf either: the two are different models
+    /// that happen to share an id, and the one meant is the one they had in
+    /// mind. So the providers are carried back to be named, the same way
+    /// `!model` names them.
+    ///
     /// The level is taken off before the lookup and put back after: an alias
     /// may carry one, and `musecringe:max` is not the name of anything the
     /// host lists.
-    fn resolve(&self, value: &str) -> Option<ChosenModel> {
+    fn resolve(&self, value: &str) -> Named {
         let agent = &self.options.config.get().agent;
         let (wanted, level) = split_level(&expand_alias(value, &agent.aliases));
         match match_model(&self.options.catalog.models(), &wanted, &agent.provider) {
-            Matched::One(found) => Some(ChosenModel {
+            Matched::One(found) => Named::One(ChosenModel {
                 provider: Some(found.provider.clone()),
                 model: found.with_level(&level),
             }),
-            Matched::None | Matched::Several(_) => None,
+            Matched::None => Named::None,
+            Matched::Several(options) => Named::Several(options),
         }
     }
 
@@ -425,16 +446,32 @@ impl SessionManager {
     ///
     /// A fallback naming a model the host does not list is skipped like one
     /// whose window is spent, since running on it would fail the same way and
-    /// for a reason the operator wrote down.
+    /// for a reason the operator wrote down. One naming a model more than one
+    /// provider serves is skipped for the same reason, and the log says which
+    /// providers it could have meant.
     async fn fallback(&self) -> Option<ChosenModel> {
         let agent = self.options.config.get().agent;
         for named in &agent.fallback {
-            let Some(resolved) = self.resolve(named) else {
-                self.options.log.warn(
-                    "a fallback names a model no provider here serves",
-                    &fields([("model", LogValue::from(named.as_str()))]),
-                );
-                continue;
+            let resolved = match self.resolve(named) {
+                Named::One(found) => found,
+                Named::None => {
+                    self.options.log.warn(
+                        "a fallback names a model no provider here serves",
+                        &fields([("model", LogValue::from(named.as_str()))]),
+                    );
+                    continue;
+                }
+                Named::Several(options) => {
+                    let served = options.join(", ");
+                    self.options.log.warn(
+                        "a fallback names a model more than one provider serves",
+                        &fields([
+                            ("model", LogValue::from(named.as_str())),
+                            ("served", LogValue::from(served.as_str())),
+                        ]),
+                    );
+                    continue;
+                }
             };
             let provider = resolved
                 .provider
@@ -483,14 +520,23 @@ impl SessionManager {
         // A name that matches nothing is refused here rather than dropped, so
         // the person is told the model was not found instead of finding out
         // from a turn that fails at the provider after a sandbox has started.
+        // A name more than one provider serves is refused too, but as a name
+        // to finish writing rather than one that does not exist.
         let mut chosen = match asked.value.as_deref() {
             None => None,
             Some(value) => match self.resolve(value) {
-                Some(found) => Some(found),
-                None => {
+                Named::One(found) => Some(found),
+                Named::None => {
                     return self.refused(format!(
                         "no provider here serves a model called `{value}`; say `!model` to see \
                          what does"
+                    ));
+                }
+                Named::Several(options) => {
+                    return self.refused(format!(
+                        "more than one provider serves `{value}`: {}; name one as \
+                         `provider/model`",
+                        options.join(", ")
                     ));
                 }
             },

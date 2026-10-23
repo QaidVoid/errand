@@ -1235,6 +1235,63 @@ async fn a_host_that_lists_no_models_refuses_a_named_one() {
     .await;
 }
 
+/// A name several providers serve is a name that exists, so refusing it must
+/// not say it does not. The refusal names the providers, which is what turns
+/// a dead end into a one word edit.
+#[tokio::test]
+async fn a_model_several_providers_serve_is_refused_by_name_not_by_absence() {
+    with_models(
+        &json!({
+            "agent": {
+                "provider": "muse",
+                "providers": {
+                    "muse": { "credentialName": "MUSE_API_KEY", "credential": "secret" },
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "beta": { "credentialName": "BETA_API_KEY", "credential": "secret" },
+                },
+            },
+        }),
+        None,
+        false,
+        listed(),
+        |harness| {
+            Box::pin(async move {
+                let outcome = harness
+                    .manager
+                    .start(message("demo: -m glm-5.3-air go", "m1"))
+                    .await;
+
+                let StartOutcome::Refused { reason } = outcome else {
+                    panic!("an ambiguous name was accepted");
+                };
+                assert!(
+                    reason.contains("more than one provider serves"),
+                    "the refusal says the model is missing rather than shared: {reason}"
+                );
+                assert!(
+                    reason.contains("anthropic/glm-5.3-air"),
+                    "the refusal does not name a provider that serves it: {reason}"
+                );
+                assert!(
+                    reason.contains("beta/glm-5.3-air"),
+                    "the refusal does not name a provider that serves it: {reason}"
+                );
+                assert!(harness.sandbox.launched.lock().unwrap().is_empty());
+
+                // The qualification the refusal asks for is one that works.
+                harness
+                    .manager
+                    .start(message("demo: -m anthropic/glm-5.3-air go", "m2"))
+                    .await;
+                let launched = harness.sandbox.launched.lock().unwrap()[0].clone();
+                assert_eq!(launched.provider, "anthropic");
+                assert_eq!(launched.model.as_deref(), Some("glm-5.3-air"));
+            })
+        },
+    )
+    .await;
+}
+
 /// By the time there is a thread to type `!model` in, the session has already
 /// started on whichever model the configuration named.
 #[tokio::test]
@@ -1659,6 +1716,48 @@ async fn a_spent_window_falls_back_to_the_first_model_with_room() {
             Box::pin(async move {
                 let refused = harness.manager.start(message("demo: just go", "m1")).await;
                 assert!(refused_reason(&refused).contains("usage window is spent"));
+            })
+        },
+    )
+    .await;
+}
+
+/// A fallback naming a model more than one provider serves names no model, so
+/// it is passed over like one nothing serves rather than guessed at, and the
+/// next fallback is the one the session starts on.
+#[tokio::test]
+async fn a_fallback_naming_a_shared_id_is_passed_over() {
+    with_models(
+        &json!({
+            "agent": {
+                "provider": "muse",
+                "providers": {
+                    "muse": { "credentialName": "MUSE_API_KEY", "credential": "secret" },
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "beta": { "credentialName": "BETA_API_KEY", "credential": "secret" },
+                },
+                "fallback": ["glm-5.3-air", "anthropic/glm-5.3-air"],
+            },
+        }),
+        Some(Arc::new(|provider: &str| {
+            let known = provider.to_owned();
+            Box::pin(
+                async move { (known == "muse").then(|| "muse's usage window is spent".to_owned()) },
+            ) as Pin<Box<dyn Future<Output = Option<String>> + Send>>
+        })),
+        false,
+        listed(),
+        |harness| {
+            Box::pin(async move {
+                let outcome = harness.manager.start(message("demo: just go", "m1")).await;
+                assert!(
+                    outcome.is_started(),
+                    "an ambiguous fallback turned the session away: {}",
+                    refused_reason(&outcome)
+                );
+                let launched = harness.sandbox.launched.lock().unwrap()[0].clone();
+                assert_eq!(launched.provider, "anthropic");
+                assert_eq!(launched.model.as_deref(), Some("glm-5.3-air"));
             })
         },
     )

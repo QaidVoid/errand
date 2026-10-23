@@ -21,6 +21,12 @@ standing `agent.provider`. A leading segment counts as a provider only when it
 is one your configuration defines, which leaves a model id holding a slash of
 its own, `meta/muse-spark-1.3`, whole.
 
+A bare name is looked for on the provider the session is on first. When that
+provider does not serve it, it is looked for on every provider you defined, and
+a name more than one of them serves is refused rather than guessed at: the
+refusal names each `provider/model` that answers to it. Two providers sharing
+an id serve two different models, and the one meant is the one you had in mind.
+
 A provider the agent has built in needs only its `credential` to be switched
 to. The daemon reads where it is served from the host's model store, so it
 does not have to be the provider a session started on.
