@@ -125,8 +125,10 @@ Naming the provider in `imageGen`, as `pictures/image-max`, resolves without the
 list, because the name says where the model lives.
 
 The command works in a thread and in the channel. In a thread it draws into the
-thread; in the channel it draws into the channel. Either way it opens no
-session, launches no sandbox, and leaves the session's model alone.
+thread; in the channel it draws into the channel, as a reply to the message
+that asked, addressed to whoever asked it. A picture posted bare in a shared
+channel belongs to nobody, and nobody can see what it answers. Either way it
+opens no session, launches no sandbox, and leaves the session's model alone.
 
 ## Effort
 

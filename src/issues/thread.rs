@@ -5,7 +5,7 @@
 //! chat id can ever be, and so where a thread lives is read off its name.
 
 /// What starts the name of every thread on GitHub.
-const PREFIX: &str = "github:";
+pub const PREFIX: &str = "github:";
 
 /// The thread an issue or pull request is.
 pub fn thread_id(repository: &str, number: u64) -> String {

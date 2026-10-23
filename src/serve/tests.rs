@@ -9,8 +9,8 @@ use serde_json::json;
 use serenity::model::id::ChannelId;
 
 use super::{
-    BoxedGateRead, answer_in, brokerable_providers, brokering_credential_names, read_usage,
-    rebuild_catalog, refusal, usage_sources,
+    BoxedGateRead, addressed, answer_in, brokerable_providers, brokering_credential_names,
+    read_usage, rebuild_catalog, refusal, reply_to, usage_sources,
 };
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
@@ -406,4 +406,53 @@ async fn an_edited_models_list_reaches_the_catalog() {
         ["glm-5.3-air"],
         "the edited list did not replace the one from before"
     );
+}
+
+/// A picture posted in a shared channel is addressed to whoever asked for it,
+/// so it is visibly theirs rather than something that happened.
+#[test]
+fn a_posted_picture_is_addressed_to_whoever_asked() {
+    assert_eq!(
+        addressed("100000000000000001", "drawn on `image:max`"),
+        "<@100000000000000001> drawn on `image:max`"
+    );
+}
+
+/// An account from somewhere else is written as its bare login, since a
+/// channel cannot mention one and the syntax would render as literal text.
+#[test]
+fn an_account_the_channel_cannot_mention_is_written_plainly() {
+    assert_eq!(
+        addressed("github:amelia", "drawn on `image:max`"),
+        "amelia drawn on `image:max`"
+    );
+}
+
+/// A message typed at the channel has an id the service knows, so the picture
+/// hangs off it and the channel shows what it answers.
+#[test]
+fn a_picture_replies_to_the_message_that_asked_for_it() {
+    let mut message = crate::session::session::IncomingMessage {
+        id: "123456789012345678".to_owned(),
+        author_id: "100000000000000001".to_owned(),
+        channel_id: "222".to_owned(),
+        author_name: Some("amelia".to_owned()),
+        content: "!gen-image a lighthouse".to_owned(),
+        attachments: Vec::new(),
+    };
+
+    assert_eq!(
+        reply_to(&message),
+        Some(serenity::model::id::MessageId::new(123_456_789_012_345_678))
+    );
+
+    // A slash command names no message to reply to.
+    message.id = "slash-100000000000000001".to_owned();
+    assert_eq!(reply_to(&message), None);
+
+    // Nor does one from a surface with no message of its own.
+    message.id = String::new();
+    assert_eq!(reply_to(&message), None);
+    message.id = "0".to_owned();
+    assert_eq!(reply_to(&message), None);
 }

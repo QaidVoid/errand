@@ -1592,11 +1592,48 @@ struct PostedFile<'a> {
     caption: &'a str,
 }
 
+/// What a posted file says, addressed to whoever asked for it.
+///
+/// The mention is the difference between a picture that belongs to somebody
+/// and one that appeared in a shared channel for no stated reason.
+///
+/// An account from somewhere other than the chat service is written as its
+/// bare login, the way every other message here writes one: a channel cannot
+/// mention `github:alice`, and the mention syntax around it would render as
+/// literal text.
+fn addressed(author_id: &str, caption: &str) -> String {
+    match author_id.strip_prefix(crate::issues::thread::PREFIX) {
+        Some(login) => format!("{login} {caption}"),
+        None => format!("<@{author_id}> {caption}"),
+    }
+}
+
+/// The message a posted file is a reply to, when there is one.
+///
+/// A message typed at the channel has an id the service knows. One that
+/// arrived some other way, as a slash command has, names no message to reply
+/// to, and is addressed to the person instead without being a reply.
+fn reply_to(message: &IncomingMessage) -> Option<serenity::model::id::MessageId> {
+    message
+        .id
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id != 0)
+        .map(serenity::model::id::MessageId::new)
+}
+
 /// Posts a file into the channel it was asked for, with its caption.
 ///
 /// A picture is an upload rather than a link: the channel shows it, and
 /// nobody has to follow anything. The caption is redacted the same way a
 /// reply is, so a credential cannot ride out on it.
+///
+/// It is addressed to whoever asked and hung off their message. A picture
+/// posted bare in a shared channel is a thing that happened to nobody: the
+/// person who asked it for has no way to tell it is theirs, and nobody else
+/// can see what it answers. A message with no id to hang off, as a slash
+/// command typed at the channel has, is still addressed to them and simply
+/// not a reply.
 async fn send_file_in_channel(
     http: &serenity::http::Http,
     log: &Logger,
@@ -1611,15 +1648,18 @@ async fn send_file_in_channel(
         caption,
     } = file;
     let channel_id = answer_in(&message.channel_id, served);
-    let caption = redact_text(caption, secrets);
-    let sent = channel_id
-        .send_message(
-            http,
-            plain(&caption).files(vec![serenity::builder::CreateAttachment::bytes(
-                bytes, name,
-            )]),
-        )
-        .await;
+    let caption = addressed(&message.author_id, &redact_text(caption, secrets));
+    let starter = match reply_to(message) {
+        Some(id) => channel_id.message(http, id).await.ok(),
+        None => None,
+    };
+    let mut posted = plain(&caption).files(vec![serenity::builder::CreateAttachment::bytes(
+        bytes, name,
+    )]);
+    if let Some(starter) = starter {
+        posted = posted.reference_message(&starter);
+    }
+    let sent = channel_id.send_message(http, posted).await;
     if let Err(error) = sent {
         log.warn(
             "the file could not be sent",
