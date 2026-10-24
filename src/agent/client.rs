@@ -93,6 +93,9 @@ pub struct AgentHandlers {
     /// A tool call finished, with whether it failed, what it said, and the
     /// images it returned.
     pub on_tool_end: Callback<(String, String, bool, String, Vec<ProducedImage>)>,
+    /// A running tool call reported where it has got to, or what an agent it
+    /// started is doing. Carries the call's id and the line to show.
+    pub on_tool_progress: Callback<(String, String)>,
     /// The model drew an image into its reply.
     pub on_agent_image: Callback<ProducedImage>,
     /// The agent is thinking. Reported once per turn.
@@ -1138,6 +1141,11 @@ impl Shared {
             } => self.apply_tool_start(&id, &title, raw_input.as_ref()),
             AcpUpdate::ToolExecute { id, raw_input } => {
                 self.apply_tool_execute(&id, raw_input.as_ref());
+            }
+            AcpUpdate::ToolProgress { id, text } => {
+                if let Some(on_tool_progress) = &self.handlers.on_tool_progress {
+                    on_tool_progress((id, text));
+                }
             }
             AcpUpdate::ToolEnd {
                 id,

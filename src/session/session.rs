@@ -27,6 +27,7 @@ use crate::agent::protocol::{AgentImage, DialogRequest, ProducedImage, Streaming
 use crate::agent::requests::{
     DELEGATE_COMMAND, RECALL_COMMAND, delegate_command_contents, recall_command_contents,
 };
+use crate::chat::chars::{PrefixKey, prefixed};
 use crate::chat::render::{
     bytes as byte_count, connection_line, dialog_lines, marker, question_line, tool_line, truncate,
     warning_line,
@@ -197,6 +198,35 @@ const MAX_REMEMBERED_OUTPUTS: usize = 50;
 
 /// Longest file read inline, matching the display reader's own limit.
 const MAX_INLINE: u64 = 12 * 1024;
+
+/// Shortest gap between two progress lines in a thread.
+///
+/// A batch of children reports far more often than a thread can be edited,
+/// and every line costs an edit. Long enough to keep the thread readable,
+/// short enough that a reader sees the work moving.
+const PROGRESS_INTERVAL_MS: i64 = 15_000;
+
+/// A progress line as a thread shows it: one line, bounded, and marked as
+/// tool output.
+fn progress_line(text: &str) -> String {
+    let line = text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    if line.is_empty() {
+        return String::new();
+    }
+    // A tool's own words can be a whole page, and a thread line cannot.
+    let mut said = line.to_owned();
+    if said.chars().count() > 120 {
+        said = said.chars().take(120).collect::<String>() + "...";
+    }
+    // Backticks inside the text would end the inline code span early.
+    let said = said.replace('`', "'");
+    prefixed(PrefixKey::Tool, &format!("`{said}`"))
+}
 
 /// The first line of something said, cut for a thread that wants one line.
 fn first_line(text: &str) -> String {
@@ -498,6 +528,12 @@ enum Signal {
         name: String,
         target: Option<String>,
     },
+    /// A running tool call said where it has got to, or what an agent it
+    /// started is doing.
+    ToolProgress {
+        id: String,
+        text: String,
+    },
     ToolEnd {
         id: String,
         name: String,
@@ -734,6 +770,9 @@ struct Running {
     /// silence: a `swarm` or `agent` call reports nothing to this session for
     /// as long as it runs, however much its children are doing.
     open_tools: HashSet<String>,
+    /// When a running call last put a line in the thread, so a batch of
+    /// children cannot edit it faster than a reader can follow.
+    progress_shown_at: i64,
     /// The delegations of the turn now running, if any.
     turn_delegations: Option<TurnDelegations<SessionSources, HttpSender>>,
     watcher: Option<Delegating>,
@@ -775,6 +814,7 @@ impl Running {
             pending_edits: Vec::new(),
             outputs: Arc::new(Mutex::new(Vec::new())),
             open_tools: HashSet::new(),
+            progress_shown_at: 0,
             introduced: HashSet::new(),
             delegated_asked: 0,
             delegated_answered: 0,
@@ -935,6 +975,9 @@ impl Running {
                     {
                         self.snapshot(&target);
                     }
+                }
+                Signal::ToolProgress { id, text } => {
+                    self.on_tool_progress(&id, &text).await;
                 }
                 Signal::ToolEnd {
                     id,
@@ -1800,6 +1843,9 @@ impl Running {
         )| {
             Signal::ToolStart { id, name, target }
         });
+        on!(on_tool_progress, (String, String), |(id, text)| {
+            Signal::ToolProgress { id, text }
+        });
         on!(
             on_tool_end,
             (String, String, bool, String, Vec<ProducedImage>),
@@ -1968,6 +2014,34 @@ impl Running {
         }
         self.abort_in_flight = false;
         self.reset_idle_timer();
+    }
+
+    /// Shows where a running tool call has got to, or what an agent it
+    /// started is doing.
+    ///
+    /// The only thing that arrives during a long call: a `swarm` says nothing
+    /// between its start and its return, and a `shell` command says nothing
+    /// between its start and its exit. Shown at a bounded rate rather than per
+    /// update, because a batch of twenty-four children reports far more often
+    /// than a thread can be edited, and the newest line is the one worth
+    /// reading.
+    async fn on_tool_progress(&mut self, _id: &str, text: &str) {
+        // A call that is reporting is a session that is working, whatever it
+        // has to say and however long ago the last line went up.
+        self.reset_idle_timer();
+
+        let line = progress_line(text);
+        if line.is_empty() {
+            return;
+        }
+        let now = now_ms();
+        if now - self.progress_shown_at < PROGRESS_INTERVAL_MS {
+            return;
+        }
+        self.progress_shown_at = now;
+        self.views
+            .send(SessionEvent::Activity { line, tool: None })
+            .await;
     }
 
     async fn on_tool_end(

@@ -308,6 +308,42 @@ fn only_decodable_images_of_a_completed_call_are_handed_over() {
 }
 
 #[test]
+fn an_unfinished_call_with_something_to_say_reports_progress() {
+    // What kage reports while a child of an `agent` or `swarm` call is
+    // working: no status, only what the child is doing now.
+    let child = json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "c1",
+        "content": [
+            { "type": "content", "content": { "type": "text", "text": "general: List /workspace" } }
+        ],
+    });
+    assert_eq!(
+        classify_update(&child),
+        AcpUpdate::ToolProgress {
+            id: "c1".to_owned(),
+            text: "general: List /workspace".to_owned(),
+        }
+    );
+
+    // A tool's own intermediate word counts too, whatever names the state.
+    let mut said = child.clone();
+    said["status"] = json!("pending");
+    assert!(matches!(
+        classify_update(&said),
+        AcpUpdate::ToolProgress { .. }
+    ));
+
+    // Silence is not progress, and an ended call is still an end.
+    let mut silent = child.clone();
+    silent["content"] = json!([]);
+    assert_eq!(classify_update(&silent), AcpUpdate::Ignored);
+    let mut done = child;
+    done["status"] = json!("completed");
+    assert!(matches!(classify_update(&done), AcpUpdate::ToolEnd { .. }));
+}
+
+#[test]
 fn an_image_in_the_reply_is_handed_over_on_its_own() {
     assert_eq!(
         classify_update(&json!({

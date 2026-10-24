@@ -273,6 +273,13 @@ pub enum AcpUpdate {
         id: String,
         raw_input: Option<Value>,
     },
+    /// A running tool call reported where it has got to, or what an agent it
+    /// started is doing. Carries no status: the call is still running.
+    ///
+    /// The one thing that arrives during a long call. A `swarm` reports
+    /// nothing else until it returns, and a `shell` command says nothing
+    /// between its start and its exit.
+    ToolProgress { id: String, text: String },
     /// A tool call finished, with whether it failed, what it said, and the
     /// images it returned.
     ToolEnd {
@@ -480,7 +487,15 @@ pub fn classify_update(update: &Value) -> AcpUpdate {
             }
             let finished = matches!(status, Some("completed" | "failed"));
             if !finished {
-                return AcpUpdate::Ignored;
+                // No status and something to say is a call still running:
+                // a tool's own progress, or a child agent's activity
+                // reported on the call that started it.
+                let text = tool_output_text(update.get("content"));
+                return if text.trim().is_empty() {
+                    AcpUpdate::Ignored
+                } else {
+                    AcpUpdate::ToolProgress { id, text }
+                };
             }
             let failed = status == Some("failed");
             AcpUpdate::ToolEnd {

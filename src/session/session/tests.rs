@@ -222,6 +222,19 @@ impl FakeControls {
         }));
     }
 
+    /// Reports a running call saying where it has got to, the way kage
+    /// reports a child agent's activity on the call that started it: no
+    /// status, only words.
+    fn tool_progress(&self, id: &str, text: &str) {
+        self.update(&json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": id,
+            "content": [
+                { "type": "content", "content": { "type": "text", "text": text } }
+            ],
+        }));
+    }
+
     /// Writes to stderr, as a dying process does.
     fn complain(&self, text: &str) {
         self.fake
@@ -1531,6 +1544,47 @@ async fn a_tool_call_in_flight_keeps_the_session_past_its_idle_deadline() {
             harness.timers.advance(1_800_001);
             settle().await;
             assert_eq!(*harness.ended.lock().unwrap(), [EndReason::Idle]);
+        })
+    })
+    .await;
+}
+
+/// A batch of children reports far faster than a thread should be edited:
+/// the first line goes up, the ones behind it inside the window do not.
+#[tokio::test]
+async fn a_running_call_shows_where_it_is_but_not_faster_than_a_reader_follows() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            harness.controls().tool_start("t1", "swarm");
+            settle().await;
+
+            harness
+                .controls()
+                .tool_progress("t1", "general: List /workspace");
+            settle().await;
+            assert!(
+                harness
+                    .thread
+                    .activity()
+                    .join("\n")
+                    .contains("`general: List /workspace`")
+            );
+
+            harness
+                .controls()
+                .tool_progress("t1", "general: Read src/main.rs");
+            settle().await;
+            assert!(
+                !harness
+                    .thread
+                    .activity()
+                    .join("\n")
+                    .contains("`general: Read src/main.rs`")
+            );
+
+            harness.controls().tool_end("t1");
+            settle().await;
         })
     })
     .await;
