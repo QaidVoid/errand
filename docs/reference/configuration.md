@@ -188,7 +188,7 @@ Deadlines that end or unblock a session.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `idleMs` | `number` | `1800000` | No message and no agent activity for this long ends the session. |
+| `idleMs` | `number` | `1800000` | No message and no agent activity for this long ends the session.  A tool call in flight is activity, however long it runs and whatever it says: a `swarm` or `agent` call reports nothing to the session until it returns, so silence during one is not idleness. |
 | `startupMs` | `number` | none | How long the agent has to become ready before it is abandoned. |
 | `questionMs` | `number` | none | How long a question posted to a thread waits for an answer. |
 | `abortMs` | `number` | none | How long an abort waits for the agent before it is forced. |

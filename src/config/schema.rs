@@ -557,6 +557,10 @@ pub struct LimitsConfig {
 #[serde(rename_all = "camelCase")]
 pub struct TimeoutsConfig {
     /// No message and no agent activity for this long ends the session.
+    ///
+    /// A tool call in flight is activity, however long it runs and whatever
+    /// it says: a `swarm` or `agent` call reports nothing to the session
+    /// until it returns, so silence during one is not idleness.
     pub idle_ms: u64,
     /// How long the agent has to become ready before it is abandoned.
     pub startup_ms: u64,

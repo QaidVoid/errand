@@ -407,7 +407,7 @@
       "properties": {
         "idleMs": {
           "type": "number",
-          "description": "No message and no agent activity for this long ends the session."
+          "description": "No message and no agent activity for this long ends the session.  A tool call in flight is activity, however long it runs and whatever it says: a `swarm` or `agent` call reports nothing to the session until it returns, so silence during one is not idleness."
         },
         "startupMs": {
           "type": "number",

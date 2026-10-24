@@ -194,6 +194,34 @@ impl FakeControls {
         self.turn_end();
     }
 
+    /// Announces a tool call and starts it, the two updates the agent sends
+    /// before a tool runs. The activity line comes from the second, so both
+    /// are needed for the session to see the call at all.
+    fn tool_start(&self, id: &str, name: &str) {
+        self.update(&json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": id,
+            "title": name,
+            "rawInput": {},
+        }));
+        self.update(&json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": id,
+            "status": "in_progress",
+            "rawInput": {},
+        }));
+    }
+
+    /// Reports a tool call finished, as the agent does once it returns.
+    fn tool_end(&self, id: &str) {
+        self.update(&json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": id,
+            "status": "completed",
+            "content": [],
+        }));
+    }
+
     /// Writes to stderr, as a dying process does.
     fn complain(&self, text: &str) {
         self.fake
@@ -1473,6 +1501,56 @@ async fn an_ended_session_lets_go_of_its_agent() {
                 2,
                 "only the fake sandbox still holds the agent"
             );
+        })
+    })
+    .await;
+}
+
+/// A `swarm` call reports nothing to its session until it returns, however
+/// much its children are doing. The idle deadline must not end the session
+/// under it: that kills the sandbox and every child with it, and the thread
+/// is told nothing because an idle ending is quiet.
+#[tokio::test]
+async fn a_tool_call_in_flight_keeps_the_session_past_its_idle_deadline() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            harness.controls().tool_start("t1", "swarm");
+            settle().await;
+
+            harness.timers.advance(1_800_001);
+            settle().await;
+            assert!(
+                harness.ended.lock().unwrap().is_empty(),
+                "a running tool call is work, not silence"
+            );
+
+            // Once it returns, silence means silence again.
+            harness.controls().tool_end("t1");
+            settle().await;
+            harness.timers.advance(1_800_001);
+            settle().await;
+            assert_eq!(*harness.ended.lock().unwrap(), [EndReason::Idle]);
+        })
+    })
+    .await;
+}
+
+/// A turn that settles cannot have left a call open: whatever it started has
+/// returned by then. Keeping one open would hold the idle deadline off for
+/// the rest of the session's life.
+#[tokio::test]
+async fn a_settled_turn_leaves_no_tool_call_open() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            harness.controls().tool_start("t1", "swarm");
+            harness.controls().turn_end();
+            settle().await;
+
+            harness.timers.advance(1_800_001);
+            settle().await;
+            assert_eq!(*harness.ended.lock().unwrap(), [EndReason::Idle]);
         })
     })
     .await;

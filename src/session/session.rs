@@ -728,6 +728,12 @@ struct Running {
     pending_edits: Vec<(String, String)>,
     /// What each tool call produced, so a delegation can name one by its id.
     outputs: Arc<Mutex<Vec<(String, String)>>>,
+    /// Tool calls the agent has announced and not yet reported finished.
+    ///
+    /// The idle deadline measures silence, and a tool call in flight is not
+    /// silence: a `swarm` or `agent` call reports nothing to this session for
+    /// as long as it runs, however much its children are doing.
+    open_tools: HashSet<String>,
     /// The delegations of the turn now running, if any.
     turn_delegations: Option<TurnDelegations<SessionSources, HttpSender>>,
     watcher: Option<Delegating>,
@@ -768,6 +774,7 @@ impl Running {
             explained: HashSet::new(),
             pending_edits: Vec::new(),
             outputs: Arc::new(Mutex::new(Vec::new())),
+            open_tools: HashSet::new(),
             introduced: HashSet::new(),
             delegated_asked: 0,
             delegated_answered: 0,
@@ -911,6 +918,7 @@ impl Running {
                 }
                 Signal::ToolStart { id, name, target } => {
                     self.reset_idle_timer();
+                    self.open_tools.insert(id.clone());
                     self.views
                         .send(SessionEvent::Activity {
                             line: tool_line(&name, target.as_deref()),
@@ -1025,6 +1033,21 @@ impl Running {
     async fn on_timer(&mut self, timer: SessionTimer, _handle: u64) {
         match timer {
             SessionTimer::Idle => {
+                // A tool call in flight is work, not silence. A `swarm` or
+                // `agent` call tells this session nothing until it returns,
+                // so the deadline would otherwise end the session under it
+                // while its children are still writing. The agent bounds its
+                // own tools, so a call still open is one that has not reached
+                // that bound yet, and a dead agent ends the session through
+                // its exit rather than through this timer.
+                if !self.open_tools.is_empty() {
+                    self.log.info(
+                        "the idle deadline passed with a tool call running, so the session was kept",
+                        &fields([("tools", LogValue::from(self.open_tools.len()))]),
+                    );
+                    self.reset_idle_timer();
+                    return;
+                }
                 self.end_because(
                     EndReason::Idle,
                     "nothing happened for a while, so this session stopped",
@@ -1690,6 +1713,9 @@ impl Running {
     /// Every path that ends a turn goes through here, so the slot is released
     /// exactly once and the scheduler's view never drifts from reality.
     async fn settle_turn(&mut self, outcome: ReactionOutcome) {
+        // Nothing a turn started is still running once it has settled, so no
+        // call may stay open and hold the idle deadline off for good.
+        self.open_tools.clear();
         let ticket = self.ticket.take();
         self.views.send(SessionEvent::Busy { busy: false }).await;
         // Now that the agent is not writing to its own conversation, anything
@@ -1952,6 +1978,7 @@ impl Running {
         output: &str,
         images: &[ProducedImage],
     ) {
+        self.open_tools.remove(id);
         if !failed && EDITING_TOOLS.contains(&name) {
             self.report_edit(name, id).await;
         }
