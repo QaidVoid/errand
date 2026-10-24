@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, watch};
 use super::{
     DescribeImages, DrawImage, Drawn, FetchAttachment, FetchBox, IncomingMessage, Launcher,
     OpenPullRequest, RunningBox, SessionHandle, SessionOptions, SessionTimer, Signal, Timers,
-    Unavailable,
+    Unavailable, killed_by, signal_name,
 };
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
@@ -2259,6 +2259,59 @@ async fn an_agent_that_died_for_want_of_memory_says_that_instead() {
         })
     })
     .await;
+}
+
+/// A kill is not a crash: the code says a signal did it, and saying which
+/// one is what turns a number into something a reader can act on. The agent
+/// can be killed from inside the sandbox by a command it ran, which is what
+/// `pkill -f` does when its pattern matches the agent's own command line.
+#[tokio::test]
+async fn an_agent_killed_by_a_signal_names_the_signal() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            settle().await;
+            harness.controls().end(143);
+            settle().await;
+
+            let said = harness.thread.everything();
+            assert!(said.contains("killed by SIGTERM (15)"), "{said}");
+            assert!(said.contains("while a turn was running"), "{said}");
+            assert_eq!(*harness.ended.lock().unwrap(), [EndReason::Crashed]);
+        })
+    })
+    .await;
+}
+
+/// An agent that was between turns is reported as idle rather than as
+/// having been interrupted mid-work.
+#[tokio::test]
+async fn an_agent_killed_while_idle_says_so() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+            harness.controls().end(130);
+            settle().await;
+
+            let said = harness.thread.everything();
+            assert!(said.contains("killed by SIGINT (2)"), "{said}");
+            assert!(said.contains("while it was idle"), "{said}");
+        })
+    })
+    .await;
+}
+
+#[test]
+fn a_shell_exit_code_above_128_names_the_signal_that_killed_it() {
+    assert_eq!(killed_by(143), Some(15));
+    assert_eq!(killed_by(130), Some(2));
+    // 128 is not a signal death, and neither is an ordinary failure.
+    assert_eq!(killed_by(128), None);
+    assert_eq!(killed_by(1), None);
+    assert_eq!(signal_name(15), "SIGTERM (15)");
+    // A number the platform does not name is still worth reporting.
+    assert_eq!(signal_name(63), "signal 63");
 }
 
 /// A number on its own is not something a reader can act on.

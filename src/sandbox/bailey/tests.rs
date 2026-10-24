@@ -282,10 +282,11 @@ fn a_resumed_session_takes_no_flag_history_continues_over_the_protocol() {
     assert_eq!(fresh, resumed);
 }
 
-/// The agent reads memory in its system prompt, not from a host path it
-/// cannot see.
+/// The agent is told where its memory is, not what is in it. The block is
+/// the session's own state, and a command line is readable by every user on
+/// the host; naming the file also keeps a host path out of the agent's view.
 #[test]
-fn the_system_prompt_is_embedded_where_no_host_path_leaks() {
+fn the_memory_is_named_where_no_host_path_leaks() {
     let root = tempfile::tempdir().expect("a state directory");
     let memory = root.path().join("memory.md");
     std::fs::write(&memory, "remember this").expect("written");
@@ -296,8 +297,8 @@ fn the_system_prompt_is_embedded_where_no_host_path_leaks() {
     let args = bailey_args(&config(), &with_prompt, "/p.toml", None);
 
     let said = args.join(" ");
-    assert!(said.contains("--system"), "{said}");
-    assert!(said.contains("remember this"), "{said}");
+    assert!(said.contains("--system-file /state/memory.md"), "{said}");
+    assert!(!said.contains("remember this"), "{said}");
     assert!(!said.contains(&root.path().display().to_string()), "{said}");
 }
 

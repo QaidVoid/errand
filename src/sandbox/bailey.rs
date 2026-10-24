@@ -21,7 +21,7 @@ use crate::sandbox::SandboxHandle;
 use crate::sandbox::agent_config::{BrokeredProvider, write_agent_config};
 use crate::sandbox::backend::{
     AgentCommand, CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
-    agent_command, fresh_disk_tmp, sandbox_name,
+    agent_command, agent_memory_path, fresh_disk_tmp, sandbox_name,
 };
 use crate::sandbox::paths;
 use crate::sandbox::policy::{
@@ -283,10 +283,12 @@ pub fn bailey_args(
     args.extend(agent_command(&AgentCommand {
         provider: launch.provider.clone(),
         model: launch.model.clone(),
-        system_text: launch
+        // The host path only says the block was written. The agent reads it
+        // where the state directory is placed, not where the daemon put it.
+        system_file: launch
             .system_prompt_path
             .as_ref()
-            .and_then(|path| std::fs::read_to_string(path).ok()),
+            .map(|_| agent_memory_path()),
     }));
     args
 }

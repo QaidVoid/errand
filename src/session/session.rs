@@ -209,6 +209,25 @@ fn first_line(text: &str) -> String {
     }
 }
 
+/// The signal a shell's `128 + n` exit code stands for, when it is one.
+///
+/// A shell reports a signal death this way, and so does the sandbox, so a
+/// code above 128 says the process was killed rather than that it failed.
+/// 137 is handled before this, since a kill for a resource limit is the
+/// likelier reading of that one.
+fn killed_by(code: i64) -> Option<i32> {
+    let signal = i32::try_from(code).ok()?.checked_sub(128)?;
+    (1..=64).contains(&signal).then_some(signal)
+}
+
+/// A signal as a reader has to act on it: its name and its number.
+fn signal_name(signal: i32) -> String {
+    match nix::sys::signal::Signal::try_from(signal) {
+        Ok(named) => format!("{} ({signal})", named.as_str()),
+        Err(_) => format!("signal {signal}"),
+    }
+}
+
 /// Encodes bytes as base64, as the agent protocol carries an image.
 fn encode_base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -502,6 +521,8 @@ enum Signal {
     ProtocolViolation(String),
     Exit {
         code: i64,
+        /// Whether the agent was in the middle of a turn when it went.
+        during_turn: bool,
     },
     DelegationReported(Reported),
 }
@@ -987,7 +1008,7 @@ impl Running {
                     )
                     .await;
                 }
-                Signal::Exit { code } => self.on_exit(code).await,
+                Signal::Exit { code, during_turn } => self.on_exit(code, during_turn).await,
                 Signal::DelegationReported(reported) => self.note_delegation(reported).await,
             }
             // The channel never closes on its own: this task, its timers, and
@@ -1781,8 +1802,9 @@ impl Running {
         on!(on_dialog_timeout, DialogRequest, |_| Signal::DialogTimeout);
         on!(on_unsupported_dialog, String, |_| Signal::UnsupportedDialog);
         on!(on_protocol_violation, String, Signal::ProtocolViolation);
-        on!(on_exit, (i64, bool), |(code, _during)| Signal::Exit {
-            code
+        on!(on_exit, (i64, bool), |(code, during_turn)| Signal::Exit {
+            code,
+            during_turn
         });
         handlers
     }
@@ -2029,7 +2051,7 @@ impl Running {
         None
     }
 
-    async fn on_exit(&mut self, code: i64) {
+    async fn on_exit(&mut self, code: i64, during_turn: bool) {
         if self.ended {
             return;
         }
@@ -2048,14 +2070,42 @@ impl Running {
         }
 
         // 137 is SIGKILL, which is how a container killed for exceeding a
-        // limit ends. Naming the limit beats reporting a generic crash.
+        // limit ends. Naming the limit beats reporting a generic crash, and
+        // saying that the kill was a signal keeps it from being read as the
+        // only explanation when it is one of two.
         if code == 137 {
             let sandbox = &self.options.config.sandbox;
             self.end_because(
                 EndReason::ResourceLimit,
                 &format!(
-                    "the session was terminated for exceeding a configured resource limit (memory {}, cpus {}, pids {}). {CONTINUE_HINT}",
+                    "the session was killed by SIGKILL, which is how a configured resource limit \
+                     (memory {}, cpus {}, pids {}) is enforced, and how anything else that means \
+                     to be final kills a process. {CONTINUE_HINT}",
                     sandbox.memory, sandbox.cpus, sandbox.pids
+                ),
+            )
+            .await;
+            return;
+        }
+
+        // Above 128 is a shell's way of saying a signal killed the process,
+        // and the sandbox reports it that way too. Naming the signal says the
+        // agent did not fail on its own, which is the difference between a
+        // bug to look for and a kill to account for.
+        if let Some(signal) = killed_by(code) {
+            let doing = if during_turn {
+                "while a turn was running"
+            } else {
+                "while it was idle"
+            };
+            self.end_because(
+                EndReason::Crashed,
+                &format!(
+                    "this session was killed by {} {doing}. Something sent it a signal rather \
+                     than it exiting on its own, and a command the agent ran can do that: \
+                     `pkill -f` matches every process whose command line holds the pattern, the \
+                     agent's own included. {CONTINUE_HINT}",
+                    signal_name(signal)
                 ),
             )
             .await;

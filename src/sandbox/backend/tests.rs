@@ -2,24 +2,43 @@
 //! assertions in `bailey_test.ts` and `podman_test.ts`.
 
 use super::{
-    AgentCommand, KAGE_ROLE, SANDBOX_NAME_PREFIX, agent_command, disk_tmp_dir, fresh_disk_tmp,
-    sandbox_name,
+    AgentCommand, KAGE_ROLE, SANDBOX_NAME_PREFIX, agent_command, agent_memory_path, disk_tmp_dir,
+    fresh_disk_tmp, sandbox_name,
 };
 
 #[test]
-fn the_agent_is_started_with_provider_model_and_memory() {
+fn the_agent_is_started_with_provider_model_and_the_memory_path() {
     let command = agent_command(&AgentCommand {
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
-        system_text: Some("remember this".to_owned()),
+        system_file: Some(agent_memory_path()),
     });
     let said = command.join(" ");
 
     assert_eq!(command[..3], ["kage", "rpc", "--yolo"]);
     assert!(said.contains("-m zai-coding-cn/glm-5.3"));
-    assert!(said.contains("--system"));
-    assert!(said.contains("remember this"));
+    assert!(said.contains("--system-file /state/memory.md"));
     assert!(said.contains(KAGE_ROLE));
+}
+
+/// The block is the session's own state: the operator's notes, what earlier
+/// conversations recorded, who asked for the errand. `/proc/<pid>/cmdline` is
+/// readable by every user on the host, so none of it may reach the command
+/// line, and a process scanning command lines must not find the session's
+/// words there either.
+#[test]
+fn the_memory_text_never_reaches_the_command_line() {
+    let command = agent_command(&AgentCommand {
+        provider: "zai-coding-cn".to_owned(),
+        model: None,
+        system_file: Some(agent_memory_path()),
+    });
+    let said = command.join("\n");
+
+    assert_eq!(
+        said,
+        format!("kage\nrpc\n--yolo\n--system\n{KAGE_ROLE}\n--system-file\n/state/memory.md")
+    );
 }
 
 #[test]
@@ -27,7 +46,7 @@ fn a_level_is_split_off_the_model_and_memory_may_be_absent() {
     let command = agent_command(&AgentCommand {
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3-flash:max".to_owned()),
-        system_text: None,
+        system_file: None,
     });
     let said = command.join(" ");
 
@@ -41,7 +60,7 @@ fn without_a_model_the_flag_is_absent_so_the_provider_default_stands() {
     let command = agent_command(&AgentCommand {
         provider: "zai-coding-cn".to_owned(),
         model: None,
-        system_text: None,
+        system_file: None,
     });
 
     assert_eq!(command, ["kage", "rpc", "--yolo"]);

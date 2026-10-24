@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::config::schema::{PluginConfig, SandboxBackend};
+use crate::memory::store::BLOCK_FILENAME;
 
 /// Where a session's project appears to the agent, under every backend.
 ///
@@ -167,6 +168,17 @@ pub const KAGE_DIR: &str = "kage";
 /// rewords it, the worst case is a stale sentence, not a broken launch.
 pub const KAGE_ROLE: &str = "You are kage, a coding agent. Use the provided tools when they help and ask only when blocked.";
 
+/// Where a session's memory block is, as the agent sees it.
+///
+/// The daemon writes the block into the session state directory and every
+/// backend places that directory at [`STATE_PATH`], so the file is at the same
+/// path from inside. Naming it costs the agent no tool call, and it keeps the
+/// block itself out of the target's command line, which `/proc/<pid>/cmdline`
+/// publishes to every user on the host.
+pub fn agent_memory_path() -> String {
+    format!("{STATE_PATH}/{BLOCK_FILENAME}")
+}
+
 /// What the agent is started with inside any sandbox.
 ///
 /// The provider is always passed. The agent picks its own default otherwise,
@@ -187,14 +199,14 @@ pub fn agent_command(launch: &AgentCommand) -> Vec<String> {
         command.push(format!("{}/{}", launch.provider, bare));
     }
     // Memory rides the system prompt, which costs the agent no tool call to
-    // read and no round trip to a daemon it cannot reach.
-    if let Some(system) = launch
-        .system_text
-        .as_ref()
-        .filter(|text| !text.trim().is_empty())
-    {
+    // read and no round trip to a daemon it cannot reach. It is named rather
+    // than inlined: the block is the session's own state, and a command line
+    // is readable by every user on the host.
+    if let Some(memory) = launch.system_file.as_ref().filter(|path| !path.is_empty()) {
         command.push("--system".to_owned());
-        command.push(format!("{KAGE_ROLE}\n\n{system}"));
+        command.push(KAGE_ROLE.to_owned());
+        command.push("--system-file".to_owned());
+        command.push(memory.clone());
     }
     command
 }
@@ -207,8 +219,9 @@ pub struct AgentCommand {
     /// The model asked for, with any `:level` still on it, or none for the
     /// provider's default.
     pub model: Option<String>,
-    /// Memory for the system prompt, or none when there is nothing to say.
-    pub system_text: Option<String>,
+    /// Where the memory block is inside the sandbox, or none when there is
+    /// nothing to say and a prompt would cost context for no benefit.
+    pub system_file: Option<String>,
 }
 
 #[cfg(test)]

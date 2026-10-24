@@ -26,7 +26,7 @@ use crate::sandbox::agent_config::write_agent_config;
 use crate::sandbox::backend::{
     AGENT_HOME, AgentCommand, CapabilityReport, SESSION_LABEL, STATE_PATH, SYSTEM_LABEL,
     SandboxLaunch, SandboxLaunchError, SandboxUnavailableError, WORKSPACE_PATH, agent_command,
-    disk_tmp_dir, fresh_disk_tmp, sandbox_name,
+    agent_memory_path, disk_tmp_dir, fresh_disk_tmp, sandbox_name,
 };
 use crate::sandbox::spawn::spawn_agent;
 
@@ -125,10 +125,12 @@ pub fn podman_args(config: &SandboxConfig, launch: &SandboxLaunch) -> Vec<String
     args.extend(agent_command(&AgentCommand {
         provider: launch.provider.clone(),
         model: launch.model.clone(),
-        system_text: launch
+        // The host path only says the block was written. The agent reads it
+        // where the state directory is mounted, not where the daemon put it.
+        system_file: launch
             .system_prompt_path
             .as_ref()
-            .and_then(|path| std::fs::read_to_string(path).ok()),
+            .map(|_| agent_memory_path()),
     }));
     args
 }
