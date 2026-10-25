@@ -3290,9 +3290,12 @@ async fn a_generated_image_over_the_upload_limit_is_named_rather_than_posted() {
 }
 
 #[tokio::test]
-async fn a_turn_posts_a_few_generated_images_and_names_the_rest() {
+async fn a_turn_posts_up_to_the_image_cap_and_is_then_interrupted() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
+            harness.controls().turn_start();
+            settle().await;
+            assert!(harness.thread.busy());
             // Bytes that only claim to be an image are refused, said so, and
             // count among the turn's images.
             harness
@@ -3326,6 +3329,13 @@ async fn a_turn_posts_a_few_generated_images_and_names_the_rest() {
             assert!(
                 posts[1].contains("more than 4 images this turn"),
                 "{posts:?}"
+            );
+            assert_eq!(harness.written().matches("session/cancel").count(), 1);
+            harness.controls().turn_end();
+            settle().await;
+            assert_eq!(
+                harness.thread.final_reaction("m1"),
+                Some(ReactionOutcome::Interrupted)
             );
         })
     })
@@ -4553,6 +4563,160 @@ async fn a_file_caption_is_inert_but_the_original_filename_is_opened() {
             let caption = &captions(harness)[0];
             assert!(!caption.contains(['<', '@']));
             assert_eq!(caption.matches('`').count(), 2);
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn image_limits_interrupt_once_even_when_posting_is_disabled() {
+    for post_images in [true, false] {
+        with_session(
+            SessionTestCase {
+                config: Some(config_with(&json!({"output": {"postImages": post_images}}))),
+                ..SessionTestCase::default()
+            },
+            |harness| {
+                Box::pin(async move {
+                    harness.controls().turn_start();
+                    settle().await;
+                    assert!(harness.thread.busy());
+                    for n in 0..super::MAX_IMAGES_PER_TURN + 2 {
+                        if n % 2 == 0 {
+                            harness.controls().send(&generated_image(
+                                &format!("t{n}"),
+                                GENERATED_PNG,
+                                None,
+                                None,
+                            ));
+                        } else {
+                            harness.controls().send(&drawn_image(GENERATED_PNG));
+                        }
+                    }
+                    settle().await;
+                    assert_eq!(harness.written().matches("session/cancel").count(), 1);
+                    assert_eq!(
+                        harness
+                            .thread
+                            .everything()
+                            .matches("more than 4 images this turn")
+                            .count(),
+                        1
+                    );
+                    assert_eq!(
+                        harness.thread.uploads().len(),
+                        if post_images {
+                            super::MAX_IMAGES_PER_TURN
+                        } else {
+                            0
+                        }
+                    );
+                    harness
+                        .session
+                        .handle(message_from("!interrupt", OWNER, "m2"))
+                        .await;
+                    assert!(harness.thread.everything().contains("already interrupting"));
+                    harness.controls().turn_end();
+                    settle().await;
+                    assert_eq!(
+                        harness.thread.final_reaction("m1"),
+                        Some(ReactionOutcome::Interrupted)
+                    );
+                })
+            },
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn crossing_the_image_cap_does_not_restart_an_existing_interrupt_wait() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            settle().await;
+            assert!(harness.thread.busy());
+            harness
+                .session
+                .handle(message_from("!interrupt", OWNER, "m2"))
+                .await;
+            let deadline = |timers: &TestTimers| -> Vec<(u64, i64)> {
+                timers
+                    .pending
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|pending| matches!(pending.timer, SessionTimer::AbortDeadline))
+                    .map(|pending| (pending.handle, pending.at))
+                    .collect()
+            };
+            let before = deadline(&harness.timers);
+            assert_eq!(before.len(), 1);
+            harness.timers.advance(1_000);
+            settle().await;
+            for _ in 0..=super::MAX_IMAGES_PER_TURN {
+                harness.controls().send(&drawn_image(GENERATED_PNG));
+            }
+            settle().await;
+            assert_eq!(harness.written().matches("session/cancel").count(), 1);
+            assert_eq!(deadline(&harness.timers), before);
+            harness.timers.advance(20_000);
+            settle().await;
+            assert_eq!(
+                harness
+                    .thread
+                    .everything()
+                    .matches("did not confirm the interruption")
+                    .count(),
+                1
+            );
+            assert!(harness.session.is_ended().await);
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn images_with_no_turn_open_do_not_request_interruption() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            harness.controls().turn_end();
+            settle().await;
+            harness
+                .session
+                .handle(message_from("!interrupt", OWNER, "m2"))
+                .await;
+            assert!(harness.thread.everything().contains("nothing running"));
+            for _ in 0..=super::MAX_IMAGES_PER_TURN {
+                harness.controls().send(&drawn_image(GENERATED_PNG));
+            }
+            settle().await;
+            assert!(!harness.written().contains("session/cancel"));
+            assert!(!harness.thread.everything().contains("more than 4 images"));
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn failed_image_tools_do_not_count_returned_images() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            settle().await;
+            assert!(harness.thread.busy());
+            for n in 0..super::MAX_IMAGES_PER_TURN {
+                let mut failed = generated_image(&format!("failed{n}"), GENERATED_PNG, None, None);
+                failed["params"]["update"]["status"] = json!("failed");
+                harness.controls().send(&failed);
+            }
+            harness
+                .controls()
+                .send(&generated_image("good", GENERATED_PNG, None, None));
+            settle().await;
+            assert_eq!(harness.thread.uploads().len(), 1);
+            assert!(!harness.written().contains("session/cancel"));
         })
     })
     .await;

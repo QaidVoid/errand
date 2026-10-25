@@ -181,9 +181,8 @@ const EDITING_TOOLS: [&str; 5] = ["edit", "write", "create", "str_replace", "mul
 /// Largest file diffed. Beyond this the change is summarised, not shown.
 const MAX_DIFFABLE_BYTES: u64 = 512 * 1024;
 
-/// Most images the agent made that one turn posts to the thread, or reports
-/// as not posted. The rest stay in the project, so an agent generating in a
-/// loop cannot flood it.
+/// Most returned images a turn permits before requesting interruption.
+/// In-flight or failed generation calls may already have incurred cost.
 const MAX_IMAGES_PER_TURN: usize = 4;
 
 /// Said when a session ends for a limit it could carry on past.
@@ -740,8 +739,8 @@ struct Running {
     /// Output tokens the session had produced when this turn opened, so the
     /// turn's own share can be told apart from the running total.
     turn_output_from: u64,
-    /// Images the agent made that this turn posted or reported as not posted,
-    /// so the thread hears of at most [`MAX_IMAGES_PER_TURN`] of them.
+    /// Every image returned this turn, including when posting is disabled.
+    /// Crossing [`MAX_IMAGES_PER_TURN`] requests interruption once.
     turn_images: usize,
     idle_timer: Option<u64>,
     disk_timer: Option<u64>,
@@ -991,11 +990,7 @@ impl Running {
                 } => {
                     self.on_tool_end(&id, &name, failed, &output, &images).await;
                 }
-                Signal::AgentImage(image) => {
-                    if self.options.config.output.post_images {
-                        self.post_image(&image).await;
-                    }
-                }
+                Signal::AgentImage(image) => self.on_image(&image).await,
                 Signal::Thought(text) => {
                     self.views.send(SessionEvent::Thinking { text }).await;
                 }
@@ -2069,9 +2064,9 @@ impl Running {
         if !failed && EDITING_TOOLS.contains(&name) {
             self.report_edit(name, id).await;
         }
-        if !failed && self.options.config.output.post_images {
+        if !failed {
             for image in images {
-                self.post_image(image).await;
+                self.on_image(image).await;
             }
         }
 

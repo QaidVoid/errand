@@ -366,24 +366,33 @@ impl Running {
             .await;
     }
 
+    /// Counts every returned image and stops a running turn that crosses the cap.
+    pub(super) async fn on_image(&mut self, image: &ProducedImage) {
+        self.turn_images = self.turn_images.saturating_add(1);
+        if self.turn_images <= MAX_IMAGES_PER_TURN {
+            if self.options.config.output.post_images {
+                self.post_image(image).await;
+            }
+        } else if self.turn_images == MAX_IMAGES_PER_TURN + 1
+            && self.ticket.is_some()
+            && !self.abort_in_flight
+        {
+            self.aborting = true;
+            self.abort();
+            self.say(&format!(
+                "the agent made more than {MAX_IMAGES_PER_TURN} images this turn, so the turn \
+                 is being stopped; if the agent does not confirm, the session will end"
+            ))
+            .await;
+        }
+    }
+
     /// Posts an image the agent made as an upload, captioned with its size,
     /// where the tool saved it when it did, and what its server said about
     /// it. One that cannot be posted is reported in the thread with the
     /// reason instead, so somebody told that an image was made is not left
-    /// waiting for it. Either way it counts toward the turn's cap.
+    /// waiting for it. The caller owns counting images toward the turn's cap.
     pub(super) async fn post_image(&mut self, image: &ProducedImage) {
-        if self.turn_images >= MAX_IMAGES_PER_TURN {
-            if self.turn_images == MAX_IMAGES_PER_TURN {
-                self.say(&format!(
-                    "the agent made more than {MAX_IMAGES_PER_TURN} images this turn, so the \
-                     rest were not posted"
-                ))
-                .await;
-            }
-            self.turn_images += 1;
-            return;
-        }
-        self.turn_images += 1;
         let saved = image
             .path
             .as_deref()
