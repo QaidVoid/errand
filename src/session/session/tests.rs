@@ -4519,3 +4519,41 @@ async fn a_link_planted_at_kage_session_is_not_followed() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn generated_image_captions_make_notes_and_paths_inert() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().send(&generated_image(
+                "t1",
+                GENERATED_PNG,
+                Some("/workspace/generated/`<@1>.png"),
+                Some("<@999> fallback"),
+            ));
+            settle().await;
+            let caption = &captions(harness)[0];
+            assert!(!caption.contains(['<', '@']));
+            assert_eq!(caption.matches('`').count(), 2);
+            assert_eq!(harness.thread.uploads()[0].0, "`<@1>.png");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_file_caption_is_inert_but_the_original_filename_is_opened() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            std::fs::write(harness.root.path().join("project/`<@1>.txt"), "notes").unwrap();
+            harness
+                .session
+                .handle(message_from("!file `<@1>.txt", OWNER, "m2"))
+                .await;
+            assert_eq!(harness.thread.uploads()[0], ("`<@1>.txt".to_owned(), 5));
+            let caption = &captions(harness)[0];
+            assert!(!caption.contains(['<', '@']));
+            assert_eq!(caption.matches('`').count(), 2);
+        })
+    })
+    .await;
+}

@@ -725,3 +725,16 @@ fn a_provider_without_a_credential_sends_none() {
     assert_eq!(endpoint.base_url, "http://localhost:8080/v1");
     assert_eq!(endpoint.credential, "");
 }
+
+#[test]
+fn image_captions_cannot_carry_mentions_or_escape_the_model_span() {
+    let picture = Drawn {
+        bytes: PNG.to_vec(),
+        revised_prompt: Some("<@111> nice `day`".to_owned()),
+    }
+    .into_picture("image:`<@222>", u64::MAX)
+    .unwrap();
+    assert!(!picture.caption.contains(['<', '@']));
+    assert_eq!(picture.caption.matches('`').count(), 2);
+    assert!(picture.caption.contains("image:"));
+}

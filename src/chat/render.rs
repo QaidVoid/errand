@@ -20,6 +20,19 @@ use crate::session::files::Entry;
 use crate::session::files::{FileContents, MAX_INLINE_BYTES};
 use crate::session::model::split_level;
 
+/// Makes free text inert inside captions by removing mention and span syntax.
+pub fn inert(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if matches!(character, '<' | '@' | '`') {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
 /// The service's per-message character limit.
 pub const MESSAGE_LIMIT: usize = 2000;
 

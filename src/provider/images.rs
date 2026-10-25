@@ -15,6 +15,7 @@ use std::future::Future;
 
 use serde_json::{Value, json};
 
+use crate::chat::render::inert;
 use crate::config::schema::AgentConfig;
 use crate::provider::models::{AvailableModel, Matched, match_model};
 use crate::session::model::{expand_alias, known_providers, resolve_model, split_level};
@@ -179,8 +180,8 @@ impl Drawn {
         };
         Ok(Picture {
             caption: match self.revised_prompt.as_deref() {
-                Some(revised) => format!("drawn on `{model}`: {revised}"),
-                None => format!("drawn on `{model}`"),
+                Some(revised) => format!("drawn on `{}`: {}", inert(model), inert(revised)),
+                None => format!("drawn on `{}`", inert(model)),
             },
             name: format!("image.{extension}"),
             bytes: self.bytes,

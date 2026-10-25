@@ -540,3 +540,8 @@ fn usage_is_a_table_with_the_reset_in_utc() {
 ```"
     );
 }
+
+#[test]
+fn inert_strips_mention_and_span_syntax() {
+    assert_eq!(super::inert("<@123> a`b@c"), "  123> a b c");
+}

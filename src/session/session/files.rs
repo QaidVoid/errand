@@ -11,7 +11,7 @@ use super::{IncomingMessage, MAX_DIFFABLE_BYTES, MAX_IMAGES_PER_TURN, MAX_INLINE
 use crate::agent::protocol::ProducedImage;
 use crate::chat::diff::file_diff;
 use crate::chat::render::{
-    bytes as byte_count, connection_line, directory_listing, file_view, widen,
+    bytes as byte_count, connection_line, directory_listing, file_view, inert, widen,
 };
 use crate::log::{LogValue, fields};
 use crate::provider::images::{endpoint_with_effort, image_extension};
@@ -251,7 +251,7 @@ impl Running {
             .send(SessionEvent::Upload {
                 name,
                 bytes,
-                caption: format!("`{}` {} bytes", display, meta.len()),
+                caption: format!("`{}` {} bytes", inert(&display), meta.len()),
             })
             .await;
     }
@@ -449,11 +449,10 @@ const MAX_NOTE_CHARS: usize = 300;
 /// control characters or a wall of text into the thread.
 fn image_caption(saved: Option<&str>, size: f64, note: Option<&str>) -> String {
     let mut caption = match saved {
-        Some(path) => format!("generated `{path}` {}", byte_count(size)),
+        Some(path) => format!("generated `{}` {}", inert(path), byte_count(size)),
         None => format!("generated an image, {}", byte_count(size)),
     };
-    let printable: String = note
-        .unwrap_or_default()
+    let printable: String = inert(note.unwrap_or_default())
         .chars()
         .map(|c| if c.is_ascii_graphic() { c } else { ' ' })
         .collect();
