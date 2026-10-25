@@ -824,3 +824,66 @@ fn no_image_tool_without_images_or_an_endpoint() {
     );
     assert!(!config.contains("[tools.generate_image]"), "{config}");
 }
+
+#[test]
+fn google_is_overridden_in_place_with_a_broker_endpoint() {
+    let brokered = BTreeMap::from([(
+        "google".to_owned(),
+        BrokeredProvider {
+            base_url: "http://169.254.169.1:8443/provider/google".to_owned(),
+        },
+    )]);
+    let names = BTreeMap::from([("google".to_owned(), "GOOGLE_KEY".to_owned())]);
+    let config = kage_config(
+        &serde_json::Map::new(),
+        &brokered,
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+    );
+    assert!(config.contains("[providers.google]"));
+    assert!(config.contains("base_url = \"http://169.254.169.1:8443/provider/google\""));
+    assert!(!config.contains("custom"));
+}
+
+#[test]
+fn google_with_only_a_key_is_written_but_gemini_is_not() {
+    for (name, written) in [("google", true), ("gemini", false)] {
+        let defined =
+            serde_json::Map::from_iter([(name.to_owned(), json!({"credential": "secret"}))]);
+        let names = BTreeMap::from([(name.to_owned(), "PROVIDER_KEY".to_owned())]);
+        let config = kage_config(
+            &defined,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &names,
+            &[],
+            &Denials::default(),
+        );
+        assert_eq!(config.contains(&format!("[providers.{name}]")), written);
+        assert!(!config.contains("custom"));
+        assert!(!config.contains("secret"));
+    }
+}
+
+#[test]
+fn gemini_with_an_endpoint_and_models_is_registered_custom() {
+    let defined = serde_json::Map::from_iter([(
+        "gemini".to_owned(),
+        json!({
+            "baseUrl": "https://custom.example/v1", "models": [{"id": "drawing"}],
+        }),
+    )]);
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &[],
+        &Denials::default(),
+    );
+    assert!(config.contains("[providers.custom.gemini]"));
+    assert!(config.contains("[[providers.custom.gemini.models]]"));
+    assert!(!config.contains("[providers.gemini]"));
+}

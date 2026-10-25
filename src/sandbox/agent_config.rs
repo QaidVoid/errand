@@ -29,7 +29,7 @@ pub struct BrokeredProvider {
 }
 
 /// Provider ids kage already knows, from its built-ins (`anthropic`,
-/// `openai`, `openai-responses`, `gemini`) and its `COMPAT_PROVIDERS` table
+/// `openai`, `openai-responses`, `google`) and its `COMPAT_PROVIDERS` table
 /// at the pinned kage. One of these is overridden in place, keeping its
 /// catalog models; anything else is registered as a custom provider with the
 /// store's models. A kage that learns a new id takes the custom path for it,
@@ -39,7 +39,7 @@ const KAGE_KNOWN: [&str; 20] = [
     "anthropic",
     "openai",
     "openai-responses",
-    "gemini",
+    "google",
     "zai",
     "zai-coding-plan",
     "zhipuai-coding-plan",
