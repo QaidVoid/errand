@@ -440,6 +440,56 @@ fn message_chunk(content: Option<&Value>) -> AcpUpdate {
         .map_or(AcpUpdate::Ignored, AcpUpdate::AgentText)
 }
 
+/// Classifies a tool call's execution, progress, or final result.
+fn tool_call_update(update: &Value) -> AcpUpdate {
+    let id = update
+        .get("toolCallId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    if id.is_empty() {
+        return AcpUpdate::Ignored;
+    }
+    let status = update.get("status").and_then(Value::as_str);
+    if status == Some("in_progress") {
+        return AcpUpdate::ToolExecute {
+            id,
+            raw_input: update.get("rawInput").cloned(),
+        };
+    }
+    let finished = matches!(status, Some("completed" | "failed"));
+    if !finished {
+        // No status and something to say is a call still running:
+        // a tool's own progress, or a child agent's activity
+        // reported on the call that started it.
+        let text = tool_output_text(update.get("content"));
+        return if text.trim().is_empty() {
+            AcpUpdate::Ignored
+        } else {
+            AcpUpdate::ToolProgress { id, text }
+        };
+    }
+    let failed = status == Some("failed");
+    AcpUpdate::ToolEnd {
+        id,
+        title: update
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        failed,
+        output: tool_output_text(update.get("content"))
+            + update
+                .get("rawOutput")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        images: if failed {
+            Vec::new()
+        } else {
+            produced_images(update)
+        },
+    }
+}
+
 /// Classifies one `session/update` notification body.
 pub fn classify_update(update: &Value) -> AcpUpdate {
     let kind = update.get("sessionUpdate").and_then(Value::as_str);
@@ -469,54 +519,7 @@ pub fn classify_update(update: &Value) -> AcpUpdate {
                 raw_input: update.get("rawInput").cloned(),
             }
         }
-        Some("tool_call_update") => {
-            let id = update
-                .get("toolCallId")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            if id.is_empty() {
-                return AcpUpdate::Ignored;
-            }
-            let status = update.get("status").and_then(Value::as_str);
-            if status == Some("in_progress") {
-                return AcpUpdate::ToolExecute {
-                    id,
-                    raw_input: update.get("rawInput").cloned(),
-                };
-            }
-            let finished = matches!(status, Some("completed" | "failed"));
-            if !finished {
-                // No status and something to say is a call still running:
-                // a tool's own progress, or a child agent's activity
-                // reported on the call that started it.
-                let text = tool_output_text(update.get("content"));
-                return if text.trim().is_empty() {
-                    AcpUpdate::Ignored
-                } else {
-                    AcpUpdate::ToolProgress { id, text }
-                };
-            }
-            let failed = status == Some("failed");
-            AcpUpdate::ToolEnd {
-                id,
-                title: update
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                failed,
-                output: tool_output_text(update.get("content"))
-                    + update
-                        .get("rawOutput")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                images: if failed {
-                    Vec::new()
-                } else {
-                    produced_images(update)
-                },
-            }
-        }
+        Some("tool_call_update") => tool_call_update(update),
         Some("usage_update") => match usage_of(update) {
             Some(usage) => {
                 let size = update.get("size").and_then(Value::as_f64).unwrap_or(0.0);

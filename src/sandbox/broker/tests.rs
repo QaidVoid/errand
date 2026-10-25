@@ -869,3 +869,330 @@ async fn a_plain_http_request_is_forwarded_only_on_an_allowed_port() {
     assert!(refused.starts_with("HTTP/1.1 403"));
     broker.close();
 }
+
+fn provider_route(prefix: &str, upstream: &str) -> ProviderRoute {
+    ProviderRoute {
+        prefix: prefix.to_owned(),
+        upstream: upstream.to_owned(),
+        nonce: "session-nonce".to_owned(),
+        credential: "operator-key".to_owned(),
+    }
+}
+
+fn provider_state(routes: Vec<ProviderRoute>) -> super::ProviderState {
+    super::ProviderState {
+        routes,
+        allow: Vec::new(),
+        ports: vec![443],
+        allow_internal: false,
+        log: silent(),
+        resolve: None,
+        provider_port: 0,
+        client: reqwest::Client::builder().no_proxy().build().unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn malformed_provider_routes_are_refused_before_resolution_or_forwarding() {
+    let lookups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&lookups);
+    let mut state = provider_state(vec![provider_route(
+        "/provider/anthropic",
+        "https://api.anthropic.com/v1",
+    )]);
+    state.resolve = Some(Arc::new(move |_| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(vec!["1.1.1.1".to_owned()]) })
+    }));
+    let state = Arc::new(state);
+    for (suffix, status) in [
+        (".attacker.example/", 404),
+        ("@attacker.example/", 404),
+        (":8443/", 404),
+        ("x/v1/messages", 404),
+        ("//attacker.example/", 400),
+        ("/../outside", 400),
+        ("/%2e%2e/outside", 400),
+        ("/%2Fattacker.example/", 400),
+        ("/%5cattacker.example/", 400),
+    ] {
+        let request = http::Request::builder()
+            .uri(format!("/provider/anthropic{suffix}"))
+            .header("authorization", "Bearer session-nonce")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = super::serve_provider_request(Arc::clone(&state), request).await;
+        assert_eq!(response.status().as_u16(), status, "{suffix}");
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+}
+
+/// Records attempted upstream names and fails resolution before any socket
+/// can be opened or pooled, keeping forwarding assertions independent of
+/// the host's network and running services.
+#[derive(Clone)]
+struct RecordingResolve {
+    attempted_hosts: Arc<Mutex<Vec<String>>>,
+}
+
+impl reqwest::dns::Resolve for RecordingResolve {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        self.attempted_hosts
+            .lock()
+            .unwrap()
+            .push(name.as_str().to_owned());
+        Box::pin(async {
+            Err(std::io::Error::other("injected upstream resolution failure").into())
+        })
+    }
+}
+
+/// Refusals are logged before either resolver is consulted. The benign
+/// control reaches the recording client resolver and fails there, proving
+/// that forwarding attempts are observable without making a connection.
+#[tokio::test]
+async fn hostile_provider_paths_never_reach_any_upstream() {
+    let attempted_hosts = Arc::new(Mutex::new(Vec::new()));
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let lookups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&lookups);
+
+    let mut state = provider_state(vec![provider_route(
+        "/provider/anthropic",
+        "http://upstream.test/v1",
+    )]);
+    state.client = reqwest::Client::builder()
+        .dns_resolver(Arc::new(RecordingResolve {
+            attempted_hosts: Arc::clone(&attempted_hosts),
+        }))
+        .no_proxy()
+        .build()
+        .unwrap();
+    state.resolve = Some(Arc::new(move |_| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(vec!["9.9.9.9".to_owned()]) })
+    }));
+    let recorded = Arc::clone(&lines);
+    state.log = Logger::new(
+        LogFields::new(),
+        Arc::new(move |_level, line| recorded.lock().unwrap().push(line.to_owned())),
+    );
+    let state = Arc::new(state);
+
+    let request_for = |suffix: &str| {
+        http::Request::builder()
+            .method(http::Method::POST)
+            .uri(format!("/provider/anthropic{suffix}"))
+            .header("authorization", "Bearer session-nonce")
+            .body(axum::body::Body::empty())
+            .unwrap()
+    };
+
+    let answer =
+        super::serve_provider_request(Arc::clone(&state), request_for("/v1/messages?beta=true"))
+            .await;
+    assert_eq!(answer.status().as_u16(), 502);
+    assert_eq!(
+        *attempted_hosts.lock().unwrap(),
+        vec!["upstream.test".to_owned()]
+    );
+    let judged = lookups.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(judged, 1);
+
+    for (suffix, status) in [
+        (".attacker.example/", 404),
+        ("@attacker.example/", 404),
+        (":8443/", 404),
+        ("x/v1/messages", 404),
+        ("//attacker.example/", 400),
+        ("/../outside", 400),
+        ("/%2e%2e/outside", 400),
+        ("/%2Fattacker.example/", 400),
+        ("/%5cattacker.example/", 400),
+    ] {
+        let response = super::serve_provider_request(Arc::clone(&state), request_for(suffix)).await;
+        assert_eq!(response.status().as_u16(), status, "{suffix}");
+    }
+
+    assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), judged);
+    assert_eq!(
+        *attempted_hosts.lock().unwrap(),
+        vec!["upstream.test".to_owned()],
+        "a forward was attempted"
+    );
+
+    // The refusals are on the log: one line per unmatched route, one per
+    // path that cannot be a path, naming the probe's path.
+    let lines = lines.lock().unwrap();
+    let unserved = lines
+        .iter()
+        .filter(|line| line.contains("does not serve"))
+        .count();
+    assert_eq!(unserved, 4, "unmatched routes must be logged");
+    let malformed = lines
+        .iter()
+        .filter(|line| line.contains("cannot be a path"))
+        .count();
+    assert_eq!(malformed, 5, "malformed paths must be logged");
+    assert!(
+        lines.iter().any(|line| line.contains("attacker.example")),
+        "the probe's path must be on the log"
+    );
+}
+
+/// A broken upstream is the operator's failure: answered 502 rather than a
+/// 400 that blames the session, and refused before resolution is consulted.
+#[tokio::test]
+async fn a_broken_upstream_is_a_502_refused_before_resolution() {
+    let lookups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&lookups);
+    let mut state = provider_state(vec![provider_route(
+        "/provider/anthropic",
+        "https://user:pass@api.anthropic.com/v1",
+    )]);
+    state.resolve = Some(Arc::new(move |_| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(vec!["1.1.1.1".to_owned()]) })
+    }));
+    let state = Arc::new(state);
+    let request = http::Request::builder()
+        .uri("/provider/anthropic/v1/messages")
+        .header("authorization", "Bearer session-nonce")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = super::serve_provider_request(state, request).await;
+    assert_eq!(response.status().as_u16(), 502);
+    assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[test]
+fn provider_names_and_longest_segment_prefix_are_preserved() {
+    let routes = ["a", "a/nested", "a-b", "a.b", "a2"]
+        .map(|name| provider_route(&format!("/provider/{name}"), "https://provider.example"));
+    let state = provider_state(routes.to_vec());
+    for route in routes {
+        for suffix in ["", "/", "/v1/messages"] {
+            let path = format!("{}{suffix}", route.prefix);
+            assert_eq!(
+                super::route_for(&state, &path).unwrap().prefix,
+                route.prefix
+            );
+        }
+    }
+}
+
+#[test]
+fn provider_targets_keep_the_configured_origin_and_base_path() {
+    for upstream in [
+        "https://api.example.com",
+        "https://api.example.com:8443/v1/",
+        "http://127.0.0.1:8000/api",
+        "https://[2001:4860:4860::8888]:8443/v1",
+    ] {
+        let route = provider_route("/provider/test", upstream);
+        let base = reqwest::Url::parse(upstream).unwrap();
+        for rest in ["", "/", "/messages", "/x/../messages", "/user@example:8443"] {
+            let target =
+                super::provider_target(&route, rest, Some("q=//other.example/%2f")).unwrap();
+            let request = super::build_forwarded(
+                &provider_state(vec![route.clone()]),
+                http::Request::new(axum::body::Body::empty()),
+                &route,
+                &target,
+            )
+            .build()
+            .unwrap();
+            assert_eq!(request.url().host(), base.host());
+            assert_eq!(
+                request.url().port_or_known_default(),
+                base.port_or_known_default()
+            );
+            assert_eq!(request.url().scheme(), base.scheme());
+            assert!(super::under_prefix(
+                request.url().path(),
+                base.path().trim_end_matches('/')
+            ));
+            assert_eq!(request.url().query(), Some("q=//other.example/%2f"));
+        }
+    }
+}
+
+#[test]
+fn ambiguous_provider_paths_and_userinfo_are_refused() {
+    let route = provider_route("/provider/test", "https://api.example.com/v1");
+    for rest in [
+        ".other.example/",
+        "@other.example/",
+        ":8443/",
+        "//other.example/",
+        "/\\other.example/",
+        "/%2fother.example/",
+        "/%5Cother.example/",
+        "/../outside",
+        "/%2e%2e/outside",
+        "/.%2E/outside",
+        "/%2e./outside",
+        "/../v10/messages",
+    ] {
+        assert!(
+            matches!(
+                super::provider_target(&route, rest, None),
+                Err(super::TargetError::Malformed(_))
+            ),
+            "{rest}"
+        );
+    }
+    for upstream in [
+        "https://user@api.example.com",
+        "https://user:pass@api.example.com",
+        "file:///v1",
+        // A query or fragment on the upstream is a misconfiguration to
+        // refuse, not one to normalise away.
+        "https://api.example.com/v1?x=1",
+        "https://api.example.com/v1#frag",
+    ] {
+        assert!(
+            matches!(
+                super::provider_target(
+                    &provider_route("/provider/test", upstream),
+                    "/messages",
+                    None
+                ),
+                Err(super::TargetError::Upstream(_))
+            ),
+            "{upstream}"
+        );
+    }
+}
+
+#[test]
+fn provider_forwarding_preserves_authority_path_query_and_replaces_credentials() {
+    let state = provider_state(vec![provider_route(
+        "/provider/anthropic",
+        "https://api.example.com:8443/api",
+    )]);
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/provider/anthropic/v1/messages?beta=true")
+        .header("host", "broker.example:9000")
+        .header("authorization", "Bearer session-nonce")
+        .header("x-api-key", "session-nonce")
+        .body(axum::body::Body::from("{}"))
+        .unwrap();
+    let route = super::route_for(&state, request.uri().path()).unwrap();
+    let rest = request.uri().path().strip_prefix(&route.prefix).unwrap();
+    let target = super::provider_target(route, rest, request.uri().query()).unwrap();
+    let forwarded = super::build_forwarded(&state, request, route, &target)
+        .build()
+        .unwrap();
+
+    assert_eq!(forwarded.method(), http::Method::POST);
+    assert_eq!(forwarded.url().scheme(), "https");
+    assert_eq!(forwarded.url().host_str(), Some("api.example.com"));
+    assert_eq!(forwarded.url().port(), Some(8443));
+    assert_eq!(forwarded.url().path(), "/api/v1/messages");
+    assert_eq!(forwarded.url().query(), Some("beta=true"));
+    assert_eq!(forwarded.headers()["authorization"], "Bearer operator-key");
+    assert_eq!(forwarded.headers()["x-api-key"], "operator-key");
+    assert!(!forwarded.headers().contains_key("host"));
+}
