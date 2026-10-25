@@ -779,6 +779,7 @@ struct SessionTestCase {
     start: bool,
     /// Starts as a revival: the agent reopens this recorded session.
     resume_kage_session: Option<String>,
+    link_kage_session: bool,
 }
 
 impl Default for SessionTestCase {
@@ -797,15 +798,22 @@ impl Default for SessionTestCase {
             catalog: None,
             start: true,
             resume_kage_session: None,
+            link_kage_session: false,
         }
     }
 }
 
 /// Seeds the agent's recorded session for a revival, so the start reopens
 /// its history instead of opening a new recording.
-fn seed_kage_session(state_dir: &std::path::Path, previous: Option<&String>) {
-    if let Some(previous) = previous {
-        std::fs::write(state_dir.join("kage-session"), previous).expect("seeded recording");
+fn seed_kage_session(state_dir: &std::path::Path, case: &SessionTestCase) {
+    if let Some(previous) = case.resume_kage_session.as_ref() {
+        if case.link_kage_session {
+            let target = state_dir.parent().unwrap().join("host-marker");
+            std::fs::write(&target, previous).unwrap();
+            std::os::unix::fs::symlink(target, state_dir.join("kage-session")).unwrap();
+        } else {
+            std::fs::write(state_dir.join("kage-session"), previous).expect("seeded recording");
+        }
     }
 }
 
@@ -903,7 +911,7 @@ async fn with_session(
     };
 
     if case.start {
-        seed_kage_session(&state_dir, case.resume_kage_session.as_ref());
+        seed_kage_session(&state_dir, &case);
         // The start is waited on in the background, so the ready answer can
         // arrive while it runs.
         let starting = {
@@ -4461,5 +4469,36 @@ async fn a_short_name_added_after_the_launch_is_known_to_a_running_session() {
             );
         })
     })
+    .await;
+}
+
+#[tokio::test]
+async fn a_link_planted_at_kage_session_is_not_followed() {
+    with_session(
+        SessionTestCase {
+            resume_kage_session: Some("private-host-marker".to_owned()),
+            link_kage_session: true,
+            ..SessionTestCase::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                let written = harness.written();
+                assert!(!written.contains("session/resume"));
+                assert!(written.contains("session/new"));
+                assert!(!written.contains("private-host-marker"));
+                assert!(written.contains("do the thing"));
+                let state = std::path::Path::new(&harness.state_dir);
+                assert!(
+                    std::fs::symlink_metadata(state.join("kage-session"))
+                        .unwrap()
+                        .is_symlink()
+                );
+                assert_eq!(
+                    std::fs::read_to_string(state.parent().unwrap().join("host-marker")).unwrap(),
+                    "private-host-marker"
+                );
+            })
+        },
+    )
     .await;
 }

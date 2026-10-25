@@ -2571,15 +2571,28 @@ impl Running {
     /// The agent's recorded session, when a previous start stored one, so a
     /// revived session reopens its history instead of starting blank.
     fn kage_session_id(&self) -> Option<String> {
-        std::fs::read_to_string(std::path::Path::new(&self.options.state_dir).join("kage-session"))
-            .ok()
-            .map(|id| id.trim().to_owned())
-            .filter(|id| !id.is_empty())
+        match paths::read_beneath(&self.options.state_dir, "kage-session") {
+            Ok(id) => Some(id.trim().to_owned()).filter(|id| !id.is_empty()),
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    self.log.warn(
+                        "the recorded agent session could not be read; starting fresh",
+                        &fields([
+                            (
+                                "path",
+                                format!("{}/kage-session", self.options.state_dir).into(),
+                            ),
+                            ("detail", error.to_string().into()),
+                        ]),
+                    );
+                }
+                None
+            }
+        }
     }
 
-    /// Stores the agent's recorded session beside the transcript, where the
-    /// next process finds it. The agent never sees this file; it lives
-    /// beside the state directory contents, not in them.
+    /// Stores the agent's recording id in the agent-writable state directory.
+    /// A planted symlink is refused, so the recording is not stored through it.
     fn remember_kage_session_id(&self) {
         let Some(id) = self.client.as_ref().and_then(AgentClient::agent_session_id) else {
             return;
