@@ -245,30 +245,25 @@ TLS-CLIENT-HELLO";
 /// A stand-in provider that reports what key it was actually handed, under
 /// each header a session may send one in.
 async fn start_upstream(seen: Arc<Mutex<BTreeMap<String, String>>>, key: &'static str) -> u16 {
-    let app = axum::Router::new().fallback(
-        move |headers: axum::http::HeaderMap, uri: http::Uri, method: http::Method| {
-            let seen = Arc::clone(&seen);
-            async move {
-                let header = |name: &str| {
-                    headers
-                        .get(name)
-                        .and_then(|value| value.to_str().ok())
-                        .unwrap_or("")
-                        .to_owned()
-                };
-                let mut seen = seen.lock().unwrap();
-                seen.insert(format!("{key}/host"), header("host"));
-                seen.insert(format!("{key}/uri"), uri.to_string());
-                seen.insert(format!("{key}/method"), method.to_string());
-                seen.insert(key.to_owned(), header("authorization"));
-                seen.insert(format!("{key}/x-api-key"), header("x-api-key"));
-                (
-                    [(axum::http::header::CONTENT_TYPE, "application/json")],
-                    "{}",
-                )
-            }
-        },
-    );
+    let app = axum::Router::new().fallback(move |headers: axum::http::HeaderMap| {
+        let seen = Arc::clone(&seen);
+        async move {
+            let header = |name: &str| {
+                headers
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("")
+                    .to_owned()
+            };
+            let mut seen = seen.lock().unwrap();
+            seen.insert(key.to_owned(), header("authorization"));
+            seen.insert(format!("{key}/x-api-key"), header("x-api-key"));
+            (
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                "{}",
+            )
+        }
+    });
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("bound");
@@ -1022,38 +1017,34 @@ fn ambiguous_provider_paths_and_userinfo_are_refused() {
     }
 }
 
-#[tokio::test]
-async fn a_named_provider_receives_the_expected_authority_path_query_and_key() {
-    let seen = Arc::new(Mutex::new(BTreeMap::new()));
-    let upstream_port = start_upstream(Arc::clone(&seen), "anthropic").await;
-    let mut broker = Broker::new(
-        Vec::new(),
-        vec![443],
-        silent(),
-        vec![provider_route(
-            "/provider/anthropic",
-            &format!("http://127.0.0.1:{upstream_port}/api"),
-        )],
-        true,
-    );
-    let port = broker.listen("127.0.0.1").await.unwrap();
-    let response = reqwest::Client::new()
-        .post(format!(
-            "http://127.0.0.1:{port}/provider/anthropic/v1/messages?beta=true"
-        ))
+#[test]
+fn provider_forwarding_preserves_authority_path_query_and_replaces_credentials() {
+    let state = provider_state(vec![provider_route(
+        "/provider/anthropic",
+        "https://api.example.com:8443/api",
+    )]);
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/provider/anthropic/v1/messages?beta=true")
+        .header("host", "broker.example:9000")
+        .header("authorization", "Bearer session-nonce")
         .header("x-api-key", "session-nonce")
-        .body("{}")
-        .send()
-        .await
+        .body(axum::body::Body::from("{}"))
         .unwrap();
-    assert_eq!(response.status().as_u16(), 200);
-    {
-        let seen = seen.lock().unwrap();
-        assert_eq!(seen["anthropic/host"], format!("127.0.0.1:{upstream_port}"));
-        assert_eq!(seen["anthropic/uri"], "/api/v1/messages?beta=true");
-        assert_eq!(seen["anthropic/method"], "POST");
-        assert_eq!(seen["anthropic"], "Bearer operator-key");
-        assert_eq!(seen["anthropic/x-api-key"], "operator-key");
-    }
-    broker.close();
+    let route = super::route_for(&state, request.uri().path()).unwrap();
+    let rest = request.uri().path().strip_prefix(&route.prefix).unwrap();
+    let target = super::provider_target(route, rest, request.uri().query()).unwrap();
+    let forwarded = super::build_forwarded(&state, request, route, &target)
+        .build()
+        .unwrap();
+
+    assert_eq!(forwarded.method(), http::Method::POST);
+    assert_eq!(forwarded.url().scheme(), "https");
+    assert_eq!(forwarded.url().host_str(), Some("api.example.com"));
+    assert_eq!(forwarded.url().port(), Some(8443));
+    assert_eq!(forwarded.url().path(), "/api/v1/messages");
+    assert_eq!(forwarded.url().query(), Some("beta=true"));
+    assert_eq!(forwarded.headers()["authorization"], "Bearer operator-key");
+    assert_eq!(forwarded.headers()["x-api-key"], "operator-key");
+    assert!(!forwarded.headers().contains_key("host"));
 }
