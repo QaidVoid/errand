@@ -1404,7 +1404,8 @@ fn a_denied_command_reaches_the_agent_as_a_rule_it_can_match() {
             commands: vec!["rm -rf *".to_owned()],
             tools: vec!["web_search".to_owned()],
         },
-    );
+    )
+    .toml;
 
     // The agent reads `deny` and `allow` as lists; a bare string is a parse
     // error that ends the launch.
@@ -1413,4 +1414,41 @@ fn a_denied_command_reaches_the_agent_as_a_rule_it_can_match() {
         config.contains("[permissions.tools.web_search]\ndefault = \"deny\""),
         "{config}"
     );
+}
+
+#[test]
+fn images_without_any_endpoint_or_credential_are_refused() {
+    for name in ["pictures", "openai"] {
+        for definition in [
+            json!({"images": {"model": "image"}}),
+            json!({"images": {"model": "image"}, "models": [{"id": "m"}]}),
+            json!({"images": {"model": "image"}, "baseUrl": ""}),
+            json!({"images": {"model": "image"}, "baseUrl": "  ", "credential": " ", "credentialName": " "}),
+        ] {
+            let mut providers =
+                json!({"chat": {"credential": "k", "baseUrl": "https://chat.example/v1"}});
+            providers[name] = definition;
+            let problems = problems_of(&with_providers(&providers)).join("\n");
+            assert!(
+                problems.contains(&format!("agent.providers.{name}.images needs a baseUrl")),
+                "{problems}"
+            );
+        }
+    }
+}
+
+#[test]
+fn images_can_use_an_endpoint_or_a_builtin_credential_binding() {
+    for (name, extra) in [
+        ("pictures", json!({"baseUrl": "https://images.example/v1"})),
+        ("openai", json!({"credential": "k"})),
+        ("openai", json!({"credentialName": "IMAGE_KEY"})),
+        ("openai", json!({"baseUrl": "https://images.example/v1"})),
+    ] {
+        let mut providers =
+            json!({"chat": {"credential": "k", "baseUrl": "https://chat.example/v1"}});
+        providers[name] = extra;
+        providers[name]["images"] = json!({"model": "image"});
+        validate_config(&with_providers(&providers)).expect("reachable image provider");
+    }
 }

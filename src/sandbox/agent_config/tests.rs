@@ -31,7 +31,8 @@ fn a_brokered_known_provider_is_overridden_with_the_brokers_url() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     assert!(config.contains("[providers.anthropic]"), "{config}");
     assert!(
@@ -59,7 +60,8 @@ fn a_known_provider_with_a_key_and_no_endpoint_is_written() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     assert!(config.contains("[providers.zai]"), "{config}");
     assert!(
@@ -91,7 +93,8 @@ fn a_brokered_unknown_provider_is_registered_custom_with_its_models() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     assert!(config.contains("[providers.custom.meta]"), "{config}");
     assert!(
@@ -128,7 +131,8 @@ fn an_operator_base_url_passes_through_less_the_credential() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     assert!(config.contains("[providers.custom.meta]"), "{config}");
     assert!(
@@ -167,7 +171,8 @@ fn a_model_entry_carries_its_sizes_inputs_and_levels() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     assert!(config.contains(r#"id = "muse-spark-1.3""#), "{config}");
     assert!(config.contains(r#"name = "Muse Spark""#), "{config}");
@@ -220,7 +225,8 @@ fn a_bare_model_entry_writes_no_sizes_inputs_or_levels() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     let entry = config
         .split("[[providers.custom.meta.models]]")
@@ -254,7 +260,8 @@ fn an_unusable_output_limit_is_left_out() {
             &BTreeMap::new(),
             &[],
             &Denials::default(),
-        );
+        )
+        .toml;
 
         assert!(!config.contains("max_output ="), "{max}: {config}");
     }
@@ -279,7 +286,8 @@ fn a_custom_provider_without_a_kind_speaks_openai() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     assert!(config.contains("[providers.custom.meta]"), "{config}");
     assert!(config.contains("kind = \"openai\""), "{config}");
@@ -305,7 +313,8 @@ fn a_custom_provider_naming_anthropic_is_written_anthropic() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     assert!(config.contains("[providers.custom.meta]"), "{config}");
     assert!(config.contains("kind = \"anthropic\""), "{config}");
@@ -332,7 +341,8 @@ fn a_kind_on_a_known_provider_is_left_out() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     assert!(config.contains("[providers.anthropic]"), "{config}");
     assert!(!config.contains("kind ="), "{config}");
@@ -351,7 +361,8 @@ fn a_provider_with_nothing_to_say_is_left_out() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     assert!(!config.contains("plain"), "{config}");
 }
@@ -383,7 +394,8 @@ fn a_custom_provider_kage_could_not_load_is_left_out() {
             &names,
             &[],
             &Denials::default(),
-        );
+        )
+        .toml;
         assert!(!config.contains("gateway"), "{case}: {config}");
     }
 }
@@ -411,6 +423,7 @@ async fn a_plugin_is_copied_and_granted() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &crate::log::Logger::new(crate::log::LogFields::new(), std::sync::Arc::new(|_, _| {})),
     )
     .await
     .expect("written");
@@ -446,6 +459,7 @@ async fn a_removed_plugin_stops_loading() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &crate::log::Logger::new(crate::log::LogFields::new(), std::sync::Arc::new(|_, _| {})),
     )
     .await
     .expect("written");
@@ -484,6 +498,7 @@ async fn two_plugins_copying_to_one_name_are_refused() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &crate::log::Logger::new(crate::log::LogFields::new(), std::sync::Arc::new(|_, _| {})),
     )
     .await
     .expect_err("a name taken twice is refused");
@@ -522,9 +537,15 @@ async fn the_written_file_holds_endpoints_and_no_keys() {
         providers,
         ..SandboxLaunch::default()
     };
-    write_agent_config(&launch, &brokered, &BTreeMap::new(), &names)
-        .await
-        .expect("written");
+    write_agent_config(
+        &launch,
+        &brokered,
+        &BTreeMap::new(),
+        &names,
+        &crate::log::Logger::new(crate::log::LogFields::new(), std::sync::Arc::new(|_, _| {})),
+    )
+    .await
+    .expect("written");
 
     let body = std::fs::read_to_string(state.join("kage/kage/config.toml")).expect("the config");
     assert!(body.contains("[providers.anthropic]"), "{body}");
@@ -548,7 +569,8 @@ fn no_tool_is_written_twice_whatever_the_operator_denies() {
         &BTreeMap::new(),
         &[],
         &denied,
-    );
+    )
+    .toml;
 
     let mut seen: Vec<&str> = Vec::new();
     for line in config.lines() {
@@ -600,7 +622,8 @@ fn denying_the_shell_tool_takes_no_command_patterns_with_it() {
         &BTreeMap::new(),
         &[],
         &denied,
-    );
+    )
+    .toml;
 
     assert_eq!(
         config.matches("[permissions.tools.shell]").count(),
@@ -624,7 +647,8 @@ fn only_denials_are_written() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
     assert!(!config.contains("[permissions"), "{config}");
 
     let denied = Denials {
@@ -638,7 +662,8 @@ fn only_denials_are_written() {
         &BTreeMap::new(),
         &[],
         &denied,
-    );
+    )
+    .toml;
     assert!(
         config.contains("[permissions.tools.shell]\ndeny = [\"rm -rf *\", \"git push*\"]\n"),
         "{config}"
@@ -681,7 +706,8 @@ fn an_images_only_provider_is_written_for_the_image_tool_alone() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     assert!(!config.contains("[providers"), "{config}");
     assert!(
@@ -718,7 +744,8 @@ fn an_unbrokered_images_provider_points_the_tool_at_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
 
     assert!(
         config.contains(
@@ -757,7 +784,8 @@ fn a_chat_provider_carrying_images_lends_the_tool_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
     assert!(config.contains("[providers.custom.gateway]"), "{config}");
     assert!(
         config.contains(
@@ -781,7 +809,8 @@ fn a_chat_provider_carrying_images_lends_the_tool_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
     assert!(config.contains("[providers.openai]"), "{config}");
     assert!(
         config
@@ -807,7 +836,8 @@ fn no_image_tool_without_images_or_an_endpoint() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
     assert!(!config.contains("[tools.generate_image]"), "{config}");
 
     defined.insert(
@@ -821,7 +851,8 @@ fn no_image_tool_without_images_or_an_endpoint() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
     assert!(!config.contains("[tools.generate_image]"), "{config}");
 }
 
@@ -843,7 +874,8 @@ fn google_is_overridden_in_place_with_a_broker_endpoint() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
     assert!(config.contains("[providers.google]"), "{config}");
     assert!(
         config.contains("base_url = \"http://169.254.169.1:8443/provider/google\""),
@@ -867,7 +899,8 @@ fn google_with_only_a_key_is_written() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
     assert!(config.contains("[providers.google]"), "{config}");
     assert!(
         config.contains(r#"api_key_env = "PROVIDER_KEY""#),
@@ -893,7 +926,8 @@ fn gemini_with_only_a_key_is_not_written() {
         &names,
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
     assert!(!config.contains("gemini"), "{config}");
     assert!(!config.contains("secret"), "{config}");
 }
@@ -915,11 +949,89 @@ fn gemini_with_an_endpoint_and_models_is_registered_custom() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
-    );
+    )
+    .toml;
     assert!(config.contains("[providers.custom.gemini]"), "{config}");
     assert!(
         config.contains("[[providers.custom.gemini.models]]"),
         "{config}"
     );
     assert!(!config.contains("[providers.gemini]"), "{config}");
+}
+
+#[test]
+fn dropped_provider_declarations_report_fixed_reasons_without_credentials() {
+    let defined = serde_json::Map::from_iter([
+        (
+            "pictures".to_owned(),
+            json!({"credential": "super-secret", "images": {"model": "image"}}),
+        ),
+        (
+            "empty".to_owned(),
+            json!({"baseUrl": "https://images.example/v1"}),
+        ),
+        ("openai".to_owned(), json!({"credential": "super-secret"})),
+    ]);
+    let names = BTreeMap::from([
+        ("pictures".to_owned(), "PICTURE_KEY".to_owned()),
+        ("openai".to_owned(), "OPENAI_KEY".to_owned()),
+    ]);
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+    );
+    assert_eq!(config.dropped.len(), 2);
+    assert!(
+        config
+            .dropped
+            .iter()
+            .any(|d| d.name == "pictures" && d.reason == super::DropReason::NoEndpoint)
+    );
+    assert!(
+        config
+            .dropped
+            .iter()
+            .any(|d| d.name == "empty" && d.reason == super::DropReason::NoModels)
+    );
+    assert!(!format!("{config:?}").contains("super-secret"));
+    assert!(config.toml.contains("[providers.openai]"));
+}
+
+#[tokio::test]
+async fn omitted_providers_are_logged_at_launch_without_secret_values() {
+    let root = tempfile::tempdir().unwrap();
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = std::sync::Arc::clone(&lines);
+    let log = crate::log::Logger::new(
+        crate::log::LogFields::new(),
+        std::sync::Arc::new(move |_, line| {
+            recorded.lock().unwrap().push(line.to_owned());
+        }),
+    );
+    let launch = SandboxLaunch {
+        state_dir: root.path().display().to_string(),
+        providers: serde_json::Map::from_iter([(
+            "pictures".to_owned(),
+            json!({"credential": "super-secret", "images": {"model": "image"}}),
+        )]),
+        ..SandboxLaunch::default()
+    };
+    write_agent_config(
+        &launch,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &log,
+    )
+    .await
+    .unwrap();
+    let lines = lines.lock().unwrap();
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].contains("pictures"));
+    assert!(lines[0].contains("no endpoint"));
+    assert!(!lines[0].contains("super-secret"));
 }

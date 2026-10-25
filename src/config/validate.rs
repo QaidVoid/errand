@@ -641,6 +641,20 @@ fn validate_images(name: &str, definition: &Value, problems: &mut Problems) {
              registers has none"
         ));
     }
+    if definition.get("extension").and_then(Value::as_bool) != Some(true)
+        && !["baseUrl", "credential", "credentialName"]
+            .iter()
+            .any(|field| {
+                definition
+                    .get(*field)
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+            })
+    {
+        problems.add(format!(
+            "{place} needs a baseUrl or a credential; otherwise sessions run without the image tool"
+        ));
+    }
     if NO_IMAGES_ENDPOINT.contains(&name.trim()) {
         problems.add(format!(
             "{place} cannot use kage's own {} provider: the image tool reaches only openai and \

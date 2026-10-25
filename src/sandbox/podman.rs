@@ -282,6 +282,7 @@ impl PodmanSandbox {
             &BTreeMap::new(),
             &self.built_in,
             &launch.credential_names,
+            &self.log,
         )
         .await?;
         let name = sandbox_name(&launch.session_id);

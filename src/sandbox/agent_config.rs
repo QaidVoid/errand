@@ -14,6 +14,7 @@ use serde_json::{Map, Value};
 
 use crate::config::schema::PluginConfig;
 use crate::config::schema::defaults::{CUSTOM_PROVIDER_KIND, CUSTOM_PROVIDER_KINDS};
+use crate::log::{Logger, fields};
 use crate::sandbox::backend::{Denials, KAGE_DIR, SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 
@@ -209,6 +210,55 @@ fn model_efforts(entry: &Value) -> Option<String> {
     })
 }
 
+/// The agent configuration and provider declarations it could not include.
+#[derive(Debug)]
+pub struct KageConfig {
+    /// Configuration text containing endpoints and environment variable names.
+    pub toml: String,
+    /// Providers omitted because their declarations are incomplete.
+    pub dropped: Vec<DroppedProvider>,
+}
+
+/// One provider omitted from the agent's provider table.
+#[derive(Debug)]
+pub struct DroppedProvider {
+    /// The operator's provider name, never its credential or endpoint.
+    pub name: String,
+    /// Which part of the declaration was missing.
+    pub reason: DropReason,
+}
+
+impl DroppedProvider {
+    fn new(name: &str, has_endpoint: bool) -> Self {
+        Self {
+            name: name.to_owned(),
+            reason: if has_endpoint {
+                DropReason::NoModels
+            } else {
+                DropReason::NoEndpoint
+            },
+        }
+    }
+}
+
+/// Why a provider declaration cannot be written for the agent.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DropReason {
+    /// No endpoint or built-in provider credential was available.
+    NoEndpoint,
+    /// A custom provider must declare at least one model.
+    NoModels,
+}
+
+impl DropReason {
+    fn message(&self) -> &'static str {
+        match self {
+            Self::NoEndpoint => "no endpoint or built-in credential is configured",
+            Self::NoModels => "a custom provider needs at least one model",
+        }
+    }
+}
+
 /// The kage provider configuration for one session, as TOML.
 ///
 /// Brokered providers point at the broker with the nonce's variable named,
@@ -229,7 +279,8 @@ pub fn kage_config(
     credential_names: &BTreeMap<String, String>,
     plugins: &[PluginConfig],
     denied: &Denials,
-) -> String {
+) -> KageConfig {
+    let mut dropped = Vec::new();
     let mut out = String::from(
         "# Written by the daemon for one session. Endpoints only: credentials\n\
          # travel in the environment, with a broker's nonces swapped in.\n",
@@ -294,6 +345,7 @@ pub fn kage_config(
             base_url.is_some() && !models.is_empty()
         };
         if !worth_writing {
+            dropped.push(DroppedProvider::new(name, base_url.is_some()));
             continue;
         }
         written.push(name.as_str());
@@ -332,7 +384,7 @@ pub fn kage_config(
     ));
     out.push_str(&plugin_capabilities(plugins));
     out.push_str(&permissions_section(denied));
-    out
+    KageConfig { toml: out, dropped }
 }
 
 /// The `[tools.generate_image]` table, for the provider whose definition
@@ -445,6 +497,7 @@ pub async fn write_agent_config(
     brokered: &BTreeMap<String, BrokeredProvider>,
     built_in: &BTreeMap<String, Vec<Value>>,
     credential_names: &BTreeMap<String, String>,
+    log: &Logger,
 ) -> Result<(), SandboxLaunchError> {
     let failed = |error: std::io::Error| SandboxLaunchError(error.to_string());
     // The host side of `{KAGE_HOME}`, with kage's own `kage` segment under
@@ -461,11 +514,24 @@ pub async fn write_agent_config(
         &launch.plugins,
         &launch.denied,
     );
+    for provider in &body.dropped {
+        log.warn(
+            "the session runs without a provider declaration",
+            &fields([
+                ("provider", provider.name.as_str().into()),
+                ("detail", provider.reason.message().into()),
+            ]),
+        );
+    }
     // Written beneath the directory rather than by name, for the same
     // reason the policy is: the session writes here too, and a link
     // planted at the file name would redirect the write.
-    paths::write_beneath(&directory.to_string_lossy(), "config.toml", body.as_bytes())
-        .map_err(failed)?;
+    paths::write_beneath(
+        &directory.to_string_lossy(),
+        "config.toml",
+        body.toml.as_bytes(),
+    )
+    .map_err(failed)?;
     copy_plugins(&directory.join("plugins"), &launch.plugins).await
 }
 

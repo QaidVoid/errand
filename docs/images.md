@@ -34,7 +34,7 @@ kage does not know, which serves images and no chat model, is described without
 
 It is written for the image tool alone, so `!model` never offers its image
 models, and it needs a `baseUrl`: without one there is nowhere to send a call,
-and sessions run without the tool. With `sandbox.egress.mode` set to `proxy` it
+and the configuration is refused at load when no credential is supplied either. A provider kage knows needs a credential or a `baseUrl`. With `sandbox.egress.mode` set to `proxy` it
 is brokered like any other provider, so the sandbox holds a nonce in place of
 its key.
 
