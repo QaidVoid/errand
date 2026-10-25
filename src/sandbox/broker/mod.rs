@@ -589,6 +589,13 @@ pub(crate) async fn serve_provider_request(
 
     let path = request.uri().path().to_owned();
     let Some(route) = route_for(&state, &path) else {
+        // An unmatched route is where a probe dies: the session named a
+        // provider this broker does not serve, or spelled one in a way that
+        // would have escaped below. Say so, with the path.
+        state.log.warn(
+            "a provider call arrived for a route this broker does not serve",
+            &fields([("path", path.into())]),
+        );
         return (
             axum::http::StatusCode::NOT_FOUND,
             "not a provider this broker serves\n",

@@ -949,18 +949,24 @@ impl reqwest::dns::Resolve for RecordingResolve {
 /// Hostile paths are refused before anything is dialled. The judge resolver
 /// answers a public address, so only the structural checks can refuse, and
 /// the client's own resolver records every name it is asked for while
-/// answering with the mock upstream's loopback address: a regression that
-/// forwards would reach the mock and leave a dialled name behind. The one
-/// benign request first is what proves the harness would have recorded it.
+/// Hostile paths are refused before anything is dialled, and the refusals
+/// reach the log. The test opens no listener, so a connection can never be
+/// pooled and every forward attempt must consult the client's resolver:
+/// the recording resolver is a complete count of forward attempts. The one
+/// benign request proves the counting works: it is answered 502 because
+/// nothing listens on the dial target, and its attempt shows up in the
+/// recording. The judge resolver answers a public address, so only the
+/// structural checks can refuse.
 #[tokio::test]
 async fn hostile_provider_paths_never_reach_any_upstream() {
     let dialled = Arc::new(Mutex::new(Vec::new()));
-    let seen = Arc::new(Mutex::new(BTreeMap::new()));
-    let upstream_port = start_upstream(Arc::clone(&seen), "anthropic").await;
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let lookups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&lookups);
 
     let mut state = provider_state(vec![provider_route(
         "/provider/anthropic",
-        &format!("http://upstream.test:{upstream_port}/v1"),
+        "http://upstream.test:9/v1",
     )]);
     state.client = reqwest::Client::builder()
         .dns_resolver(Arc::new(RecordingResolve {
@@ -969,7 +975,15 @@ async fn hostile_provider_paths_never_reach_any_upstream() {
         .no_proxy()
         .build()
         .unwrap();
-    state.resolve = Some(resolver(&["9.9.9.9"]));
+    state.resolve = Some(Arc::new(move |_| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(vec!["9.9.9.9".to_owned()]) })
+    }));
+    let recorded = Arc::clone(&lines);
+    state.log = Logger::new(
+        LogFields::new(),
+        Arc::new(move |_level, line| recorded.lock().unwrap().push(line.to_owned())),
+    );
     let state = Arc::new(state);
 
     let request_for = |suffix: &str| {
@@ -980,13 +994,19 @@ async fn hostile_provider_paths_never_reach_any_upstream() {
             .body(axum::body::Body::empty())
             .unwrap()
     };
+
+    // A forward attempt is observable. This one fails for want of a
+    // listener, and that is the point: the attempt is still recorded.
     let answer =
         super::serve_provider_request(Arc::clone(&state), request_for("/v1/messages?beta=true"))
             .await;
-    assert_eq!(answer.status().as_u16(), 200);
-    let forwarded = seen.lock().unwrap().len();
-    assert_eq!(forwarded, 2, "the benign request was not recorded");
+    assert!(
+        !answer.status().is_success(),
+        "nothing listens on the dial target"
+    );
     assert_eq!(*dialled.lock().unwrap(), vec!["upstream.test".to_owned()]);
+    let judged = lookups.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(judged, 1);
 
     for (suffix, status) in [
         (".attacker.example/", 404),
@@ -1002,15 +1022,32 @@ async fn hostile_provider_paths_never_reach_any_upstream() {
         let response = super::serve_provider_request(Arc::clone(&state), request_for(suffix)).await;
         assert_eq!(response.status().as_u16(), status, "{suffix}");
     }
-    assert_eq!(
-        seen.lock().unwrap().len(),
-        forwarded,
-        "the mock was reached"
-    );
+
+    // Nothing was judged or dialled again: all nine refusals were
+    // structural, not resolution or forwarding.
+    assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), judged);
     assert_eq!(
         *dialled.lock().unwrap(),
         vec!["upstream.test".to_owned()],
-        "a name was dialled"
+        "a forward was attempted"
+    );
+
+    // The refusals are on the log: one line per unmatched route, one per
+    // path that cannot be a path, naming the probe's path.
+    let lines = lines.lock().unwrap();
+    let unserved = lines
+        .iter()
+        .filter(|line| line.contains("does not serve"))
+        .count();
+    assert_eq!(unserved, 4, "unmatched routes must be logged");
+    let malformed = lines
+        .iter()
+        .filter(|line| line.contains("cannot be a path"))
+        .count();
+    assert_eq!(malformed, 5, "malformed paths must be logged");
+    assert!(
+        lines.iter().any(|line| line.contains("attacker.example")),
+        "the probe's path must be on the log"
     );
 }
 
