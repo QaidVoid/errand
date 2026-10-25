@@ -927,50 +927,43 @@ async fn malformed_provider_routes_are_refused_before_resolution_or_forwarding()
     }
 }
 
-/// A reqwest resolver that answers every name with loopback and records the
-/// names it is asked for, so a test reads the hosts the client really
-/// dialled rather than trusting where it said it was going.
+/// Records attempted upstream names and fails resolution before any socket
+/// can be opened or pooled, keeping forwarding assertions independent of
+/// the host's network and running services.
 #[derive(Clone)]
 struct RecordingResolve {
-    dialled: Arc<Mutex<Vec<String>>>,
+    attempted_hosts: Arc<Mutex<Vec<String>>>,
 }
 
 impl reqwest::dns::Resolve for RecordingResolve {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        self.dialled.lock().unwrap().push(name.as_str().to_owned());
-        let addrs: reqwest::dns::Addrs = Box::new(std::iter::once(std::net::SocketAddr::from((
-            [127, 0, 0, 1],
-            0,
-        ))));
-        Box::pin(std::future::ready(Ok(addrs)))
+        self.attempted_hosts
+            .lock()
+            .unwrap()
+            .push(name.as_str().to_owned());
+        Box::pin(async {
+            Err(std::io::Error::other("injected upstream resolution failure").into())
+        })
     }
 }
 
-/// Hostile paths are refused before anything is dialled. The judge resolver
-/// answers a public address, so only the structural checks can refuse, and
-/// the client's own resolver records every name it is asked for while
-/// Hostile paths are refused before anything is dialled, and the refusals
-/// reach the log. The test opens no listener, so a connection can never be
-/// pooled and every forward attempt must consult the client's resolver:
-/// the recording resolver is a complete count of forward attempts. The one
-/// benign request proves the counting works: it is answered 502 because
-/// nothing listens on the dial target, and its attempt shows up in the
-/// recording. The judge resolver answers a public address, so only the
-/// structural checks can refuse.
+/// Refusals are logged before either resolver is consulted. The benign
+/// control reaches the recording client resolver and fails there, proving
+/// that forwarding attempts are observable without making a connection.
 #[tokio::test]
 async fn hostile_provider_paths_never_reach_any_upstream() {
-    let dialled = Arc::new(Mutex::new(Vec::new()));
+    let attempted_hosts = Arc::new(Mutex::new(Vec::new()));
     let lines = Arc::new(Mutex::new(Vec::new()));
     let lookups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = Arc::clone(&lookups);
 
     let mut state = provider_state(vec![provider_route(
         "/provider/anthropic",
-        "http://upstream.test:9/v1",
+        "http://upstream.test/v1",
     )]);
     state.client = reqwest::Client::builder()
         .dns_resolver(Arc::new(RecordingResolve {
-            dialled: Arc::clone(&dialled),
+            attempted_hosts: Arc::clone(&attempted_hosts),
         }))
         .no_proxy()
         .build()
@@ -995,16 +988,14 @@ async fn hostile_provider_paths_never_reach_any_upstream() {
             .unwrap()
     };
 
-    // A forward attempt is observable. This one fails for want of a
-    // listener, and that is the point: the attempt is still recorded.
     let answer =
         super::serve_provider_request(Arc::clone(&state), request_for("/v1/messages?beta=true"))
             .await;
-    assert!(
-        !answer.status().is_success(),
-        "nothing listens on the dial target"
+    assert_eq!(answer.status().as_u16(), 502);
+    assert_eq!(
+        *attempted_hosts.lock().unwrap(),
+        vec!["upstream.test".to_owned()]
     );
-    assert_eq!(*dialled.lock().unwrap(), vec!["upstream.test".to_owned()]);
     let judged = lookups.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(judged, 1);
 
@@ -1023,11 +1014,9 @@ async fn hostile_provider_paths_never_reach_any_upstream() {
         assert_eq!(response.status().as_u16(), status, "{suffix}");
     }
 
-    // Nothing was judged or dialled again: all nine refusals were
-    // structural, not resolution or forwarding.
     assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), judged);
     assert_eq!(
-        *dialled.lock().unwrap(),
+        *attempted_hosts.lock().unwrap(),
         vec!["upstream.test".to_owned()],
         "a forward was attempted"
     );
