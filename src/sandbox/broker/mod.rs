@@ -504,7 +504,49 @@ fn route_for<'a>(state: &'a ProviderState, path: &str) -> Option<&'a ProviderRou
     routes.sort_by_key(|route| std::cmp::Reverse(route.prefix.len()));
     routes
         .into_iter()
-        .find(|candidate| path.starts_with(&candidate.prefix))
+        .find(|candidate| under_prefix(path, &candidate.prefix))
+}
+
+/// Whether a path is the prefix itself or one of its descendants.
+fn under_prefix(path: &str, prefix: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Builds a provider URL without allowing the session to change its origin.
+fn provider_target(route: &ProviderRoute, rest: &str, query: Option<&str>) -> Option<reqwest::Url> {
+    let lower = rest.to_ascii_lowercase();
+    if (!rest.is_empty() && !rest.starts_with('/'))
+        || rest.starts_with("//")
+        || rest.contains('\\')
+        || lower.contains("%2f")
+        || lower.contains("%5c")
+    {
+        return None;
+    }
+    let base = reqwest::Url::parse(&route.upstream).ok()?;
+    if !matches!(base.scheme(), "http" | "https")
+        || base.host_str().is_none()
+        || !base.username().is_empty()
+        || base.password().is_some()
+    {
+        return None;
+    }
+    let prefix = base.path().trim_end_matches('/');
+    let mut target = base.clone();
+    target.set_path(&format!("{prefix}{rest}"));
+    target.set_query(query);
+    target.set_fragment(None);
+    if target.scheme() != base.scheme()
+        || target.host() != base.host()
+        || target.port_or_known_default() != base.port_or_known_default()
+        || !under_prefix(target.path(), prefix)
+    {
+        return None;
+    }
+    Some(target)
 }
 
 /// Serves the provider API, with the real credential put on here.
@@ -520,11 +562,6 @@ pub(crate) async fn serve_provider_request(
     use axum::response::IntoResponse;
 
     let path = request.uri().path().to_owned();
-    let query = request
-        .uri()
-        .query()
-        .map(|query| format!("?{query}"))
-        .unwrap_or_default();
     let Some(route) = route_for(&state, &path) else {
         return (
             axum::http::StatusCode::NOT_FOUND,
@@ -543,8 +580,13 @@ pub(crate) async fn serve_provider_request(
     }
 
     let rest = path[route.prefix.len()..].to_owned();
-    let trimmed_upstream = route.upstream.strip_suffix('/').unwrap_or(&route.upstream);
-    let target = format!("{trimmed_upstream}{rest}{query}");
+    let Some(target) = provider_target(route, &rest, request.uri().query()) else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "the provider path is invalid or leaves its configured base\n",
+        )
+            .into_response();
+    };
     if let Some(refused) = provider_refusal(&state, route, &target).await {
         return refused;
     }
@@ -592,7 +634,7 @@ pub(crate) async fn serve_provider_request(
 async fn provider_refusal(
     state: &ProviderState,
     route: &ProviderRoute,
-    target: &str,
+    target: &reqwest::Url,
 ) -> Option<axum::response::Response> {
     use axum::response::IntoResponse;
 
@@ -600,14 +642,14 @@ async fn provider_refusal(
     // reaching somewhere it chose. It is still judged by the same rule, so
     // that a provider pointed at this machine is a deliberate setting rather
     // than a quiet exception to where the broker will go.
-    let hostname = url_host(target);
+    let hostname = target.host_str().map(|host| host.trim_matches(['[', ']']));
     let internal = match hostname {
         Some(hostname) => {
-            let lookup = public_addresses(&hostname, state.allow_internal, None);
+            let lookup = public_addresses(hostname, state.allow_internal, state.resolve.as_ref());
             let Ok(addresses) = tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await else {
                 state.log.warn(
                     "the provider's name did not resolve in time",
-                    &fields([("host", hostname.as_str().into())]),
+                    &fields([("host", hostname.into())]),
                 );
                 return Some(
                     (
@@ -623,7 +665,7 @@ async fn provider_refusal(
                 Err(NoAddress::Unresolved(why)) => {
                     state.log.warn(
                         "the provider's name did not resolve on this host",
-                        &fields([("host", hostname.as_str().into()), ("detail", why.into())]),
+                        &fields([("host", hostname.into()), ("detail", why.into())]),
                     );
                     return Some(
                         (
@@ -658,12 +700,12 @@ fn build_forwarded(
     state: &ProviderState,
     request: http::Request<axum::body::Body>,
     route: &ProviderRoute,
-    target: &str,
+    target: &reqwest::Url,
 ) -> reqwest::RequestBuilder {
     let mut forwarded = state.client.request(
         reqwest::Method::from_bytes(request.method().as_str().as_bytes())
             .unwrap_or(reqwest::Method::GET),
-        target,
+        target.clone(),
     );
     // Whether the session sent its key the Anthropic way, which decides
     // whether the provider is also given it that way below.
@@ -715,20 +757,6 @@ fn stream_answer(answered: reqwest::Response) -> axum::response::Response {
 
 /// Where a resolved name comes back as.
 pub(crate) type ResolveFuture = Pin<Box<dyn Future<Output = Result<Vec<String>, String>> + Send>>;
-
-/// The host of a URL, without pulling in a full URL parser for one field.
-fn url_host(target: &str) -> Option<String> {
-    let rest = target
-        .strip_prefix("http://")
-        .or_else(|| target.strip_prefix("https://"))?;
-    let authority = rest.split(['/', '?']).next()?;
-    // A provider is named, never bracketed, so an IPv6 literal here is not
-    // reachable through this path either.
-    let host = authority
-        .rsplit_once(':')
-        .map_or(authority, |(host, _)| host);
-    Some(host.to_owned())
-}
 
 /// The listener that admits a session's connections and tunnels them.
 pub(crate) mod server;
