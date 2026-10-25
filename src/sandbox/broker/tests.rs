@@ -927,6 +927,118 @@ async fn malformed_provider_routes_are_refused_before_resolution_or_forwarding()
     }
 }
 
+/// A reqwest resolver that answers every name with loopback and records the
+/// names it is asked for, so a test reads the hosts the client really
+/// dialled rather than trusting where it said it was going.
+#[derive(Clone)]
+struct RecordingResolve {
+    dialled: Arc<Mutex<Vec<String>>>,
+}
+
+impl reqwest::dns::Resolve for RecordingResolve {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        self.dialled.lock().unwrap().push(name.as_str().to_owned());
+        let addrs: reqwest::dns::Addrs = Box::new(std::iter::once(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))));
+        Box::pin(std::future::ready(Ok(addrs)))
+    }
+}
+
+/// Hostile paths are refused before anything is dialled. The judge resolver
+/// answers a public address, so only the structural checks can refuse, and
+/// the client's own resolver records every name it is asked for while
+/// answering with the mock upstream's loopback address: a regression that
+/// forwards would reach the mock and leave a dialled name behind. The one
+/// benign request first is what proves the harness would have recorded it.
+#[tokio::test]
+async fn hostile_provider_paths_never_reach_any_upstream() {
+    let dialled = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::new(Mutex::new(BTreeMap::new()));
+    let upstream_port = start_upstream(Arc::clone(&seen), "anthropic").await;
+
+    let mut state = provider_state(vec![provider_route(
+        "/provider/anthropic",
+        &format!("http://upstream.test:{upstream_port}/v1"),
+    )]);
+    state.client = reqwest::Client::builder()
+        .dns_resolver(Arc::new(RecordingResolve {
+            dialled: Arc::clone(&dialled),
+        }))
+        .no_proxy()
+        .build()
+        .unwrap();
+    state.resolve = Some(resolver(&["9.9.9.9"]));
+    let state = Arc::new(state);
+
+    let request_for = |suffix: &str| {
+        http::Request::builder()
+            .method(http::Method::POST)
+            .uri(format!("/provider/anthropic{suffix}"))
+            .header("authorization", "Bearer session-nonce")
+            .body(axum::body::Body::empty())
+            .unwrap()
+    };
+    let answer =
+        super::serve_provider_request(Arc::clone(&state), request_for("/v1/messages?beta=true"))
+            .await;
+    assert_eq!(answer.status().as_u16(), 200);
+    let forwarded = seen.lock().unwrap().len();
+    assert_eq!(forwarded, 2, "the benign request was not recorded");
+    assert_eq!(*dialled.lock().unwrap(), vec!["upstream.test".to_owned()]);
+
+    for (suffix, status) in [
+        (".attacker.example/", 404),
+        ("@attacker.example/", 404),
+        (":8443/", 404),
+        ("x/v1/messages", 404),
+        ("//attacker.example/", 400),
+        ("/../outside", 400),
+        ("/%2e%2e/outside", 400),
+        ("/%2Fattacker.example/", 400),
+        ("/%5cattacker.example/", 400),
+    ] {
+        let response = super::serve_provider_request(Arc::clone(&state), request_for(suffix)).await;
+        assert_eq!(response.status().as_u16(), status, "{suffix}");
+    }
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        forwarded,
+        "the mock was reached"
+    );
+    assert_eq!(
+        *dialled.lock().unwrap(),
+        vec!["upstream.test".to_owned()],
+        "a name was dialled"
+    );
+}
+
+/// A broken upstream is the operator's failure: answered 502 rather than a
+/// 400 that blames the session, and refused before resolution is consulted.
+#[tokio::test]
+async fn a_broken_upstream_is_a_502_refused_before_resolution() {
+    let lookups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&lookups);
+    let mut state = provider_state(vec![provider_route(
+        "/provider/anthropic",
+        "https://user:pass@api.anthropic.com/v1",
+    )]);
+    state.resolve = Some(Arc::new(move |_| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(vec!["1.1.1.1".to_owned()]) })
+    }));
+    let state = Arc::new(state);
+    let request = http::Request::builder()
+        .uri("/provider/anthropic/v1/messages")
+        .header("authorization", "Bearer session-nonce")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = super::serve_provider_request(state, request).await;
+    assert_eq!(response.status().as_u16(), 502);
+    assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
 #[test]
 fn provider_names_and_longest_segment_prefix_are_preserved() {
     let routes = ["a", "a/nested", "a-b", "a.b", "a2"]
@@ -997,7 +1109,10 @@ fn ambiguous_provider_paths_and_userinfo_are_refused() {
         "/../v10/messages",
     ] {
         assert!(
-            super::provider_target(&route, rest, None).is_none(),
+            matches!(
+                super::provider_target(&route, rest, None),
+                Err(super::TargetError::Malformed(_))
+            ),
             "{rest}"
         );
     }
@@ -1005,14 +1120,21 @@ fn ambiguous_provider_paths_and_userinfo_are_refused() {
         "https://user@api.example.com",
         "https://user:pass@api.example.com",
         "file:///v1",
+        // A query or fragment on the upstream is a misconfiguration to
+        // refuse, not one to normalise away.
+        "https://api.example.com/v1?x=1",
+        "https://api.example.com/v1#frag",
     ] {
         assert!(
-            super::provider_target(
-                &provider_route("/provider/test", upstream),
-                "/messages",
-                None
-            )
-            .is_none()
+            matches!(
+                super::provider_target(
+                    &provider_route("/provider/test", upstream),
+                    "/messages",
+                    None
+                ),
+                Err(super::TargetError::Upstream(_))
+            ),
+            "{upstream}"
         );
     }
 }
