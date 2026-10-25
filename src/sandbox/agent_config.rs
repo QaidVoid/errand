@@ -305,6 +305,8 @@ pub fn kage_config(
             definition
                 .and_then(|fields| fields.get("baseUrl"))
                 .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
                 .map(str::to_owned)
         });
         if through.is_none() && definition.is_none() {

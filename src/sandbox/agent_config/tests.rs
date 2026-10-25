@@ -1035,3 +1035,35 @@ async fn omitted_providers_are_logged_at_launch_without_secret_values() {
     assert!(lines[0].contains("no endpoint"));
     assert!(!lines[0].contains("super-secret"));
 }
+
+#[test]
+fn blank_image_endpoints_use_builtin_credentials_or_report_missing_endpoints() {
+    let names = BTreeMap::from([
+        ("openai".to_owned(), "OPENAI_KEY".to_owned()),
+        ("pictures".to_owned(), "PICTURE_KEY".to_owned()),
+    ]);
+    let defined = serde_json::Map::from_iter([
+        (
+            "openai".to_owned(),
+            json!({"baseUrl": "  ", "images": {"model": "image"}}),
+        ),
+        (
+            "pictures".to_owned(),
+            json!({"baseUrl": "", "models": [{"id": "m"}]}),
+        ),
+    ]);
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+    );
+    assert!(config.toml.contains("[providers.openai]"));
+    assert!(config.toml.contains("provider = \"openai\""));
+    assert!(!config.toml.contains("base_url"));
+    assert_eq!(config.dropped.len(), 1);
+    assert_eq!(config.dropped[0].name, "pictures");
+    assert_eq!(config.dropped[0].reason, super::DropReason::NoEndpoint);
+}
