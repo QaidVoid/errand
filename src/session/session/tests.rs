@@ -4660,6 +4660,13 @@ async fn crossing_the_image_cap_does_not_restart_an_existing_interrupt_wait() {
             settle().await;
             assert_eq!(harness.written().matches("session/cancel").count(), 1);
             assert_eq!(deadline(&harness.timers), before);
+            let thread = harness.thread.everything();
+            assert_eq!(
+                thread.matches("the rest were not posted").count(),
+                1,
+                "{thread}"
+            );
+            assert!(!thread.contains("is being stopped"), "{thread}");
             harness.timers.advance(20_000);
             settle().await;
             assert_eq!(
@@ -4693,7 +4700,13 @@ async fn images_with_no_turn_open_do_not_request_interruption() {
             }
             settle().await;
             assert!(!harness.written().contains("session/cancel"));
-            assert!(!harness.thread.everything().contains("more than 4 images"));
+            let thread = harness.thread.everything();
+            assert_eq!(
+                thread.matches("the rest were not posted").count(),
+                1,
+                "{thread}"
+            );
+            assert!(!thread.contains("is being stopped"), "{thread}");
         })
     })
     .await;
