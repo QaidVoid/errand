@@ -150,7 +150,7 @@ How much of the agent's activity reaches the thread.
 | `maxAttachmentsPerMessage` | `number` | `4` | Most attached files taken from one message. The rest are refused. |
 | `maxUploadBytes` | `number` | `20971520` | Largest file uploaded, on request with `!file` or as an image the agent generated, in bytes. |
 | `postDiffs` | `boolean` | `true` | Post a diff after the agent changes a file. |
-| `postImages` | `boolean` | `true` | Post each image the agent generates to the thread, as an upload with a caption. A turn posts at most four, and the rest stay in the project. |
+| `postImages` | `boolean` | `true` | Post each image the agent generates to the thread, as an upload with a caption. A turn posts at most four, and generating a fifth stops the turn, whether or not images are posted. |
 
 ## web
 
