@@ -541,6 +541,21 @@ fn usage_is_a_table_with_the_reset_in_utc() {
     );
 }
 
+/// A server's text lands in a code span, so it must stay on one line and
+/// hold no backtick that would close the span early.
+#[test]
+fn server_text_is_one_inert_line_cut_short() {
+    assert_eq!(
+        super::server_text("a `b`\n\n[x](https://evil.example) <@1>\u{2713}"),
+        "a b [x](https://evil.example) 1>"
+    );
+    assert_eq!(super::server_text(" \n\t"), "");
+    let long = "word ".repeat(100);
+    let cut = super::server_text(&long);
+    assert!(cut.ends_with("..."), "{cut}");
+    assert!(cut.len() <= super::MAX_SERVER_TEXT_CHARS + 3, "{cut}");
+}
+
 #[test]
 fn inert_strips_mention_and_span_syntax() {
     assert_eq!(super::inert("<@123> a`b@c"), "  123> a b c");

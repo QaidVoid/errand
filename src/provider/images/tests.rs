@@ -382,7 +382,7 @@ fn a_picture_is_named_for_its_type_and_captioned_with_its_model() {
         .expect("a picture");
 
     assert_eq!(picture.name, "image.png");
-    assert_eq!(picture.caption, "drawn on `image:max`: a tall lighthouse");
+    assert_eq!(picture.caption, "drawn on `image:max`: `a tall lighthouse`");
 }
 
 /// The error is what a thread is told, so it has to read as a sentence.
@@ -750,11 +750,18 @@ fn a_provider_without_a_credential_sends_none() {
 fn image_captions_cannot_carry_mentions_or_escape_the_model_span() {
     let picture = Drawn {
         bytes: PNG.to_vec(),
-        revised_prompt: Some("<@111> nice `day`".to_owned()),
+        revised_prompt: Some("<@111> nice `day`\n# [verify](https://evil.example)".to_owned()),
     }
     .into_picture("image:`<@222>", u64::MAX)
     .unwrap();
-    assert!(!picture.caption.contains(['<', '@']));
-    assert_eq!(picture.caption.matches('`').count(), 2);
+    assert!(!picture.caption.contains(['<', '@', '\n']));
+    assert_eq!(picture.caption.matches('`').count(), 4);
     assert!(picture.caption.contains("image:"));
+    assert!(
+        picture
+            .caption
+            .ends_with(": `111> nice day # [verify](https://evil.example)`"),
+        "{}",
+        picture.caption
+    );
 }

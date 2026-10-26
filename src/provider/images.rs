@@ -15,7 +15,7 @@ use std::future::Future;
 
 use serde_json::{Value, json};
 
-use crate::chat::render::inert;
+use crate::chat::render::{inert, server_text};
 use crate::config::schema::AgentConfig;
 use crate::provider::models::{AvailableModel, Matched, match_model};
 use crate::session::model::{expand_alias, known_providers, resolve_model, split_level};
@@ -164,8 +164,8 @@ impl Drawn {
     ///
     /// `limit` is the largest upload the surface takes, and the caption names
     /// the model that drew it and what the server said about the prompt when
-    /// it said anything. Both are made inert, so mention and code-span
-    /// characters in them become spaces.
+    /// it said anything. The model is made inert, and the server's text goes
+    /// through [`server_text`] into a code span of its own.
     pub fn into_picture(self, model: &str, limit: u64) -> Result<Picture, ImageError> {
         let size = u64::try_from(self.bytes.len()).unwrap_or(u64::MAX);
         if size > limit {
@@ -180,8 +180,13 @@ impl Drawn {
             ));
         };
         Ok(Picture {
-            caption: match self.revised_prompt.as_deref() {
-                Some(revised) => format!("drawn on `{}`: {}", inert(model), inert(revised)),
+            caption: match self
+                .revised_prompt
+                .as_deref()
+                .map(server_text)
+                .filter(|revised| !revised.is_empty())
+            {
+                Some(revised) => format!("drawn on `{}`: `{revised}`", inert(model)),
                 None => format!("drawn on `{}`", inert(model)),
             },
             name: format!("image.{extension}"),
