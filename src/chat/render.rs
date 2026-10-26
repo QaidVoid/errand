@@ -20,6 +20,40 @@ use crate::session::files::Entry;
 use crate::session::files::{FileContents, MAX_INLINE_BYTES};
 use crate::session::model::split_level;
 
+/// Makes free text inert inside captions by removing mention and span syntax.
+pub fn inert(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if matches!(character, '<' | '@' | '`') {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+/// The longest stretch of an image server's free text a caption shows.
+pub const MAX_SERVER_TEXT_CHARS: usize = 300;
+
+/// An image server's free text, ready to sit inside a caption's code span:
+/// made inert, kept to printable ASCII on one line, and cut short with `...`
+/// where it was cut. Inside the span no markdown renders, so the text cannot
+/// format the thread or carry a masked link. Empty when nothing printable is
+/// left.
+pub fn server_text(text: &str) -> String {
+    let printable: String = inert(text)
+        .chars()
+        .map(|c| if c.is_ascii_graphic() { c } else { ' ' })
+        .collect();
+    let whole = printable.split_whitespace().collect::<Vec<_>>().join(" ");
+    if whole.len() > MAX_SERVER_TEXT_CHARS {
+        format!("{}...", whole[..MAX_SERVER_TEXT_CHARS].trim_end())
+    } else {
+        whole
+    }
+}
+
 /// The service's per-message character limit.
 pub const MESSAGE_LIMIT: usize = 2000;
 

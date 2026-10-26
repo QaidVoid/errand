@@ -206,6 +206,26 @@ async fn a_refusal_carries_the_servers_own_message() {
 }
 
 #[tokio::test]
+async fn a_refusal_cannot_carry_a_mention_into_the_thread() {
+    let post = FakePost::answering(Ok(Response {
+        status: 400,
+        body: Some(json!({ "error": { "message": "ask <@123> about `this`" } })),
+    }));
+
+    let refused = draw(&endpoint(), "a lighthouse", &post)
+        .await
+        .expect_err("refused");
+
+    assert!(!refused.0.contains('<'), "{}", refused.0);
+    assert!(!refused.0.contains('`'), "{}", refused.0);
+    assert!(
+        refused.0.contains("ask   123> about  this "),
+        "{}",
+        refused.0
+    );
+}
+
+#[tokio::test]
 async fn an_unreachable_endpoint_says_so() {
     let post = FakePost::answering(Err("connection refused".to_owned()));
 
@@ -362,7 +382,7 @@ fn a_picture_is_named_for_its_type_and_captioned_with_its_model() {
         .expect("a picture");
 
     assert_eq!(picture.name, "image.png");
-    assert_eq!(picture.caption, "drawn on `image:max`: a tall lighthouse");
+    assert_eq!(picture.caption, "drawn on `image:max`: `a tall lighthouse`");
 }
 
 /// The error is what a thread is told, so it has to read as a sentence.
@@ -724,4 +744,24 @@ fn a_provider_without_a_credential_sends_none() {
 
     assert_eq!(endpoint.base_url, "http://localhost:8080/v1");
     assert_eq!(endpoint.credential, "");
+}
+
+#[test]
+fn image_captions_cannot_carry_mentions_or_escape_the_model_span() {
+    let picture = Drawn {
+        bytes: PNG.to_vec(),
+        revised_prompt: Some("<@111> nice `day`\n# [verify](https://evil.example)".to_owned()),
+    }
+    .into_picture("image:`<@222>", u64::MAX)
+    .unwrap();
+    assert!(!picture.caption.contains(['<', '@', '\n']));
+    assert_eq!(picture.caption.matches('`').count(), 4);
+    assert!(picture.caption.contains("image:"));
+    assert!(
+        picture
+            .caption
+            .ends_with(": `111> nice day # [verify](https://evil.example)`"),
+        "{}",
+        picture.caption
+    );
 }

@@ -11,7 +11,7 @@ use super::{IncomingMessage, MAX_DIFFABLE_BYTES, MAX_IMAGES_PER_TURN, MAX_INLINE
 use crate::agent::protocol::ProducedImage;
 use crate::chat::diff::file_diff;
 use crate::chat::render::{
-    bytes as byte_count, connection_line, directory_listing, file_view, widen,
+    bytes as byte_count, connection_line, directory_listing, file_view, inert, server_text, widen,
 };
 use crate::log::{LogValue, fields};
 use crate::provider::images::{endpoint_with_effort, image_extension};
@@ -251,7 +251,7 @@ impl Running {
             .send(SessionEvent::Upload {
                 name,
                 bytes,
-                caption: format!("`{}` {} bytes", display, meta.len()),
+                caption: format!("`{}` {} bytes", inert(&display), meta.len()),
             })
             .await;
     }
@@ -437,34 +437,21 @@ impl Running {
     }
 }
 
-/// The longest part of an image server's note shown in a caption.
-const MAX_NOTE_CHARS: usize = 300;
-
 /// The caption an image the agent made is posted with: where the tool saved
 /// it when it did, its size, and in brackets what its server said, such as a
 /// fallback to another model, so a reader sees it beside the picture.
 ///
-/// The note is the server's free text: it is kept to printable ASCII on one
-/// line and cut short, with `...` where it was cut, so it cannot carry
-/// control characters or a wall of text into the thread.
+/// The note is the server's free text, so it goes through [`server_text`]
+/// and sits in a code span. The path is made inert, so neither can ping
+/// anyone or close the code span.
 fn image_caption(saved: Option<&str>, size: f64, note: Option<&str>) -> String {
     let mut caption = match saved {
-        Some(path) => format!("generated `{path}` {}", byte_count(size)),
+        Some(path) => format!("generated `{}` {}", inert(path), byte_count(size)),
         None => format!("generated an image, {}", byte_count(size)),
     };
-    let printable: String = note
-        .unwrap_or_default()
-        .chars()
-        .map(|c| if c.is_ascii_graphic() { c } else { ' ' })
-        .collect();
-    let whole = printable.split_whitespace().collect::<Vec<_>>().join(" ");
-    let note = if whole.len() > MAX_NOTE_CHARS {
-        format!("{}...", whole[..MAX_NOTE_CHARS].trim_end())
-    } else {
-        whole
-    };
+    let note = server_text(note.unwrap_or_default());
     if !note.is_empty() {
-        let _ = write!(caption, " [{note}]");
+        let _ = write!(caption, " [`{note}`]");
     }
     caption
 }
