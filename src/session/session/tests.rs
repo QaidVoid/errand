@@ -971,6 +971,13 @@ async fn a_revived_session_reopens_the_agents_recorded_session() {
                 .find(|frame| frame.get("method").and_then(Value::as_str) == Some("session/resume"))
                 .expect("the resume is sent");
             assert_eq!(resumed["params"]["sessionId"], "s-old");
+            assert!(
+                harness.thread.notices()[0]
+                    .0
+                    .contains("resumed, continuing in demo"),
+                "{:?}",
+                harness.thread.notices()
+            );
             assert_eq!(
                 std::fs::read_to_string(
                     std::path::Path::new(&harness.state_dir).join("kage-session")
@@ -4490,6 +4497,12 @@ async fn a_link_planted_at_kage_session_is_not_followed() {
                 assert!(!written.contains("session/resume"));
                 assert!(written.contains("session/new"));
                 assert!(!written.contains("private-host-marker"));
+                let opening = &harness.thread.notices()[0].0;
+                assert!(
+                    opening.contains("could not be reopened, so it starts without it"),
+                    "{opening}"
+                );
+                assert!(!opening.contains("continuing"), "{opening}");
                 assert!(written.contains("do the thing"));
                 let state = std::path::Path::new(&harness.state_dir);
                 assert!(

@@ -1150,17 +1150,25 @@ impl Running {
     ///
     /// The model is named here because it is the one thing about a session
     /// somebody may want to change before the first turn, and the only other
-    /// way to learn it is to ask.
-    fn opening_line(&self) -> String {
+    /// way to learn it is to ask. A revived session whose agent conversation
+    /// could not be reopened (`restored` false) says so, since the agent
+    /// starts without what was said before and the thread would otherwise be
+    /// told it carries on.
+    fn opening_line(&self, restored: bool) -> String {
         let project = &self.options.project.name;
-        let doing = if self.options.resume {
-            format!("resumed, continuing in {project}")
-        } else {
-            format!("ready, working in {project}")
+        let place = match self.running_model() {
+            Some(model) => format!("in {project} on `{model}`"),
+            None => format!("in {project}"),
         };
-        match self.running_model() {
-            Some(model) => format!("{doing} on `{model}`"),
-            None => doing,
+        if !self.options.resume {
+            format!("ready, working {place}")
+        } else if restored {
+            format!("resumed, continuing {place}")
+        } else {
+            format!(
+                "resumed {place}, but the agent's earlier conversation could not be reopened, so \
+                 it starts without it"
+            )
         }
     }
 
@@ -1224,7 +1232,9 @@ impl Running {
         self.client = Some(client);
 
         let client = self.client.as_ref().expect("the client was just made");
-        let ready = match self.kage_session_id() {
+        let previous = self.kage_session_id();
+        let restored = previous.is_some();
+        let ready = match previous {
             // A revived session carries on in its recorded session; a fresh
             // one opens a new recording.
             Some(previous) => {
@@ -1256,7 +1266,7 @@ impl Running {
         // tells a reader nothing they can act on, and tells anyone else what
         // to probe. The operator sees it at startup, in the log, where it
         // belongs.
-        let opening = self.opening_line();
+        let opening = self.opening_line(restored);
 
         // Offered once, when the thread is new. A thread shows the
         // conversation and the interface shows the work behind it, and
