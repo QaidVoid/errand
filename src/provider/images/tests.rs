@@ -206,6 +206,26 @@ async fn a_refusal_carries_the_servers_own_message() {
 }
 
 #[tokio::test]
+async fn a_refusal_cannot_carry_a_mention_into_the_thread() {
+    let post = FakePost::answering(Ok(Response {
+        status: 400,
+        body: Some(json!({ "error": { "message": "ask <@123> about `this`" } })),
+    }));
+
+    let refused = draw(&endpoint(), "a lighthouse", &post)
+        .await
+        .expect_err("refused");
+
+    assert!(!refused.0.contains('<'), "{}", refused.0);
+    assert!(!refused.0.contains('`'), "{}", refused.0);
+    assert!(
+        refused.0.contains("ask   123> about  this "),
+        "{}",
+        refused.0
+    );
+}
+
+#[tokio::test]
 async fn an_unreachable_endpoint_says_so() {
     let post = FakePost::answering(Err("connection refused".to_owned()));
 

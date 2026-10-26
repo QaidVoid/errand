@@ -446,7 +446,8 @@ const MAX_NOTE_CHARS: usize = 300;
 ///
 /// The note is the server's free text: it is kept to printable ASCII on one
 /// line and cut short, with `...` where it was cut, so it cannot carry
-/// control characters or a wall of text into the thread.
+/// control characters or a wall of text into the thread. The note and the
+/// path are made inert, so neither can ping anyone or close the code span.
 fn image_caption(saved: Option<&str>, size: f64, note: Option<&str>) -> String {
     let mut caption = match saved {
         Some(path) => format!("generated `{}` {}", inert(path), byte_count(size)),

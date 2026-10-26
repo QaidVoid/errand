@@ -164,7 +164,8 @@ impl Drawn {
     ///
     /// `limit` is the largest upload the surface takes, and the caption names
     /// the model that drew it and what the server said about the prompt when
-    /// it said anything.
+    /// it said anything. Both are made inert, so mention and code-span
+    /// characters in them become spaces.
     pub fn into_picture(self, model: &str, limit: u64) -> Result<Picture, ImageError> {
         let size = u64::try_from(self.bytes.len()).unwrap_or(u64::MAX);
         if size > limit {
@@ -327,7 +328,8 @@ fn read(body: &Value) -> Option<Drawn> {
 }
 
 /// The server's own message about a refusal, or a plain one when it said
-/// nothing readable.
+/// nothing readable. The message is the server's free text and is posted to
+/// the thread, so it is made inert like a caption.
 fn detail(body: Option<&Value>) -> String {
     let message = body
         .and_then(|body| body.get("error"))
@@ -337,7 +339,7 @@ fn detail(body: Option<&Value>) -> String {
             body.and_then(|body| body.get("message"))
                 .and_then(Value::as_str)
         });
-    message.map_or_else(|| "it did not say why".to_owned(), str::to_owned)
+    message.map_or_else(|| "it did not say why".to_owned(), inert)
 }
 
 /// Decodes standard base64, padded or not. Nothing for any other character.
