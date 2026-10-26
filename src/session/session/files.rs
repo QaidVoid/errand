@@ -366,40 +366,45 @@ impl Running {
             .await;
     }
 
-    /// Counts every returned image and stops a running turn that crosses the
-    /// cap. Past the cap with no turn to stop, or with a stop already waiting,
+    /// Counts a returned image, posts it while the turn is under the cap, and
+    /// stops a running turn once it generates more than the cap. Past the cap
     /// the images are not posted, and the log and the thread say so.
-    pub(super) async fn on_image(&mut self, image: &ProducedImage) {
+    pub(super) async fn on_image(&mut self, image: &ProducedImage, generated: bool) {
         self.turn_images = self.turn_images.saturating_add(1);
-        if self.turn_images <= MAX_IMAGES_PER_TURN {
+        if generated {
+            self.turn_generated = self.turn_generated.saturating_add(1);
+        }
+        if generated
+            && self.turn_generated == MAX_IMAGES_PER_TURN + 1
+            && self.ticket.is_some()
+            && !self.abort_in_flight
+        {
+            self.log.warn(
+                "the agent passed the image cap, so its turn is being stopped",
+                &fields([("cap", LogValue::from(MAX_IMAGES_PER_TURN))]),
+            );
+            self.aborting = true;
+            self.abort();
+            self.say(&format!(
+                "the agent made more than {MAX_IMAGES_PER_TURN} images this turn, so the turn \
+                 is being stopped; if the agent does not confirm, the session will end"
+            ))
+            .await;
+        } else if self.turn_images <= MAX_IMAGES_PER_TURN {
             if self.options.config.output.post_images {
                 self.post_image(image).await;
             }
         } else if self.turn_images == MAX_IMAGES_PER_TURN + 1 {
-            if self.ticket.is_some() && !self.abort_in_flight {
-                self.log.warn(
-                    "the agent passed the image cap, so its turn is being stopped",
-                    &fields([("cap", LogValue::from(MAX_IMAGES_PER_TURN))]),
-                );
-                self.aborting = true;
-                self.abort();
+            self.log.warn(
+                "the agent passed the image cap; the images past it are not posted",
+                &fields([("cap", LogValue::from(MAX_IMAGES_PER_TURN))]),
+            );
+            if self.options.config.output.post_images {
                 self.say(&format!(
                     "the agent made more than {MAX_IMAGES_PER_TURN} images this turn, so the \
-                     turn is being stopped; if the agent does not confirm, the session will end"
+                     rest were not posted"
                 ))
                 .await;
-            } else {
-                self.log.warn(
-                    "the agent passed the image cap; the images past it are not posted",
-                    &fields([("cap", LogValue::from(MAX_IMAGES_PER_TURN))]),
-                );
-                if self.options.config.output.post_images {
-                    self.say(&format!(
-                        "the agent made more than {MAX_IMAGES_PER_TURN} images this turn; the \
-                         rest were not posted"
-                    ))
-                    .await;
-                }
             }
         }
     }

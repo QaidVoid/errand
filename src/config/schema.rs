@@ -508,8 +508,8 @@ pub struct OutputConfig {
     /// Post a diff after the agent changes a file.
     pub post_diffs: bool,
     /// Post each image the agent generates to the thread, as an upload with a
-    /// caption. A turn posts at most four, and a fifth stops the turn, whether
-    /// or not images are posted.
+    /// caption. A turn posts at most four, and generating a fifth stops the
+    /// turn, whether or not images are posted.
     pub post_images: bool,
 }
 

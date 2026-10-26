@@ -181,9 +181,14 @@ const EDITING_TOOLS: [&str; 5] = ["edit", "write", "create", "str_replace", "mul
 /// Largest file diffed. Beyond this the change is summarised, not shown.
 const MAX_DIFFABLE_BYTES: u64 = 512 * 1024;
 
-/// Most returned images a turn permits before requesting interruption.
+/// Most images a turn posts, and most it may generate before it is stopped.
 /// In-flight or failed generation calls may already have incurred cost.
 const MAX_IMAGES_PER_TURN: usize = 4;
+
+/// kage's image tool, which titles its calls with this name. Only its images
+/// and those the model draws into a reply cost a generation: a `read` of a
+/// picture returns one too, and must not stop a turn.
+const GENERATE_IMAGE_TOOL: &str = "generate_image";
 
 /// Said when a session ends for a limit it could carry on past.
 ///
@@ -739,9 +744,11 @@ struct Running {
     /// Output tokens the session had produced when this turn opened, so the
     /// turn's own share can be told apart from the running total.
     turn_output_from: u64,
-    /// Every image returned this turn, including when posting is disabled.
-    /// Crossing [`MAX_IMAGES_PER_TURN`] requests interruption once.
+    /// Every image returned this turn, counted toward the posting cap.
     turn_images: usize,
+    /// Images generated this turn, including when posting is disabled.
+    /// Crossing [`MAX_IMAGES_PER_TURN`] requests interruption once.
+    turn_generated: usize,
     idle_timer: Option<u64>,
     disk_timer: Option<u64>,
     delegating_timer: Option<u64>,
@@ -853,6 +860,7 @@ impl Running {
             turn_first_output_at: None,
             turn_output_from: 0,
             turn_images: 0,
+            turn_generated: 0,
             idle_timer: None,
             disk_timer: None,
             delegating_timer: None,
@@ -990,7 +998,7 @@ impl Running {
                 } => {
                     self.on_tool_end(&id, &name, failed, &output, &images).await;
                 }
-                Signal::AgentImage(image) => self.on_image(&image).await,
+                Signal::AgentImage(image) => self.on_image(&image, true).await,
                 Signal::Thought(text) => {
                     self.views.send(SessionEvent::Thinking { text }).await;
                 }
@@ -1630,6 +1638,7 @@ impl Running {
         self.turn_first_output_at = None;
         self.turn_output_from = self.usage.output;
         self.turn_images = 0;
+        self.turn_generated = 0;
         self.views.send(SessionEvent::Waiting { text: None }).await;
         self.views.send(SessionEvent::Busy { busy: true }).await;
         let content = match self.pull_request_outcome.take() {
@@ -2066,7 +2075,7 @@ impl Running {
         }
         if !failed {
             for image in images {
-                self.on_image(image).await;
+                self.on_image(image, name == GENERATE_IMAGE_TOOL).await;
             }
         }
 

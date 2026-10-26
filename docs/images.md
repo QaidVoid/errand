@@ -77,10 +77,12 @@ said about it, such as that it fell back to another model.
 The daemon checks that the bytes are a PNG, JPEG, GIF or WebP before anything is
 posted. Anything else is refused, and the thread is told that a picture was not
 posted, and why. A picture larger than `output.maxUploadBytes` is named instead
-of posted. A turn posts at most four images. Returning a fifth image requests
-interruption of the turn, including when `output.postImages` is `false`. The
-count includes images that cannot be uploaded. The interruption follows the same
-deadline as `!interrupt`: if the agent does not confirm within
+of posted. A turn posts at most four images. A turn that generates a fifth,
+through `generate_image` or in the model's own reply, is interrupted, including
+when `output.postImages` is `false`. The count includes images that cannot be
+uploaded. An image another tool returns, such as a `read` of a picture, counts
+toward the four posted but does not interrupt the turn. The interruption follows
+the same deadline as `!interrupt`: if the agent does not confirm within
 `timeouts.abortMs`, the session ends. In-flight calls may still complete, and
 failed calls with no returned image cannot be counted, so this is not a hard
 billing limit. Setting `output.postImages` to `false` disables uploads only.

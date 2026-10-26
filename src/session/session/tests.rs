@@ -3165,7 +3165,7 @@ fn generated_image(call: &str, bytes: &[u8], path: Option<&str>, note: Option<&s
         "method": "session/update",
         "params": { "sessionId": "s-1", "update": {
             "sessionUpdate": "tool_call_update",
-            "toolCallId": call, "status": "completed",
+            "toolCallId": call, "status": "completed", "title": "generate_image",
             "content": [
                 { "type": "content", "content": { "type": "text", "text": "Generated an image" } },
                 { "type": "content", "content": {
@@ -4707,6 +4707,41 @@ async fn images_with_no_turn_open_do_not_request_interruption() {
                 "{thread}"
             );
             assert!(!thread.contains("is being stopped"), "{thread}");
+        })
+    })
+    .await;
+}
+
+/// A `read` of a picture returns an image too, but costs no generation:
+/// past the cap it is not posted, and the turn runs on.
+#[tokio::test]
+async fn images_another_tool_returns_do_not_stop_the_turn() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            settle().await;
+            assert!(harness.thread.busy());
+            for n in 0..=super::MAX_IMAGES_PER_TURN {
+                let mut read = generated_image(&format!("read{n}"), GENERATED_PNG, None, None);
+                read["params"]["update"]["title"] = json!("read");
+                harness.controls().send(&read);
+            }
+            settle().await;
+            assert_eq!(harness.thread.uploads().len(), super::MAX_IMAGES_PER_TURN);
+            assert!(!harness.written().contains("session/cancel"));
+            let thread = harness.thread.everything();
+            assert_eq!(
+                thread.matches("the rest were not posted").count(),
+                1,
+                "{thread}"
+            );
+            assert!(!thread.contains("is being stopped"), "{thread}");
+
+            harness
+                .controls()
+                .send(&generated_image("drawn", GENERATED_PNG, None, None));
+            settle().await;
+            assert!(!harness.written().contains("session/cancel"));
         })
     })
     .await;
