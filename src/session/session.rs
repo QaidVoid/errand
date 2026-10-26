@@ -193,6 +193,9 @@ const MAX_IMAGES_PER_TURN: usize = 4;
 /// ending otherwise reads as final, and the recovery went unnoticed.
 const CONTINUE_HINT: &str = "Post here to continue on a fresh sandbox.";
 
+/// Where the agent's recorded session id is kept in the state directory.
+const KAGE_SESSION_FILENAME: &str = "kage-session";
+
 /// Tool outputs kept so a delegation can name one, newest first.
 const MAX_REMEMBERED_OUTPUTS: usize = 50;
 
@@ -1147,17 +1150,25 @@ impl Running {
     ///
     /// The model is named here because it is the one thing about a session
     /// somebody may want to change before the first turn, and the only other
-    /// way to learn it is to ask.
-    fn opening_line(&self) -> String {
+    /// way to learn it is to ask. A revived session whose agent conversation
+    /// could not be reopened (`restored` false) says so, since the agent
+    /// starts without what was said before and the thread would otherwise be
+    /// told it carries on.
+    fn opening_line(&self, restored: bool) -> String {
         let project = &self.options.project.name;
-        let doing = if self.options.resume {
-            format!("resumed, continuing in {project}")
-        } else {
-            format!("ready, working in {project}")
+        let place = match self.running_model() {
+            Some(model) => format!("in {project} on `{model}`"),
+            None => format!("in {project}"),
         };
-        match self.running_model() {
-            Some(model) => format!("{doing} on `{model}`"),
-            None => doing,
+        if !self.options.resume {
+            format!("ready, working {place}")
+        } else if restored {
+            format!("resumed, continuing {place}")
+        } else {
+            format!(
+                "resumed {place}, but the agent's earlier conversation could not be reopened, so \
+                 it starts without it"
+            )
         }
     }
 
@@ -1221,7 +1232,9 @@ impl Running {
         self.client = Some(client);
 
         let client = self.client.as_ref().expect("the client was just made");
-        let ready = match self.kage_session_id() {
+        let previous = self.kage_session_id();
+        let restored = previous.is_some();
+        let ready = match previous {
             // A revived session carries on in its recorded session; a fresh
             // one opens a new recording.
             Some(previous) => {
@@ -1253,7 +1266,7 @@ impl Running {
         // tells a reader nothing they can act on, and tells anyone else what
         // to probe. The operator sees it at startup, in the log, where it
         // belongs.
-        let opening = self.opening_line();
+        let opening = self.opening_line(restored);
 
         // Offered once, when the thread is new. A thread shows the
         // conversation and the interface shows the work behind it, and
@@ -2571,20 +2584,39 @@ impl Running {
     /// The agent's recorded session, when a previous start stored one, so a
     /// revived session reopens its history instead of starting blank.
     fn kage_session_id(&self) -> Option<String> {
-        std::fs::read_to_string(std::path::Path::new(&self.options.state_dir).join("kage-session"))
-            .ok()
-            .map(|id| id.trim().to_owned())
-            .filter(|id| !id.is_empty())
+        match paths::read_beneath(&self.options.state_dir, KAGE_SESSION_FILENAME) {
+            Ok(id) => Some(id.trim().to_owned()).filter(|id| !id.is_empty()),
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    self.log.warn(
+                        "the recorded agent session could not be read; starting fresh",
+                        &fields([
+                            (
+                                "path",
+                                format!("{}/{KAGE_SESSION_FILENAME}", self.options.state_dir)
+                                    .into(),
+                            ),
+                            ("detail", error.to_string().into()),
+                        ]),
+                    );
+                }
+                None
+            }
+        }
     }
 
-    /// Stores the agent's recorded session beside the transcript, where the
-    /// next process finds it. The agent never sees this file; it lives
-    /// beside the state directory contents, not in them.
+    /// Stores the agent's recorded session in the state directory, where the
+    /// next start finds it. The agent can write that directory, so a link
+    /// planted at the name makes the write fail and nothing is stored.
     fn remember_kage_session_id(&self) {
         let Some(id) = self.client.as_ref().and_then(AgentClient::agent_session_id) else {
             return;
         };
-        let _ = paths::write_beneath(&self.options.state_dir, "kage-session", id.as_bytes());
+        let _ = paths::write_beneath(
+            &self.options.state_dir,
+            KAGE_SESSION_FILENAME,
+            id.as_bytes(),
+        );
     }
 
     /// Records what the project already held, then watches how much the

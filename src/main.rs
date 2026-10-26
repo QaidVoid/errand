@@ -133,10 +133,11 @@ fn workspace_grant(policy: &str) -> Option<String> {
 /// what it names is untrusted input. A project outside the configured root is
 /// refused, so a rewritten policy cannot revive a session onto a directory
 /// the operator never chose, and a root that does not resolve is refused
-/// rather than assumed.
+/// rather than assumed. The file is read without following links and without
+/// blocking, so a planted link or pipe cannot point the read at a host file
+/// or hang the command.
 fn project_of(state_dir: &str, root: &str) -> Option<Project> {
-    let policy =
-        std::fs::read_to_string(std::path::Path::new(state_dir).join(POLICY_FILENAME)).ok()?;
+    let policy = crate::sandbox::paths::read_beneath(state_dir, POLICY_FILENAME).ok()?;
     let path = workspace_grant(&policy)?;
     let name = std::path::Path::new(&path)
         .file_name()?
@@ -271,6 +272,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::grant_pair;
+    use super::project_of;
     use super::workspace_grant;
     use crate::config::schema::NetworkMode;
     use crate::sandbox::backend::{Denials, SandboxLaunch};
@@ -324,6 +326,38 @@ mod tests {
                 "the workspace grant is lost in a {network:?} policy"
             );
         }
+    }
+
+    /// The session can write its state directory, so a policy planted there
+    /// as a link to a host file must not be followed, while a policy written
+    /// in place still names the project.
+    #[test]
+    fn a_policy_planted_as_a_link_names_no_project() {
+        let dir = tempfile::tempdir().expect("a temp directory");
+        let root = dir.path().join("code");
+        let state = dir.path().join("state");
+        std::fs::create_dir_all(root.join("demo")).expect("the project");
+        std::fs::create_dir_all(&state).expect("the state directory");
+        let policy = format!(
+            "[mount]\nworkspace = {{ path = \"{}\", at = \"/workspace\" }}\n",
+            root.join("demo").display()
+        );
+        let host_policy = dir.path().join("host-policy.toml");
+        std::fs::write(&host_policy, &policy).expect("the host file");
+        let state_dir = state.to_str().expect("a UTF-8 path");
+        let root = root.to_str().expect("a UTF-8 path");
+
+        std::os::unix::fs::symlink(&host_policy, state.join("policy.toml")).expect("the link");
+        assert!(project_of(state_dir, root).is_none());
+
+        std::fs::remove_file(state.join("policy.toml")).expect("the link is removed");
+        std::fs::write(state.join("policy.toml"), &policy).expect("the policy");
+        assert_eq!(
+            project_of(state_dir, root)
+                .map(|project| project.name)
+                .as_deref(),
+            Some("demo")
+        );
     }
 
     /// The pairs after the first arrive with a comma in front, and the
