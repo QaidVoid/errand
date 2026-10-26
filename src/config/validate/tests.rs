@@ -737,6 +737,39 @@ fn with_providers(providers: &Value) -> Value {
     }))
 }
 
+/// kage refuses its whole configuration over one provider id it cannot
+/// take, so errand refuses the id first and names it.
+#[test]
+fn a_provider_id_kage_cannot_take_is_refused() {
+    for name in ["My_Gateway", "gateway.eu", "GW"] {
+        let problems = problems_of(&with_providers(&json!({
+            "chat": { "credential": "k" },
+            name: { "credential": "k", "baseUrl": "https://gw.example/v1", "models": [{ "id": "m" }] },
+        })))
+        .join("\n");
+        assert!(
+            problems.contains(&format!(
+                "agent.providers.{name} must be named with lowercase letters, digits and dashes"
+            )),
+            "{name}: {problems}"
+        );
+    }
+}
+
+/// Lowercase letters, digits and dashes pass, and a provider a plugin
+/// registers is never written for kage, so its id is not held to kage's
+/// rule.
+#[test]
+fn a_provider_id_kage_takes_passes() {
+    validate_config(&with_providers(&json!({
+        "chat": { "credential": "k" },
+        "zai-coding-cn": { "credential": "k" },
+        "my-gw2": { "credential": "k", "baseUrl": "https://gw.example/v1", "models": [{ "id": "m" }] },
+        "My_Plugin": { "extension": true },
+    })))
+    .expect("every id is one kage takes, or one kage never reads");
+}
+
 #[test]
 fn a_provider_may_carry_images_for_the_agent_to_generate_through() {
     let config = validate_config(&with_providers(&json!({
@@ -931,7 +964,7 @@ fn ids_that_cannot_differ_in_a_variable_are_kept_apart() {
             "provider": "pg-oc",
             "providers": {
                 "pg-oc": { "credential": "a" },
-                "pg.oc": { "credential": "b" },
+                "pg.oc": { "credential": "b", "extension": true },
             },
         },
     })))

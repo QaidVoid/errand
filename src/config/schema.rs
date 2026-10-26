@@ -164,6 +164,10 @@ pub struct AgentConfig {
     pub rules_path: Option<String>,
     /// Every provider, the one a session starts on included.
     ///
+    /// A provider is named with lowercase letters, digits and dashes, which is
+    /// all kage accepts in a provider id. One marked `extension: true` may be
+    /// named anything, since errand never writes it into kage's configuration.
+    ///
     /// Each entry carries the credential errand reaches that provider with,
     /// optionally the `credentialName` the agent reads it from, and whatever
     /// else locates it: `baseUrl`, `kind`, `models`. A `kind` of `openai` or

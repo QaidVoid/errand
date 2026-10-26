@@ -514,6 +514,25 @@ fn validate_chat(raw: &Map<String, Value>, problems: &mut Problems) -> ChatConfi
     }
 }
 
+/// Refuses a provider id kage would not accept: anything but lowercase ASCII
+/// letters, digits and dashes. kage refuses the whole configuration over one
+/// id it cannot take, which would end every session rather than the one
+/// provider. A provider a plugin registers is never written into kage's
+/// configuration, so kage never reads its id.
+fn validate_provider_id(name: &str, definition: &Value, problems: &mut Problems) {
+    let id = name.trim();
+    let takes = !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    if !takes && definition.get("extension").and_then(Value::as_bool) != Some(true) {
+        problems.add(format!(
+            "agent.providers.{name} must be named with lowercase letters, digits and dashes \
+             only, which is all kage accepts in a provider id"
+        ));
+    }
+}
+
 /// Reads the operator's provider definitions, which are passed through as they
 /// are written.
 ///
@@ -543,6 +562,7 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
             ));
             continue;
         }
+        validate_provider_id(name, definition, problems);
         if let Some(flag) = definition.get("broker")
             && !flag.is_boolean()
         {
