@@ -824,3 +824,102 @@ fn no_image_tool_without_images_or_an_endpoint() {
     );
     assert!(!config.contains("[tools.generate_image]"), "{config}");
 }
+
+/// kage knows `google` as a built-in, so a brokered one is overridden in
+/// place: a custom table under that id would make kage refuse the config.
+#[test]
+fn google_is_overridden_in_place_with_a_broker_endpoint() {
+    let brokered = BTreeMap::from([(
+        "google".to_owned(),
+        BrokeredProvider {
+            base_url: "http://169.254.169.1:8443/provider/google".to_owned(),
+        },
+    )]);
+    let names = BTreeMap::from([("google".to_owned(), "GOOGLE_KEY".to_owned())]);
+    let config = kage_config(
+        &serde_json::Map::new(),
+        &brokered,
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+    );
+    assert!(config.contains("[providers.google]"), "{config}");
+    assert!(
+        config.contains("base_url = \"http://169.254.169.1:8443/provider/google\""),
+        "{config}"
+    );
+    assert!(config.contains(r#"api_key_env = "GOOGLE_KEY""#), "{config}");
+    assert!(!config.contains("custom"), "{config}");
+}
+
+/// A key alone is enough for the built-in `google`, which kage already knows
+/// the endpoint and models of.
+#[test]
+fn google_with_only_a_key_is_written() {
+    let defined =
+        serde_json::Map::from_iter([("google".to_owned(), json!({"credential": "secret"}))]);
+    let names = BTreeMap::from([("google".to_owned(), "PROVIDER_KEY".to_owned())]);
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+    );
+    assert!(config.contains("[providers.google]"), "{config}");
+    assert!(
+        config.contains(r#"api_key_env = "PROVIDER_KEY""#),
+        "{config}"
+    );
+    assert!(!config.contains("base_url"), "{config}");
+    assert!(!config.contains("custom"), "{config}");
+    assert!(!config.contains("secret"), "{config}");
+}
+
+/// `gemini` is not a kage built-in, so a key alone describes nothing kage
+/// can reach, and writing it as an override would make kage refuse the
+/// config.
+#[test]
+fn gemini_with_only_a_key_is_not_written() {
+    let defined =
+        serde_json::Map::from_iter([("gemini".to_owned(), json!({"credential": "secret"}))]);
+    let names = BTreeMap::from([("gemini".to_owned(), "PROVIDER_KEY".to_owned())]);
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+    );
+    assert!(!config.contains("gemini"), "{config}");
+    assert!(!config.contains("secret"), "{config}");
+}
+
+/// An operator's own `gemini` with an endpoint and models is registered as a
+/// custom provider, since kage has no built-in of that name to override.
+#[test]
+fn gemini_with_an_endpoint_and_models_is_registered_custom() {
+    let defined = serde_json::Map::from_iter([(
+        "gemini".to_owned(),
+        json!({
+            "baseUrl": "https://custom.example/v1", "models": [{"id": "drawing"}],
+        }),
+    )]);
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &[],
+        &Denials::default(),
+    );
+    assert!(config.contains("[providers.custom.gemini]"), "{config}");
+    assert!(
+        config.contains("[[providers.custom.gemini.models]]"),
+        "{config}"
+    );
+    assert!(!config.contains("[providers.gemini]"), "{config}");
+}
