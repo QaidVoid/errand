@@ -831,21 +831,6 @@ fn images_need_an_openai_endpoint_errand_can_name() {
         problems.contains("a provider a plugin registers has none"),
         "{problems}"
     );
-
-    // kage knows these by name, whatever `kind` says, and none of them
-    // serves images.
-    for name in ["anthropic", "openai-responses"] {
-        let mut providers = json!({
-            "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
-        });
-        providers[name] =
-            json!({ "credential": "k", "kind": "openai", "images": { "model": "image" } });
-        let problems = problems_of(&with_providers(&providers)).join("\n");
-        assert!(
-            problems.contains(&format!("cannot use kage's own {name} provider")),
-            "{name}: {problems}"
-        );
-    }
 }
 
 #[test]

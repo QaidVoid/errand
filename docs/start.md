@@ -6,6 +6,10 @@
 - A credential for a model provider.
 - Linux, with either [bailey](https://github.com/QaidVoid/bailey) or rootless
   podman. The sandbox is not optional, so one of them has to be there.
+- [kage](https://github.com/QaidVoid/kage), the agent, newer than 0.5.1: on the
+  host's PATH under bailey, or in the image under podman. errand asks it which
+  providers it knows (`kage providers --json`) and refuses to start when it
+  cannot say.
 
 ## Build it
 

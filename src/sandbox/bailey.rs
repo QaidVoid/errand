@@ -465,7 +465,7 @@ impl BaileySandbox {
                 ],
             });
         };
-        self.ask_kage(&launcher).await?;
+        let kage_providers = self.ask_kage(&launcher).await?;
 
         let mut notes = vec![
             "sessions run as confined host processes using the host's own tools".to_owned(),
@@ -533,12 +533,13 @@ impl BaileySandbox {
             backend: SandboxBackend::Bailey,
             gaps,
             notes,
+            kage_providers,
         })
     }
 
     /// Asks the kage at `launcher`, the one sessions run, which providers it
     /// knows, and keeps the answer for every launch.
-    async fn ask_kage(&self, launcher: &str) -> Result<(), SandboxUnavailableError> {
+    async fn ask_kage(&self, launcher: &str) -> Result<KageProviders, SandboxUnavailableError> {
         let run = self
             .options
             .kage
@@ -558,8 +559,8 @@ impl BaileySandbox {
                 backend: SandboxBackend::Bailey,
                 reasons: vec![reason],
             })?;
-        self.kage_providers.keep(listed);
-        Ok(())
+        self.kage_providers.keep(listed.clone());
+        Ok(listed)
     }
 
     fn lookup(&self) -> Lookup {

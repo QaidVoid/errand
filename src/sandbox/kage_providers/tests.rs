@@ -79,3 +79,56 @@ fn an_answer_that_is_not_a_list_is_refused() {
         );
     }
 }
+
+/// The operator's provider definitions, as validation hands them on.
+fn defined(providers: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    providers.as_object().expect("an object").clone()
+}
+
+/// A provider named for an id kage reserves is refused, naming it.
+#[test]
+fn a_provider_named_for_a_reserved_id_is_refused() {
+    let problems = as_installed().refuses(&defined(&serde_json::json!({
+        "acp": { "credential": "k" },
+        "gw": { "credential": "k" },
+    })));
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains("agent.providers.acp is named for a provider kage reserves"),
+        "{problems:?}"
+    );
+}
+
+/// The image tool cannot reach a kage provider that speaks the Anthropic API,
+/// whatever it is called, including catalog ones a name list never caught.
+#[test]
+fn images_on_a_kage_provider_without_an_images_endpoint_are_refused() {
+    for name in ["anthropic", "kenari-claude", "commandcode-claude"] {
+        let problems = as_installed().refuses(&defined(&serde_json::json!({
+            name: { "credential": "k", "images": { "model": "i" } },
+        })));
+        assert_eq!(problems.len(), 1, "{name}: {problems:?}");
+        assert!(
+            problems[0].contains(&format!(
+                "agent.providers.{name}.images cannot use kage's {name} provider, which speaks \
+                 the anthropic API"
+            )),
+            "{problems:?}"
+        );
+    }
+}
+
+/// `openai`, an OpenAI-compatible catalog provider, an id kage no longer
+/// knows, and a gateway of the operator's own may all carry images, and a
+/// provider a plugin registers is not held to kage's list.
+#[test]
+fn what_kage_takes_is_not_refused() {
+    let problems = as_installed().refuses(&defined(&serde_json::json!({
+        "openai": { "credential": "k", "images": { "model": "i" } },
+        "kenari": { "credential": "k" },
+        "openai-responses": { "credential": "k", "baseUrl": "https://o.example/v1" },
+        "pictures": { "credential": "k", "baseUrl": "https://p.example/v1" },
+        "acp": { "extension": true },
+    })));
+    assert!(problems.is_empty(), "{problems:?}");
+}

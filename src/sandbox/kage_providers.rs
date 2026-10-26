@@ -9,9 +9,14 @@
 use std::sync::RwLock;
 
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 use crate::sandbox::RunResult;
 use crate::sandbox::backend::SandboxLaunchError;
+
+/// The wire protocols of kage providers that have no images endpoint for the
+/// image tool to call.
+const NO_IMAGES_APIS: [&str; 2] = ["anthropic", "acp"];
 
 /// The arguments that ask kage for its provider list.
 pub const LIST_ARGS: [&str; 2] = ["providers", "--json"];
@@ -89,6 +94,39 @@ impl KageProviders {
     pub fn reserves(&self, id: &str) -> bool {
         self.get(id)
             .is_some_and(|provider| !provider.overridable && !provider.custom)
+    }
+
+    /// What in the operator's provider definitions this kage cannot take, one
+    /// problem each, in the words validation uses.
+    ///
+    /// Checked when the daemon starts and on every reload, since only a probe
+    /// knows the list. A provider a plugin registers is never written for kage,
+    /// so it is not held to the list.
+    pub fn refuses(&self, defined: &Map<String, Value>) -> Vec<String> {
+        let mut problems = Vec::new();
+        for (name, definition) in defined {
+            if definition.get("extension").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
+            if self.reserves(name) {
+                problems.push(format!(
+                    "agent.providers.{name} is named for a provider kage reserves, which takes \
+                     neither an override nor a custom provider; rename it"
+                ));
+                continue;
+            }
+            let api = self.get(name).map(|provider| provider.api.as_str());
+            if let Some(api) = api.filter(|api| NO_IMAGES_APIS.contains(api))
+                && definition.get("images").is_some()
+            {
+                problems.push(format!(
+                    "agent.providers.{name}.images cannot use kage's {name} provider, which \
+                     speaks the {api} API: the image tool reaches only OpenAI-compatible \
+                     providers"
+                ));
+            }
+        }
+        problems
     }
 }
 

@@ -245,7 +245,7 @@ impl PodmanSandbox {
                 reasons: vec![format!("in {}, {reason}", self.config.image)],
             }
         })?;
-        self.kage_providers.keep(kage_providers);
+        self.kage_providers.keep(kage_providers.clone());
 
         let notes = vec![
             format!(
@@ -279,6 +279,7 @@ impl PodmanSandbox {
             backend: SandboxBackend::Podman,
             gaps: Vec::new(),
             notes,
+            kage_providers,
         })
     }
 

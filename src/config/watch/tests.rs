@@ -9,6 +9,7 @@ use super::{AfterReload, POLL, looks_changed, reload, stamp, watch};
 use crate::config::live::{LiveConfig, Reloaded};
 use crate::config::load::{Environment, load_config};
 use crate::log::{LogFields, LogLevel, Logger};
+use crate::sandbox::kage_providers::as_installed;
 use serde_json::json;
 
 /// What a recording logger kept, shared with the test that reads it.
@@ -86,7 +87,7 @@ fn a_file_caught_mid_write_leaves_the_daemon_running_on_what_it_had() {
 
     // What an editor leaves behind for a moment: a file cut off part way.
     std::fs::write(&path, "{\"chat\": {\"token\": \"a.tok").expect("the file is truncated");
-    let outcome = reload(&live, &path, &env(), &log);
+    let outcome = reload(&live, &path, &env(), &as_installed(), &log);
 
     assert!(matches!(outcome, Reloaded::Rejected(_)), "{outcome:?}");
     assert_eq!(
@@ -108,11 +109,35 @@ fn a_file_that_says_something_impossible_is_refused_rather_than_applied() {
 
     std::fs::write(&path, json!({ "agent": { "provider": "zai" } }).to_string())
         .expect("the file is written");
-    let outcome = reload(&live, &path, &env(), &log);
+    let outcome = reload(&live, &path, &env(), &as_installed(), &log);
 
     assert!(matches!(outcome, Reloaded::Rejected(_)), "{outcome:?}");
     assert_eq!(live.get().agent.model.as_deref(), Some("first"));
     assert_eq!(live.get().chat.channel_id, "chan");
+}
+
+/// An edit naming a provider the installed kage reserves would end every
+/// session it started, so it is refused like any invalid file.
+#[test]
+fn an_edit_kage_would_refuse_is_refused_and_says_why() {
+    let dir = tempfile::tempdir().expect("a temp directory");
+    let path = written(dir.path(), "first");
+    let live = started_from(&path);
+    let (log, lines) = recording();
+
+    let mut edited: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("json");
+    edited["agent"]["providers"]["acp"] = json!({ "credential": "k" });
+    std::fs::write(&path, edited.to_string()).expect("the file is written");
+    let outcome = reload(&live, &path, &env(), &as_installed(), &log);
+
+    assert!(matches!(outcome, Reloaded::Rejected(_)), "{outcome:?}");
+    assert!(!live.get().agent.providers.contains_key("acp"));
+    assert!(
+        said(&lines).contains("provider kage reserves"),
+        "{}",
+        said(&lines)
+    );
 }
 
 /// The point of the whole thing: a good edit is in force without a restart.
@@ -124,7 +149,7 @@ fn a_good_edit_is_in_force_on_the_next_reload() {
     let (log, lines) = recording();
 
     assert_eq!(
-        reload(&live, &path, &env(), &log),
+        reload(&live, &path, &env(), &as_installed(), &log),
         Reloaded::Unchanged,
         "the file the daemon started on is not a change to it"
     );
@@ -132,7 +157,10 @@ fn a_good_edit_is_in_force_on_the_next_reload() {
 
     // And a later one, as a second edit would be.
     let _ = written(dir.path(), "a-much-longer-model-name-than-before");
-    assert_eq!(reload(&live, &path, &env(), &log), Reloaded::Changed);
+    assert_eq!(
+        reload(&live, &path, &env(), &as_installed(), &log),
+        Reloaded::Changed
+    );
     assert_eq!(
         live.get().agent.model.as_deref(),
         Some("a-much-longer-model-name-than-before"),
@@ -150,7 +178,10 @@ fn a_save_that_changes_nothing_is_not_reported_as_a_reload() {
     let live = started_from(&path);
     let (log, lines) = recording();
 
-    assert_eq!(reload(&live, &path, &env(), &log), Reloaded::Unchanged);
+    assert_eq!(
+        reload(&live, &path, &env(), &as_installed(), &log),
+        Reloaded::Unchanged
+    );
     assert!(!said(&lines).contains("reloaded"));
 }
 
@@ -167,6 +198,7 @@ fn a_file_that_is_gone_is_refused_rather_than_fatal() {
         &live,
         &dir.path().join("absent.json").display().to_string(),
         &env(),
+        &as_installed(),
         &log,
     );
 
@@ -196,7 +228,7 @@ fn every_reason_a_reload_was_refused_reaches_the_log() {
     )
     .expect("the file is written");
     let path = dir.path().join("config.json").display().to_string();
-    let outcome = reload(&live, &path, &env(), &log);
+    let outcome = reload(&live, &path, &env(), &as_installed(), &log);
 
     let Reloaded::Rejected(problems) = outcome else {
         panic!("the reload was expected to be refused: {outcome:?}");
@@ -277,6 +309,7 @@ async fn the_loop_applies_an_edit_to_the_configuration_it_was_given() {
         live.clone(),
         path.clone(),
         env(),
+        as_installed(),
         log,
         every,
         Arc::new(move || {
@@ -342,7 +375,15 @@ async fn a_refused_change_does_not_reach_what_is_derived_from_it() {
     });
 
     let every = Duration::from_millis(20);
-    let handle = watch(live.clone(), path.clone(), env(), log, every, after);
+    let handle = watch(
+        live.clone(),
+        path.clone(),
+        env(),
+        as_installed(),
+        log,
+        every,
+        after,
+    );
     // The loop stamps the file when it starts, so the cut has to go in after
     // that or the watcher is only ever handed a file it never saw change.
     tokio::time::sleep(every * 3).await;
