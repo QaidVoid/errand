@@ -193,6 +193,9 @@ const MAX_IMAGES_PER_TURN: usize = 4;
 /// ending otherwise reads as final, and the recovery went unnoticed.
 const CONTINUE_HINT: &str = "Post here to continue on a fresh sandbox.";
 
+/// Where the agent's recorded session id is kept in the state directory.
+const KAGE_SESSION_FILENAME: &str = "kage-session";
+
 /// Tool outputs kept so a delegation can name one, newest first.
 const MAX_REMEMBERED_OUTPUTS: usize = 50;
 
@@ -2571,7 +2574,7 @@ impl Running {
     /// The agent's recorded session, when a previous start stored one, so a
     /// revived session reopens its history instead of starting blank.
     fn kage_session_id(&self) -> Option<String> {
-        match paths::read_beneath(&self.options.state_dir, "kage-session") {
+        match paths::read_beneath(&self.options.state_dir, KAGE_SESSION_FILENAME) {
             Ok(id) => Some(id.trim().to_owned()).filter(|id| !id.is_empty()),
             Err(error) => {
                 if error.kind() != std::io::ErrorKind::NotFound {
@@ -2580,7 +2583,8 @@ impl Running {
                         &fields([
                             (
                                 "path",
-                                format!("{}/kage-session", self.options.state_dir).into(),
+                                format!("{}/{KAGE_SESSION_FILENAME}", self.options.state_dir)
+                                    .into(),
                             ),
                             ("detail", error.to_string().into()),
                         ]),
@@ -2591,13 +2595,18 @@ impl Running {
         }
     }
 
-    /// Stores the agent's recording id in the agent-writable state directory.
-    /// A planted symlink is refused, so the recording is not stored through it.
+    /// Stores the agent's recorded session in the state directory, where the
+    /// next start finds it. The agent can write that directory, so a link
+    /// planted at the name makes the write fail and nothing is stored.
     fn remember_kage_session_id(&self) {
         let Some(id) = self.client.as_ref().and_then(AgentClient::agent_session_id) else {
             return;
         };
-        let _ = paths::write_beneath(&self.options.state_dir, "kage-session", id.as_bytes());
+        let _ = paths::write_beneath(
+            &self.options.state_dir,
+            KAGE_SESSION_FILENAME,
+            id.as_bytes(),
+        );
     }
 
     /// Records what the project already held, then watches how much the

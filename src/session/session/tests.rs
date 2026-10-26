@@ -779,6 +779,7 @@ struct SessionTestCase {
     start: bool,
     /// Starts as a revival: the agent reopens this recorded session.
     resume_kage_session: Option<String>,
+    /// Plants the recording as a link to a host file instead of a file.
     link_kage_session: bool,
 }
 
@@ -804,13 +805,16 @@ impl Default for SessionTestCase {
 }
 
 /// Seeds the agent's recorded session for a revival, so the start reopens
-/// its history instead of opening a new recording.
+/// its history instead of opening a new recording. With a link asked for,
+/// the recording sits in a host file and the state directory holds a link
+/// to it.
 fn seed_kage_session(state_dir: &std::path::Path, case: &SessionTestCase) {
     if let Some(previous) = case.resume_kage_session.as_ref() {
         if case.link_kage_session {
             let target = state_dir.parent().unwrap().join("host-marker");
-            std::fs::write(&target, previous).unwrap();
-            std::os::unix::fs::symlink(target, state_dir.join("kage-session")).unwrap();
+            std::fs::write(&target, previous).expect("seeded host file");
+            std::os::unix::fs::symlink(target, state_dir.join("kage-session"))
+                .expect("seeded link");
         } else {
             std::fs::write(state_dir.join("kage-session"), previous).expect("seeded recording");
         }
