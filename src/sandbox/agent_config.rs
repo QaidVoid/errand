@@ -16,6 +16,7 @@ use crate::config::schema::PluginConfig;
 use crate::config::schema::defaults::{CUSTOM_PROVIDER_KIND, CUSTOM_PROVIDER_KINDS};
 use crate::log::{Logger, fields};
 use crate::sandbox::backend::{Denials, KAGE_DIR, SandboxLaunch, SandboxLaunchError};
+use crate::sandbox::kage_providers::KageProviders;
 use crate::sandbox::paths;
 
 /// Where the broker is reached for one provider.
@@ -28,36 +29,6 @@ pub struct BrokeredProvider {
     /// The base URL the session is pointed at.
     pub base_url: String,
 }
-
-/// Provider ids kage already knows, from its built-ins (`anthropic`,
-/// `openai`, `openai-responses`, `google`) and its `COMPAT_PROVIDERS` table
-/// at the pinned kage. One of these is overridden in place, keeping its
-/// catalog models; anything else is registered as a custom provider with the
-/// store's models. A kage that learns a new id takes the custom path for it,
-/// which still reaches it but without catalog pricing, and says so in its
-/// startup warning.
-const KAGE_KNOWN: [&str; 20] = [
-    "anthropic",
-    "openai",
-    "openai-responses",
-    "google",
-    "zai",
-    "zai-coding-plan",
-    "zhipuai-coding-plan",
-    "deepseek",
-    "groq",
-    "mistral",
-    "cerebras",
-    "xai",
-    "openrouter",
-    "fireworks-ai",
-    "moonshotai",
-    "kimi-for-coding",
-    "xiaomi",
-    "xiaomi-token-plan-ams",
-    "xiaomi-token-plan-cn",
-    "xiaomi-token-plan-sgp",
-];
 
 /// A TOML basic string: backslashes, quotes, and line breaks escaped.
 fn toml_string(value: &str) -> String {
@@ -231,13 +202,18 @@ pub struct DroppedProvider {
 }
 
 impl DroppedProvider {
-    /// The report for a provider the writer leaves out, or nothing for the
-    /// image-only shape: an images provider with an endpoint and no models
-    /// is reached by the image tool through its endpoint, so nothing is
-    /// missing.
-    fn of(name: &str, definition: Option<&Map<String, Value>>, has_endpoint: bool) -> Option<Self> {
+    /// The report for a provider the writer leaves out, `known` when kage
+    /// overrides it, or nothing for the image-only shape: an images provider
+    /// with an endpoint and no models is reached by the image tool through its
+    /// endpoint, so nothing is missing.
+    fn of(
+        name: &str,
+        definition: Option<&Map<String, Value>>,
+        known: bool,
+        has_endpoint: bool,
+    ) -> Option<Self> {
         let images = definition.is_some_and(|fields| fields.contains_key("images"));
-        let reason = if KAGE_KNOWN.contains(&name) {
+        let reason = if known {
             Missing::Credential
         } else if has_endpoint {
             Missing::Models
@@ -273,15 +249,34 @@ impl Missing {
     }
 }
 
+/// The model declarations a custom provider is written with: the ones its
+/// definition lists, then the host store's for that provider.
+fn custom_models(
+    defined: &Map<String, Value>,
+    built_in: &BTreeMap<String, Vec<Value>>,
+    name: &str,
+) -> Vec<String> {
+    defined
+        .get(name)
+        .and_then(|definition| definition.get("models"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .chain(built_in.get(name).into_iter().flatten())
+        .filter_map(kage_model)
+        .collect()
+}
+
 /// The kage provider configuration for one session, as TOML.
 ///
 /// Brokered providers point at the broker with the nonce's variable named,
 /// so what the file holds is worth nothing anywhere but this broker.
 /// Operator definitions contribute their base URL; their credentials never
-/// enter the file, traveling in the environment instead. Providers kage does
-/// not know are registered custom with the store's models: the id, the name,
-/// and, when the store says them, the context window, the output limit, the
-/// inputs, and the thinking levels. A `kind` on the definition says which
+/// enter the file, traveling in the environment instead. A provider `kage`
+/// says it overrides keeps kage's own models, and any other is registered
+/// custom with the store's models: the id, the name, and, when the store says
+/// them, the context window, the output limit, the inputs, and the thinking
+/// levels. A `kind` on the definition says which
 /// wire protocol they speak, defaulting to `openai`. A provider an
 /// extension registers (`extension: true`) is left out entirely: the plugin
 /// brings its own endpoint, and writing errand's would only disagree with
@@ -293,6 +288,7 @@ pub fn kage_config(
     credential_names: &BTreeMap<String, String>,
     plugins: &[PluginConfig],
     denied: &Denials,
+    kage: &KageProviders,
 ) -> KageConfig {
     let mut dropped = Vec::new();
     let mut out = String::from(
@@ -323,30 +319,20 @@ pub fn kage_config(
                 .filter(|url| !url.is_empty())
                 .map(str::to_owned)
         });
-        if through.is_none() && definition.is_none() {
+        // Validation refuses an id kage reserves, at startup and on reload.
+        // One reaching here anyway is left out rather than written into a
+        // file kage would refuse whole.
+        if (through.is_none() && definition.is_none()) || kage.reserves(name) {
             continue;
         }
         if let Some(url) = &base_url {
             endpoints.insert(name.as_str(), url.clone());
         }
-        let known = KAGE_KNOWN.contains(&name.as_str());
-        let models: Vec<String> = if known {
+        let known = kage.overrides(name);
+        let models = if known {
             Vec::new()
         } else {
-            defined
-                .get(name)
-                .and_then(|definition| definition.get("models"))
-                .and_then(Value::as_array)
-                .map(|written| written.iter().filter_map(kage_model).collect::<Vec<_>>())
-                .unwrap_or_default()
-                .into_iter()
-                .chain(
-                    built_in
-                        .get(name)
-                        .map(|known| known.iter().filter_map(kage_model).collect::<Vec<_>>())
-                        .unwrap_or_default(),
-                )
-                .collect()
+            custom_models(defined, built_in, name)
         };
         // A custom provider kage does not know must declare both an endpoint and
         // at least one model: it refuses the whole file when either is
@@ -354,14 +340,18 @@ pub fn kage_config(
         // One errand cannot describe completely is left out instead. A known
         // provider needs neither, since kage already knows its endpoint and
         // its models, so a variable alone is enough to have it written.
-        let known = KAGE_KNOWN.contains(&name.as_str());
         let worth_writing = if known {
             base_url.is_some() || credential_names.contains_key(name)
         } else {
             base_url.is_some() && !models.is_empty()
         };
         if !worth_writing {
-            dropped.extend(DroppedProvider::of(name, definition, base_url.is_some()));
+            dropped.extend(DroppedProvider::of(
+                name,
+                definition,
+                known,
+                base_url.is_some(),
+            ));
             continue;
         }
         written.push(name.as_str());
@@ -514,6 +504,7 @@ pub async fn write_agent_config(
     built_in: &BTreeMap<String, Vec<Value>>,
     credential_names: &BTreeMap<String, String>,
     log: &Logger,
+    kage: &KageProviders,
 ) -> Result<(), SandboxLaunchError> {
     let failed = |error: std::io::Error| SandboxLaunchError(error.to_string());
     // The host side of `{KAGE_HOME}`, with kage's own `kage` segment under
@@ -529,6 +520,7 @@ pub async fn write_agent_config(
         credential_names,
         &launch.plugins,
         &launch.denied,
+        kage,
     );
     for provider in &body.dropped {
         log.warn(

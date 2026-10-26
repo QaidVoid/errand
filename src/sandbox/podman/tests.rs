@@ -13,6 +13,7 @@ use crate::config::size::parse_size;
 use crate::log::{LogFields, Logger};
 use crate::sandbox::Run;
 use crate::sandbox::backend::{Denials, SYSTEM_LABEL, SandboxLaunch};
+use crate::sandbox::kage_providers::INSTALLED_JSON;
 
 /// Flags that would undo the isolation this backend exists to provide.
 const FORBIDDEN_ARGS: [&str; 8] = [
@@ -105,6 +106,8 @@ fn fake_run(answers: BTreeMap<String, Answer>) -> (Run, Calls) {
                 stdout: stdout.unwrap_or_else(|| {
                     if key == "info" {
                         "true".to_owned()
+                    } else if key == "run" && args.iter().any(|arg| arg == "providers") {
+                        INSTALLED_JSON.to_owned()
                     } else {
                         String::new()
                     }
@@ -332,6 +335,54 @@ async fn a_healthy_host_reports_what_it_enforces_and_no_gaps() {
             .join("\n")
             .contains("measured rather than enforced")
     );
+}
+
+/// The list comes from the image's kage, which is the one sessions run, and
+/// the probe keeps it for every launch.
+#[tokio::test]
+async fn the_images_own_kage_is_asked_which_providers_it_knows() {
+    let (run, calls) = fake_run(BTreeMap::new());
+    let sandbox = PodmanSandbox::new(config(), silent(), run, BTreeMap::new());
+
+    sandbox.probe().await.expect("a report");
+
+    let taken = calls.lock().unwrap();
+    let asked = taken
+        .iter()
+        .find(|call| call.first().map(String::as_str) == Some("run"))
+        .expect("kage was asked");
+    let image = &config().image;
+    assert!(
+        asked.ends_with(&[
+            image.clone(),
+            "kage".to_owned(),
+            "providers".to_owned(),
+            "--json".to_owned()
+        ]),
+        "{asked:?}"
+    );
+    assert!(asked.contains(&"--network=none".to_owned()), "{asked:?}");
+    assert!(
+        sandbox
+            .kage_providers
+            .get()
+            .expect("kept")
+            .overrides("openai")
+    );
+}
+
+/// An image whose kage predates the command cannot be written for, so the
+/// backend refuses to start and names the image.
+#[tokio::test]
+async fn an_image_whose_kage_cannot_list_its_providers_is_refused() {
+    let mut answers = BTreeMap::new();
+    answers.insert("run".to_owned(), (Some(2), Some(String::new())));
+    let (run, _calls) = fake_run(answers);
+    let sandbox = PodmanSandbox::new(config(), silent(), run, BTreeMap::new());
+
+    let error = sandbox.probe().await.expect_err("refused").to_string();
+    assert!(error.contains(&config().image), "{error}");
+    assert!(error.contains("update kage"), "{error}");
 }
 
 #[tokio::test]

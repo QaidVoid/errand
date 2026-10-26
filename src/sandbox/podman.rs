@@ -28,6 +28,7 @@ use crate::sandbox::backend::{
     SandboxLaunch, SandboxLaunchError, SandboxUnavailableError, WORKSPACE_PATH, agent_command,
     agent_memory_path, disk_tmp_dir, fresh_disk_tmp, sandbox_name,
 };
+use crate::sandbox::kage_providers::{KageProviders, LIST_ARGS, Probed};
 use crate::sandbox::spawn::spawn_agent;
 
 /// Network arguments that leave the model provider reachable and the host not.
@@ -141,6 +142,7 @@ pub struct PodmanSandbox {
     log: Logger,
     run: super::Run,
     built_in: BTreeMap<String, Vec<Value>>,
+    kage_providers: Probed,
 }
 
 /// Runs the installed tool. Injected for tests.
@@ -185,6 +187,7 @@ impl PodmanSandbox {
             log,
             run,
             built_in,
+            kage_providers: Probed::default(),
         }
     }
 
@@ -231,6 +234,18 @@ impl PodmanSandbox {
                 reasons,
             });
         }
+
+        // The image's kage, not the host's: it is the one sessions run, and
+        // the two need not be the same build.
+        let mut ask = vec!["run", "--rm", "--network=none", &self.config.image, "kage"];
+        ask.extend(LIST_ARGS);
+        let kage_providers = KageProviders::from_run(&self.call(&ask).await).map_err(|reason| {
+            SandboxUnavailableError {
+                backend: SandboxBackend::Podman,
+                reasons: vec![format!("in {}, {reason}", self.config.image)],
+            }
+        })?;
+        self.kage_providers.keep(kage_providers);
 
         let notes = vec![
             format!(
@@ -283,6 +298,7 @@ impl PodmanSandbox {
             &self.built_in,
             &launch.credential_names,
             &self.log,
+            &self.kage_providers.get()?,
         )
         .await?;
         let name = sandbox_name(&launch.session_id);

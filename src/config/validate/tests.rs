@@ -1426,6 +1426,7 @@ fn denied_tools_are_read_into_the_configuration() {
 fn a_denied_command_reaches_the_agent_as_a_rule_it_can_match() {
     use crate::sandbox::agent_config::kage_config;
     use crate::sandbox::backend::Denials;
+    use crate::sandbox::kage_providers::as_installed;
 
     let config = kage_config(
         &serde_json::Map::new(),
@@ -1437,6 +1438,7 @@ fn a_denied_command_reaches_the_agent_as_a_rule_it_can_match() {
             commands: vec!["rm -rf *".to_owned()],
             tools: vec!["web_search".to_owned()],
         },
+        &as_installed(),
     )
     .toml;
 

@@ -24,6 +24,8 @@ pub mod backend;
 pub mod bailey;
 /// The egress broker every confined session dials out through.
 pub mod broker;
+/// The provider ids the installed kage knows.
+pub mod kage_providers;
 /// Whether a path stays inside the directory a session is confined to.
 pub mod paths;
 /// The podman backend: a session in a container.

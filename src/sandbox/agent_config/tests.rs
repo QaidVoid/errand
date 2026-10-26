@@ -8,6 +8,7 @@ use super::{BrokeredProvider, kage_config, kage_model, write_agent_config};
 use crate::config::schema::PluginConfig;
 use crate::log::{LogFields, Logger};
 use crate::sandbox::backend::{Denials, SandboxLaunch};
+use crate::sandbox::kage_providers::as_installed;
 
 /// A logger that drops every line, for tests that do not read the log.
 fn silent() -> Logger {
@@ -37,6 +38,7 @@ fn a_brokered_known_provider_is_overridden_with_the_brokers_url() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
 
@@ -66,6 +68,7 @@ fn a_known_provider_with_a_key_and_no_endpoint_is_written() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
 
@@ -99,6 +102,7 @@ fn a_brokered_unknown_provider_is_registered_custom_with_its_models() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
 
@@ -137,6 +141,7 @@ fn an_operator_base_url_passes_through_less_the_credential() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
 
@@ -177,6 +182,7 @@ fn a_model_entry_carries_its_sizes_inputs_and_levels() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
 
@@ -231,6 +237,7 @@ fn a_bare_model_entry_writes_no_sizes_inputs_or_levels() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
 
@@ -266,6 +273,7 @@ fn an_unusable_output_limit_is_left_out() {
             &BTreeMap::new(),
             &[],
             &Denials::default(),
+            &as_installed(),
         )
         .toml;
 
@@ -292,6 +300,7 @@ fn a_custom_provider_without_a_kind_speaks_openai() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
 
@@ -319,6 +328,7 @@ fn a_custom_provider_naming_anthropic_is_written_anthropic() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
 
@@ -347,6 +357,7 @@ fn a_kind_on_a_known_provider_is_left_out() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
 
@@ -367,6 +378,7 @@ fn a_provider_with_nothing_to_say_is_left_out() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
 
@@ -400,6 +412,7 @@ fn a_custom_provider_kage_could_not_load_is_left_out() {
             &names,
             &[],
             &Denials::default(),
+            &as_installed(),
         )
         .toml;
         assert!(!config.contains("gateway"), "{case}: {config}");
@@ -430,6 +443,7 @@ async fn a_plugin_is_copied_and_granted() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &silent(),
+        &as_installed(),
     )
     .await
     .expect("written");
@@ -466,6 +480,7 @@ async fn a_removed_plugin_stops_loading() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &silent(),
+        &as_installed(),
     )
     .await
     .expect("written");
@@ -505,6 +520,7 @@ async fn two_plugins_copying_to_one_name_are_refused() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &silent(),
+        &as_installed(),
     )
     .await
     .expect_err("a name taken twice is refused");
@@ -543,9 +559,16 @@ async fn the_written_file_holds_endpoints_and_no_keys() {
         providers,
         ..SandboxLaunch::default()
     };
-    write_agent_config(&launch, &brokered, &BTreeMap::new(), &names, &silent())
-        .await
-        .expect("written");
+    write_agent_config(
+        &launch,
+        &brokered,
+        &BTreeMap::new(),
+        &names,
+        &silent(),
+        &as_installed(),
+    )
+    .await
+    .expect("written");
 
     let body = std::fs::read_to_string(state.join("kage/kage/config.toml")).expect("the config");
     assert!(body.contains("[providers.anthropic]"), "{body}");
@@ -569,6 +592,7 @@ fn no_tool_is_written_twice_whatever_the_operator_denies() {
         &BTreeMap::new(),
         &[],
         &denied,
+        &as_installed(),
     )
     .toml;
 
@@ -622,6 +646,7 @@ fn denying_the_shell_tool_takes_no_command_patterns_with_it() {
         &BTreeMap::new(),
         &[],
         &denied,
+        &as_installed(),
     )
     .toml;
 
@@ -647,6 +672,7 @@ fn only_denials_are_written() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
     assert!(!config.contains("[permissions"), "{config}");
@@ -662,6 +688,7 @@ fn only_denials_are_written() {
         &BTreeMap::new(),
         &[],
         &denied,
+        &as_installed(),
     )
     .toml;
     assert!(
@@ -706,6 +733,7 @@ fn an_images_only_provider_is_written_for_the_image_tool_alone() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     );
     assert!(written.dropped.is_empty(), "{:?}", written.dropped);
     let config = written.toml;
@@ -745,6 +773,7 @@ fn an_unbrokered_images_provider_points_the_tool_at_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     );
     assert!(written.dropped.is_empty(), "{:?}", written.dropped);
     let config = written.toml;
@@ -786,6 +815,7 @@ fn a_chat_provider_carrying_images_lends_the_tool_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
     assert!(config.contains("[providers.custom.gateway]"), "{config}");
@@ -811,6 +841,7 @@ fn a_chat_provider_carrying_images_lends_the_tool_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
     assert!(config.contains("[providers.openai]"), "{config}");
@@ -838,6 +869,7 @@ fn no_image_tool_without_images_or_an_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
     assert!(!config.contains("[tools.generate_image]"), "{config}");
@@ -853,6 +885,7 @@ fn no_image_tool_without_images_or_an_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
     assert!(!config.contains("[tools.generate_image]"), "{config}");
@@ -876,6 +909,7 @@ fn google_is_overridden_in_place_with_a_broker_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
     assert!(config.contains("[providers.google]"), "{config}");
@@ -901,6 +935,7 @@ fn google_with_only_a_key_is_written() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
     assert!(config.contains("[providers.google]"), "{config}");
@@ -928,6 +963,7 @@ fn gemini_with_only_a_key_is_not_written() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
     assert!(!config.contains("gemini"), "{config}");
@@ -951,6 +987,7 @@ fn gemini_with_an_endpoint_and_models_is_registered_custom() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        &as_installed(),
     )
     .toml;
     assert!(config.contains("[providers.custom.gemini]"), "{config}");
@@ -993,6 +1030,7 @@ fn dropped_provider_declarations_report_fixed_reasons_without_credentials() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     );
     let reported: Vec<(&str, &super::Missing, bool)> = config
         .dropped
@@ -1040,6 +1078,7 @@ async fn omitted_providers_are_logged_at_launch_without_secret_values() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &log,
+        &as_installed(),
     )
     .await
     .unwrap();
@@ -1074,6 +1113,7 @@ fn blank_image_endpoints_use_builtin_credentials_or_report_missing_endpoints() {
         &names,
         &[],
         &Denials::default(),
+        &as_installed(),
     );
     assert!(config.toml.contains("[providers.openai]"));
     assert!(config.toml.contains("provider = \"openai\""));
@@ -1081,4 +1121,78 @@ fn blank_image_endpoints_use_builtin_credentials_or_report_missing_endpoints() {
     assert_eq!(config.dropped.len(), 1);
     assert_eq!(config.dropped[0].name, "pictures");
     assert_eq!(config.dropped[0].reason, super::Missing::Endpoint);
+}
+
+/// The session's config for `defined`, written by the list kage reported.
+fn written_for(defined: &serde_json::Value) -> String {
+    let defined = defined.as_object().expect("an object").clone();
+    let names = defined
+        .keys()
+        .map(|name| (name.clone(), format!("KEY_{}", name.replace('-', "_"))))
+        .collect();
+    kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    )
+    .toml
+}
+
+/// A catalog id kage lists is overridden in place and keeps kage's own
+/// models, including ones a copy of the list kept in errand was missing.
+#[test]
+fn a_catalog_provider_kage_lists_is_overridden() {
+    let config = written_for(&json!({
+        "kenari": { "credential": "k" },
+        "opencode-go": { "credential": "k", "baseUrl": "https://relay.example/v1" },
+    }));
+
+    assert!(config.contains("[providers.kenari]"), "{config}");
+    assert!(config.contains("[providers.opencode-go]"), "{config}");
+    assert!(!config.contains("custom"), "{config}");
+}
+
+/// An id kage no longer lists is written as a custom provider with its
+/// models. Written as an override, kage would refuse the whole file.
+#[test]
+fn an_id_kage_does_not_list_is_written_custom() {
+    let config = written_for(&json!({
+        "openai-responses": {
+            "credential": "k",
+            "baseUrl": "https://api.openai.example/v1",
+            "models": [{ "id": "gpt-x" }],
+        },
+    }));
+
+    assert!(
+        config.contains("[providers.custom.openai-responses]"),
+        "{config}"
+    );
+    assert!(!config.contains("[providers.openai-responses]"), "{config}");
+    assert!(config.contains(r#"id = "gpt-x""#), "{config}");
+}
+
+/// An id kage takes under neither table is left out, so the other providers
+/// still reach the session.
+#[test]
+fn an_id_kage_reserves_is_left_out() {
+    let config = written_for(&json!({
+        "acp": {
+            "credential": "k",
+            "baseUrl": "https://acp.example/v1",
+            "models": [{ "id": "m" }],
+        },
+        "gw": {
+            "credential": "k",
+            "baseUrl": "https://gw.example/v1",
+            "models": [{ "id": "m" }],
+        },
+    }));
+
+    assert!(!config.contains("acp"), "{config}");
+    assert!(config.contains("[providers.custom.gw]"), "{config}");
 }

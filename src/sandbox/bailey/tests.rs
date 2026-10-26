@@ -13,6 +13,7 @@ use crate::config::schema::{EgressConfig, EgressMode, SandboxBackend, SandboxCon
 use crate::log::{LogFields, Logger};
 use crate::sandbox::Run;
 use crate::sandbox::backend::{Denials, SandboxLaunch};
+use crate::sandbox::kage_providers::INSTALLED_JSON;
 use tempfile::TempDir;
 
 fn config() -> SandboxConfig {
@@ -420,6 +421,80 @@ fn fake_agent(name: &str) -> Option<String> {
     (name == "kage").then(|| "/usr/local/bin/kage".to_owned())
 }
 
+/// Stands in for the agent's own answer to being asked which providers it
+/// knows, and records what it was run with.
+fn fake_kage(code: i32, stdout: &'static str) -> (Run, Calls) {
+    let calls: Calls = Arc::new(Mutex::new(Vec::new()));
+    let call_log = Arc::clone(&calls);
+    let run = move |args: Vec<String>, _cwd: Option<String>| {
+        call_log.lock().unwrap().push(args);
+        Box::pin(async move {
+            Ok(super::super::RunResult {
+                code,
+                stdout: stdout.to_owned(),
+                stderr: "error: unrecognized subcommand 'providers'".to_owned(),
+            })
+        }) as super::super::RunFuture<super::super::RunResult>
+    };
+    (Arc::new(run), calls)
+}
+
+/// The kage asked is the one on PATH that sessions run, and the probe keeps
+/// its answer for every launch.
+#[tokio::test]
+async fn the_hosts_own_kage_is_asked_which_providers_it_knows() {
+    let root = TempDir::new().expect("a temporary directory");
+    let (run, _calls) = fake_run(BTreeMap::new());
+    let (kage, asked) = fake_kage(0, INSTALLED_JSON);
+    let sandbox = bailey_with(
+        &config(),
+        &root.path().to_string_lossy(),
+        run,
+        BaileyOptions {
+            lookup: Some(Arc::new(fake_agent)),
+            kage: Some(kage),
+            ..BaileyOptions::default()
+        },
+    );
+
+    sandbox.probe().await.expect("a report");
+
+    assert_eq!(
+        *asked.lock().unwrap(),
+        [["/usr/local/bin/kage", "providers", "--json"]]
+    );
+    assert!(
+        sandbox
+            .kage_providers
+            .get()
+            .expect("kept")
+            .overrides("openai")
+    );
+}
+
+/// A kage too old to say which providers it knows would have its sessions
+/// written by a guess, so the backend refuses to start instead.
+#[tokio::test]
+async fn a_kage_that_cannot_list_its_providers_is_refused_at_startup() {
+    let root = TempDir::new().expect("a temporary directory");
+    let (run, _calls) = fake_run(BTreeMap::new());
+    let sandbox = bailey_with(
+        &config(),
+        &root.path().to_string_lossy(),
+        run,
+        BaileyOptions {
+            lookup: Some(Arc::new(fake_agent)),
+            kage: Some(fake_kage(2, "").0),
+            ..BaileyOptions::default()
+        },
+    );
+
+    let error = sandbox.probe().await.expect_err("refused").to_string();
+    assert!(error.contains("unrecognized subcommand"), "{error}");
+    assert!(error.contains("update kage"), "{error}");
+    assert!(sandbox.kage_providers.get().is_err());
+}
+
 /// The report must never describe a tighter boundary than the one applied.
 #[tokio::test]
 async fn extra_grants_are_named_in_what_the_backend_reports() {
@@ -437,6 +512,7 @@ async fn extra_grants_are_named_in_what_the_backend_reports() {
         run,
         BaileyOptions {
             lookup: Some(Arc::new(fake_agent)),
+            kage: Some(fake_kage(0, INSTALLED_JSON).0),
             ..BaileyOptions::default()
         },
     );
@@ -465,6 +541,7 @@ async fn variables_set_by_configuration_are_named_in_what_the_backend_reports() 
         run,
         BaileyOptions {
             lookup: Some(Arc::new(fake_agent)),
+            kage: Some(fake_kage(0, INSTALLED_JSON).0),
             ..BaileyOptions::default()
         },
     );
