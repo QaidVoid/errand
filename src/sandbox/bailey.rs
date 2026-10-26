@@ -535,6 +535,7 @@ impl BaileySandbox {
             &self.brokered_providers(),
             &self.options.built_in,
             &launch.credential_names,
+            &self.log,
         )
         .await?;
         let env = match &self.options.brokering {
@@ -584,10 +585,7 @@ impl BaileySandbox {
         // Started from the project, so the tool enters it after the pivot. It
         // is the agent's working directory, and without this the agent starts
         // in a private home rather than the project it was asked to work in.
-        let mut session_env_source = BTreeMap::new();
-        for (name, value) in std::env::vars() {
-            session_env_source.insert(name, value);
-        }
+        let session_env_source = std::env::vars().collect();
         let session_env = session_environment(
             &launch.env,
             &session_env_source,

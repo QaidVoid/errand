@@ -14,6 +14,7 @@ use serde_json::{Map, Value};
 
 use crate::config::schema::PluginConfig;
 use crate::config::schema::defaults::{CUSTOM_PROVIDER_KIND, CUSTOM_PROVIDER_KINDS};
+use crate::log::{Logger, fields};
 use crate::sandbox::backend::{Denials, KAGE_DIR, SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 
@@ -209,6 +210,69 @@ fn model_efforts(entry: &Value) -> Option<String> {
     })
 }
 
+/// The agent configuration and provider declarations it could not include.
+#[derive(Debug)]
+pub struct KageConfig {
+    /// Configuration text containing endpoints and environment variable names.
+    pub toml: String,
+    /// Providers omitted because their declarations are incomplete.
+    pub dropped: Vec<DroppedProvider>,
+}
+
+/// One provider omitted from the agent's provider table.
+#[derive(Debug)]
+pub struct DroppedProvider {
+    /// The operator's provider name, never its credential or endpoint.
+    pub name: String,
+    /// Which part of the declaration was missing.
+    pub reason: Missing,
+    /// Whether it carried `images`, so the session lacks the image tool too.
+    pub images: bool,
+}
+
+impl DroppedProvider {
+    /// The report for a provider the writer leaves out, or nothing for the
+    /// image-only shape: an images provider with an endpoint and no models
+    /// is reached by the image tool through its endpoint, so nothing is
+    /// missing.
+    fn of(name: &str, definition: Option<&Map<String, Value>>, has_endpoint: bool) -> Option<Self> {
+        let images = definition.is_some_and(|fields| fields.contains_key("images"));
+        let reason = if KAGE_KNOWN.contains(&name) {
+            Missing::Credential
+        } else if has_endpoint {
+            Missing::Models
+        } else {
+            Missing::Endpoint
+        };
+        (!(images && reason == Missing::Models)).then(|| Self {
+            name: name.to_owned(),
+            reason,
+            images,
+        })
+    }
+}
+
+/// What a provider declaration lacks for the agent to be told about it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Missing {
+    /// A provider kage knows was given neither an endpoint nor a credential.
+    Credential,
+    /// A provider kage does not know was given no endpoint.
+    Endpoint,
+    /// A provider kage does not know was given no models.
+    Models,
+}
+
+impl Missing {
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Credential => "it has neither a baseUrl nor a credential",
+            Self::Endpoint => "kage does not know this provider, so it needs a baseUrl",
+            Self::Models => "kage does not know this provider, so it needs at least one model",
+        }
+    }
+}
+
 /// The kage provider configuration for one session, as TOML.
 ///
 /// Brokered providers point at the broker with the nonce's variable named,
@@ -229,7 +293,8 @@ pub fn kage_config(
     credential_names: &BTreeMap<String, String>,
     plugins: &[PluginConfig],
     denied: &Denials,
-) -> String {
+) -> KageConfig {
+    let mut dropped = Vec::new();
     let mut out = String::from(
         "# Written by the daemon for one session. Endpoints only: credentials\n\
          # travel in the environment, with a broker's nonces swapped in.\n",
@@ -254,6 +319,8 @@ pub fn kage_config(
             definition
                 .and_then(|fields| fields.get("baseUrl"))
                 .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
                 .map(str::to_owned)
         });
         if through.is_none() && definition.is_none() {
@@ -294,6 +361,7 @@ pub fn kage_config(
             base_url.is_some() && !models.is_empty()
         };
         if !worth_writing {
+            dropped.extend(DroppedProvider::of(name, definition, base_url.is_some()));
             continue;
         }
         written.push(name.as_str());
@@ -332,7 +400,7 @@ pub fn kage_config(
     ));
     out.push_str(&plugin_capabilities(plugins));
     out.push_str(&permissions_section(denied));
-    out
+    KageConfig { toml: out, dropped }
 }
 
 /// The `[tools.generate_image]` table, for the provider whose definition
@@ -445,6 +513,7 @@ pub async fn write_agent_config(
     brokered: &BTreeMap<String, BrokeredProvider>,
     built_in: &BTreeMap<String, Vec<Value>>,
     credential_names: &BTreeMap<String, String>,
+    log: &Logger,
 ) -> Result<(), SandboxLaunchError> {
     let failed = |error: std::io::Error| SandboxLaunchError(error.to_string());
     // The host side of `{KAGE_HOME}`, with kage's own `kage` segment under
@@ -461,11 +530,29 @@ pub async fn write_agent_config(
         &launch.plugins,
         &launch.denied,
     );
+    for provider in &body.dropped {
+        log.warn(
+            if provider.images {
+                "the session runs without the image tool or a provider declaration"
+            } else {
+                "the session runs without a provider declaration"
+            },
+            &fields([
+                ("session", launch.session_id.as_str().into()),
+                ("provider", provider.name.as_str().into()),
+                ("detail", provider.reason.message().into()),
+            ]),
+        );
+    }
     // Written beneath the directory rather than by name, for the same
     // reason the policy is: the session writes here too, and a link
     // planted at the file name would redirect the write.
-    paths::write_beneath(&directory.to_string_lossy(), "config.toml", body.as_bytes())
-        .map_err(failed)?;
+    paths::write_beneath(
+        &directory.to_string_lossy(),
+        "config.toml",
+        body.toml.as_bytes(),
+    )
+    .map_err(failed)?;
     copy_plugins(&directory.join("plugins"), &launch.plugins).await
 }
 
