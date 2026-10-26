@@ -6,7 +6,13 @@ use serde_json::json;
 
 use super::{BrokeredProvider, kage_config, kage_model, write_agent_config};
 use crate::config::schema::PluginConfig;
+use crate::log::{LogFields, Logger};
 use crate::sandbox::backend::{Denials, SandboxLaunch};
+
+/// A logger that drops every line, for tests that do not read the log.
+fn silent() -> Logger {
+    Logger::new(LogFields::new(), std::sync::Arc::new(|_, _| {}))
+}
 
 /// A brokered provider kage knows is overridden in place: the broker's base
 /// URL is what changes, and the key never enters the file.
@@ -423,7 +429,7 @@ async fn a_plugin_is_copied_and_granted() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &crate::log::Logger::new(crate::log::LogFields::new(), std::sync::Arc::new(|_, _| {})),
+        &silent(),
     )
     .await
     .expect("written");
@@ -459,7 +465,7 @@ async fn a_removed_plugin_stops_loading() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &crate::log::Logger::new(crate::log::LogFields::new(), std::sync::Arc::new(|_, _| {})),
+        &silent(),
     )
     .await
     .expect("written");
@@ -498,7 +504,7 @@ async fn two_plugins_copying_to_one_name_are_refused() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &crate::log::Logger::new(crate::log::LogFields::new(), std::sync::Arc::new(|_, _| {})),
+        &silent(),
     )
     .await
     .expect_err("a name taken twice is refused");
@@ -537,15 +543,9 @@ async fn the_written_file_holds_endpoints_and_no_keys() {
         providers,
         ..SandboxLaunch::default()
     };
-    write_agent_config(
-        &launch,
-        &brokered,
-        &BTreeMap::new(),
-        &names,
-        &crate::log::Logger::new(crate::log::LogFields::new(), std::sync::Arc::new(|_, _| {})),
-    )
-    .await
-    .expect("written");
+    write_agent_config(&launch, &brokered, &BTreeMap::new(), &names, &silent())
+        .await
+        .expect("written");
 
     let body = std::fs::read_to_string(state.join("kage/kage/config.toml")).expect("the config");
     assert!(body.contains("[providers.anthropic]"), "{body}");
@@ -699,15 +699,16 @@ fn an_images_only_provider_is_written_for_the_image_tool_alone() {
         "pictures".to_owned(),
         "ERRAND_PROVIDER_PICTURES_API_KEY".to_owned(),
     )]);
-    let config = kage_config(
+    let written = kage_config(
         &defined,
         &through_broker("pictures"),
         &BTreeMap::new(),
         &names,
         &[],
         &Denials::default(),
-    )
-    .toml;
+    );
+    assert!(written.dropped.is_empty(), "{:?}", written.dropped);
+    let config = written.toml;
 
     assert!(!config.contains("[providers"), "{config}");
     assert!(
@@ -737,15 +738,16 @@ fn an_unbrokered_images_provider_points_the_tool_at_its_endpoint() {
         }),
     );
     let names = BTreeMap::from([("pictures".to_owned(), "PICTURES_KEY".to_owned())]);
-    let config = kage_config(
+    let written = kage_config(
         &defined,
         &BTreeMap::new(),
         &BTreeMap::new(),
         &names,
         &[],
         &Denials::default(),
-    )
-    .toml;
+    );
+    assert!(written.dropped.is_empty(), "{:?}", written.dropped);
+    let config = written.toml;
 
     assert!(
         config.contains(
@@ -959,6 +961,9 @@ fn gemini_with_an_endpoint_and_models_is_registered_custom() {
     assert!(!config.contains("[providers.gemini]"), "{config}");
 }
 
+/// Every provider the writer leaves out is reported with why, except the
+/// image-only shape, which the image tool reaches by its endpoint. The report
+/// names providers and fixed reasons only, never a credential.
 #[test]
 fn dropped_provider_declarations_report_fixed_reasons_without_credentials() {
     let defined = serde_json::Map::from_iter([
@@ -968,9 +973,14 @@ fn dropped_provider_declarations_report_fixed_reasons_without_credentials() {
         ),
         (
             "empty".to_owned(),
-            json!({"baseUrl": "https://images.example/v1"}),
+            json!({"baseUrl": "https://chat.example/v1"}),
+        ),
+        (
+            "drawing".to_owned(),
+            json!({"baseUrl": "https://images.example/v1", "images": {"model": "image"}}),
         ),
         ("openai".to_owned(), json!({"credential": "super-secret"})),
+        ("anthropic".to_owned(), json!({})),
     ]);
     let names = BTreeMap::from([
         ("pictures".to_owned(), "PICTURE_KEY".to_owned()),
@@ -984,21 +994,25 @@ fn dropped_provider_declarations_report_fixed_reasons_without_credentials() {
         &[],
         &Denials::default(),
     );
-    assert_eq!(config.dropped.len(), 2);
-    assert!(
-        config
-            .dropped
-            .iter()
-            .any(|d| d.name == "pictures" && d.reason == super::DropReason::NoEndpoint)
-    );
-    assert!(
-        config
-            .dropped
-            .iter()
-            .any(|d| d.name == "empty" && d.reason == super::DropReason::NoModels)
+    let reported: Vec<(&str, &super::Missing, bool)> = config
+        .dropped
+        .iter()
+        .map(|dropped| (dropped.name.as_str(), &dropped.reason, dropped.images))
+        .collect();
+    assert_eq!(
+        reported,
+        [
+            ("anthropic", &super::Missing::Credential, false),
+            ("empty", &super::Missing::Models, false),
+            ("pictures", &super::Missing::Endpoint, true),
+        ]
     );
     assert!(!format!("{config:?}").contains("super-secret"));
-    assert!(config.toml.contains("[providers.openai]"));
+    assert!(
+        config.toml.contains("[providers.openai]"),
+        "{}",
+        config.toml
+    );
 }
 
 #[tokio::test]
@@ -1006,8 +1020,8 @@ async fn omitted_providers_are_logged_at_launch_without_secret_values() {
     let root = tempfile::tempdir().unwrap();
     let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorded = std::sync::Arc::clone(&lines);
-    let log = crate::log::Logger::new(
-        crate::log::LogFields::new(),
+    let log = Logger::new(
+        LogFields::new(),
         std::sync::Arc::new(move |_, line| {
             recorded.lock().unwrap().push(line.to_owned());
         }),
@@ -1030,10 +1044,11 @@ async fn omitted_providers_are_logged_at_launch_without_secret_values() {
     .await
     .unwrap();
     let lines = lines.lock().unwrap();
-    assert_eq!(lines.len(), 1);
-    assert!(lines[0].contains("pictures"));
-    assert!(lines[0].contains("no endpoint"));
-    assert!(!lines[0].contains("super-secret"));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("without the image tool"), "{}", lines[0]);
+    assert!(lines[0].contains("pictures"), "{}", lines[0]);
+    assert!(lines[0].contains("needs a baseUrl"), "{}", lines[0]);
+    assert!(!lines[0].contains("super-secret"), "{}", lines[0]);
 }
 
 #[test]
@@ -1065,5 +1080,5 @@ fn blank_image_endpoints_use_builtin_credentials_or_report_missing_endpoints() {
     assert!(!config.toml.contains("base_url"));
     assert_eq!(config.dropped.len(), 1);
     assert_eq!(config.dropped[0].name, "pictures");
-    assert_eq!(config.dropped[0].reason, super::DropReason::NoEndpoint);
+    assert_eq!(config.dropped[0].reason, super::Missing::Endpoint);
 }

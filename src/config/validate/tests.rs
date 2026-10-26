@@ -1442,7 +1442,10 @@ fn images_can_use_an_endpoint_or_a_builtin_credential_binding() {
     for (name, extra) in [
         ("pictures", json!({"baseUrl": "https://images.example/v1"})),
         ("openai", json!({"credential": "k"})),
-        ("openai", json!({"credentialName": "IMAGE_KEY"})),
+        (
+            "openai",
+            json!({"credential": "k", "credentialName": "IMAGE_KEY"}),
+        ),
         ("openai", json!({"baseUrl": "https://images.example/v1"})),
     ] {
         let mut providers =
@@ -1451,4 +1454,39 @@ fn images_can_use_an_endpoint_or_a_builtin_credential_binding() {
         providers[name]["images"] = json!({"model": "image"});
         validate_config(&with_providers(&providers)).expect("reachable image provider");
     }
+}
+
+/// A named variable is filled from the credential, so naming one with no
+/// credential gives a session nothing to start with and is refused at load.
+#[test]
+fn a_credential_name_without_a_credential_is_refused() {
+    for definition in [
+        json!({"credentialName": "CHAT_KEY"}),
+        json!({"credentialName": "CHAT_KEY", "credential": "  "}),
+    ] {
+        let mut providers =
+            json!({"chat": {"credential": "k", "baseUrl": "https://chat.example/v1"}});
+        providers["other"] = definition;
+        let problems = problems_of(&with_providers(&providers)).join("\n");
+        assert!(
+            problems.contains("agent.providers.other.credentialName names a variable"),
+            "{problems}"
+        );
+    }
+}
+
+/// A provider a plugin registers is refused for that alone: it has no
+/// endpoint errand writes, so a second message about one would be noise.
+#[test]
+fn an_extension_images_provider_gets_only_the_plugin_refusal() {
+    let problems = problems_of(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1" },
+        "plugged": { "extension": true, "images": { "model": "image" } },
+    })))
+    .join("\n");
+    assert!(
+        problems.contains("a provider a plugin registers has none"),
+        "{problems}"
+    );
+    assert!(!problems.contains("needs a baseUrl"), "{problems}");
 }

@@ -225,36 +225,50 @@ pub struct DroppedProvider {
     /// The operator's provider name, never its credential or endpoint.
     pub name: String,
     /// Which part of the declaration was missing.
-    pub reason: DropReason,
+    pub reason: Missing,
+    /// Whether it carried `images`, so the session lacks the image tool too.
+    pub images: bool,
 }
 
 impl DroppedProvider {
-    fn new(name: &str, has_endpoint: bool) -> Self {
-        Self {
+    /// The report for a provider the writer leaves out, or nothing for the
+    /// image-only shape: an images provider with an endpoint and no models
+    /// is reached by the image tool through its endpoint, so nothing is
+    /// missing.
+    fn of(name: &str, definition: Option<&Map<String, Value>>, has_endpoint: bool) -> Option<Self> {
+        let images = definition.is_some_and(|fields| fields.contains_key("images"));
+        let reason = if KAGE_KNOWN.contains(&name) {
+            Missing::Credential
+        } else if has_endpoint {
+            Missing::Models
+        } else {
+            Missing::Endpoint
+        };
+        (!(images && reason == Missing::Models)).then(|| Self {
             name: name.to_owned(),
-            reason: if has_endpoint {
-                DropReason::NoModels
-            } else {
-                DropReason::NoEndpoint
-            },
-        }
+            reason,
+            images,
+        })
     }
 }
 
-/// Why a provider declaration cannot be written for the agent.
+/// What a provider declaration lacks for the agent to be told about it.
 #[derive(Debug, PartialEq, Eq)]
-pub enum DropReason {
-    /// No endpoint or built-in provider credential was available.
-    NoEndpoint,
-    /// A custom provider must declare at least one model.
-    NoModels,
+pub enum Missing {
+    /// A provider kage knows was given neither an endpoint nor a credential.
+    Credential,
+    /// A provider kage does not know was given no endpoint.
+    Endpoint,
+    /// A provider kage does not know was given no models.
+    Models,
 }
 
-impl DropReason {
+impl Missing {
     fn message(&self) -> &'static str {
         match self {
-            Self::NoEndpoint => "no endpoint or built-in credential is configured",
-            Self::NoModels => "a custom provider needs at least one model",
+            Self::Credential => "it has neither a baseUrl nor a credential",
+            Self::Endpoint => "kage does not know this provider, so it needs a baseUrl",
+            Self::Models => "kage does not know this provider, so it needs at least one model",
         }
     }
 }
@@ -347,7 +361,7 @@ pub fn kage_config(
             base_url.is_some() && !models.is_empty()
         };
         if !worth_writing {
-            dropped.push(DroppedProvider::new(name, base_url.is_some()));
+            dropped.extend(DroppedProvider::of(name, definition, base_url.is_some()));
             continue;
         }
         written.push(name.as_str());
@@ -518,8 +532,13 @@ pub async fn write_agent_config(
     );
     for provider in &body.dropped {
         log.warn(
-            "the session runs without a provider declaration",
+            if provider.images {
+                "the session runs without the image tool or a provider declaration"
+            } else {
+                "the session runs without a provider declaration"
+            },
             &fields([
+                ("session", launch.session_id.as_str().into()),
                 ("provider", provider.name.as_str().into()),
                 ("detail", provider.reason.message().into()),
             ]),

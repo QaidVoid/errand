@@ -33,9 +33,13 @@ kage does not know, which serves images and no chat model, is described without
 ```
 
 It is written for the image tool alone, so `!model` never offers its image
-models, and it needs a `baseUrl`: without one there is nowhere to send a call,
-and the configuration is refused at load when no credential is supplied either. A provider kage knows needs a credential or a `baseUrl`. With `sandbox.egress.mode` set to `proxy` it
-is brokered like any other provider, so the sandbox holds a nonce in place of
+models, and it needs a `baseUrl`: without one there is nowhere to send a call.
+A provider kage already knows, such as `openai`, needs a `baseUrl` or a
+`credential`. A configuration with neither is refused at load. One with a
+credential but no `baseUrl` for a provider kage does not know passes, since
+errand cannot tell it from a known one, and each session logs a warning that
+it runs without the image tool. With `sandbox.egress.mode` set to `proxy` the
+provider is brokered like any other, so the sandbox holds a nonce in place of
 its key.
 
 Only one provider may carry `images`. An `anthropic` provider cannot, since that

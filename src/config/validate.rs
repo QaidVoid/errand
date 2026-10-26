@@ -561,6 +561,21 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
                 ));
             }
         }
+        // A named variable is filled from the credential, so one without it
+        // has nothing to carry, and a session started with it cannot launch.
+        let filled = |key: &str| {
+            definition
+                .get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        };
+        if filled("credentialName") && !filled("credential") {
+            problems.add(format!(
+                "agent.providers.{name}.credentialName names a variable, but there is no \
+                 credential to put in it: add agent.providers.{name}.credential or remove \
+                 credentialName"
+            ));
+        }
         validate_images(name, definition, problems);
         match Discovery::of(name, definition) {
             Err(found) => {
@@ -642,17 +657,16 @@ fn validate_images(name: &str, definition: &Value, problems: &mut Problems) {
         ));
     }
     if definition.get("extension").and_then(Value::as_bool) != Some(true)
-        && !["baseUrl", "credential", "credentialName"]
-            .iter()
-            .any(|field| {
-                definition
-                    .get(*field)
-                    .and_then(Value::as_str)
-                    .is_some_and(|value| !value.trim().is_empty())
-            })
+        && !["baseUrl", "credential"].iter().any(|field| {
+            definition
+                .get(*field)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        })
     {
         problems.add(format!(
-            "{place} needs a baseUrl or a credential; otherwise sessions run without the image tool"
+            "{place} needs a baseUrl, or a credential when kage already knows the provider; \
+             otherwise sessions run without the image tool"
         ));
     }
     if NO_IMAGES_ENDPOINT.contains(&name.trim()) {
