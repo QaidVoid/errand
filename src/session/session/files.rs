@@ -383,6 +383,11 @@ impl Running {
                 "the agent passed the image cap, so its turn is being stopped",
                 &fields([("cap", LogValue::from(MAX_IMAGES_PER_TURN))]),
             );
+            self.image_cap_note = Some(format!(
+                "(From errand: your last turn was stopped because it generated more than \
+                 {MAX_IMAGES_PER_TURN} images. Generate at most {MAX_IMAGES_PER_TURN} images \
+                 in a turn.)"
+            ));
             self.aborting = true;
             self.abort();
             self.say(&format!(

@@ -95,6 +95,20 @@ impl FakeControls {
         self.fake.written.lock().unwrap().len()
     }
 
+    fn prompts(&self) -> Vec<String> {
+        self.written()
+            .iter()
+            .map(|line| serde_json::from_str::<Value>(line).expect("JSON"))
+            .filter(|frame| frame["method"] == "session/prompt")
+            .map(|frame| {
+                frame["params"]["prompt"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    }
+
     /// Answers the most recent request, by its numeric frame id.
     fn answer(&self, result: &Value) {
         let written = self.written();
@@ -4627,6 +4641,75 @@ async fn image_limits_interrupt_once_even_when_posting_is_disabled() {
         )
         .await;
     }
+}
+
+#[tokio::test]
+async fn the_next_prompt_says_the_image_cap_stopped_the_last_turn() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            for _ in 0..=super::MAX_IMAGES_PER_TURN {
+                harness.controls().send(&drawn_image(GENERATED_PNG));
+            }
+            settle().await;
+            harness.controls().turn_end();
+            settle().await;
+            assert_eq!(
+                harness.thread.final_reaction("m1"),
+                Some(ReactionOutcome::Interrupted)
+            );
+
+            harness
+                .session
+                .handle(message_from("continue", OWNER, "m2"))
+                .await;
+            settle().await;
+            assert_eq!(
+                harness.controls().prompts().last().unwrap(),
+                &format!(
+                    "(From errand: your last turn was stopped because it generated more than {} \
+                     images. Generate at most {} images in a turn.)\n\ncontinue",
+                    super::MAX_IMAGES_PER_TURN,
+                    super::MAX_IMAGES_PER_TURN,
+                )
+            );
+
+            harness.controls().turn_end();
+            settle().await;
+            harness
+                .session
+                .handle(message_from("next task", OWNER, "m3"))
+                .await;
+            settle().await;
+            assert_eq!(harness.controls().prompts().last().unwrap(), "next task");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_turn_that_ends_under_the_cap_carries_no_note() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            for _ in 0..super::MAX_IMAGES_PER_TURN {
+                harness.controls().send(&drawn_image(GENERATED_PNG));
+            }
+            harness.controls().turn_end();
+            settle().await;
+            assert_eq!(
+                harness.thread.final_reaction("m1"),
+                Some(ReactionOutcome::Succeeded)
+            );
+            harness
+                .session
+                .handle(message_from("continue", OWNER, "m2"))
+                .await;
+            settle().await;
+            assert_eq!(harness.controls().prompts().last().unwrap(), "continue");
+        })
+    })
+    .await;
 }
 
 #[tokio::test]
