@@ -14,10 +14,13 @@
     sessions,
     selected,
     onSelect,
+    filtered = false,
   }: {
     sessions: SessionSummary[];
     selected: string | null;
     onSelect: (id: string) => void;
+    /** Whether a filter is hiding some, which changes what an empty list means. */
+    filtered?: boolean;
   } = $props();
 
   const ordered = $derived(
@@ -76,7 +79,9 @@
 </script>
 
 <nav aria-label="Sessions">
-  {#if sessions.length === 0}
+  {#if sessions.length === 0 && filtered}
+    <p class="empty">No sessions match the filters.</p>
+  {:else if sessions.length === 0}
     <p class="empty">
       No sessions yet. Start one here, or send a message in the served channel.
     </p>

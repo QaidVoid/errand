@@ -38,6 +38,27 @@
   /** Whether this browser may start and prompt sessions. */
   let mayAct = $state(false);
   let appearanceOpen = $state(false);
+  /** Whether the list shows only this visitor's sessions, and only running ones. */
+  let onlyMine = $state(localStorage.getItem("only-mine") === "true");
+  let onlyRunning = $state(localStorage.getItem("only-running") === "true");
+
+  function setFilter(key: "only-mine" | "only-running", on: boolean): void {
+    if (key === "only-mine") onlyMine = on;
+    else onlyRunning = on;
+    localStorage.setItem(key, String(on));
+  }
+
+  /**
+   * The sessions the list shows. Mine means owned by the logged-in account,
+   * so without a login there is nobody for it to mean and it is not applied.
+   */
+  const listed = $derived(
+    sessions.filter(
+      (session) =>
+        (!onlyMine || visitor === null || session.owner === visitor.id) &&
+        (!onlyRunning || session.live),
+    ),
+  );
   /** Whether the file pane is showing, kept so the choice survives a reload. */
   let filesOpen = $state(localStorage.getItem("files-open") === "true");
 
@@ -169,9 +190,9 @@
   }
 
   function moveSession(by: number): void {
-    if (sessions.length === 0) return;
-    const at = sessions.findIndex((session) => session.id === selected);
-    const next = sessions[Math.max(0, Math.min(sessions.length - 1, at + by))];
+    if (listed.length === 0) return;
+    const at = listed.findIndex((session) => session.id === selected);
+    const next = listed[Math.max(0, Math.min(listed.length - 1, at + by))];
     if (next !== undefined && next.id !== selected) select(next.id);
   }
 
@@ -305,7 +326,9 @@
     // The address wins over the first in the list, so a reload lands back on
     // the session that was open rather than on whichever sorts first.
     const asked = inAddress();
-    select(asked !== null && sessions.some((session) => session.id === asked) ? asked : sessions[0]!.id);
+    // Otherwise the first the list shows, so a filter decides what opens too.
+    const first = listed[0] ?? sessions[0]!;
+    select(asked !== null && sessions.some((session) => session.id === asked) ? asked : first.id);
   }
 
   function select(id: string, fromAddress = false): void {
@@ -496,7 +519,31 @@
       </button>
     {/if}
 
-    <SessionList {sessions} {selected} onSelect={select} />
+    {#if sessions.length > 0}
+      <div class="filters" role="group" aria-label="Show only">
+        {#if visitor !== null}
+          <button
+            class:on={onlyMine}
+            aria-pressed={onlyMine}
+            title="Only sessions you started"
+            onclick={() => setFilter("only-mine", !onlyMine)}>mine</button
+          >
+        {/if}
+        <button
+          class:on={onlyRunning}
+          aria-pressed={onlyRunning}
+          title="Only sessions with a sandbox running"
+          onclick={() => setFilter("only-running", !onlyRunning)}>running</button
+        >
+      </div>
+    {/if}
+
+    <SessionList
+      sessions={listed}
+      {selected}
+      onSelect={select}
+      filtered={listed.length < sessions.length}
+    />
 
     <footer class="account">
       {#if visitor !== null}
@@ -956,6 +1003,31 @@
 
   .new :global(svg) {
     color: var(--accent);
+  }
+
+  .filters {
+    display: flex;
+    gap: 4px;
+    padding: 0 16px 2px;
+  }
+
+  .filters button {
+    padding: 2px 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 11.5px;
+    color: var(--faint);
+  }
+
+  .filters button:hover {
+    color: var(--ink);
+    border-color: var(--line-strong);
+  }
+
+  .filters button.on {
+    color: var(--accent);
+    border-color: var(--accent-bd);
+    background: var(--accent-soft);
   }
 
   .account {
