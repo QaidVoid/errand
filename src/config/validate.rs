@@ -15,6 +15,7 @@ use crate::config::schema::{
     self, AgentConfig, ChatConfig, Config, ConfigError, DelegateConfig, EgressConfig, EgressMode,
     GithubConfig, GithubTrigger, LimitsConfig, NetworkMode, OutputConfig, PluginConfig,
     PolicyExtraConfig, SandboxBackend, SandboxConfig, ShutdownConfig, TimeoutsConfig, WebConfig,
+    WebLoginConfig,
 };
 use crate::config::size::parse_size;
 use crate::config::usage::UsageShape;
@@ -93,7 +94,8 @@ const KNOWN_SANDBOX: [&str; 20] = [
 const KNOWN_EGRESS: [&str; 3] = ["mode", "allow", "allowInternal"];
 const KNOWN_POLICY_EXTRA: [&str; 3] = ["read", "write", "execute"];
 const KNOWN_SHUTDOWN: [&str; 1] = ["allowedUserIds"];
-const KNOWN_WEB: [&str; 4] = ["host", "port", "observer", "publicUrl"];
+const KNOWN_WEB: [&str; 5] = ["host", "port", "observer", "publicUrl", "login"];
+const KNOWN_WEB_LOGIN: [&str; 2] = ["clientId", "clientSecret"];
 const KNOWN_OUTPUT: [&str; 8] = [
     "forwardToolOutput",
     "maxToolOutputChars",
@@ -1496,6 +1498,22 @@ fn validate_web(raw: &Map<String, Value>, problems: &mut Problems) -> Option<Web
             problems,
         ),
         public_url: optional_string(&source, "publicUrl", "web", problems),
+        login: validate_web_login(&source, problems),
+    })
+}
+
+/// Reads the Discord application visitors log in through, if any.
+fn validate_web_login(
+    source: &Map<String, Value>,
+    problems: &mut Problems,
+) -> Option<WebLoginConfig> {
+    source.get("login")?;
+    let section = section(source, "login");
+    reject_unknown(&section, &KNOWN_WEB_LOGIN, "web.login", problems);
+
+    Some(WebLoginConfig {
+        client_id: required_string(&section, "clientId", "web.login", problems),
+        client_secret: required_string(&section, "clientSecret", "web.login", problems),
     })
 }
 

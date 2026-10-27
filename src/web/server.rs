@@ -4,14 +4,16 @@
 //! its own: sessions, their output, and their history all live in the session
 //! layer, and a browser is just another view attached to them.
 //!
-//! There is no authentication, deliberately. The bind address is the access
-//! control, and it is checked before anything is served.
+//! The bind address is always checked before anything is served. Without a
+//! login configured it is the whole access control. With one, reading stays
+//! open and changing anything takes a Discord login, after which a visitor
+//! acts as their own account.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path as PathParam, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::{Value, json};
@@ -32,11 +34,13 @@ use crate::session::record::transcript_path;
 use crate::session::session::IncomingMessage;
 use crate::session::transcript::Transcript;
 use crate::web::address::check_bind_address;
+use crate::web::login::{LoginFailure, Logins, STATE_COOKIE, cookie};
 use crate::web::view::{NameLookup, WebView, wire};
 
-/// The identity a request from the interface acts under.
+/// The identity a request from the interface acts under when no login is
+/// configured.
 ///
-/// Reaching the interface already means being on the operator's own network,
+/// Reaching the interface then means being on the operator's own network,
 /// so a request carries operator authority. Giving it a name rather than
 /// borrowing somebody's account id keeps that visible in a session's own
 /// records.
@@ -129,6 +133,7 @@ pub struct WebServer {
     log: Logger,
     guild_id: Option<String>,
     names: Option<NameLookup>,
+    logins: Option<Logins>,
     started: Mutex<HashMap<String, i64>>,
     openings: Mutex<HashMap<String, String>>,
     shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -196,6 +201,7 @@ impl WebServer {
         log: Logger,
         guild_id: Option<String>,
         names: Option<NameLookup>,
+        logins: Option<Logins>,
     ) -> Arc<Self> {
         Arc::new(Self {
             config,
@@ -204,6 +210,7 @@ impl WebServer {
             log,
             guild_id,
             names,
+            logins,
             started: Mutex::new(HashMap::new()),
             openings: Mutex::new(HashMap::new()),
             shutdown: Mutex::new(None),
@@ -305,6 +312,9 @@ impl WebServer {
     fn router(self: &Arc<Self>) -> axum::Router {
         let state: ServerState = Arc::clone(self);
         axum::Router::new()
+            .route("/auth/login", get(begin_login))
+            .route("/auth/callback", get(finish_login))
+            .route("/auth/logout", post(logout))
             .route("/api/interface", get(describe))
             .route("/api/sessions", get(list_sessions).post(start_session))
             .route("/api/sessions/{id}/send", post(send))
@@ -317,14 +327,43 @@ impl WebServer {
             .with_state(state)
     }
 
-    /// Refuses anything that would change something, when configured to
-    /// observe.
-    fn observing(&self) -> Option<Response> {
-        self.config.observer.then(|| {
-            refused(
+    /// Who a request that would change something acts as, or why it may
+    /// not.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the refusal is a ready response, which is the point of the shape"
+    )]
+    fn actor(&self, headers: &HeaderMap) -> Result<Actor, Response> {
+        if self.config.observer {
+            return Err(refused(
                 json!({ "error": "the interface is an observer and cannot change anything" }),
                 StatusCode::FORBIDDEN,
-            )
+            ));
+        }
+        let Some(logins) = &self.logins else {
+            return Ok(Actor {
+                id: WEB_ACTOR.to_owned(),
+                name: "the interface".to_owned(),
+            });
+        };
+        let Some(signed) = logins.signed(headers) else {
+            return Err(refused(
+                json!({ "error": "log in with Discord to do this" }),
+                StatusCode::UNAUTHORIZED,
+            ));
+        };
+        // Phrased as the channel's own refusal is not: the visitor already
+        // knows who they are, and saying which list they missed tells them
+        // nothing the configuration exists to hide.
+        if !signed.may_act {
+            return Err(refused(
+                json!({ "error": "this account may not drive sessions here" }),
+                StatusCode::FORBIDDEN,
+            ));
+        }
+        Ok(Actor {
+            id: signed.visitor.id,
+            name: signed.visitor.name,
         })
     }
 
@@ -415,15 +454,129 @@ struct Located {
     relative: String,
 }
 
+/// Who a change is made as.
+struct Actor {
+    id: String,
+    name: String,
+}
+
 /// What the interface is allowed to do, so it can show only what works.
 ///
 /// An observer that still drew a composer would be offering something every
 /// attempt at which is refused.
-async fn describe(State(server): State<ServerState>) -> Response {
+async fn describe(State(server): State<ServerState>, headers: HeaderMap) -> Response {
+    let signed = server
+        .logins
+        .as_ref()
+        .and_then(|logins| logins.signed(&headers));
+    let may_act = !server.config.observer
+        && match &server.logins {
+            None => true,
+            Some(_) => signed.as_ref().is_some_and(|signed| signed.may_act),
+        };
     ok(json!({
         "observer": server.config.observer,
         "guildId": server.guild_id,
+        "login": server.logins.is_some(),
+        "visitor": signed.as_ref().map(|signed| &signed.visitor),
+        "mayAct": may_act,
     }))
+}
+
+/// Sends the browser to Discord to log in.
+async fn begin_login(State(server): State<ServerState>) -> Response {
+    let Some(logins) = &server.logins else {
+        return refused(
+            json!({ "error": "this interface has no login" }),
+            StatusCode::NOT_FOUND,
+        );
+    };
+    let (state, url) = logins.begin();
+    Response::builder()
+        .status(StatusCode::SEE_OTHER)
+        .header(header::LOCATION, url)
+        .header(header::SET_COOKIE, logins.state_cookie(&state))
+        .body(axum::body::Body::empty())
+        .unwrap_or_else(|_| unreachable!("a redirect always builds"))
+}
+
+/// The query Discord returns the browser with.
+#[derive(serde::Deserialize)]
+struct CallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+/// Completes a login and returns the browser to the interface.
+async fn finish_login(
+    State(server): State<ServerState>,
+    headers: HeaderMap,
+    Query(query): Query<CallbackQuery>,
+) -> Response {
+    let Some(logins) = &server.logins else {
+        return refused(
+            json!({ "error": "this interface has no login" }),
+            StatusCode::NOT_FOUND,
+        );
+    };
+    let finished = logins
+        .finish(
+            query.state.as_deref(),
+            cookie(&headers, STATE_COOKIE).as_deref(),
+            query.code.as_deref(),
+            query.error.as_deref(),
+            server.guild_id.as_deref(),
+        )
+        .await;
+    let mut redirect = Response::builder()
+        .status(StatusCode::SEE_OTHER)
+        .header(header::SET_COOKIE, logins.cleared_state_cookie());
+    // A failed attempt leaves any login the browser already holds alone:
+    // backing out of Discord's page should not log somebody out.
+    redirect = match finished {
+        Ok((token, visitor)) => {
+            server.log.info(
+                "web login",
+                &fields([("account", LogValue::from(visitor.id))]),
+            );
+            redirect
+                .header(header::LOCATION, "/")
+                .header(header::SET_COOKIE, logins.login_cookie(&token))
+        }
+        Err(failure) => {
+            let detail = match &failure {
+                LoginFailure::Failed(detail) => detail.clone(),
+                LoginFailure::Denied => "declined on Discord".to_owned(),
+                LoginFailure::Expired => {
+                    "the login was not started here or took too long".to_owned()
+                }
+            };
+            server.log.warn(
+                "web login failed",
+                &fields([("detail", LogValue::from(detail))]),
+            );
+            redirect.header(header::LOCATION, format!("/?login={}", failure.code()))
+        }
+    };
+    redirect
+        .body(axum::body::Body::empty())
+        .unwrap_or_else(|_| unreachable!("a redirect always builds"))
+}
+
+/// Ends the browser's login.
+async fn logout(State(server): State<ServerState>, headers: HeaderMap) -> Response {
+    let Some(logins) = &server.logins else {
+        return ok(json!({ "loggedOut": true }));
+    };
+    logins.end(&headers);
+    Response::builder()
+        .header(header::SET_COOKIE, logins.cleared_login_cookie())
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .body(axum::body::Body::from(
+            json!({ "loggedOut": true }).to_string(),
+        ))
+        .unwrap_or_else(|_| unreachable!("a logout response always builds"))
 }
 
 /// Every session the interface knows, live and stopped together.
@@ -475,11 +628,13 @@ async fn list_sessions(State(server): State<ServerState>) -> Response {
 /// Starts a session that belongs to no thread.
 async fn start_session(
     State(server): State<ServerState>,
+    headers: HeaderMap,
     body: Option<axum::Json<StartBody>>,
 ) -> Response {
-    if let Some(refusal) = server.observing() {
-        return refusal;
-    }
+    let actor = match server.actor(&headers) {
+        Ok(actor) => actor,
+        Err(refusal) => return refusal,
+    };
 
     let Some(axum::Json(body)) = body else {
         return refused(
@@ -501,8 +656,8 @@ async fn start_session(
         .start_detached(DetachedRequest {
             project,
             prompt,
-            owner_id: WEB_ACTOR.to_owned(),
-            owner_name: Some("the interface".to_owned()),
+            owner_id: actor.id,
+            owner_name: Some(actor.name),
         })
         .await;
 
@@ -518,11 +673,13 @@ async fn start_session(
 async fn send(
     State(server): State<ServerState>,
     PathParam(id): PathParam<String>,
+    headers: HeaderMap,
     body: Option<axum::Json<SendBody>>,
 ) -> Response {
-    if let Some(refusal) = server.observing() {
-        return refusal;
-    }
+    let actor = match server.actor(&headers) {
+        Ok(actor) => actor,
+        Err(refusal) => return refusal,
+    };
 
     let Some(axum::Json(body)) = body else {
         return refused(
@@ -546,9 +703,9 @@ async fn send(
             &id,
             IncomingMessage {
                 id: format!("web-{}", now_ms()),
-                author_id: WEB_ACTOR.to_owned(),
+                author_id: actor.id,
                 channel_id: String::new(),
-                author_name: Some("the interface".to_owned()),
+                author_name: Some(actor.name),
                 content: text,
                 attachments: Vec::new(),
             },

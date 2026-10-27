@@ -560,8 +560,9 @@ pub struct OutputConfig {
 
 /// The local web interface.
 ///
-/// Absent means no listener at all. There is no login: the address it binds
-/// to is the access control, and that address is checked rather than trusted.
+/// Absent means no listener at all. The address it binds to is always checked
+/// rather than trusted. Without `login` that address is the whole access
+/// control; with it, changing anything takes a Discord login.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebConfig {
@@ -574,6 +575,18 @@ pub struct WebConfig {
     pub observer: bool,
     /// Where the interface is reachable from outside, such as behind a tunnel.
     pub public_url: Option<String>,
+    /// Discord login, which makes a visitor act as their own account.
+    pub login: Option<WebLoginConfig>,
+}
+
+/// The Discord application a visitor logs in through.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebLoginConfig {
+    /// The application's `OAuth2` client id.
+    pub client_id: String,
+    /// The application's `OAuth2` client secret. Secret.
+    pub client_secret: String,
 }
 
 /// Bounds on how much work exists at once.
@@ -655,7 +668,7 @@ pub struct Config {
 pub const ALLOW_EVERY_USER: &str = "*";
 
 /// Field paths whose values must never be logged, posted, or reported.
-pub const SECRET_PATHS: [&str; 2] = ["chat.token", "github.token"];
+pub const SECRET_PATHS: [&str; 3] = ["chat.token", "github.token", "web.login.clientSecret"];
 
 /// Values used for any optional field the configuration file omits.
 pub mod defaults {

@@ -353,7 +353,7 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
 ///
 /// Ordered here rather than taken from the file, because what a reader needs
 /// first is not the order the types happen to be declared in.
-const KEYS: [(&str, &str); 13] = [
+const KEYS: [(&str, &str); 14] = [
     ("Root", "top level"),
     ("Chat", "chat"),
     ("Agent", "agent"),
@@ -364,6 +364,7 @@ const KEYS: [(&str, &str); 13] = [
     ("PolicyExtra", "sandbox.policyExtra"),
     ("Output", "output"),
     ("Web", "web"),
+    ("WebLogin", "web.login"),
     ("Shutdown", "shutdown"),
     ("Limits", "limits"),
     ("Timeouts", "timeouts"),

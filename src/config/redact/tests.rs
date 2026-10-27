@@ -12,6 +12,7 @@ const CREDENTIAL: &str = "sk-live-9f3c7a11d4e6";
 const GITHUB_TOKEN: &str = "ghp-4b1d90ff7ac2";
 const PROVIDER_KEY: &str = "zai-5c2e80bb41af";
 const SECOND_KEY: &str = "muse-77ad13e9f0b2";
+const LOGIN_SECRET: &str = "oauth-3e91c0d27b55";
 
 fn config() -> Config {
     load_config(
@@ -31,6 +32,7 @@ fn config() -> Config {
                 },
                 "github": { "token": GITHUB_TOKEN, "userName": "errand-bot",
                             "userEmail": "bot@example.com" },
+                "web": { "login": { "clientId": "app", "clientSecret": LOGIN_SECRET } },
                 "projectRoot": "/tmp/errand/projects",
                 "stateDir": "/tmp/errand/state",
             })
@@ -49,6 +51,7 @@ fn the_configuration_can_be_logged_with_every_secret_field_blanked() {
     assert!(!shown.contains(TOKEN));
     assert!(!shown.contains(CREDENTIAL));
     assert!(!shown.contains(GITHUB_TOKEN));
+    assert!(!shown.contains(LOGIN_SECRET));
     // An operator names their own providers, so these are found by walking
     // rather than by the fixed paths.
     assert!(
@@ -83,6 +86,7 @@ fn what_a_running_session_must_scrub_is_every_secret_it_holds() {
         GITHUB_TOKEN.to_owned(),
         PROVIDER_KEY.to_owned(),
         SECOND_KEY.to_owned(),
+        LOGIN_SECRET.to_owned(),
     ];
     expected.sort();
 
@@ -102,6 +106,7 @@ fn a_secret_in_a_section_that_was_omitted_is_simply_not_there() {
         CREDENTIAL.to_owned(),
         PROVIDER_KEY.to_owned(),
         SECOND_KEY.to_owned(),
+        LOGIN_SECRET.to_owned(),
     ];
     expected.sort();
     assert_eq!(held, expected);
@@ -141,6 +146,7 @@ fn a_value_too_short_to_be_a_credential_is_not_scrubbed_from_prose() {
         GITHUB_TOKEN.to_owned(),
         PROVIDER_KEY.to_owned(),
         SECOND_KEY.to_owned(),
+        LOGIN_SECRET.to_owned(),
     ];
     expected.sort();
     assert_eq!(held, expected);

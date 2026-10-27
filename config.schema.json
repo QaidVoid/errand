@@ -382,6 +382,25 @@
         "publicUrl": {
           "type": "string",
           "description": "Where the interface is reachable from outside, such as behind a tunnel."
+        },
+        "login": {
+          "type": "object",
+          "description": "Discord login, which makes a visitor act as their own account.",
+          "additionalProperties": false,
+          "properties": {
+            "clientId": {
+              "type": "string",
+              "description": "The application's `OAuth2` client id."
+            },
+            "clientSecret": {
+              "type": "string",
+              "description": "The application's `OAuth2` client secret. Secret."
+            }
+          },
+          "required": [
+            "clientId",
+            "clientSecret"
+          ]
         }
       }
     },

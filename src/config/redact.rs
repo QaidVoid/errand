@@ -62,6 +62,9 @@ pub fn secret_values(config: &Config) -> Vec<String> {
     if let Some(github) = &config.github {
         hold(Some(&github.token));
     }
+    if let Some(login) = config.web.as_ref().and_then(|web| web.login.as_ref()) {
+        hold(Some(&login.client_secret));
+    }
     // A defined provider carries its own credential, and there is no fixed
     // path to name it by: the operator chooses how many providers there are
     // and what they are called. Walked instead, so a second provider's key is

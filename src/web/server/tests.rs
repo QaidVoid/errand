@@ -12,7 +12,7 @@ use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
 use crate::config::live::LiveConfig;
 use crate::config::schema::SandboxBackend;
-use crate::config::schema::WebConfig;
+use crate::config::schema::{WebConfig, WebLoginConfig};
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
 use crate::provider::discover::Catalog;
@@ -30,8 +30,11 @@ use crate::session::manager::{
 use crate::session::registry::ThreadRegistry;
 use crate::session::session::{IncomingMessage, RunningBox};
 use crate::session::views::{SessionView, ViewError};
+use crate::web::login::{Discord, DiscordCall, Logins, Visitor};
 
 const OWNER: &str = "100000000000000001";
+/// In the server, but not on the allowlist.
+const MEMBER: &str = "100000000000000002";
 
 fn silent() -> Logger {
     Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
@@ -304,6 +307,39 @@ async fn with_server_where(
     assets: bool,
     run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>,
 ) {
+    with_server_using(observer, assets, false, run).await;
+}
+
+/// Discord as a table: a code is the account that granted it, and only
+/// `OWNER` and `MEMBER` are in the server.
+struct FakeDiscord;
+
+impl Discord for FakeDiscord {
+    fn identify(&self, code: String, _redirect_uri: String) -> DiscordCall<Visitor> {
+        Box::pin(async move {
+            Ok(Visitor {
+                name: format!("name-{code}"),
+                id: code,
+                avatar: None,
+            })
+        })
+    }
+
+    fn is_member(&self, _guild_id: String, user_id: String) -> DiscordCall<bool> {
+        Box::pin(async move { Ok(user_id == OWNER || user_id == MEMBER) })
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one harness builds the whole daemon a test talks to"
+)]
+async fn with_server_using(
+    observer: bool,
+    assets: bool,
+    login: bool,
+    run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>,
+) {
     let root = tempfile::tempdir().expect("a temp directory");
     // The interface a test serves, so what is asserted does not depend on
     // whether the real bundle happened to be built on this machine.
@@ -350,8 +386,9 @@ async fn with_server_where(
     );
     let id = Mutex::new(0);
 
+    let live = LiveConfig::new(settings);
     let manager = Arc::new(SessionManager::new(ManagerOptions {
-        config: LiveConfig::new(settings),
+        config: live.clone(),
         sandbox: Arc::new(FakeSandbox) as Arc<dyn SandboxPool>,
         scheduler: Arc::clone(&scheduler),
         threads: Arc::new(FakeThreads {
@@ -386,6 +423,18 @@ async fn with_server_where(
         Some(Arc::new(|id: &str| {
             (id == OWNER).then(|| "amelia".to_owned())
         })),
+        login.then(|| {
+            Logins::new(
+                &WebLoginConfig {
+                    client_id: "app-1".to_owned(),
+                    client_secret: "shh".to_owned(),
+                },
+                &format!("http://127.0.0.1:{port}"),
+                Arc::new(FakeDiscord),
+                live,
+                Arc::new(|| 1_000),
+            )
+        }),
     );
     if assets {
         server.start().await.expect("the interface starts");
@@ -448,7 +497,13 @@ async fn the_interface_says_what_it_will_and_will_not_allow() {
 
             assert_eq!(
                 answer.json::<Value>().await.unwrap(),
-                json!({ "observer": false, "guildId": "guild-1" })
+                json!({
+                    "observer": false,
+                    "guildId": "guild-1",
+                    "login": false,
+                    "visitor": null,
+                    "mayAct": true,
+                })
             );
         })
     })
@@ -959,14 +1014,206 @@ async fn an_interface_asked_to_bind_publicly_refuses_to_start() {
             port: 39_999,
             observer: false,
             public_url: None,
+            login: None,
         },
         manager,
         &[],
         silent(),
         None,
         None,
+        None,
     );
 
     let error = server.start().await.unwrap_err();
     assert!(error.to_string().contains("every interface"));
+}
+
+/// Logs a browser in as `account` the way a browser would, and returns the
+/// cookie it ends up carrying.
+async fn log_in(client: &reqwest::Client, base: &str, account: &str) -> String {
+    let began = client
+        .get(format!("{base}/auth/login"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(began.status(), 303);
+    let location =
+        reqwest::Url::parse(began.headers()[reqwest::header::LOCATION].to_str().unwrap()).unwrap();
+    let state = location
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .map(|(_, value)| value.into_owned())
+        .unwrap();
+
+    let finished = client
+        .get(format!("{base}/auth/callback?code={account}&state={state}"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("{}={state}", crate::web::login::STATE_COOKIE),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(finished.status(), 303);
+    assert_eq!(finished.headers()[reqwest::header::LOCATION], "/");
+    finished
+        .headers()
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .find(|value| value.starts_with("errand_login="))
+        .and_then(|value| value.split(';').next())
+        .unwrap()
+        .to_owned()
+}
+
+fn without_redirects() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn with_a_login_nothing_changes_for_a_visitor_who_has_not_logged_in() {
+    with_server_using(false, true, true, |harness| {
+        Box::pin(async move {
+            let client = without_redirects();
+            let describe = message(&client, &harness.base, "/api/interface").await;
+            let describe = describe.json::<Value>().await.unwrap();
+            assert_eq!(describe["login"], true);
+            assert_eq!(describe["mayAct"], false);
+
+            let started = post(
+                &client,
+                &harness.base,
+                "/api/sessions",
+                &json!({ "project": "demo", "prompt": "go" }),
+            )
+            .await;
+            assert_eq!(started.status(), 401);
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_logged_in_visitor_starts_a_session_as_their_own_account() {
+    with_server_using(false, true, true, |harness| {
+        Box::pin(async move {
+            let client = without_redirects();
+            let cookie = log_in(&client, &harness.base, OWNER).await;
+
+            let describe = client
+                .get(format!("{}/api/interface", harness.base))
+                .header(reqwest::header::COOKIE, &cookie)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap();
+            assert_eq!(describe["visitor"]["id"], OWNER);
+            assert_eq!(describe["mayAct"], true);
+
+            let started = client
+                .post(format!("{}/api/sessions", harness.base))
+                .header(reqwest::header::COOKIE, &cookie)
+                .json(&json!({ "project": "demo", "prompt": "go" }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(started.status(), 200);
+
+            let listed = message(&client, &harness.base, "/api/sessions")
+                .await
+                .json::<Value>()
+                .await
+                .unwrap();
+            assert_eq!(listed[0]["owner"], OWNER);
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_logged_in_visitor_off_the_allowlist_is_refused_and_told() {
+    with_server_using(false, true, true, |harness| {
+        Box::pin(async move {
+            let client = without_redirects();
+            let cookie = log_in(&client, &harness.base, MEMBER).await;
+
+            let started = client
+                .post(format!("{}/api/sessions", harness.base))
+                .header(reqwest::header::COOKIE, &cookie)
+                .json(&json!({ "project": "demo", "prompt": "go" }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(started.status(), 403);
+            assert!(
+                started.json::<Value>().await.unwrap()["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("may not drive sessions")
+            );
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_callback_without_the_browsers_state_lands_back_saying_so() {
+    with_server_using(false, true, true, |harness| {
+        Box::pin(async move {
+            let client = without_redirects();
+            client
+                .get(format!("{}/auth/login", harness.base))
+                .send()
+                .await
+                .unwrap();
+            let forged = client
+                .get(format!(
+                    "{}/auth/callback?code={OWNER}&state=made-up",
+                    harness.base
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(forged.status(), 303);
+            assert_eq!(
+                forged.headers()[reqwest::header::LOCATION],
+                "/?login=expired"
+            );
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn logging_out_ends_the_login() {
+    with_server_using(false, true, true, |harness| {
+        Box::pin(async move {
+            let client = without_redirects();
+            let cookie = log_in(&client, &harness.base, OWNER).await;
+            client
+                .post(format!("{}/auth/logout", harness.base))
+                .header(reqwest::header::COOKIE, &cookie)
+                .send()
+                .await
+                .unwrap();
+
+            let describe = client
+                .get(format!("{}/api/interface", harness.base))
+                .header(reqwest::header::COOKIE, &cookie)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap();
+            assert_eq!(describe["visitor"], Value::Null);
+        })
+    })
+    .await;
 }

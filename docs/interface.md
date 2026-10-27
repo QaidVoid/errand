@@ -10,22 +10,58 @@ binary.
 
 Absent means no listener at all.
 
-## There is no login
+## Who can reach it
 
-Reaching it is the authorisation, so the address it binds to **is** the access
-control, and it is checked rather than trusted. A wildcard or public address is
-refused at startup, because a warning in a log is not a control. Loopback,
-RFC 1918, link-local, unique-local, and the shared range a tailnet lives in are
-allowed: reaching a machine over a private overlay network is the intended way
-to use this from a phone.
+The address it binds to is checked rather than trusted. A wildcard or public
+address is refused at startup, because a warning in a log is not a control.
+Loopback, RFC 1918, link-local, unique-local, and the shared range a tailnet
+lives in are allowed: reaching a machine over a private overlay network is the
+intended way to use this from a phone.
 
 A name is refused too. Resolving one would make what is reachable depend on what
 DNS says at the moment the daemon started.
 
-Anyone who can reach it acts with **operator authority**: they can start
-sessions, prompt any session, and run any command a thread owner could. Set
-`"observer": true` to serve one that can watch and read but change nothing,
-which is what to publish through a tunnel.
+Without a login, anyone who can reach it acts with **operator authority**: they
+can start sessions, prompt any session, and run any command a thread owner
+could. Set `"observer": true` to serve one that can watch and read but change
+nothing.
+
+## Logging in with Discord
+
+To publish the interface through a tunnel and still let people use it, give it
+a Discord application to log in through:
+
+```json
+{
+  "web": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "publicUrl": "https://errand.example.com",
+    "login": { "clientId": "...", "clientSecret": "..." }
+  }
+}
+```
+
+The bot's own application works. In the Discord developer portal, under OAuth2,
+copy the client id and secret and add `<publicUrl>/auth/callback` as a redirect.
+Without `publicUrl` the redirect is `http://<host>:<port>/auth/callback`.
+
+Reading stays open to anyone who can reach the interface, so a transcript
+linked from a pull request still opens for everyone. Starting or prompting a
+session takes a login, and a logged-in visitor acts as their own Discord
+account, never as the operator:
+
+- They must be a member of the server the bot's channel is in. A wildcard in
+  `chat.allowedUserIds` means anyone in the channel, and on the web the server
+  stands in for the channel, so it cannot mean every Discord account there is.
+- `chat.allowedUserIds` and `chat.blockedUserIds` apply as they do in the
+  channel, and are read again on every request, so blocking somebody takes
+  effect at once.
+- In a session they are what they would be in its thread: the owner, a guest
+  the owner invited with `!allow`, or an operator.
+
+Membership is checked when they log in. A login lasts seven days, and every
+login ends when the daemon restarts.
 
 ## What it shows
 

@@ -84,6 +84,7 @@ use crate::session::session::IncomingMessage;
 use crate::session::session::SpeakText;
 use crate::session::session::Unavailable;
 use crate::session::views::SessionView;
+use crate::web::login::{DiscordApi, Logins};
 use crate::web::server::WEB_ACTOR;
 use crate::web::server::WebServer;
 use crate::web::view::NameLookup;
@@ -1366,6 +1367,20 @@ async fn run(
         let memory_for_names = Arc::clone(&memory);
         let names: NameLookup =
             Arc::new(move |id| memory_for_names.display_name(id).ok().flatten());
+        let logins = web_config.login.as_ref().map(|login| {
+            let base = web_config
+                .public_url
+                .clone()
+                .unwrap_or_else(|| format!("http://{}:{}", web_config.host, web_config.port));
+            Logins::new(
+                login,
+                &base,
+                Arc::new(DiscordApi::new(login, Arc::clone(&http))),
+                live.clone(),
+                Arc::new(now_ms),
+            )
+        });
+        let has_login = logins.is_some();
         let web_server = WebServer::new(
             web_config,
             daemon.sessions(),
@@ -1373,13 +1388,22 @@ async fn run(
             log.clone(),
             guild_id.map(|guild| guild.get().to_string()),
             Some(names),
+            logins,
         );
         match web_server.start().await {
             Ok(()) => {
-                log.info(
-                    "ACCESS: anyone who can reach the interface acts with operator authority",
-                    &fields([]),
-                );
+                if has_login {
+                    log.info(
+                        "ACCESS: anyone who can reach the interface may read it; changing \
+                         anything takes a Discord login and acts as that account",
+                        &fields([]),
+                    );
+                } else {
+                    log.info(
+                        "ACCESS: anyone who can reach the interface acts with operator authority",
+                        &fields([]),
+                    );
+                }
                 log.info(
                     "  the agent's sandbox is unaffected by this; the interface is not sandboxed",
                     &fields([]),

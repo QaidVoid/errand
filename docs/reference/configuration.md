@@ -156,7 +156,7 @@ How much of the agent's activity reaches the thread.
 
 ## web
 
-The local web interface.  Absent means no listener at all. There is no login: the address it binds to is the access control, and that address is checked rather than trusted.
+The local web interface.  Absent means no listener at all. The address it binds to is always checked rather than trusted. Without `login` that address is the whole access control; with it, changing anything takes a Discord login.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
@@ -164,6 +164,15 @@ The local web interface.  Absent means no listener at all. There is no login: th
 | `port` | `number` | `8787` | Port to listen on. |
 | `observer` | `boolean` | `false` | When true the interface may watch and read but not start, prompt, or control anything. |
 | `publicUrl` | `string or undefined` | none | Where the interface is reachable from outside, such as behind a tunnel. |
+
+## web.login
+
+The Discord application a visitor logs in through.
+
+| field | type | default | what it does |
+| --- | --- | --- | --- |
+| `clientId` | `string` | none | The application's `OAuth2` client id. |
+| `clientSecret` | `string` | none | The application's `OAuth2` client secret. Secret. |
 
 ## shutdown
 
