@@ -153,7 +153,7 @@ impl Running {
             return;
         }
         if title.is_empty() {
-            self.say("say what to call it, as `!pr [--repo <directory>] <title>`")
+            self.say("say what to call it, as `!pr [--repo <dir>] <title>`")
                 .await;
             self.react(&message.id, ReactionOutcome::Failed).await;
             return;

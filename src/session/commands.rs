@@ -103,7 +103,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
             access: Owner,
             group: Session,
             summary: "open a pull request for this branch",
-            argument: Some("[--repo <directory>] <title>"),
+            argument: Some("[--repo <dir>] <title>"),
         },
     ),
     (
@@ -391,7 +391,7 @@ fn verb_with_requests(text: &str, verb: &str) -> bool {
     false
 }
 
-/// Splits `!pr [--repo <directory>] <title>` into the repository, when one
+/// Splits `!pr [--repo <dir>] <title>` into the repository, when one
 /// is named, and the title.
 ///
 /// A flag rather than a leading word, since a title may begin with anything,
