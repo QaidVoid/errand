@@ -1324,6 +1324,15 @@ async fn a_connect_without_the_credential_is_refused() {
             .answer
             .contains("Proxy-Authenticate: Basic realm=\"errand\"\r\n")
     );
+    // git's first CONNECT never carries the credential, and it reconnects
+    // with one only when the 407 says the connection is closing.
+    assert!(
+        exchange
+            .answer
+            .ends_with("Connection: close\r\nContent-Length: 0\r\n\r\n"),
+        "{}",
+        exchange.answer
+    );
     assert_eq!((exchange.lookups, exchange.dials), (0, 0));
     assert!(exchange.forwarded.is_empty());
 }

@@ -421,7 +421,11 @@ async fn refuse<W: tokio::io::AsyncWrite + Unpin>(
         head.push_str(value);
         head.push_str("\r\n");
     }
-    head.push_str("\r\n");
+    // Without these an HTTP/1.1 client takes the connection as kept alive.
+    // git probes the proxy without a credential first, and on a 407 it then
+    // retries on a socket the broker has already closed and aborts, where an
+    // explicit close makes it reconnect with the credential.
+    head.push_str("Connection: close\r\nContent-Length: 0\r\n\r\n");
     // The client may have gone; the refusal is best-effort.
     let _ = writer.write_all(head.as_bytes()).await;
     writer.shutdown().await
