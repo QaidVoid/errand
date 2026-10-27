@@ -324,20 +324,26 @@ pub enum AcpUpdate {
 pub struct ProducedMedia {
     /// What the media is, as its content block named it.
     pub kind: MediaKind,
-    /// The media's bytes.
+    /// The media's bytes. Empty when the tool handed over only a [`Self::link`].
     pub bytes: Vec<u8>,
     /// What the media's server said about it, such as a fallback to another
     /// model, when it said anything.
     pub note: Option<String>,
     /// Where the tool also saved it, as a path on the agent's side.
     pub path: Option<String>,
+    /// Where the media's server keeps it, when the tool could not fetch it
+    /// and handed over the link instead, as kage's `generate_music` does for
+    /// a song linked on a host it does not reach.
+    pub link: Option<String>,
 }
 
 /// The media a completed tool call returned.
 ///
 /// Each `image` and `audio` block in its content, in order, which is how
 /// kage hands a client what a tool made. The `note` and `path` an object
-/// `rawOutput` carries ride on each, so they can be shown beside it.
+/// `rawOutput` carries ride on each, so they can be shown beside it. A call
+/// with no media block whose `rawOutput` names a `link` returned one clip
+/// held there.
 fn produced_media(update: &Value) -> Vec<ProducedMedia> {
     let raw = |field: &str| {
         update
@@ -349,7 +355,7 @@ fn produced_media(update: &Value) -> Vec<ProducedMedia> {
             .map(str::to_owned)
     };
     let (note, path) = (raw("note"), raw("path"));
-    update
+    let media: Vec<ProducedMedia> = update
         .get("content")
         .and_then(Value::as_array)
         .into_iter()
@@ -362,9 +368,20 @@ fn produced_media(update: &Value) -> Vec<ProducedMedia> {
                 bytes,
                 note: note.clone(),
                 path: path.clone(),
+                link: None,
             })
         })
-        .collect()
+        .collect();
+    match raw("link") {
+        Some(link) if media.is_empty() => vec![ProducedMedia {
+            kind: MediaKind::Audio,
+            bytes: Vec::new(),
+            note,
+            path,
+            link: Some(link),
+        }],
+        _ => media,
+    }
 }
 
 /// The bytes of an `image` or `audio` content block with its kind, or
@@ -453,6 +470,7 @@ fn message_chunk(content: Option<&Value>) -> AcpUpdate {
             bytes,
             note: None,
             path: None,
+            link: None,
         });
     }
     content

@@ -490,6 +490,7 @@ async fn with_daemon(
         },
         draw_image: case.draw_image.clone(),
         speak_text: case.speak_text.clone(),
+        fetch_linked: None,
         memory: case.memory.clone(),
         power_off: case.power_off.clone(),
         describe_usage: case.describe_usage.clone(),

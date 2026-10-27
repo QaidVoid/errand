@@ -43,7 +43,7 @@ use crate::session::manager::{
 };
 use crate::session::model::{configured_model, split_level};
 use crate::session::registry::ThreadRegistry;
-use crate::session::session::{DescribeImages, DrawImage, IncomingMessage, SpeakText};
+use crate::session::session::{DescribeImages, DrawImage, FetchLinked, IncomingMessage, SpeakText};
 
 /// Raised when the backend cannot enforce what configuration demands.
 #[derive(Debug, thiserror::Error)]
@@ -258,6 +258,9 @@ pub struct DaemonOptions {
     /// Reads a text aloud with the speech model, or none when the host
     /// cannot.
     pub speak_text: Option<SpeakText>,
+    /// Fetches a song the agent could only link to, or none when the host
+    /// cannot.
+    pub fetch_linked: Option<FetchLinked>,
     /// Where the interface is published, when it is.
     pub public_url: Option<String>,
     /// The provider definitions sessions launch with and the models `!model`
@@ -322,6 +325,7 @@ impl Daemon {
             describe_images: options.describe_images.clone(),
             draw_image: options.draw_image.clone(),
             speak_text: options.speak_text.clone(),
+            fetch_linked: options.fetch_linked.clone(),
             public_url: options.public_url.clone(),
             catalog: options.catalog.clone(),
             delegate_base_url: options.delegate_base_url.clone(),

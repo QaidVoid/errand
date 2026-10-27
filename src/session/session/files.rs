@@ -14,6 +14,7 @@ use crate::chat::render::{
 use crate::log::{LogValue, fields};
 use crate::provider::audio::audio_extension;
 use crate::provider::images::{endpoint_with_effort, image_extension};
+use crate::provider::music::is_music_link;
 use crate::provider::speech::endpoint as speech_endpoint;
 use crate::sandbox::paths;
 use crate::session::commands::{SpeechArgs, image_args, speech_args};
@@ -525,12 +526,62 @@ impl Running {
         }
     }
 
+    /// The bytes of a song the agent's music tool could only link to,
+    /// fetched here, or nothing once the thread is told why not.
+    ///
+    /// Only a link on the host of the provider carrying `music` is fetched:
+    /// anything else is the agent's word for an address the operator never
+    /// named.
+    async fn fetch_linked(&mut self, link: &str) -> Option<Vec<u8>> {
+        let refused = |why: &str| {
+            format!(
+                "the agent made a song errand could not fetch ({why}); it is at <{}>",
+                inert(link)
+            )
+        };
+        if !is_music_link(&self.options.config.agent, link) {
+            self.say(&refused("its link is not on the music provider's host"))
+                .await;
+            return None;
+        }
+        let Some(fetch_linked) = self.options.fetch_linked.clone() else {
+            self.say(&refused("this host cannot fetch it")).await;
+            return None;
+        };
+        match fetch_linked(link.to_owned()).await {
+            Ok(bytes) => Some(bytes),
+            Err(why) => {
+                self.log.warn(
+                    "the agent's song could not be fetched",
+                    &fields([("detail", LogValue::from(why.as_str()))]),
+                );
+                self.say(&refused(&why)).await;
+                None
+            }
+        }
+    }
+
     /// Posts an image or clip the agent made as an upload, captioned with
     /// its size, where the tool saved it when it did, and what its server
     /// said about it. One that cannot be posted is reported in the thread
     /// with the reason instead, so somebody told that it was made is not left
     /// waiting for it. The caller owns counting media toward the turn's cap.
     pub(super) async fn post_media(&mut self, media: &ProducedMedia) {
+        let fetched;
+        let media = match &media.link {
+            Some(link) if media.bytes.is_empty() => {
+                let Some(bytes) = self.fetch_linked(link).await else {
+                    return;
+                };
+                fetched = ProducedMedia {
+                    bytes,
+                    link: None,
+                    ..media.clone()
+                };
+                &fetched
+            }
+            _ => media,
+        };
         let (made, noun, extension, formats) = match media.kind {
             MediaKind::Image => (
                 "an image",

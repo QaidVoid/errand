@@ -9,9 +9,9 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
 use super::{
-    DescribeImages, DrawImage, Drawn, FetchAttachment, FetchBox, IncomingMessage, Launcher,
-    OpenPullRequest, RunningBox, SessionHandle, SessionOptions, SessionTimer, Signal, SpeakText,
-    Timers, Unavailable, killed_by, signal_name,
+    DescribeImages, DrawImage, Drawn, FetchAttachment, FetchBox, FetchLinked, IncomingMessage,
+    Launcher, OpenPullRequest, RunningBox, SessionHandle, SessionOptions, SessionTimer, Signal,
+    SpeakText, Timers, Unavailable, killed_by, signal_name,
 };
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
@@ -784,6 +784,7 @@ struct SessionTestCase {
     describe_images: Option<DescribeImages>,
     draw_image: Option<DrawImage>,
     speak_text: Option<SpeakText>,
+    fetch_linked: Option<FetchLinked>,
     fetch_attachment: Option<FetchAttachment>,
     open_pull_request: Option<OpenPullRequest>,
     unavailable: Option<Unavailable>,
@@ -809,6 +810,7 @@ impl Default for SessionTestCase {
             describe_images: None,
             draw_image: None,
             speak_text: None,
+            fetch_linked: None,
             fetch_attachment: None,
             open_pull_request: None,
             unavailable: None,
@@ -917,6 +919,7 @@ async fn with_session(
         describe_images: case.describe_images.clone(),
         draw_image: case.draw_image.clone(),
         speak_text: case.speak_text.clone(),
+        fetch_linked: case.fetch_linked.clone(),
         resume: case.resume_kage_session.is_some(),
         on_ended: {
             let ended = Arc::clone(&ended);
@@ -3444,6 +3447,95 @@ async fn a_clip_the_agent_generated_is_posted_with_its_caption() {
         })
     })
     .await;
+}
+
+/// A `generate_music` call that handed back only its song's link.
+fn linked_song(call: &str, link: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": { "sessionId": "s-1", "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": call, "status": "completed", "title": "generate_music",
+            "content": [
+                { "type": "content", "content": { "type": "text", "text": "Made a song" } },
+            ],
+            "rawOutput": { "model": "music", "link": link, "seed": 3 },
+        } },
+    })
+}
+
+/// A configuration whose `songs` provider carries `music` at
+/// `music.example`.
+fn with_music_provider() -> Arc<Config> {
+    config_with(&json!({ "agent": {
+        "provider": "anthropic",
+        "providers": {
+            "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+            "songs": { "credential": "k", "baseUrl": "https://music.example/v1", "music": { "model": "music" } },
+        },
+    } }))
+}
+
+#[tokio::test]
+async fn a_song_the_agent_could_only_link_is_fetched_and_posted() {
+    let fetched = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&fetched);
+    let case = SessionTestCase {
+        config: Some(with_music_provider()),
+        fetch_linked: Some(Arc::new(move |link: String| {
+            seen.lock().unwrap().push(link);
+            Box::pin(async { Ok(GENERATED_MP3.to_vec()) })
+        })),
+        ..SessionTestCase::default()
+    };
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness
+                .controls()
+                .send(&linked_song("t1", "https://music.example/f/a.mp3"));
+            settle().await;
+
+            assert_eq!(
+                harness.thread.uploads(),
+                vec![("clip.mp3".to_owned(), GENERATED_MP3.len())]
+            );
+        })
+    })
+    .await;
+    assert_eq!(*fetched.lock().unwrap(), ["https://music.example/f/a.mp3"]);
+}
+
+#[tokio::test]
+async fn a_song_linked_off_the_music_host_is_not_fetched() {
+    let fetched = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&fetched);
+    let case = SessionTestCase {
+        config: Some(with_music_provider()),
+        fetch_linked: Some(Arc::new(move |link: String| {
+            seen.lock().unwrap().push(link);
+            Box::pin(async { Ok(GENERATED_MP3.to_vec()) })
+        })),
+        ..SessionTestCase::default()
+    };
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness
+                .controls()
+                .send(&linked_song("t1", "https://music.example.evil/f/a.mp3"));
+            settle().await;
+
+            assert!(harness.thread.uploads().is_empty());
+            let posts = harness.thread.posts();
+            assert_eq!(posts.len(), 1, "{posts:?}");
+            assert!(
+                posts[0].starts_with("the agent made a song errand could not fetch (its link is not on the music provider's host)"),
+                "{posts:?}"
+            );
+        })
+    })
+    .await;
+    assert!(fetched.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

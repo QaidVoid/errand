@@ -15,6 +15,8 @@ pub mod images;
 pub mod mapped;
 /// The host's model store: which models exist and what they cost.
 pub mod models;
+/// Fetches a song the agent's music tool could only link to.
+pub mod music;
 /// Reads a text aloud over the `OpenAI` speech shape.
 pub mod speech;
 /// Holds a window answer so every session does not ask again.

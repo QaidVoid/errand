@@ -79,6 +79,7 @@ use crate::session::model::{configured_model, split_level};
 use crate::session::pr::{ApiCall, call_api};
 use crate::session::session::DescribeImages;
 use crate::session::session::DrawImage;
+use crate::session::session::FetchLinked;
 use crate::session::session::IncomingMessage;
 use crate::session::session::SpeakText;
 use crate::session::session::Unavailable;
@@ -1285,6 +1286,10 @@ async fn run(
                 }) as Pin<Box<dyn Future<Output = Result<Spoken, String>> + Send>>
             },
         ) as SpeakText),
+        fetch_linked: Some(Arc::new(|link: String| {
+            Box::pin(crate::provider::music::fetch_song(link))
+                as Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send>>
+        }) as FetchLinked),
         public_url: config.web.as_ref().and_then(|web| web.public_url.clone()),
         operator_ids: Some(operator_ids),
         catalog: catalog.clone(),

@@ -71,8 +71,10 @@ A `music` object on one provider, naming a `model`, gives sessions kage's
 Only one provider may carry `music`, and it may be the one carrying
 `images` or `speech`. A song is posted to the thread like a clip, under
 `output.postAudio` and the same four per turn. A song can take a minute or
-more. A song the server made but kage could not fetch comes back as a link
-in the agent's reply instead. Denying `"generate_music"` in
+more. Under the broker the agent reaches the music server at the broker's
+address, so a song the server links on its own host comes back to the
+daemon as a link: the daemon fetches it from there, only from the host of
+the provider carrying `music`, and posts it like any other clip. Denying `"generate_music"` in
 `agent.deniedTools` turns the tool off. It needs a kage newer than 0.5.1.
 
 ## `!gen-speech`

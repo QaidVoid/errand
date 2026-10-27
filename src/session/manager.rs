@@ -32,8 +32,8 @@ use crate::session::registry::{ThreadRecord, ThreadRegistry};
 use crate::session::rules::house_rules_text;
 pub use crate::session::session::Unavailable;
 use crate::session::session::{
-    DescribeImages, DrawImage, IncomingMessage, Launcher, OnGuestsChanged, OnModelChanged,
-    OpenPullRequest, RunningBox, SessionHandle, SessionOptions, SpeakText,
+    DescribeImages, DrawImage, FetchLinked, IncomingMessage, Launcher, OnGuestsChanged,
+    OnModelChanged, OpenPullRequest, RunningBox, SessionHandle, SessionOptions, SpeakText,
 };
 use crate::session::transcript::{TRANSCRIPT_FILENAME, Transcript};
 use crate::session::views::{Attached, DEFAULT_TRANSCRIPT_LIMIT, Held, SessionView, ViewFanOut};
@@ -169,6 +169,9 @@ pub struct ManagerOptions {
     /// Reads a text aloud with the speech model, or none when the host
     /// cannot.
     pub speak_text: Option<SpeakText>,
+    /// Fetches a song the agent could only link to, or none when the host
+    /// cannot.
+    pub fetch_linked: Option<FetchLinked>,
     /// Where the interface is published, when it is.
     pub public_url: Option<String>,
     /// The provider definitions sessions launch with and the models `!model`
@@ -190,6 +193,7 @@ struct Shared {
     describe_images: Option<DescribeImages>,
     draw_image: Option<DrawImage>,
     speak_text: Option<SpeakText>,
+    fetch_linked: Option<FetchLinked>,
     public_url: Option<String>,
     catalog: Catalog,
     delegate_base_url: Option<String>,
@@ -243,6 +247,7 @@ impl SessionManager {
             describe_images: options.describe_images.clone(),
             draw_image: options.draw_image.clone(),
             speak_text: options.speak_text.clone(),
+            fetch_linked: options.fetch_linked.clone(),
             public_url: options.public_url.clone(),
             catalog: options.catalog.clone(),
             delegate_base_url: options.delegate_base_url.clone(),
@@ -724,6 +729,7 @@ impl SessionManager {
             describe_images: self.shared.describe_images.clone(),
             draw_image: self.shared.draw_image.clone(),
             speak_text: self.shared.speak_text.clone(),
+            fetch_linked: self.shared.fetch_linked.clone(),
             resume: false,
             on_ended: on_ended(
                 Arc::clone(&self.state),
@@ -933,6 +939,7 @@ impl SessionManager {
             describe_images: self.shared.describe_images.clone(),
             draw_image: self.shared.draw_image.clone(),
             speak_text: self.shared.speak_text.clone(),
+            fetch_linked: self.shared.fetch_linked.clone(),
             resume: true,
             on_ended: on_ended(
                 Arc::clone(&self.state),
