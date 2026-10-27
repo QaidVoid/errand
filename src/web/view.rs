@@ -125,8 +125,17 @@ impl SessionView for WebView {
         &'a self,
         event: &'a SessionEvent,
     ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
+        self.observe_at(event, now_ms())
+    }
+
+    // A replay is stamped with when each thing happened. Stamping it with when
+    // it was replayed showed every line of a running session as just now.
+    fn observe_at<'a>(
+        &'a self,
+        event: &'a SessionEvent,
+        at: i64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
         Box::pin(async move {
-            let at = now_ms();
             match event {
                 SessionEvent::BeginTurn { turn } => {
                     *self.turn.lock().expect("the view turn lock") = Some(*turn);

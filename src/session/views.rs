@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::future::join_all;
 
-use crate::log::{LogValue, Logger, fields};
+use crate::log::{LogValue, Logger, fields, now_ms};
 use crate::session::event::{ReactionOutcome, SessionEvent, SessionUsage};
 
 /// How much of a session's output is kept for a view that attaches later.
@@ -42,6 +42,8 @@ pub struct Held {
     /// before turns were kept, which is why a transcript written by an older
     /// daemon still reads.
     pub turn: Option<u32>,
+    /// When it happened, in milliseconds since the epoch.
+    pub at: i64,
     /// The event itself, as a replaying view receives it.
     pub entry: SessionEvent,
 }
@@ -67,6 +69,16 @@ pub trait SessionView: Send + Sync {
         &'a self,
         event: &'a SessionEvent,
     ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>>;
+
+    /// Shows an event that happened at `at` rather than now, as a replay
+    /// does. Only a view that draws times needs more than [`Self::observe`].
+    fn observe_at<'a>(
+        &'a self,
+        event: &'a SessionEvent,
+        _at: i64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
+        self.observe(event)
+    }
 }
 
 /// The state a view needs in order to look right the moment it attaches.
@@ -162,6 +174,7 @@ pub struct ViewFanOut {
     log: Logger,
     limit: usize,
     recorder: Option<Arc<dyn Recorder>>,
+    now: fn() -> i64,
     inner: Mutex<Inner>,
 }
 
@@ -179,8 +192,16 @@ impl ViewFanOut {
             log,
             limit,
             recorder,
+            now: now_ms,
             inner: Mutex::new(Inner::default()),
         }
+    }
+
+    /// The same fan-out, reading the time from `now`.
+    #[cfg(test)]
+    pub fn with_clock(mut self, now: fn() -> i64) -> Self {
+        self.now = now;
+        self
     }
 
     /// Seeds the record from a stored transcript, for a resumed session.
@@ -381,6 +402,7 @@ impl ViewFanOut {
         }
         inner.held.push(Held {
             turn: Some(inner.turn),
+            at: (self.now)(),
             entry,
         });
         let excess = inner.held.len().saturating_sub(self.limit);
@@ -410,6 +432,65 @@ impl ViewFanOut {
         }
     }
 
+    /// Shows a view one held entry, as it was when it happened.
+    async fn replay_held(view: &Arc<dyn SessionView>, held: &Held) -> Result<(), ViewError> {
+        match &held.entry {
+            SessionEvent::Post { .. }
+            | SessionEvent::Notice { .. }
+            | SessionEvent::Thinking { .. }
+            | SessionEvent::Reply { .. }
+            | SessionEvent::ToolResult { .. }
+            | SessionEvent::Activity { .. }
+            | SessionEvent::Delegation { .. }
+            | SessionEvent::Diff { .. } => view.observe_at(&held.entry, held.at).await?,
+            SessionEvent::Prompt {
+                author,
+                text,
+                withdrawn,
+                ..
+            }
+            | SessionEvent::Aside {
+                author,
+                text,
+                withdrawn,
+                ..
+            } => {
+                view.observe_at(
+                    &SessionEvent::Prompt {
+                        author: author.clone(),
+                        text: shown_text(*withdrawn, text).to_owned(),
+                        id: None,
+                        withdrawn: false,
+                        // Replayed into a view that may be a thread, which
+                        // was shown it when it was first said.
+                        from_interface: false,
+                    },
+                    held.at,
+                )
+                .await?;
+            }
+            SessionEvent::Attachment { name, size } => {
+                view.observe_at(
+                    &SessionEvent::Post {
+                        text: format!("[attached {name}, {size} bytes]"),
+                    },
+                    held.at,
+                )
+                .await?;
+            }
+            // Usage is state, carried below rather than replayed. The rest
+            // is never recorded, so it is never held.
+            SessionEvent::Upload { .. }
+            | SessionEvent::Usage { .. }
+            | SessionEvent::Waiting { .. }
+            | SessionEvent::Reaction { .. }
+            | SessionEvent::Busy { .. }
+            | SessionEvent::BeginTurn { .. }
+            | SessionEvent::Close { .. } => {}
+        }
+        Ok(())
+    }
+
     /// Shows a view everything it missed, then where things stand now.
     ///
     /// The first failure stops the replay: a view that cannot be told the
@@ -434,54 +515,7 @@ impl ViewFanOut {
                 view.observe(&SessionEvent::BeginTurn { turn }).await?;
             }
 
-            match &held.entry {
-                SessionEvent::Post { .. }
-                | SessionEvent::Notice { .. }
-                | SessionEvent::Thinking { .. }
-                | SessionEvent::Reply { .. }
-                | SessionEvent::ToolResult { .. }
-                | SessionEvent::Activity { .. }
-                | SessionEvent::Delegation { .. }
-                | SessionEvent::Diff { .. } => view.observe(&held.entry).await?,
-                SessionEvent::Prompt {
-                    author,
-                    text,
-                    withdrawn,
-                    ..
-                }
-                | SessionEvent::Aside {
-                    author,
-                    text,
-                    withdrawn,
-                    ..
-                } => {
-                    view.observe(&SessionEvent::Prompt {
-                        author: author.clone(),
-                        text: shown_text(*withdrawn, text).to_owned(),
-                        id: None,
-                        withdrawn: false,
-                        // Replayed into a view that may be a thread, which
-                        // was shown it when it was first said.
-                        from_interface: false,
-                    })
-                    .await?;
-                }
-                SessionEvent::Attachment { name, size } => {
-                    view.observe(&SessionEvent::Post {
-                        text: format!("[attached {name}, {size} bytes]"),
-                    })
-                    .await?;
-                }
-                // Usage is state, carried below rather than replayed. The rest
-                // is never recorded, so it is never held.
-                SessionEvent::Upload { .. }
-                | SessionEvent::Usage { .. }
-                | SessionEvent::Waiting { .. }
-                | SessionEvent::Reaction { .. }
-                | SessionEvent::Busy { .. }
-                | SessionEvent::BeginTurn { .. }
-                | SessionEvent::Close { .. } => {}
-            }
+            Self::replay_held(view, held).await?;
         }
 
         // Anything the view is told after this belongs to the turn in

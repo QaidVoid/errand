@@ -848,6 +848,7 @@ impl SessionManager {
                 .iter()
                 .map(|held| Held {
                     turn: held.turn,
+                    at: held.at,
                     entry: held.entry.clone(),
                 })
                 .collect::<Vec<_>>(),

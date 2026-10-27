@@ -396,12 +396,14 @@ async fn restoring_replaces_what_is_held_rather_than_adding_to_it() {
     let held = vec![
         Held {
             turn: Some(1),
+            at: 0,
             entry: SessionEvent::Post {
                 text: "from before".to_owned(),
             },
         },
         Held {
             turn: Some(2),
+            at: 0,
             entry: SessionEvent::Usage { usage: usage(900) },
         },
     ];
@@ -438,12 +440,14 @@ fn restoring_carries_the_turn_numbering_on() {
         &[
             Held {
                 turn: Some(1),
+                at: 0,
                 entry: SessionEvent::Post {
                     text: "one".to_owned(),
                 },
             },
             Held {
                 turn: Some(3),
+                at: 0,
                 entry: SessionEvent::Post {
                     text: "three".to_owned(),
                 },
@@ -485,4 +489,54 @@ fn a_withdrawn_entry_is_shown_as_a_marker_not_as_silence() {
     // The text is gone from the entry, so the marker is the only thing
     // standing between a reader and an apparently empty turn.
     assert!(!shown_text(true, "").is_empty());
+}
+
+/// Remembers when each replayed thing is said to have happened.
+struct Timed(Mutex<Vec<(String, i64)>>);
+
+impl SessionView for Timed {
+    fn observe<'a>(
+        &'a self,
+        event: &'a SessionEvent,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
+        self.observe_at(event, -1)
+    }
+
+    fn observe_at<'a>(
+        &'a self,
+        event: &'a SessionEvent,
+        at: i64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((label_of(event).to_owned(), at));
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// A view attaching late is told when each thing happened, not when it
+/// attached, so a browser opened on a running session shows real times.
+#[tokio::test]
+async fn a_replay_carries_when_each_thing_happened() {
+    let fan = Arc::new(ViewFanOut::new(silent()).with_clock(|| 1_234));
+    fan.send(SessionEvent::Prompt {
+        author: "amelia".to_owned(),
+        text: "go".to_owned(),
+        id: None,
+        withdrawn: false,
+        from_interface: false,
+    })
+    .await;
+    fan.send(SessionEvent::Post {
+        text: "done".to_owned(),
+    })
+    .await;
+
+    let late = Arc::new(Timed(Mutex::new(Vec::new())));
+    fan.clone().attach(late.clone()).await;
+
+    let seen = late.0.lock().unwrap().clone();
+    assert!(seen.contains(&("prompt".to_owned(), 1_234)), "{seen:?}");
+    assert!(seen.contains(&("post".to_owned(), 1_234)), "{seen:?}");
 }
