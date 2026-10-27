@@ -348,20 +348,23 @@ impl Post for HttpPost {
         for (name, value) in &request.headers {
             sent = sent.header(name.as_str(), value.as_str());
         }
-        let answer = sent
+        let mut answer = sent
             .body(request.body)
             .timeout(std::time::Duration::from_millis(request.timeout_ms))
             .send()
             .await
             .map_err(|error| error.to_string())?;
         let status = answer.status().as_u16();
-        // Capped rather than read whole, so a server answering a wall of
-        // bytes cannot fill memory before it is refused.
-        let bytes = answer.bytes().await.map_err(|error| error.to_string())?;
-        if bytes.len() as u64 > MAX_RESPONSE_BYTES {
-            return Err(format!(
-                "it answered more than {MAX_RESPONSE_BYTES} bytes, which is more than an image"
-            ));
+        // Read a chunk at a time and stopped at the cap, so a server
+        // answering a wall of bytes cannot fill memory before it is refused.
+        let mut bytes = Vec::new();
+        while let Some(chunk) = answer.chunk().await.map_err(|error| error.to_string())? {
+            if (bytes.len() + chunk.len()) as u64 > MAX_RESPONSE_BYTES {
+                return Err(format!(
+                    "it answered more than {MAX_RESPONSE_BYTES} bytes, which is more than an image"
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
         }
         let body = serde_json::from_slice::<Value>(&bytes).ok();
         Ok(Response { status, body })
