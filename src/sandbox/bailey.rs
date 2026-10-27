@@ -219,13 +219,15 @@ pub fn provider_broker_url(port: u16, provider: &str) -> String {
     )
 }
 
-/// What the daemon holds back from a session, and what it gives instead.
+/// Provider stand-ins and the shared proxy credential given to a session.
 ///
-/// The credential never crosses into a sandbox: the broker puts it on at the
-/// other end, so what a session carries is a nonce that only the broker
-/// honours.
+/// Provider credentials never cross into a sandbox: the broker puts them on
+/// at the other end. Sessions carry provider nonces and one proxy secret
+/// shared by every session for this broker run.
 #[derive(Debug, Clone)]
 pub struct ProviderBrokering {
+    /// The proxy credential shared by every session for this broker run.
+    pub proxy_secret: String,
     /// The variable the agent reads each provider's key from, by provider
     /// name, for those that name one.
     pub credential_names: BTreeMap<String, String>,
@@ -259,7 +261,7 @@ pub fn brokered_env(
 pub struct BaileyOptions {
     /// Host loopback port of the broker, under `egress.mode = proxy`.
     pub egress_proxy_port: Option<u16>,
-    /// What stands in for the provider credential inside a session.
+    /// Provider stand-ins and the shared proxy credential inside a session.
     pub brokering: Option<ProviderBrokering>,
     /// Finds the agent. Injected so a test needs no agent installed.
     pub lookup: Option<Lookup>,
@@ -271,9 +273,9 @@ pub struct BaileyOptions {
     pub built_in: BTreeMap<String, Vec<Value>>,
 }
 
-/// The proxy URL a brokered session's tools use, for a given broker port.
-pub fn egress_proxy_url(port: u16) -> String {
-    format!("http://{EGRESS_MAP_ADDRESS}:{port}")
+/// The authenticated proxy URL a brokered session's tools use.
+pub fn egress_proxy_url(port: u16, secret: &str) -> String {
+    format!("http://session:{secret}@{EGRESS_MAP_ADDRESS}:{port}")
 }
 
 /// The `--egress-proxy` value for a given broker port.
@@ -395,10 +397,12 @@ impl BaileySandbox {
         if self.config.egress.mode != EgressMode::Proxy {
             return if base.is_empty() { None } else { Some(base) };
         }
-        let Some(port) = self.options.egress_proxy_port else {
+        let (Some(port), Some(brokering)) =
+            (self.options.egress_proxy_port, &self.options.brokering)
+        else {
             return if base.is_empty() { None } else { Some(base) };
         };
-        let url = egress_proxy_url(port);
+        let url = egress_proxy_url(port, &brokering.proxy_secret);
         base.insert("HTTPS_PROXY".to_owned(), url.clone());
         base.insert("https_proxy".to_owned(), url.clone());
         base.insert("HTTP_PROXY".to_owned(), url.clone());

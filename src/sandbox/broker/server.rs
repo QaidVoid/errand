@@ -3,6 +3,7 @@
 //! One `Broker` serves one session's namespace: the allowlist is fixed for the
 //! life of that session.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -11,7 +12,7 @@ use tokio::sync::oneshot;
 
 use super::{
     DIAL_BUDGET, DIAL_TIMEOUT, LOOKUP_TIMEOUT, NoAddress, ProviderRoute, ProviderState, Target,
-    host_allowed, parse_connect, parse_forward, public_addresses,
+    carries_proxy_credential, host_allowed, parse_connect, parse_forward, public_addresses,
 };
 use crate::log::Logger;
 use crate::log::fields;
@@ -23,6 +24,7 @@ pub struct Broker {
     log: Logger,
     routes: Vec<ProviderRoute>,
     allow_internal: bool,
+    proxy_authorization: String,
     accept_shutdown: Option<oneshot::Sender<()>>,
     provider_shutdown: Option<oneshot::Sender<()>>,
     closed: bool,
@@ -30,13 +32,15 @@ pub struct Broker {
 
 impl Broker {
     /// A broker over `allow` and `ports`, optionally answering as the
-    /// providers in `routes`.
+    /// providers in `routes`. Proxy requests must carry `proxy_authorization`,
+    /// supplied as a complete `Basic <base64(session:secret)>` header value.
     pub fn new(
         allow: Vec<String>,
         ports: Vec<u16>,
         log: Logger,
         routes: Vec<ProviderRoute>,
         allow_internal: bool,
+        proxy_authorization: String,
     ) -> Self {
         Self {
             allow,
@@ -44,6 +48,7 @@ impl Broker {
             log,
             routes,
             allow_internal,
+            proxy_authorization,
             accept_shutdown: None,
             provider_shutdown: None,
             closed: false,
@@ -72,6 +77,7 @@ impl Broker {
             allow: self.allow.clone(),
             ports: self.ports.clone(),
             allow_internal: self.allow_internal,
+            proxy_authorization: self.proxy_authorization.clone(),
             log: self.log.clone(),
             resolve: None,
             provider_port,
@@ -86,7 +92,11 @@ impl Broker {
                 };
                 let Ok((stream, _peer)) = accepted else { break };
                 let state = Arc::clone(&state);
-                tokio::spawn(handle(stream, state));
+                tokio::spawn(handle(
+                    stream,
+                    state,
+                    |addresses, port, deadline| async move { dial(&addresses, port, deadline).await },
+                ));
             }
         });
         self.accept_shutdown = Some(shutdown_sender);
@@ -106,6 +116,7 @@ impl Broker {
             allow: self.allow.clone(),
             ports: self.ports.clone(),
             allow_internal: self.allow_internal,
+            proxy_authorization: self.proxy_authorization.clone(),
             log: self.log.clone(),
             resolve: None,
             provider_port: 0,
@@ -144,14 +155,25 @@ impl Broker {
     }
 }
 
-/// Handles one client connection: tunnel, forward, serve the provider, or
-/// refuse.
-async fn handle(mut stream: TcpStream, state: Arc<ProviderState>) {
+/// Handles one client connection with an injected stream and upstream dial.
+/// Provider requests retain their separate loopback transport and nonce check.
+pub(super) async fn handle<S, U, F>(
+    mut stream: S,
+    state: Arc<ProviderState>,
+    dial_upstream: impl FnOnce(Vec<String>, u16, tokio::time::Instant) -> F,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    U: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    F: Future<Output = std::io::Result<U>>,
+{
     let Some(head) = read_request_head(&mut stream).await else {
         return;
     };
     if let Some(target) = parse_connect(head.lines().next().unwrap_or("")) {
-        let Some(mut upstream) = admit(&mut stream, &target, &state).await else {
+        if !authenticate_proxy(&mut stream, &head, &target, &state).await {
+            return;
+        }
+        let Some(mut upstream) = admit(&mut stream, &target, &state, dial_upstream).await else {
             return;
         };
         if stream
@@ -164,7 +186,11 @@ async fn handle(mut stream: TcpStream, state: Arc<ProviderState>) {
         return;
     }
     if let Some(forward) = parse_forward(&head) {
-        let Some(mut upstream) = admit(&mut stream, &forward.target, &state).await else {
+        if !authenticate_proxy(&mut stream, &head, &forward.target, &state).await {
+            return;
+        }
+        let Some(mut upstream) = admit(&mut stream, &forward.target, &state, dial_upstream).await
+        else {
             return;
         };
         if upstream.write_all(forward.head.as_bytes()).await.is_ok() {
@@ -179,15 +205,47 @@ async fn handle(mut stream: TcpStream, state: Arc<ProviderState>) {
         let _ = serve_provider(&mut stream, &head, state.provider_port).await;
         return;
     }
-    let _ = refuse(&mut stream, 400, "the broker speaks only as a proxy").await;
+    let _ = refuse(&mut stream, 400, "the broker speaks only as a proxy", &[]).await;
+}
+
+/// Challenges an unauthenticated proxy request before target admission.
+async fn authenticate_proxy<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    head: &str,
+    target: &Target,
+    state: &ProviderState,
+) -> bool {
+    if carries_proxy_credential(head, &state.proxy_authorization) {
+        return true;
+    }
+    state.log.info(
+        "proxy authentication refused",
+        &fields([
+            ("host", target.host.as_str().into()),
+            ("port", i64::from(target.port).into()),
+        ]),
+    );
+    let _ = refuse(
+        writer,
+        407,
+        "Proxy Authentication Required",
+        &[("Proxy-Authenticate", "Basic realm=\"errand\"")],
+    )
+    .await;
+    false
 }
 
 /// Gates a target and dials it, or refuses the client and says why.
-async fn admit<W: tokio::io::AsyncWrite + Unpin>(
+async fn admit<W, U, F>(
     writer: &mut W,
     target: &Target,
     state: &ProviderState,
-) -> Option<TcpStream> {
+    dial_upstream: impl FnOnce(Vec<String>, u16, tokio::time::Instant) -> F,
+) -> Option<U>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    F: Future<Output = std::io::Result<U>>,
+{
     let host = target.host.as_str();
     let port = i64::from(target.port);
     if !state.ports.contains(&target.port) || !host_allowed(host, &state.allow) {
@@ -195,7 +253,7 @@ async fn admit<W: tokio::io::AsyncWrite + Unpin>(
             "egress refused",
             &fields([("host", host.into()), ("port", port.into())]),
         );
-        let _ = refuse(writer, 403, "not on the egress allowlist").await;
+        let _ = refuse(writer, 403, "not on the egress allowlist", &[]).await;
         return None;
     }
 
@@ -207,7 +265,7 @@ async fn admit<W: tokio::io::AsyncWrite + Unpin>(
         state
             .log
             .warn("egress lookup timed out", &fields([("host", host.into())]));
-        let _ = refuse(writer, 504, "the name did not resolve in time").await;
+        let _ = refuse(writer, 504, "the name did not resolve in time", &[]).await;
         return None;
     };
     let addresses = match resolved {
@@ -217,7 +275,7 @@ async fn admit<W: tokio::io::AsyncWrite + Unpin>(
                 "egress could not resolve a name on this host",
                 &fields([("host", host.into()), ("detail", why.into())]),
             );
-            let _ = refuse(writer, 502, "the name did not resolve").await;
+            let _ = refuse(writer, 502, "the name did not resolve", &[]).await;
             return None;
         }
         Err(NoAddress::Internal) => {
@@ -225,13 +283,13 @@ async fn admit<W: tokio::io::AsyncWrite + Unpin>(
                 "egress refused a host-internal target",
                 &fields([("host", host.into())]),
             );
-            let _ = refuse(writer, 403, "not a public host").await;
+            let _ = refuse(writer, 403, "not a public host", &[]).await;
             return None;
         }
     };
 
     let deadline = tokio::time::Instant::now() + DIAL_BUDGET;
-    match dial(&addresses, target.port, deadline).await {
+    match dial_upstream(addresses, target.port, deadline).await {
         Ok(upstream) => {
             state.log.info(
                 "egress allowed",
@@ -240,7 +298,7 @@ async fn admit<W: tokio::io::AsyncWrite + Unpin>(
             Some(upstream)
         }
         Err(error) => {
-            let _ = refuse(writer, 502, "upstream unreachable").await;
+            let _ = refuse(writer, 502, "upstream unreachable", &[]).await;
             state.log.warn(
                 "upstream connect failed",
                 &fields([("host", host.into()), ("detail", error.to_string().into())]),
@@ -290,13 +348,13 @@ pub(super) async fn dial(
 /// The head was read to find out whether this was a tunnel, so it is written
 /// on before the two are joined; everything after it is still in the socket
 /// and flows through untouched, body and event stream alike.
-async fn serve_provider(
-    stream: &mut TcpStream,
+async fn serve_provider<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    stream: &mut S,
     head: &str,
     provider_port: u16,
 ) -> std::io::Result<()> {
     let Ok(mut inner) = TcpStream::connect(("127.0.0.1", provider_port)).await else {
-        return refuse(stream, 502, "the provider endpoint is not up").await;
+        return refuse(stream, 502, "the provider endpoint is not up", &[]).await;
     };
     inner.write_all(head.as_bytes()).await?;
     tokio::io::copy_bidirectional(stream, &mut inner).await?;
@@ -354,10 +412,17 @@ async fn refuse<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut W,
     code: u16,
     reason: &str,
+    headers: &[(&str, &str)],
 ) -> std::io::Result<()> {
+    let mut head = format!("HTTP/1.1 {code} {reason}\r\n");
+    for (name, value) in headers {
+        head.push_str(name);
+        head.push_str(": ");
+        head.push_str(value);
+        head.push_str("\r\n");
+    }
+    head.push_str("\r\n");
     // The client may have gone; the refusal is best-effort.
-    let _ = writer
-        .write_all(format!("HTTP/1.1 {code} {reason}\r\n\r\n").as_bytes())
-        .await;
+    let _ = writer.write_all(head.as_bytes()).await;
     writer.shutdown().await
 }
