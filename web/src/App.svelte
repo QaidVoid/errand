@@ -1,7 +1,9 @@
 <script lang="ts">
   import Appearance from "./components/Appearance.svelte";
+  import Composer from "./components/Composer.svelte";
   import FileTree from "./components/FileTree.svelte";
   import Icon from "./components/Icon.svelte";
+  import LensMenu from "./components/LensMenu.svelte";
   import FileView from "./components/FileView.svelte";
   import SessionList from "./components/SessionList.svelte";
   import Transcript from "./components/Transcript.svelte";
@@ -48,41 +50,35 @@
   let appearanceOpen = $state(false);
   let catalog = $state<ModelCatalog | null>(null);
   let commandList = $state<CommandInfo[]>([]);
-  /** Whether the model switcher under the session's model is open. */
-  let switching = $state(false);
-  let switchTo = $state("");
-  let newModel = $state("");
+  /** What the home page will start, as it is being written. */
+  let homeDraft = $state("");
+  let newProject = $state("");
+  let newModel = $state<string | null>(null);
 
   /** Whether this browser may start and prompt sessions, whatever made it so. */
   const canAct = $derived(!observer && (!login || mayAct));
 
-  /** Every name `--model` and `!model` accept, short names first. */
-  const modelNames = $derived(
-    catalog === null ? [] : [...Object.keys(catalog.aliases), ...catalog.models],
-  );
-
-  /**
-   * Commands that start with what has been typed, while the first word is
-   * still being typed. Once a space follows it the command is chosen, and the
-   * list would only cover what the argument is being written over.
-   */
-  const suggestions = $derived(
-    /^![^\s]*$/.test(draft)
-      ? commandList.filter((command) => command.name.startsWith(draft)).slice(0, 8)
-      : [],
-  );
-
-  function complete(command: CommandInfo): void {
-    draft = command.argument === null ? command.name : `${command.name} `;
-  }
-
-  async function switchModel(): Promise<void> {
-    const name = switchTo.trim();
-    if (name.length === 0) return;
-    switching = false;
-    switchTo = "";
+  /** Switches the open session's model the way the thread would, with `!model`. */
+  async function switchModel(name: string | null): Promise<void> {
+    if (name === null) return;
     draft = `!model ${name}`;
     await send();
+  }
+
+  /** Back to the home page, where what is written starts a session. */
+  function goHome(): void {
+    stop?.();
+    stop = null;
+    stopDrawing();
+    selected = null;
+    entries = [];
+    usage = null;
+    viewing = null;
+    drawer = null;
+    const url = new URL(location.href);
+    url.searchParams.delete("session");
+    url.hash = "";
+    history.pushState({}, "", url);
   }
   /** Whether the list shows only this visitor's sessions, and only running ones. */
   let onlyMine = $state(localStorage.getItem("only-mine") === "true");
@@ -246,7 +242,6 @@
     if (event.key === "Escape") {
       if (keysOpen) keysOpen = false;
       else if (drawer !== null) drawer = null;
-      else if (starting) starting = false;
       else if (search.length > 0) search = "";
       else if (searching) searching = false;
       else if (typing(event.target)) (event.target as HTMLElement).blur();
@@ -284,9 +279,6 @@
    */
   let drawer = $state<"sessions" | "files" | null>(null);
 
-  let starting = $state(false);
-  let newProject = $state("");
-  let newPrompt = $state("");
 
   let stop: (() => void) | null = null;
 
@@ -366,15 +358,12 @@
       fail(error);
       return;
     }
-    if (selected !== null && !sessions.some((session) => session.id === selected)) return;
-    if (selected !== null || sessions.length === 0) return;
+    if (selected !== null) return;
 
-    // The address wins over the first in the list, so a reload lands back on
-    // the session that was open rather than on whichever sorts first.
+    // Only a session the address names is opened. Anything else lands on the
+    // home page, which is where a new session is started from.
     const asked = inAddress();
-    // Otherwise the first the list shows, so a filter decides what opens too.
-    const first = listed[0] ?? sessions[0]!;
-    select(asked !== null && sessions.some((session) => session.id === asked) ? asked : first.id);
+    if (asked !== null && sessions.some((session) => session.id === asked)) select(asked, true);
   }
 
   function select(id: string, fromAddress = false): void {
@@ -467,34 +456,19 @@
     }
   }
 
-  function onKey(event: KeyboardEvent): void {
-    const first = suggestions[0];
-    if (event.key === "Tab" && first !== undefined) {
-      event.preventDefault();
-      complete(first);
-      return;
-    }
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void send();
-    }
-  }
-
   async function start(): Promise<void> {
     const project = newProject.trim();
-    const asked = newModel.trim();
+    const written = homeDraft.trim();
+    if (written.length === 0) return;
     // The same flag a message in the channel would carry, so the daemon reads
     // the model exactly as it would there.
-    const prompt = asked.length > 0 ? `--model ${asked} ${newPrompt.trim()}` : newPrompt.trim();
-    if (newPrompt.trim().length === 0) return;
+    const prompt = newModel === null ? written : `--model ${newModel} ${written}`;
 
     failure = null;
     try {
       const started = await api.start(project, prompt);
       newProject = "";
-      newPrompt = "";
-      newModel = "";
-      starting = false;
+      homeDraft = "";
       await refresh();
       if (started.id !== undefined) select(started.id);
     } catch (error) {
@@ -562,6 +536,19 @@
   });
 </script>
 
+{#snippet gate(what: string)}
+  {#if observer}
+    <p class="gate">This interface is read only. Send messages from the chat thread.</p>
+  {:else if login && visitor === null}
+    <p class="gate">
+      <span>Log in to {what}.</span>
+      <a class="discord" href={api.loginUrl}>Log in with Discord</a>
+    </p>
+  {:else}
+    <p class="gate">Your account can read here, but cannot drive sessions.</p>
+  {/if}
+{/snippet}
+
 <div
   class="shell"
   class:files-open={filesOpen && selected !== null}
@@ -578,7 +565,7 @@
     </header>
 
     {#if !observer && (mayAct || !login)}
-      <button class="new" onclick={() => (starting = true)}>
+      <button class="new" onclick={goHome}>
         <Icon name="plus" /> New session
       </button>
     {/if}
@@ -635,38 +622,124 @@
 
   <main>
     {#if selected === null}
-      <div class="welcome">
-        <span class="logo big" aria-hidden="true">e</span>
-        <p>Pick a session, or start one.</p>
+      <div class="home">
+        <button class="pull floating" onclick={() => (drawer = "sessions")} aria-label="Sessions"
+          ><Icon name="menu" /></button
+        >
+        <div class="hero">
+          <span class="logo big" aria-hidden="true">e</span>
+          <h2>
+            {visitor === null ? "What should it work on?" : `What should it work on, ${visitor.name}?`}
+          </h2>
+          <p>
+            A session gets a sandbox of its own and a thread in the channel, and keeps going
+            while you are away.
+          </p>
+        </div>
+
+        {#if failure !== null}
+          <p class="banner bad" role="alert">
+            <span>{failure}</span>
+            <button class="quiet" onclick={() => (failure = null)} aria-label="Dismiss">dismiss</button>
+          </p>
+        {/if}
+
+        {#if canAct}
+          <Composer
+            bind:draft={homeDraft}
+            roomy
+            placeholder="Describe the task. Enter starts it."
+            {catalog}
+            model={newModel}
+            allowDefault
+            onModel={(name) => (newModel = name)}
+            onSend={() => void start()}
+          >
+            {#snippet tools()}
+              <input
+                class="project"
+                bind:value={newProject}
+                placeholder="project (optional)"
+                spellcheck="false"
+                title="A name to come back to the same directory next time"
+              />
+            {/snippet}
+          </Composer>
+        {:else}
+          {@render gate("start a session")}
+        {/if}
+
+        {#if listed.some((session) => session.live)}
+          <div class="recent">
+            <p>Running now</p>
+            {#each listed.filter((session) => session.live).slice(0, 4) as session (session.id)}
+              <button onclick={() => select(session.id)}>
+                <span class="dot" class:busy={session.busy}></span>
+                <span class="what">{nameFrom(session.opening)?.title ?? session.project}</span>
+                <span class="when">{ago(session.lastActiveAt)}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
       </div>
     {:else}
       <header class="bar">
-        <button
-          class="pull"
-          onclick={() => (drawer = "sessions")}
-          aria-label="Sessions"><Icon name="menu" /></button
+        <button class="pull" onclick={() => (drawer = "sessions")} aria-label="Sessions"
+          ><Icon name="menu" /></button
         >
-        <div class="title">
-          <span class="named" title={current?.opening ?? current?.project ?? ""}>
-            {nameFrom(current?.opening)?.title ?? current?.project ?? selected}
-          </span>
-          <span class="status {status}">{status}</span>
-        </div>
-
-        {#if reading !== null}
-          <span class="where">turn {reading.at} of {reading.of}</span>
+        {#if searching}
+          <div class="finding">
+            <Icon name="search" />
+            <input
+              class="find"
+              bind:this={searchBox}
+              bind:value={search}
+              type="search"
+              placeholder="Search this session"
+              aria-label="Search this session"
+              onblur={() => {
+                if (search.length === 0) searching = false;
+              }}
+            />
+            <!-- Said as it is typed, so an empty result is plainly the search
+                 and not the session having nothing in it. -->
+            <span class="tally" aria-live="polite">
+              {#if search.trim().length === 0}
+                {""}
+              {:else if found.matches === 0}
+                no matches
+              {:else}
+                {found.matches} in {found.exchanges}
+              {/if}
+            </span>
+            <button
+              class="quiet"
+              aria-label="Close the search"
+              onclick={() => {
+                search = "";
+                searching = false;
+              }}>done</button
+            >
+          </div>
+        {:else}
+          <div class="title">
+            <span class="named" title={current?.opening ?? current?.project ?? ""}>
+              {nameFrom(current?.opening)?.title ?? current?.project ?? selected}
+            </span>
+            <span class="status {status}">{status}</span>
+          </div>
+          {#if usage !== null && usage.cost > 0}
+            <span class="spend">{money(usage.cost)}</span>
+          {/if}
+          <button
+            class="icon"
+            aria-label="Search this session"
+            title="Search this session (/)"
+            onclick={openSearch}><Icon name="search" /></button
+          >
         {/if}
-        {#if usage !== null && usage.turns > 0}
-          <span class="spend">{money(usage.cost)}</span>
-        {/if}
 
-        <button
-          class="icon"
-          aria-label="Search this session"
-          aria-expanded={searching}
-          title="Search this session (/)"
-          onclick={openSearch}><Icon name="search" /></button
-        >
+        <LensMenu bind:lens counts={lensCounts} />
         {#if guildId !== null && current?.threadId !== undefined}
           <a
             class="icon thread"
@@ -692,18 +765,6 @@
       <!-- One quiet line for what holds for the whole session, since none of it
            changes while it is read. -->
       <p class="facts">
-        {#if usage !== null && usage.model !== undefined}
-          {#if canAct && !ended}
-            <button
-              class="chip"
-              aria-expanded={switching}
-              title="Switch this session's model"
-              onclick={() => (switching = !switching)}>{usage.model} <span aria-hidden="true">v</span></button
-            >
-          {:else}
-            <span class="chip">{usage.model}</span>
-          {/if}
-        {/if}
         {#if usage !== null && usage.contextWindow}
           {@const used = Math.round((usage.contextTokens / usage.contextWindow) * 100)}
           <span
@@ -721,6 +782,9 @@
               : `, ${cacheRate(usage.input, usage.cacheRead, usage.cacheWrite)}% cached`}
           </span>
         {/if}
+        {#if reading !== null}
+          <span>exchange {reading.at} of {reading.of}</span>
+        {/if}
         {#if current !== undefined}
           <span class="when" title={new Date(current.lastActiveAt).toLocaleString()}>
             {ago(current.lastActiveAt)}
@@ -728,88 +792,8 @@
         {/if}
       </p>
 
-      {#if switching}
-        <form
-          class="switcher"
-          onsubmit={(event) => {
-            event.preventDefault();
-            void switchModel();
-          }}
-        >
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            bind:value={switchTo}
-            list="model-names"
-            autofocus
-            spellcheck="false"
-            placeholder="a model, provider/model, or a short name"
-            aria-label="Model to switch to"
-          />
-          <button class="primary" type="submit" disabled={switchTo.trim().length === 0}
-            >switch</button
-          >
-          <button type="button" class="quiet" onclick={() => (switching = false)}>cancel</button>
-          <span class="hint">Sends <code>!model</code>, so it applies from the next turn.</span>
-        </form>
-      {/if}
-
       {#if !connected}
         <p class="banner warn">Reconnecting to the daemon.</p>
-      {/if}
-
-      {#if searching || lensCounts.all > 0}
-        <div class="reading">
-          {#if searching}
-            <div class="finding">
-              <input
-                class="find"
-                bind:this={searchBox}
-                bind:value={search}
-                type="search"
-                placeholder="Search this session"
-                aria-label="Search this session"
-                onblur={() => {
-                  if (search.length === 0) searching = false;
-                }}
-              />
-              <!-- Said as it is typed, so an empty result is plainly the search
-                   and not the session having nothing in it. -->
-              <span class="tally" aria-live="polite">
-                {#if search.trim().length === 0}
-                  type to search
-                {:else if found.matches === 0}
-                  no matches
-                {:else}
-                  {found.matches} in {found.exchanges} exchange{found.exchanges === 1 ? "" : "s"}
-                {/if}
-              </span>
-              <button
-                class="quiet"
-                title="Clear the search"
-                aria-label="Clear the search"
-                onclick={() => {
-                  search = "";
-                  searching = false;
-                }}>clear</button
-              >
-            </div>
-          {/if}
-          <div class="lenses" role="group" aria-label="Narrow this session to">
-            {#each LENSES as value}
-              {@const count = lensCounts[value]}
-              <button
-                class:on={lens === value}
-                aria-pressed={lens === value}
-                disabled={count === 0 && value !== "all"}
-                title={LENS_HELP[value]}
-                onclick={() => (lens = value)}
-              >
-                {value}
-                <span class="count">{count}</span>
-              </button>
-            {/each}
-          </div>
-        </div>
       {/if}
 
       <!-- Keyed on the session, so switching gives a fresh pane rather than one
@@ -842,58 +826,27 @@
           </p>
         {/if}
 
-        {#if observer}
-          <p class="gate">This interface is read only. Send messages from the chat thread.</p>
-        {:else if login && visitor === null}
-          <p class="gate">
-            <span>Log in to chat in this session.</span>
-            <a class="discord" href={api.loginUrl}>Log in with Discord</a>
-          </p>
-        {:else if login && !mayAct}
-          <p class="gate">Your account can read here, but cannot drive sessions.</p>
-        {:else}
-          {#if suggestions.length > 0}
-            <ul class="suggestions" role="listbox" aria-label="Commands">
-              {#each suggestions as command, index (command.name)}
-                <li role="option" aria-selected={index === 0}>
-                  <button type="button" onclick={() => complete(command)}>
-                    <code>{command.name}{command.argument === null ? "" : ` ${command.argument}`}</code>
-                    <span>{command.summary}</span>
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-          <form
-            class="composer"
-            onsubmit={(event) => {
-              event.preventDefault();
-              void send();
-            }}
-          >
-            <textarea
-              bind:value={draft}
-              onkeydown={onKey}
-              rows="1"
-              disabled={ended}
-              placeholder={ended
-                ? "This session has ended."
-                : live
-                  ? "Message the agent, or !help"
-                  : "Send a message to pick this session up again"}
-              aria-label="Message"
-            ></textarea>
-            <button
-              class="send"
-              type="submit"
-              disabled={ended || draft.trim().length === 0}
-              aria-label="Send"><Icon name="send" /></button
-            >
-          </form>
+        {#if canAct}
+          <Composer
+            bind:draft
+            disabled={ended}
+            placeholder={ended
+              ? "This session has ended."
+              : live
+                ? "Message the agent"
+                : "Send a message to pick this session up again"}
+            commands={commandList}
+            {catalog}
+            model={usage?.model ?? null}
+            onModel={(name) => void switchModel(name)}
+            onSend={() => void send()}
+          />
           <p class="note">
             {#if visitor !== null}Sent as {visitor.name}, and posted in the thread.{/if}
-            Enter sends, Shift+Enter adds a line, and <code>!</code> lists the commands.
+            Shift+Enter adds a line. Type <code>!</code> for commands.
           </p>
+        {:else}
+          {@render gate("chat in this session")}
         {/if}
       </div>
     {/if}
@@ -940,69 +893,6 @@
     <button class="scrim" aria-label="Close" onclick={() => (drawer = null)}></button>
   {/if}
 
-  {#if starting}
-    <div class="modal" role="presentation" onclick={() => (starting = false)}>
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <div
-        class="sheet"
-        role="dialog"
-        tabindex="-1"
-        aria-modal="true"
-        aria-label="Start a session"
-        onclick={(event) => event.stopPropagation()}
-      >
-      <form
-        class="start"
-        onsubmit={(event) => {
-          event.preventDefault();
-          void start();
-        }}
-      >
-        <h2>New session</h2>
-        <label>
-          <span>What should it do?</span>
-          <!-- svelte-ignore a11y_autofocus -->
-          <textarea
-            bind:value={newPrompt}
-            rows="4"
-            autofocus
-            placeholder="Describe the task"
-            onkeydown={(event) => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void start();
-            }}
-          ></textarea>
-        </label>
-        <label>
-          <span>Model <em>optional</em></span>
-          <input
-            bind:value={newModel}
-            list="model-names"
-            spellcheck="false"
-            placeholder={catalog?.default ?? "the provider's default"}
-          />
-        </label>
-        <label>
-          <span>Project <em>optional</em></span>
-          <input
-            bind:value={newProject}
-            placeholder="a name to come back to the same directory"
-            spellcheck="false"
-          />
-        </label>
-        <p class="note">
-          It gets a thread in the channel too{#if visitor !== null}, started as {visitor.name}{/if}.
-        </p>
-        <footer>
-          <button type="button" class="quiet" onclick={() => (starting = false)}>cancel</button>
-          <button class="primary" type="submit" disabled={newPrompt.trim().length === 0}
-            >Start</button
-          >
-        </footer>
-      </form>
-      </div>
-    </div>
-  {/if}
-
   {#if keysOpen}
     <div
       class="modal"
@@ -1032,11 +922,6 @@
     <Appearance onClose={() => (appearanceOpen = false)} />
   {/if}
 
-  <datalist id="model-names">
-    {#each modelNames as name (name)}
-      <option value={name}></option>
-    {/each}
-  </datalist>
 </div>
 
 <style>
@@ -1229,17 +1114,122 @@
     overflow: hidden;
   }
 
-  .welcome {
+  /*
+   * Where a session is started: the composer in the middle of the page with
+   * nothing else competing for it, as the first thing anyone sees.
+   */
+  .home {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 22px;
+    height: 100%;
+    overflow-y: auto;
+    padding: 32px 24px 12vh;
+  }
+
+  .home > :global(:not(.floating)) {
+    width: 100%;
+    max-width: 720px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .hero {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 14px;
-    margin: auto;
+    gap: 10px;
+    text-align: center;
+  }
+
+  .hero h2 {
+    margin: 6px 0 0;
+    font-size: 24px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    color: var(--ink-strong);
+  }
+
+  .hero p {
+    max-width: 46ch;
+    margin: 0;
+    font-size: 13.5px;
     color: var(--faint);
   }
 
-  .welcome p {
-    margin: 0;
+  .project {
+    flex: 0 1 150px;
+    width: 0;
+    min-width: 72px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+
+  .recent {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .recent p {
+    margin: 0 0 4px 10px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ghost);
+  }
+
+  .recent button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    text-align: left;
+  }
+
+  .recent button:hover {
+    background: var(--hover);
+  }
+
+  .recent .dot {
+    width: 7px;
+    height: 7px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--faint);
+  }
+
+  .recent .dot.busy {
+    background: var(--ok);
+    box-shadow: 0 0 0 3px var(--ok-soft);
+  }
+
+  .recent .what {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--ink);
+  }
+
+  .recent .when {
+    flex-shrink: 0;
+    font-size: 11.5px;
+    color: var(--faint);
+  }
+
+  .pull.floating {
+    position: absolute;
+    top: 12px;
+    left: 12px;
   }
 
   .bar {
@@ -1313,7 +1303,6 @@
   }
 
   .icon:hover,
-  .icon[aria-expanded="true"],
   .icon[aria-pressed="true"] {
     background: var(--hover);
     color: var(--ink);
@@ -1335,98 +1324,11 @@
     display: none;
   }
 
-  .chip {
-    padding: 1px 8px;
-    border-radius: 6px;
-    background: var(--fill);
-    font-family: var(--mono);
-    color: var(--muted);
-  }
 
-  button.chip {
-    color: var(--ink);
-    cursor: pointer;
-  }
-
-  button.chip:hover,
-  button.chip[aria-expanded="true"] {
-    background: var(--fill-hover);
-  }
-
-  button.chip span {
-    color: var(--faint);
-    font-size: 10px;
-  }
-
-  .switcher {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 10px 20px;
-    border-bottom: 1px solid var(--subtle);
-    background: var(--surface);
-  }
-
-  .switcher input {
-    flex: 1;
-    min-width: 220px;
-    padding: 6px 10px;
-    font-family: var(--mono);
-    font-size: 12.5px;
-  }
-
-  .switcher .hint {
-    font-size: 11.5px;
-    color: var(--faint);
-  }
-
-  .switcher code,
   .note code {
     padding: 0 4px;
     border-radius: 4px;
     background: var(--code-inline);
-  }
-
-  .suggestions {
-    max-width: var(--measure);
-    margin: 0 auto 6px;
-    padding: 4px;
-    list-style: none;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: var(--menu);
-    box-shadow: 0 12px 32px -12px rgb(0 0 0 / 35%);
-  }
-
-  .suggestions button {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    width: 100%;
-    padding: 6px 10px;
-    border-radius: 8px;
-    text-align: left;
-  }
-
-  .suggestions li[aria-selected="true"] button,
-  .suggestions button:hover {
-    background: var(--hover);
-  }
-
-  .suggestions code {
-    flex-shrink: 0;
-    color: var(--accent);
-    font-size: 12.5px;
-  }
-
-  .suggestions span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 12.5px;
-    color: var(--muted);
   }
 
   .meter {
@@ -1476,28 +1378,30 @@
     background: var(--danger-soft);
   }
 
-  .reading {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    padding: 8px 18px;
-    border-bottom: 1px solid var(--subtle);
-  }
-
   .finding {
     display: flex;
     align-items: center;
     gap: 8px;
     flex: 1;
-    min-width: 200px;
+    min-width: 0;
+    padding: 0 4px 0 10px;
+    border: 1px solid var(--composer-focus-line);
+    border-radius: 10px;
+    background: var(--composer-bg);
+    color: var(--faint);
   }
 
   .find {
     flex: 1;
-    min-width: 120px;
-    padding: 6px 10px;
-    font-size: 12.5px;
+    min-width: 0;
+    padding: 6px 0;
+    border: none;
+    background: transparent;
+    font-size: 13px;
+  }
+
+  .find:focus {
+    outline: none;
   }
 
   .tally {
@@ -1506,18 +1410,14 @@
     white-space: nowrap;
   }
 
-  .lenses,
+
   .doing {
     display: flex;
     gap: 2px;
     flex-shrink: 0;
-  }
-
-  .doing {
     margin-bottom: 10px;
   }
 
-  .lenses button,
   .doing button {
     padding: 3px 9px;
     border-radius: 999px;
@@ -1525,97 +1425,14 @@
     color: var(--faint);
   }
 
-  .lenses button:hover,
+
   .doing button:hover {
     color: var(--ink);
-  }
-
-  .lenses button.on {
-    background: var(--selected);
-    color: var(--ink);
-  }
-
-  .lenses .count {
-    margin-left: 5px;
-    font-variant-numeric: tabular-nums;
-    color: var(--ghost);
-  }
-
-  .lenses button.on .count {
-    color: var(--muted);
-  }
-
-  .lenses button:disabled {
-    opacity: 0.4;
-    cursor: default;
   }
 
   .dock {
     padding: 8px 20px 16px;
     background: linear-gradient(to bottom, transparent, var(--bg) 18px);
-  }
-
-  .composer {
-    display: flex;
-    align-items: flex-end;
-    gap: 8px;
-    max-width: var(--measure);
-    margin: 0 auto;
-    padding: 8px 8px 8px 14px;
-    border: 1px solid var(--composer-line);
-    border-radius: 16px;
-    background: var(--composer-bg);
-    box-shadow: 0 6px 20px -8px rgb(0 0 0 / 25%);
-    transition: border-color 120ms ease;
-  }
-
-  .composer:focus-within {
-    border-color: var(--composer-focus-line);
-  }
-
-  .composer textarea {
-    flex: 1;
-    min-height: 34px;
-    max-height: 200px;
-    padding: 7px 0;
-    border: none;
-    background: transparent;
-    color: var(--ink);
-    font: inherit;
-    resize: none;
-    field-sizing: content;
-  }
-
-  .composer textarea:focus {
-    outline: none;
-  }
-
-  .composer textarea::placeholder {
-    color: var(--faint);
-  }
-
-  .send {
-    display: grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    flex-shrink: 0;
-    border-radius: 10px;
-    background: var(--send-bg);
-    color: var(--send-icon);
-    font-size: 16px;
-    font-weight: 700;
-    transition: background 120ms ease;
-  }
-
-  .send:hover {
-    background: var(--send-bg-hover);
-  }
-
-  .send:disabled {
-    background: var(--send-bg-off);
-    color: var(--send-icon-off);
-    cursor: default;
   }
 
   .note {
@@ -1697,26 +1514,7 @@
     color: var(--ink);
   }
 
-  .primary {
-    padding: 7px 16px;
-    border-radius: 9px;
-    background: var(--send-bg);
-    color: var(--send-icon);
-    font-weight: 600;
-  }
-
-  .primary:hover {
-    background: var(--send-bg-hover);
-  }
-
-  .primary:disabled {
-    background: var(--send-bg-off);
-    color: var(--send-icon-off);
-    cursor: default;
-  }
-
-  input,
-  textarea {
+  input {
     color: var(--ink);
     background: var(--composer-bg);
     border: 1px solid var(--line);
@@ -1725,8 +1523,7 @@
     font: inherit;
   }
 
-  input::placeholder,
-  textarea::placeholder {
+  input::placeholder {
     color: var(--faint);
   }
 
@@ -1773,49 +1570,11 @@
     box-shadow: 0 24px 64px rgb(0 0 0 / 40%);
   }
 
-  .sheet:has(.start) {
-    width: min(520px, 94vw);
-  }
-
-  .start {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
   .sheet h2 {
     margin: 0;
     font-size: 15px;
     font-weight: 600;
     color: var(--ink-strong);
-  }
-
-  .start label {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 12.5px;
-    color: var(--muted);
-  }
-
-  .start em {
-    font-style: normal;
-    color: var(--ghost);
-  }
-
-  .start textarea {
-    resize: vertical;
-  }
-
-  .start .note {
-    margin: 0;
-    text-align: left;
-  }
-
-  .start footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
   }
 
   .sheet dl {
@@ -1907,7 +1666,6 @@
 
     .bar,
     .facts,
-    .reading,
     .dock {
       padding-left: 12px;
       padding-right: 12px;

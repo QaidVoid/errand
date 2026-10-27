@@ -26,7 +26,7 @@ use crate::log::now_ms;
 use crate::provider::models::AvailableModel;
 use crate::sandbox::paths;
 use crate::sandbox::paths::host_path_under;
-use crate::session::commands::COMMANDS;
+use crate::session::commands::{COMMANDS, CommandAccess};
 use crate::session::event::SessionEvent;
 use crate::session::files::MAX_INLINE_BYTES;
 use crate::session::files::{read_directory, read_file_for_display};
@@ -507,14 +507,19 @@ async fn models(State(server): State<ServerState>) -> Response {
 
 /// The commands a session answers to, from the same table the thread's help
 /// is written from.
+///
+/// Leaves out what only the daemon answers, in the channel: a session never
+/// sees those, so offering one here would offer something that does nothing.
 async fn commands() -> Response {
     let listed: Vec<Value> = COMMANDS
         .iter()
+        .filter(|(_, meta)| meta.access != CommandAccess::Host)
         .map(|(name, meta)| {
             json!({
                 "name": name,
                 "argument": meta.argument,
                 "summary": meta.summary,
+                "group": meta.group.title(),
             })
         })
         .collect();

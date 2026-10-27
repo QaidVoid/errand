@@ -44,6 +44,18 @@ pub enum CommandGroup {
     You,
 }
 
+impl CommandGroup {
+    /// The heading a group is listed under.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Session => "The session",
+            Self::People => "Who takes part",
+            Self::Project => "The project",
+            Self::You => "You and the host",
+        }
+    }
+}
+
 /// One command: who may run it, what it does, and what it takes.
 #[derive(Debug, Clone, Copy)]
 pub struct CommandMeta {

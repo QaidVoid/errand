@@ -1232,12 +1232,14 @@ async fn the_interface_offers_the_commands_and_models_a_session_accepts() {
                 .await
                 .unwrap();
             let listed = commands.as_array().unwrap();
-            assert_eq!(listed.len(), crate::session::commands::COMMANDS.len());
             assert!(listed.contains(&json!({
                 "name": "!model",
                 "argument": "[name]",
                 "summary": "show the models, or switch to one",
+                "group": "The session",
             })));
+            // Answered by the daemon in the channel, never by a session.
+            assert!(!listed.iter().any(|command| command["name"] == "!shutdown"));
 
             let models = message(&client, &harness.base, "/api/models")
                 .await

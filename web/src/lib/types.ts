@@ -142,6 +142,8 @@ export interface CommandInfo {
   /** The argument as a person would write it, when it takes one. */
   argument: string | null;
   summary: string;
+  /** The heading it is listed under in the thread's help. */
+  group: string;
 }
 
 /** A node in a project's file tree. */
