@@ -5,19 +5,18 @@
 //! reporting an edit as a diff rather than as a name, and posting an image the
 //! agent made as an upload rather than as a path.
 
-use std::fmt::Write as _;
-
 use super::{IncomingMessage, MAX_DIFFABLE_BYTES, MAX_INLINE, MAX_MEDIA_PER_TURN, Running};
 use crate::agent::protocol::{MediaKind, ProducedMedia};
 use crate::chat::diff::file_diff;
 use crate::chat::render::{
-    bytes as byte_count, connection_line, directory_listing, file_view, inert, server_text, widen,
+    bytes as byte_count, connection_line, directory_listing, file_view, inert, media_caption, widen,
 };
 use crate::log::{LogValue, fields};
 use crate::provider::audio::audio_extension;
 use crate::provider::images::{endpoint_with_effort, image_extension};
+use crate::provider::speech::endpoint as speech_endpoint;
 use crate::sandbox::paths;
-use crate::session::commands::image_args;
+use crate::session::commands::{SpeechArgs, image_args, speech_args};
 use crate::session::event::{ReactionOutcome, SessionEvent};
 use crate::session::files::{NotAFileError, read_directory, read_file_for_display};
 
@@ -367,6 +366,112 @@ impl Running {
             .await;
     }
 
+    /// Reads a text aloud with the speech model the configuration names.
+    ///
+    /// One request to `POST {baseUrl}/audio/speech`, answered as bytes,
+    /// which are posted to the thread as an upload. Deliberately not a turn,
+    /// as a picture is not: the text goes to the speech endpoint, not to the
+    /// model the session chats with.
+    ///
+    /// The model is `agent.speechGen`, read as `!model` reads a name. It
+    /// takes no effort level, because the speech tiers are model names on
+    /// the server. A clip read this way is not the agent's making, so it
+    /// does not count toward the turn's media cap.
+    pub(super) async fn generate_speech(&mut self, rest: &str, message: &IncomingMessage) {
+        let asked = match speech_args(rest) {
+            Ok(asked) => asked,
+            Err(refused) => {
+                self.say(&refused).await;
+                self.react(&message.id, ReactionOutcome::Failed).await;
+                return;
+            }
+        };
+        let named = self
+            .options
+            .config
+            .agent
+            .speech_gen
+            .as_deref()
+            .map(str::trim)
+            .filter(|named| !named.is_empty());
+        let Some(named) = named else {
+            self.say(
+                "no speech model is configured; set `agent.speechGen` to a speech model that \
+                 answers `/audio/speech`",
+            )
+            .await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
+            return;
+        };
+        let Some(speak_text) = self.options.speak_text.clone() else {
+            self.say("this host has no way to read aloud").await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
+            return;
+        };
+
+        // Read from the catalog rather than this session's own copy of the
+        // configuration, so a name added since it was launched still works.
+        let endpoint = match speech_endpoint(
+            &self.options.config.agent,
+            &self.options.catalog.models(),
+            named,
+            &self.options.catalog.aliases(),
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(refused) => {
+                self.say(&refused.0).await;
+                self.react(&message.id, ReactionOutcome::Failed).await;
+                return;
+            }
+        };
+        let SpeechArgs {
+            text,
+            voice,
+            language,
+        } = asked;
+        let text = text.to_owned();
+
+        self.react(&message.id, ReactionOutcome::Accepted).await;
+        self.say(&connection_line(&format!(
+            "reading this aloud on `{}`",
+            endpoint.model
+        )))
+        .await;
+
+        let spoken = match speak_text(endpoint.clone(), text, voice, language).await {
+            Ok(spoken) => spoken,
+            Err(refused) => {
+                self.say(&refused).await;
+                self.react(&message.id, ReactionOutcome::Failed).await;
+                return;
+            }
+        };
+        let limit = self.options.config.output.max_upload_bytes;
+        let clip = match spoken.into_clip(limit) {
+            Ok(clip) => clip,
+            Err(refused) => {
+                self.say(&refused.0).await;
+                self.react(&message.id, ReactionOutcome::Failed).await;
+                return;
+            }
+        };
+
+        self.log.info(
+            "posting a clip the command read",
+            &fields([
+                ("model", LogValue::from(endpoint.model.as_str())),
+                ("bytes", LogValue::from(clip.bytes.len())),
+            ]),
+        );
+        self.views
+            .send(SessionEvent::Upload {
+                name: clip.name,
+                bytes: clip.bytes,
+                caption: clip.caption,
+            })
+            .await;
+    }
+
     /// Counts a returned image or clip, posts it while the turn is under the
     /// cap, and stops a running turn once it generates more than the cap.
     /// Past the cap the media is not posted, and the log and the thread say
@@ -489,24 +594,4 @@ impl Running {
             })
             .await;
     }
-}
-
-/// The caption an image or clip the agent made is posted with: where the
-/// tool saved it when it did, its size, and in brackets what its server
-/// said, such as a fallback to another model, so a reader sees it beside the
-/// media. `noun` is what was made, "an image" or "a clip".
-///
-/// The note is the server's free text, so it goes through [`server_text`]
-/// and sits in a code span. The path is made inert, so neither can ping
-/// anyone or close the code span.
-fn media_caption(saved: Option<&str>, size: f64, note: Option<&str>, noun: &str) -> String {
-    let mut caption = match saved {
-        Some(path) => format!("generated `{}` {}", inert(path), byte_count(size)),
-        None => format!("generated {noun}, {}", byte_count(size)),
-    };
-    let note = server_text(note.unwrap_or_default());
-    if !note.is_empty() {
-        let _ = write!(caption, " [`{note}`]");
-    }
-    caption
 }

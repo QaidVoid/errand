@@ -93,7 +93,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Guest,
             group: Session,
-            summary: "hold a prompt until the running turn finishes",
+            summary: "hold a prompt until the turn finishes",
             argument: Some("<prompt>"),
         },
     ),
@@ -102,7 +102,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Owner,
             group: Session,
-            summary: "open a pull request for the work on this branch",
+            summary: "open a pull request for this branch",
             argument: Some("[--repo <directory>] <title>"),
         },
     ),
@@ -111,7 +111,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Owner,
             group: Session,
-            summary: "summarise the conversation so far to free up context",
+            summary: "summarise the conversation to free context",
             argument: None,
         },
     ),
@@ -120,7 +120,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Owner,
             group: Session,
-            summary: "show the models available, or switch to one",
+            summary: "show the models, or switch to one",
             argument: Some("[name]"),
         },
     ),
@@ -133,13 +133,22 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
             argument: Some("<prompt>"),
         },
     ),
+    (
+        "!gen-speech",
+        CommandMeta {
+            access: Guest,
+            group: Session,
+            summary: "read a text aloud with the speech model",
+            argument: Some("<text>"),
+        },
+    ),
     // Who may take part. The owner's alone, for the same reason.
     (
         "!allow",
         CommandMeta {
             access: Owner,
             group: People,
-            summary: "let another account take part in this thread",
+            summary: "let somebody take part in this thread",
             argument: Some("<user>"),
         },
     ),
@@ -148,7 +157,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Owner,
             group: People,
-            summary: "withdraw another account from this thread",
+            summary: "withdraw somebody from this thread",
             argument: Some("<user>"),
         },
     ),
@@ -157,7 +166,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Guest,
             group: People,
-            summary: "who may take part in this thread",
+            summary: "who takes part in this thread",
             argument: None,
         },
     ),
@@ -171,7 +180,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Guest,
             group: People,
-            summary: "what is remembered about somebody, or this project",
+            summary: "what is remembered about somebody or the project",
             argument: Some("[@somebody|project]"),
         },
     ),
@@ -180,7 +189,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Owner,
             group: People,
-            summary: "drop what is remembered about somebody, or this project",
+            summary: "drop what is remembered about somebody or the project",
             argument: Some("<@somebody|project>"),
         },
     ),
@@ -251,7 +260,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Anyone,
             group: You,
-            summary: "how much of the provider's usage window is left",
+            summary: "what is left of the provider's usage window",
             argument: Some("[refresh]"),
         },
     ),
@@ -261,7 +270,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Owner,
             group: You,
-            summary: "ask the providers again which models they serve",
+            summary: "ask the providers again for their models",
             argument: Some("refresh"),
         },
     ),
@@ -272,7 +281,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Host,
             group: You,
-            summary: "power off the host this daemon runs on",
+            summary: "power off this daemon's host",
             argument: None,
         },
     ),
@@ -474,6 +483,78 @@ pub struct ImageArgs<'a> {
     pub effort: Option<String>,
     /// What to draw.
     pub prompt: &'a str,
+}
+
+/// Splits `!gen-speech [--voice <name>] [--language <code>] <text>` into the
+/// voice and language asked for, and the text.
+///
+/// The flags may come in either order, since a slash command offers them in
+/// its own order and a person types them in theirs. A flag value beginning
+/// with another flag is refused rather than swallowed, since a voice named
+/// `--language` is a command nobody finished. Anything else is the text,
+/// untouched: an unknown flag in it is read aloud rather than acted on,
+/// which is how `!gen-image` treats one too.
+pub fn speech_args(rest: &str) -> Result<SpeechArgs<'_>, String> {
+    let mut rest = rest.trim();
+    let mut voice: Option<String> = None;
+    let mut language: Option<String> = None;
+    while let Some((name, after)) = next_speech_flag(rest) {
+        // A flag with nothing, or with another flag, after it is one nobody
+        // finished, not a value nobody meant.
+        if after.trim().is_empty() || after.trim_start().starts_with("--") {
+            return Err(match name {
+                "--voice" => "say which voice, as `!gen-speech --voice <name> <text>`".to_owned(),
+                _ => "say which language, as `!gen-speech --language <code> <text>`".to_owned(),
+            });
+        }
+        let (value, remaining) = after
+            .trim_start()
+            .split_once(char::is_whitespace)
+            .unwrap_or((after.trim_start(), ""));
+        if name == "--voice" {
+            voice = Some(value.to_owned());
+        } else {
+            language = Some(value.to_owned());
+        }
+        rest = remaining.trim();
+    }
+    if rest.is_empty() {
+        return Err(
+            "say what to read, as `!gen-speech [--voice <name>] [--language <code>] <text>`"
+                .to_owned(),
+        );
+    }
+    Ok(SpeechArgs {
+        voice,
+        language,
+        text: rest,
+    })
+}
+
+/// The flag `rest` begins with, and what follows it, when it begins with one
+/// of the two this command reads. A flag left with nothing after it is one
+/// of these too, so it is refused rather than read aloud.
+fn next_speech_flag(rest: &str) -> Option<(&'static str, &str)> {
+    for name in ["--voice", "--language"] {
+        if let Some(after) = rest.strip_prefix(name)
+            && (after.is_empty() || after.starts_with(char::is_whitespace))
+        {
+            return Some((name, after));
+        }
+    }
+    None
+}
+
+/// What `!gen-speech` was asked for, after its arguments were read.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeechArgs<'a> {
+    /// The voice to read with, when one was asked for. None leaves it to the
+    /// server.
+    pub voice: Option<String>,
+    /// The language to read in, when one was asked for. None leaves it out.
+    pub language: Option<String>,
+    /// What to read.
+    pub text: &'a str,
 }
 
 /// Whether a message asks for a pull request.

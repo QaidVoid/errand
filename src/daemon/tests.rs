@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::{
-    Daemon, DaemonOptions, DrawImage, SlashCommand, StartError, create_sandbox, inert_settings,
-    render_startup_report,
+    Daemon, DaemonOptions, DrawImage, SlashCommand, SpeakText, StartError, create_sandbox,
+    inert_settings, render_startup_report,
 };
 use crate::agent::client::AgentProcess;
 use crate::chat::inbound::{InboundDecision, RawMessage};
@@ -24,6 +24,7 @@ use crate::memory::store::{MemoryStore, Scope};
 use crate::provider::discover::Catalog;
 use crate::provider::images::{Drawn, Endpoint as ImageEndpoint};
 use crate::provider::models::AvailableModel;
+use crate::provider::speech::{Endpoint as SpeechEndpoint, Spoken};
 use crate::sandbox::Backend;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
@@ -404,6 +405,7 @@ struct DaemonCase {
     power_off: Option<super::PowerOff>,
     describe_usage: Option<super::DescribeUsage>,
     draw_image: Option<DrawImage>,
+    speak_text: Option<SpeakText>,
     refresh_models: Option<super::RefreshModels>,
     report: Option<CapabilityReport>,
     start: bool,
@@ -418,6 +420,7 @@ impl Default for DaemonCase {
             power_off: None,
             describe_usage: None,
             draw_image: None,
+            speak_text: None,
             refresh_models: None,
             report: None,
             start: true,
@@ -486,6 +489,7 @@ async fn with_daemon(
             )
         },
         draw_image: case.draw_image.clone(),
+        speak_text: case.speak_text.clone(),
         memory: case.memory.clone(),
         power_off: case.power_off.clone(),
         describe_usage: case.describe_usage.clone(),
@@ -927,6 +931,228 @@ async fn a_refusal_to_draw_is_said_in_the_channel_where_it_was_asked() {
             })
         },
     )
+    .await;
+}
+
+/// What a reading was asked for, and the speaker that answers it.
+type Speaking = (
+    Arc<Mutex<Vec<(String, String, Option<String>, Option<String>)>>>,
+    SpeakText,
+);
+
+/// A clip's beginning: an ID3 tag, which is what a real answer carries.
+const READ_MP3: &[u8] = b"ID3\x04\x00\x00\x00\x00\x00\x00";
+
+/// Reads a fixed clip, recording what it was asked for.
+fn speaking() -> Speaking {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&asked);
+    let speak: SpeakText = Arc::new(
+        move |endpoint: SpeechEndpoint,
+              text: String,
+              voice: Option<String>,
+              language: Option<String>| {
+            seen.lock()
+                .unwrap()
+                .push((endpoint.model.clone(), text, voice, language));
+            Box::pin(async move {
+                Ok(Spoken {
+                    bytes: READ_MP3.to_vec(),
+                    extension: "mp3",
+                }) as Result<Spoken, String>
+            }) as Pin<Box<dyn Future<Output = Result<Spoken, String>> + Send>>
+        },
+    );
+    (asked, speak)
+}
+
+/// A speech generation is read, not started: one request to the provider's
+/// speech endpoint, and the bytes posted to the channel as an upload.
+fn speech_case(speech_gen: &str, speak: Option<SpeakText>) -> DaemonCase {
+    DaemonCase {
+        settings: Some(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "gateway": {
+                        "credentialName": "GATEWAY_KEY",
+                        "credential": "other",
+                        "baseUrl": "https://speech.example/v1",
+                    },
+                },
+                "speechGen": speech_gen,
+            },
+        })),
+        speak_text: speak,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn a_speech_generation_in_the_channel_reads_and_posts_it() {
+    let (asked, speak) = speaking();
+    with_daemon(speech_case("gateway/tts", Some(speak)), |harness| {
+        Box::pin(async move {
+            harness
+                .daemon
+                .handle(
+                    raw("!gen-speech --voice alloy hello there"),
+                    InboundDecision::Start,
+                )
+                .await;
+
+            // No thread and no sandbox: a clip is one call.
+            assert!(created(&harness.threads).is_empty());
+            assert!(harness.sandbox.launched.lock().unwrap().is_empty());
+
+            assert_eq!(
+                asked.lock().unwrap().as_slice(),
+                [(
+                    "tts".to_owned(),
+                    "hello there".to_owned(),
+                    Some("alloy".to_owned()),
+                    None
+                )]
+            );
+            let files = harness.files.lock().unwrap();
+            let (name, bytes, caption) = files.first().expect("a clip was posted");
+            assert_eq!(name, "clip.mp3");
+            assert_eq!(bytes, READ_MP3);
+            assert!(caption.starts_with("generated a clip, "), "{caption}");
+            assert!(harness.replies.lock().unwrap().is_empty());
+        })
+    })
+    .await;
+}
+
+/// Nothing is configured to read with, and the command says so rather than
+/// reading with whatever the provider defaults to.
+#[tokio::test]
+async fn a_speech_generation_in_the_channel_without_a_configured_model_says_so() {
+    let (asked, speak) = speaking();
+    with_daemon(
+        DaemonCase {
+            speak_text: Some(speak),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("!gen-speech hello there"), InboundDecision::Start)
+                    .await;
+
+                assert!(created(&harness.threads).is_empty());
+                assert!(
+                    harness
+                        .said()
+                        .contains("set `agent.speechGen` to a speech model"),
+                    "{}",
+                    harness.said()
+                );
+                assert!(asked.lock().unwrap().is_empty(), "nothing is read");
+                assert!(harness.files.lock().unwrap().is_empty());
+            })
+        },
+    )
+    .await;
+}
+
+/// A host that cannot read says so rather than failing silently.
+#[tokio::test]
+async fn a_speech_generation_on_a_host_that_cannot_read_says_so() {
+    with_daemon(speech_case("gateway/tts", None), |harness| {
+        Box::pin(async move {
+            harness
+                .daemon
+                .handle(raw("!gen-speech hello there"), InboundDecision::Start)
+                .await;
+
+            assert!(harness.said().contains("no way to read"));
+            assert!(harness.files.lock().unwrap().is_empty());
+        })
+    })
+    .await;
+}
+
+/// A server that refuses is reported in the channel it was asked in, in its
+/// own words.
+#[tokio::test]
+async fn a_refusal_to_read_is_said_in_the_channel_where_it_was_asked() {
+    with_daemon(
+        DaemonCase {
+            settings: Some(json!({
+                "agent": {
+                    "provider": "gateway",
+                    "providers": {
+                        "gateway": {
+                            "credential": "k",
+                            "baseUrl": "https://speech.example/v1",
+                        },
+                    },
+                    "speechGen": "tts",
+                },
+            })),
+            speak_text: Some(Arc::new(
+                |_: SpeechEndpoint, _: String, _: Option<String>, _: Option<String>| {
+                    Box::pin(async move {
+                        Err("gateway refused to read it: no credit left".to_owned())
+                            as Result<Spoken, String>
+                    })
+                        as Pin<Box<dyn Future<Output = Result<Spoken, String>> + Send>>
+                },
+            )),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("!gen-speech hello there"), InboundDecision::Start)
+                    .await;
+
+                assert!(
+                    harness.said().contains("no credit left"),
+                    "{}",
+                    harness.said()
+                );
+                assert!(harness.files.lock().unwrap().is_empty());
+            })
+        },
+    )
+    .await;
+}
+
+/// A slash command's voice arrives as the same flag, and lands the same way.
+#[tokio::test]
+async fn a_slash_speech_generation_reads_into_the_channel() {
+    let (asked, speak) = speaking();
+    with_daemon(speech_case("gateway/tts", Some(speak)), |harness| {
+        Box::pin(async move {
+            let answer = harness
+                .daemon
+                .run_command(&SlashCommand {
+                    thread_id: None,
+                    user_id: OWNER.to_owned(),
+                    user_name: "amelia".to_owned(),
+                    content: "!gen-speech --language en hello there".to_owned(),
+                })
+                .await;
+
+            assert!(answer.contains("the clip is in the channel"), "{answer}");
+            assert_eq!(
+                asked.lock().unwrap().as_slice(),
+                [(
+                    "tts".to_owned(),
+                    "hello there".to_owned(),
+                    None,
+                    Some("en".to_owned())
+                )]
+            );
+            assert_eq!(harness.files.lock().unwrap().len(), 1);
+        })
+    })
     .await;
 }
 

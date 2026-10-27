@@ -45,18 +45,31 @@ const TEXT_OPTION: &[(&str, &str, &str, bool)] = &[
     ("!then", "instruction", "what to do after this turn", true),
     ("!pr", "title", "title for the pull request", true),
     ("!gen-image", "prompt", "what to generate", true),
+    ("!gen-speech", "text", "what to read aloud", true),
 ];
 
-/// Commands with a second, optional string option.
+/// Commands with optional string options beside the required one.
 ///
 /// `/gen-image` asks for the effort beside the prompt rather than as a level on
 /// a model name, since a slash command has no name to put one on.
-const EXTRA_OPTION: &[(&str, &str, &str, &str)] = &[(
-    "!gen-image",
-    "effort",
-    "how hard to work: off, low, medium, high, xhigh or max",
-    "effort",
-)];
+/// `/gen-speech` asks for the voice and language the same way. Each option is
+/// written as the flag the in-thread command reads, so both front doors run
+/// the same parser.
+const EXTRA_OPTION: &[(&str, &str, &str, &str)] = &[
+    (
+        "!gen-image",
+        "effort",
+        "how hard to work: off, low, medium, high, xhigh or max",
+        "effort",
+    ),
+    ("!gen-speech", "voice", "the voice to read with", "voice"),
+    (
+        "!gen-speech",
+        "language",
+        "the language to read in, as en or de",
+        "language",
+    ),
+];
 
 /// Commands that name an account, so the client offers a member picker.
 const USER_OPTION: &[(&str, &str)] = &[
@@ -65,7 +78,7 @@ const USER_OPTION: &[(&str, &str)] = &[
 ];
 
 /// The names of the options whose values are read back in `translate`.
-const OPTION_NAMES: [&str; 4] = ["path", "instruction", "title", "prompt"];
+const OPTION_NAMES: [&str; 5] = ["path", "instruction", "title", "prompt", "text"];
 
 /// Raised when the service will not accept the commands, with what to do.
 #[derive(Debug, thiserror::Error)]
@@ -116,20 +129,25 @@ pub fn build_commands() -> Vec<CreateCommand> {
             }
             for (command, option_name, description, _) in EXTRA_OPTION {
                 if *command == *name {
-                    builder = builder.add_option(
-                        CreateCommandOption::new(
-                            serenity::model::application::CommandOptionType::String,
-                            *option_name,
-                            *description,
-                        )
-                        .required(false)
-                        .add_string_choice("off", "off")
-                        .add_string_choice("low", "low")
-                        .add_string_choice("medium", "medium")
-                        .add_string_choice("high", "high")
-                        .add_string_choice("xhigh", "xhigh")
-                        .add_string_choice("max", "max"),
-                    );
+                    // The effort is a level, so the client offers the ones
+                    // this host knows. A voice or a language is whatever the
+                    // server takes.
+                    let mut option = CreateCommandOption::new(
+                        serenity::model::application::CommandOptionType::String,
+                        *option_name,
+                        *description,
+                    )
+                    .required(false);
+                    if *option_name == "effort" {
+                        option = option
+                            .add_string_choice("off", "off")
+                            .add_string_choice("low", "low")
+                            .add_string_choice("medium", "medium")
+                            .add_string_choice("high", "high")
+                            .add_string_choice("xhigh", "xhigh")
+                            .add_string_choice("max", "max");
+                    }
+                    builder = builder.add_option(option);
                 }
             }
             for (command, description) in USER_OPTION {
@@ -201,15 +219,19 @@ pub fn translate(
         })
         .unwrap_or_default();
 
-    // An optional second option is written as the flag the in-thread command
-    // reads, so both front doors run the same parser.
+    // Optional options are written as the flags the in-thread command reads,
+    // so both front doors run the same parser.
     let extra = EXTRA_OPTION
         .iter()
-        .find(|(command, ..)| slash_name(command) == command_name)
-        .and_then(|(_, _, _, flag)| string_named("effort").map(|effort| (*flag, effort)))
-        .filter(|(_, effort)| !effort.trim().is_empty())
-        .map(|(flag, effort)| format!("--{flag} {}", effort.trim()))
-        .unwrap_or_default();
+        .filter(|(command, ..)| slash_name(command) == command_name)
+        .filter_map(|(_, option_name, _, flag)| {
+            string_named(option_name)
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .map(|value| format!("--{flag} {value}"))
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
 
     let mut content = format!("!{command_name}");
     for part in [extra, argument]

@@ -40,6 +40,7 @@ use crate::memory::store::MemoryStore;
 use crate::provider::ask::{Endpoint, HttpSender};
 use crate::provider::discover::Catalog;
 use crate::provider::images::{Drawn, Endpoint as ImageEndpoint};
+use crate::provider::speech::{Endpoint as SpeechEndpoint, Spoken};
 use crate::sandbox::backend::{Denials, SandboxLaunch, SandboxLaunchError, WORKSPACE_PATH};
 use crate::sandbox::paths;
 use crate::session::attachments::{self, RawAttachment, is_image, receive};
@@ -370,6 +371,22 @@ pub type DrawImage = Arc<
         + Sync,
 >;
 
+/// Reads a text aloud with the speech model, for `!gen-speech`.
+///
+/// The endpoint is resolved by the caller, which owns the configuration and
+/// the catalog the name is read from; this only puts the text to it. Its
+/// error is words worth posting into a thread.
+pub type SpeakText = Arc<
+    dyn Fn(
+            SpeechEndpoint,
+            String,
+            Option<String>,
+            Option<String>,
+        ) -> Pin<Box<dyn Future<Output = Result<Spoken, String>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Everything the manager gives a session at construction.
 pub struct SessionOptions {
     /// This session's own identifier, which also names its sandbox.
@@ -432,6 +449,9 @@ pub struct SessionOptions {
     pub describe_images: Option<DescribeImages>,
     /// Draws a picture with the image model, or none when the host cannot.
     pub draw_image: Option<DrawImage>,
+    /// Reads a text aloud with the speech model, or none when the host
+    /// cannot.
+    pub speak_text: Option<SpeakText>,
     /// Continue the agent conversation already stored in the state directory.
     pub resume: bool,
     /// Called once the session is finished with, so the manager can forget it.

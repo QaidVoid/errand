@@ -190,6 +190,7 @@ impl Running {
             "!compact" => self.compact_conversation(message).await,
             "!model" => self.switch_model(rest, message).await,
             "!gen-image" => self.generate_image(rest, message).await,
+            "!gen-speech" => self.generate_speech(rest, message).await,
             "!help" => self.say(&help_text()).await,
             "!then" => {
                 if rest.trim().is_empty() {

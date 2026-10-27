@@ -1,9 +1,9 @@
 //! Tests for the command table, ported from `commands_test.ts`.
 
 use super::{
-    COMMANDS, CommandAccess, Standing, answer_without_session, argument_of, asks_for_pull_request,
-    help_text, image_args, is_addressed_to_bot, is_aside, is_command, may_run, parse_user_id,
-    pull_request_args,
+    COMMANDS, CommandAccess, SpeechArgs, Standing, answer_without_session, argument_of,
+    asks_for_pull_request, help_text, image_args, is_addressed_to_bot, is_aside, is_command,
+    may_run, parse_user_id, pull_request_args, speech_args,
 };
 use crate::chat::render::MESSAGE_LIMIT;
 
@@ -167,10 +167,6 @@ fn help_groups_the_commands_and_says_which_are_not_open_to_all() {
 /// `!help` reaches a slash command as a single interaction response, and the
 /// service refuses one over its message limit rather than truncating it. A
 /// command added to the table must not push the list past that.
-///
-/// The list sat at 1993 of 2000 characters when `!gen-image` last changed, so
-/// the next command or argument added here needs something else shortened to
-/// make room. This test is what says so.
 #[test]
 fn the_help_list_fits_one_message() {
     let text = help_text();
@@ -304,4 +300,113 @@ fn an_effort_is_read_case_insensitively() {
     let asked = image_args("--effort MAX a lighthouse").expect("read");
 
     assert_eq!(asked.effort.as_deref(), Some("max"));
+}
+
+/// A text alone asks for nothing but the reading.
+#[test]
+fn a_speech_text_alone_names_no_voice_and_no_language() {
+    let asked = speech_args("the quick brown fox").expect("read");
+
+    assert_eq!(asked.voice, None);
+    assert_eq!(asked.language, None);
+    assert_eq!(asked.text, "the quick brown fox");
+}
+
+/// A voice may be asked for, and is kept off the text.
+#[test]
+fn a_speech_voice_flag_is_read_and_kept_off_the_text() {
+    let asked = speech_args("--voice alloy the quick brown fox").expect("read");
+
+    assert_eq!(asked.voice.as_deref(), Some("alloy"));
+    assert_eq!(asked.language, None);
+    assert_eq!(asked.text, "the quick brown fox");
+}
+
+/// A language may be asked for the same way.
+#[test]
+fn a_speech_language_flag_is_read_and_kept_off_the_text() {
+    let asked = speech_args("--language de Guten Tag").expect("read");
+
+    assert_eq!(asked.language.as_deref(), Some("de"));
+    assert_eq!(asked.voice, None);
+    assert_eq!(asked.text, "Guten Tag");
+}
+
+/// The flags may come in either order, since a slash command offers them in
+/// its own order and a person types them in theirs.
+#[test]
+fn the_speech_flags_may_come_in_either_order() {
+    let voice_first = speech_args("--voice alloy --language en hello there").expect("read");
+    let language_first = speech_args("--language en --voice alloy hello there").expect("read");
+
+    let expected = SpeechArgs {
+        voice: Some("alloy".to_owned()),
+        language: Some("en".to_owned()),
+        text: "hello there",
+    };
+    assert_eq!(voice_first, expected);
+    assert_eq!(language_first, expected);
+}
+
+/// The text is taken as it is written, quotes included: what was typed is
+/// what is read.
+#[test]
+fn a_speech_text_is_taken_as_written() {
+    let asked = speech_args("\"hello there\", said the thread").expect("read");
+
+    assert_eq!(asked.text, "\"hello there\", said the thread");
+}
+
+/// With nothing to read there is nothing to say, and the command says what
+/// to type instead.
+#[test]
+fn a_speech_text_that_is_empty_is_refused_with_usage() {
+    let refused = speech_args("   ").expect_err("nothing to read");
+
+    assert!(refused.contains("!gen-speech"), "{refused}");
+    assert!(refused.contains("--voice"), "{refused}");
+}
+
+/// A flag with nothing after it says what to type instead of reading the
+/// flag's own name aloud.
+#[test]
+fn a_speech_flag_with_no_value_says_what_to_type() {
+    let refused = speech_args("--voice").expect_err("no value");
+    assert!(refused.contains("--voice"), "{refused}");
+
+    let refused = speech_args("--language en --voice").expect_err("no value");
+    assert!(refused.contains("--voice"), "{refused}");
+
+    let refused = speech_args("--language").expect_err("no value");
+    assert!(refused.contains("--language"), "{refused}");
+}
+
+/// A value that is itself a flag is a command nobody finished, not a voice
+/// called `--language`.
+#[test]
+fn a_speech_flag_value_that_is_a_flag_is_refused() {
+    let refused = speech_args("--voice --language en hello").expect_err("no voice");
+
+    assert!(refused.contains("--voice"), "{refused}");
+}
+
+/// An unknown flag is part of the text, as `!gen-image` treats one: reading
+/// it aloud is what was asked for.
+#[test]
+fn an_unknown_speech_flag_stays_in_the_text() {
+    let asked = speech_args("--slowly hello there").expect("read");
+
+    assert_eq!(asked.voice, None);
+    assert_eq!(asked.language, None);
+    assert_eq!(asked.text, "--slowly hello there");
+}
+
+/// A flag in the middle of the text is read aloud, not acted on: only what
+/// comes before the text is instructions.
+#[test]
+fn a_speech_flag_after_the_text_stays_in_the_text() {
+    let asked = speech_args("hello there --voice alloy").expect("read");
+
+    assert_eq!(asked.voice, None);
+    assert_eq!(asked.text, "hello there --voice alloy");
 }

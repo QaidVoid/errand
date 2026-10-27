@@ -15,21 +15,22 @@ aside: everyone in the thread sees it and the agent is never told.
 | `!stop` | the owner and operators | end the session and close the thread |
 | `!interrupt` | the owner and operators | abort the running turn |
 | `!steer <instruction>` | the owner and operators | redirect the running turn |
-| `!then <prompt>` | the owner and whoever they invited | hold a prompt until the running turn finishes |
-| `!pr [--repo <directory>] <title>` | the owner and operators | open a pull request for the work on this branch |
-| `!compact` | the owner and operators | summarise the conversation so far to free up context |
-| `!model [name]` | the owner and operators | show the models available, or switch to one |
+| `!then <prompt>` | the owner and whoever they invited | hold a prompt until the turn finishes |
+| `!pr [--repo <directory>] <title>` | the owner and operators | open a pull request for this branch |
+| `!compact` | the owner and operators | summarise the conversation to free context |
+| `!model [name]` | the owner and operators | show the models, or switch to one |
 | `!gen-image <prompt>` | the owner and whoever they invited | draw with the image model |
+| `!gen-speech <text>` | the owner and whoever they invited | read a text aloud with the speech model |
 
 ## Who takes part
 
 | command | who may | what it does |
 | --- | --- | --- |
-| `!allow <user>` | the owner and operators | let another account take part in this thread |
-| `!deny <user>` | the owner and operators | withdraw another account from this thread |
-| `!guests` | the owner and whoever they invited | who may take part in this thread |
-| `!facts [@somebody|project]` | the owner and whoever they invited | what is remembered about somebody, or this project |
-| `!forget <@somebody|project>` | the owner and operators | drop what is remembered about somebody, or this project |
+| `!allow <user>` | the owner and operators | let somebody take part in this thread |
+| `!deny <user>` | the owner and operators | withdraw somebody from this thread |
+| `!guests` | the owner and whoever they invited | who takes part in this thread |
+| `!facts [@somebody|project]` | the owner and whoever they invited | what is remembered about somebody or the project |
+| `!forget <@somebody|project>` | the owner and operators | drop what is remembered about somebody or the project |
 
 ## The project
 
@@ -46,7 +47,7 @@ aside: everyone in the thread sees it and the agent is never told.
 | --- | --- | --- |
 | `!status` | anyone permitted | session state and queue |
 | `!help` | anyone permitted | list these commands |
-| `!usage [refresh]` | anyone permitted | how much of the provider's usage window is left |
-| `!models refresh` | the owner and operators | ask the providers again which models they serve |
-| `!shutdown` | named accounts, answered by the daemon | power off the host this daemon runs on |
+| `!usage [refresh]` | anyone permitted | what is left of the provider's usage window |
+| `!models refresh` | the owner and operators | ask the providers again for their models |
+| `!shutdown` | named accounts, answered by the daemon | power off this daemon's host |
 

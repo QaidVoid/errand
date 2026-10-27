@@ -6,6 +6,7 @@
 //! next, so every message posted is independently well formed.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use serde_json::Value;
 
@@ -753,6 +754,26 @@ pub fn delegation_line(delegated: &Delegated) -> String {
 #[expect(clippy::cast_precision_loss)]
 pub(crate) fn widen(count: u64) -> f64 {
     count as f64
+}
+
+/// The caption an image or clip the agent made is posted with: where the
+/// tool saved it when it did, its size, and in brackets what its server
+/// said, such as a fallback to another model, so a reader sees it beside the
+/// media. `noun` is what was made, "an image" or "a clip".
+///
+/// The note is the server's free text, so it goes through [`server_text`]
+/// and sits in a code span. The path is made inert, so neither can ping
+/// anyone or close the code span.
+pub fn media_caption(saved: Option<&str>, size: f64, note: Option<&str>, noun: &str) -> String {
+    let mut caption = match saved {
+        Some(path) => format!("generated `{}` {}", inert(path), bytes(size)),
+        None => format!("generated {noun}, {}", bytes(size)),
+    };
+    let note = server_text(note.unwrap_or_default());
+    if !note.is_empty() {
+        let _ = write!(caption, " [`{note}`]");
+    }
+    caption
 }
 
 /// A byte count, in the units a person reading a thread would use.

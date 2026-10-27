@@ -10,8 +10,8 @@ use tokio::sync::{mpsc, watch};
 
 use super::{
     DescribeImages, DrawImage, Drawn, FetchAttachment, FetchBox, IncomingMessage, Launcher,
-    OpenPullRequest, RunningBox, SessionHandle, SessionOptions, SessionTimer, Signal, Timers,
-    Unavailable, killed_by, signal_name,
+    OpenPullRequest, RunningBox, SessionHandle, SessionOptions, SessionTimer, Signal, SpeakText,
+    Timers, Unavailable, killed_by, signal_name,
 };
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
@@ -22,6 +22,7 @@ use crate::memory::store::{MemoryStore, Scope};
 use crate::provider::discover::Catalog;
 use crate::provider::images::Endpoint as ImageEndpoint;
 use crate::provider::models::AvailableModel;
+use crate::provider::speech::{Endpoint as SpeechEndpoint, Spoken};
 use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 use crate::session::attachments::RawAttachment;
@@ -782,6 +783,7 @@ struct SessionTestCase {
     memory: Option<Arc<MemoryStore>>,
     describe_images: Option<DescribeImages>,
     draw_image: Option<DrawImage>,
+    speak_text: Option<SpeakText>,
     fetch_attachment: Option<FetchAttachment>,
     open_pull_request: Option<OpenPullRequest>,
     unavailable: Option<Unavailable>,
@@ -806,6 +808,7 @@ impl Default for SessionTestCase {
             memory: None,
             describe_images: None,
             draw_image: None,
+            speak_text: None,
             fetch_attachment: None,
             open_pull_request: None,
             unavailable: None,
@@ -836,6 +839,10 @@ fn seed_kage_session(state_dir: &std::path::Path, case: &SessionTestCase) {
 }
 
 /// Starts a session against fakes, and tears down whatever it created.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the setup is one linear sequence; splitting it would hide the order"
+)]
 async fn with_session(
     case: SessionTestCase,
     run: impl FnOnce(&Harness) -> Pin<Box<dyn Future<Output = ()> + '_>>,
@@ -909,6 +916,7 @@ async fn with_session(
         fetch_attachment: case.fetch_attachment.clone(),
         describe_images: case.describe_images.clone(),
         draw_image: case.draw_image.clone(),
+        speak_text: case.speak_text.clone(),
         resume: case.resume_kage_session.is_some(),
         on_ended: {
             let ended = Arc::clone(&ended);
@@ -4434,6 +4442,215 @@ async fn a_refusal_to_draw_is_said_in_the_thread() {
             harness
                 .session
                 .handle(message_from("!gen-image a lighthouse", OWNER, "m2"))
+                .await;
+            settle().await;
+
+            let said = harness.thread.everything();
+            assert!(said.contains("no credit left"), "{said}");
+            assert!(harness.thread.upload().is_none(), "nothing is posted");
+            assert_eq!(
+                harness.thread.final_reaction("m2"),
+                Some(ReactionOutcome::Failed)
+            );
+        })
+    })
+    .await;
+}
+
+/// What a reading was asked for, and the speaker that answers it.
+type Speaking = (
+    Arc<Mutex<Vec<(String, String, Option<String>, Option<String>)>>>,
+    SpeakText,
+);
+
+/// A clip's beginning: an ID3 tag, which is what a real answer carries.
+const READ_MP3: &[u8] = b"ID3\x04\x00\x00\x00\x00\x00\x00";
+
+/// Reads a fixed clip, recording what it was asked for.
+fn speaking() -> Speaking {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&asked);
+    let speak: SpeakText = Arc::new(
+        move |endpoint: SpeechEndpoint,
+              text: String,
+              voice: Option<String>,
+              language: Option<String>| {
+            seen.lock()
+                .unwrap()
+                .push((endpoint.model.clone(), text, voice, language));
+            Box::pin(async move {
+                Ok(Spoken {
+                    bytes: READ_MP3.to_vec(),
+                    extension: "mp3",
+                }) as Result<Spoken, String>
+            }) as Pin<Box<dyn Future<Output = Result<Spoken, String>> + Send>>
+        },
+    );
+    (asked, speak)
+}
+
+/// `!gen-speech` reads one text and posts it, without touching the session's
+/// model: a clip is one call to the speech endpoint, and the conversation
+/// stays where it was.
+#[tokio::test]
+async fn a_speech_generation_reads_and_posts_it() {
+    let (asked, speak) = speaking();
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "model": "sonnet",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                    "gateway": {
+                        "credential": "secret",
+                        "baseUrl": "https://speech.example/v1",
+                    },
+                },
+                "speechGen": "gateway/tts",
+            },
+        }))),
+        speak_text: Some(speak),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+            let before = harness.controls().written().len();
+
+            harness
+                .session
+                .handle(message_from(
+                    "!gen-speech --voice alloy hello there",
+                    OWNER,
+                    "m2",
+                ))
+                .await;
+            settle().await;
+
+            // The model stays where it was: no switch, and no prompt sent to
+            // the agent as a chat turn.
+            let said: Vec<String> = harness.controls().written().split_off(before);
+            assert!(
+                !said.iter().any(|line| line.contains("set_config_option")),
+                "no model is switched, got {said:?}"
+            );
+            assert!(
+                !said.iter().any(|line| line.contains("session/prompt")),
+                "no chat turn is run, got {said:?}"
+            );
+
+            assert_eq!(
+                asked.lock().unwrap().as_slice(),
+                [(
+                    "tts".to_owned(),
+                    "hello there".to_owned(),
+                    Some("alloy".to_owned()),
+                    None
+                )]
+            );
+            let said = harness.thread.everything();
+            assert!(said.contains("reading this aloud on `tts`"), "{said}");
+            let (name, bytes, caption) = harness.thread.upload().expect("the clip was posted");
+            assert_eq!(name, "clip.mp3");
+            assert_eq!(bytes, READ_MP3);
+            assert!(caption.starts_with("generated a clip, "), "{caption}");
+            // No turn runs, so the reaction settles at accepted rather than
+            // succeeded, as `!file` does.
+            assert_eq!(
+                harness.thread.final_reaction("m2"),
+                Some(ReactionOutcome::Accepted)
+            );
+        })
+    })
+    .await;
+}
+
+/// Nothing is configured to read with, and the command says so rather than
+/// sending the text to whatever model the session happens to run on.
+#[tokio::test]
+async fn a_speech_generation_without_a_configured_model_is_refused() {
+    let (asked, speak) = speaking();
+    let case = SessionTestCase {
+        speak_text: Some(speak),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+            let before = harness.controls().written().len();
+
+            harness
+                .session
+                .handle(message_from("!gen-speech hello there", OWNER, "m2"))
+                .await;
+            settle().await;
+
+            let said = harness.thread.everything();
+            assert!(
+                said.contains("set `agent.speechGen` to a speech model"),
+                "{said}"
+            );
+            assert!(
+                !harness
+                    .controls()
+                    .written()
+                    .split_off(before)
+                    .iter()
+                    .any(|line| line.contains("session/prompt")),
+                "nothing is sent to the agent"
+            );
+            assert!(asked.lock().unwrap().is_empty(), "nothing is read");
+            assert_eq!(
+                harness.thread.final_reaction("m2"),
+                Some(ReactionOutcome::Failed)
+            );
+        })
+    })
+    .await;
+}
+
+/// A server that refuses is reported in the thread in its own words, so a
+/// clip that was not read is never mistaken for one that was.
+#[tokio::test]
+async fn a_refusal_to_read_is_said_in_the_thread() {
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                    "gateway": {
+                        "credential": "secret",
+                        "baseUrl": "https://speech.example/v1",
+                    },
+                },
+                "speechGen": "gateway/tts",
+            },
+        }))),
+        speak_text: Some(Arc::new(
+            |_: SpeechEndpoint, _: String, _: Option<String>, _: Option<String>| {
+                Box::pin(async move {
+                    Err("gateway refused to read it: no credit left".to_owned())
+                        as Result<Spoken, String>
+                }) as Pin<Box<dyn Future<Output = Result<Spoken, String>> + Send>>
+            },
+        )),
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness.controls().turn_end();
+            settle().await;
+
+            harness
+                .session
+                .handle(message_from("!gen-speech hello there", OWNER, "m2"))
                 .await;
             settle().await;
 

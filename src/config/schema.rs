@@ -307,6 +307,17 @@ impl AgentConfig {
             .filter(|credential| !credential.trim().is_empty())
     }
 
+    /// The `baseUrl` a provider's own API is reached at, when it names one
+    /// that is not blank.
+    pub fn base_url_of(&self, provider: &str) -> Option<&str> {
+        self.providers
+            .get(provider)
+            .and_then(|definition| definition.get("baseUrl"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+    }
+
     /// The variable each provider's key is read from, by provider name.
     ///
     /// A provider the operator names a variable for is read from that one.

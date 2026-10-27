@@ -53,6 +53,9 @@ use crate::provider::mapped::fetch_mapped;
 use crate::provider::models::{
     agent_directory, common_base_url, model_by_id, read_models, read_store, store_entries,
 };
+use crate::provider::speech::{
+    Endpoint as SpeechEndpoint, HttpPost as HttpSpeechPost, Spoken, speak,
+};
 use crate::provider::usage::Fetch;
 use crate::provider::usage::HttpRequest;
 use crate::provider::usage::HttpResponse;
@@ -77,6 +80,7 @@ use crate::session::pr::{ApiCall, call_api};
 use crate::session::session::DescribeImages;
 use crate::session::session::DrawImage;
 use crate::session::session::IncomingMessage;
+use crate::session::session::SpeakText;
 use crate::session::session::Unavailable;
 use crate::session::views::SessionView;
 use crate::web::server::WEB_ACTOR;
@@ -1263,6 +1267,24 @@ async fn run(
                     .map_err(|error| error.to_string())
             }) as Pin<Box<dyn Future<Output = Result<Drawn, String>> + Send>>
         }) as DrawImage),
+        speak_text: Some(Arc::new(
+            |endpoint: SpeechEndpoint,
+             text: String,
+             voice: Option<String>,
+             language: Option<String>| {
+                Box::pin(async move {
+                    speak(
+                        &endpoint,
+                        &text,
+                        voice.as_deref(),
+                        language.as_deref(),
+                        &HttpSpeechPost,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())
+                }) as Pin<Box<dyn Future<Output = Result<Spoken, String>> + Send>>
+            },
+        ) as SpeakText),
         public_url: config.web.as_ref().and_then(|web| web.public_url.clone()),
         operator_ids: Some(operator_ids),
         catalog: catalog.clone(),

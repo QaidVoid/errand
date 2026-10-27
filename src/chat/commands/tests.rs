@@ -112,6 +112,60 @@ fn an_image_generation_with_no_effort_carries_only_its_prompt() {
     assert_eq!(command.content, "!gen-image a lighthouse in the fog");
 }
 
+/// The text of a speech generation is the command's whole argument, as an
+/// in-thread `!gen-speech` would carry it.
+#[test]
+fn a_speech_generation_carries_its_text() {
+    let command = translate(
+        "gen-speech",
+        &[text_option("text", "hello there")],
+        "thread-1",
+        true,
+        "u1",
+        "amelia",
+    );
+
+    assert_eq!(command.content, "!gen-speech hello there");
+}
+
+/// The voice and the language are written as the flags the in-thread command
+/// reads, so both front doors run one parser.
+#[test]
+fn a_speech_generation_carries_its_voice_and_language_as_flags() {
+    let command = translate(
+        "gen-speech",
+        &[
+            text_option("text", "hello there"),
+            text_option("language", "en"),
+            text_option("voice", "alloy"),
+        ],
+        "chan",
+        false,
+        "u1",
+        "amelia",
+    );
+
+    assert_eq!(
+        command.content,
+        "!gen-speech --voice alloy --language en hello there"
+    );
+}
+
+/// With neither picked, the command is what it always was.
+#[test]
+fn a_speech_generation_with_no_options_carries_only_its_text() {
+    let command = translate(
+        "gen-speech",
+        &[text_option("text", "hello there")],
+        "chan",
+        false,
+        "u1",
+        "amelia",
+    );
+
+    assert_eq!(command.content, "!gen-speech hello there");
+}
+
 #[test]
 fn a_command_with_no_argument_is_just_the_command() {
     let command = translate("status", &[], "chan", false, "u1", "amelia");

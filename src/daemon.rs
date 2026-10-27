@@ -21,6 +21,7 @@ use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::{MemoryStore, Scope};
 use crate::provider::discover::Catalog;
 use crate::provider::images::{Picture, endpoint_with_effort};
+use crate::provider::speech;
 use crate::sandbox::Backend;
 use crate::sandbox::backend::{CapabilityReport, SandboxUnavailableError};
 use crate::sandbox::bailey::BaileyOptions;
@@ -33,6 +34,7 @@ use crate::session::attachments::RawAttachment;
 use crate::session::commands::image_args;
 use crate::session::commands::{
     answer_without_session, argument_of, first_word, is_addressed_to_bot, is_aside, parse_user_id,
+    speech_args,
 };
 use crate::session::event::EndReason;
 use crate::session::manager::SandboxPool;
@@ -41,7 +43,7 @@ use crate::session::manager::{
 };
 use crate::session::model::{configured_model, split_level};
 use crate::session::registry::ThreadRegistry;
-use crate::session::session::{DescribeImages, DrawImage, IncomingMessage};
+use crate::session::session::{DescribeImages, DrawImage, IncomingMessage, SpeakText};
 
 /// Raised when the backend cannot enforce what configuration demands.
 #[derive(Debug, thiserror::Error)]
@@ -222,6 +224,9 @@ pub type ReplyWithFile = Arc<
 /// The one command that starts work from the channel itself.
 const IMAGE_GENERATION: &str = "!gen-image";
 
+/// The other one: a clip needs no conversation to live in either.
+const SPEECH_GENERATION: &str = "!gen-speech";
+
 /// Everything the daemon needs, with the transport injected for testability.
 pub struct DaemonOptions {
     /// The configuration every session is started from, and which a change to
@@ -250,6 +255,9 @@ pub struct DaemonOptions {
     pub describe_images: Option<DescribeImages>,
     /// Draws a picture with the image model, or none when the host cannot.
     pub draw_image: Option<DrawImage>,
+    /// Reads a text aloud with the speech model, or none when the host
+    /// cannot.
+    pub speak_text: Option<SpeakText>,
     /// Where the interface is published, when it is.
     pub public_url: Option<String>,
     /// The provider definitions sessions launch with and the models `!model`
@@ -313,6 +321,7 @@ impl Daemon {
             memory: options.memory.clone(),
             describe_images: options.describe_images.clone(),
             draw_image: options.draw_image.clone(),
+            speak_text: options.speak_text.clone(),
             public_url: options.public_url.clone(),
             catalog: options.catalog.clone(),
             delegate_base_url: options.delegate_base_url.clone(),
@@ -733,6 +742,12 @@ impl Daemon {
             return;
         }
 
+        // Neither does a clip.
+        if first_word(&message.content) == SPEECH_GENERATION {
+            self.speak_into_channel(&message).await;
+            return;
+        }
+
         // Another bot's command, or one of this system's that needs a session.
         // Either way it is not work to start, and the channel is shared, so it
         // is left alone rather than answered.
@@ -787,6 +802,39 @@ impl Daemon {
         }
     }
 
+    /// Reads a text aloud asked for in the channel, and posts the clip
+    /// there.
+    ///
+    /// One request to the provider's speech endpoint, answered as bytes and
+    /// posted as an upload. No session, no thread, and no sandbox, as for a
+    /// picture.
+    async fn speak_into_channel(&self, message: &IncomingMessage) {
+        let asked = match speech_args(argument_of(&message.content, SPEECH_GENERATION)) {
+            Ok(asked) => asked,
+            Err(refused) => {
+                (self.options.reply_in_channel)(message.clone(), refused).await;
+                return;
+            }
+        };
+        match self
+            .read_aloud(asked.voice, asked.language, asked.text)
+            .await
+        {
+            Ok(clip) => {
+                (self.options.reply_with_file)(
+                    message.clone(),
+                    clip.name,
+                    clip.bytes,
+                    clip.caption,
+                )
+                .await;
+            }
+            Err(reason) => {
+                (self.options.reply_in_channel)(message.clone(), reason).await;
+            }
+        }
+    }
+
     /// Draws one picture, with the model and effort it was asked for.
     ///
     /// The endpoint is resolved from the configuration in force rather than a
@@ -823,6 +871,48 @@ impl Daemon {
         let drawn = draw_image(endpoint.clone(), prompt.to_owned()).await?;
         drawn
             .into_picture(&endpoint.model, config.output.max_upload_bytes)
+            .map_err(|refused| refused.0)
+    }
+
+    /// Reads one text aloud, with the voice and language it was asked for.
+    ///
+    /// The endpoint is resolved from the configuration in force, as a
+    /// picture's is. The model is `agent.speechGen`, which the command
+    /// cannot override, since the voice and language are the only choices a
+    /// reading offers.
+    async fn read_aloud(
+        &self,
+        voice: Option<String>,
+        language: Option<String>,
+        text: &str,
+    ) -> Result<speech::Clip, String> {
+        let config = self.options.config.get();
+        let Some(named) = config
+            .agent
+            .speech_gen
+            .as_deref()
+            .map(str::trim)
+            .filter(|named| !named.is_empty())
+        else {
+            return Err(
+                "no speech model is configured; set `agent.speechGen` to a speech model that \
+                 answers `/audio/speech`"
+                    .to_owned(),
+            );
+        };
+        let Some(speak_text) = self.options.speak_text.clone() else {
+            return Err("this host has no way to read aloud".to_owned());
+        };
+        let endpoint = speech::endpoint(
+            &config.agent,
+            &self.options.catalog.models(),
+            named,
+            &config.agent.aliases,
+        )
+        .map_err(|refused| refused.0)?;
+        let spoken = speak_text(endpoint.clone(), text.to_owned(), voice, language).await?;
+        spoken
+            .into_clip(config.output.max_upload_bytes)
             .map_err(|refused| refused.0)
     }
 
@@ -882,6 +972,33 @@ impl Daemon {
                     )
                     .await;
                     "drew it; the picture is in the channel".to_owned()
+                }
+                Err(reason) => reason,
+            };
+        }
+
+        // Neither does a clip.
+        if command.thread_id.is_none() && first_word(&command.content) == SPEECH_GENERATION {
+            let asked = match speech_args(argument_of(&command.content, SPEECH_GENERATION)) {
+                Ok(asked) => asked,
+                Err(refused) => return refused,
+            };
+            let where_to = IncomingMessage {
+                id: format!("slash-{}", command.user_id),
+                author_id: command.user_id.clone(),
+                channel_id: String::new(),
+                author_name: Some(command.user_name.clone()),
+                content: command.content.clone(),
+                attachments: Vec::new(),
+            };
+            let reading = self
+                .read_aloud(asked.voice, asked.language, asked.text)
+                .await;
+            return match reading {
+                Ok(clip) => {
+                    (self.options.reply_with_file)(where_to, clip.name, clip.bytes, clip.caption)
+                        .await;
+                    "read it; the clip is in the channel".to_owned()
                 }
                 Err(reason) => reason,
             };

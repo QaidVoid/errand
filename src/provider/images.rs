@@ -17,8 +17,8 @@ use serde_json::{Value, json};
 
 use crate::chat::render::{inert, server_text};
 use crate::config::schema::AgentConfig;
-use crate::provider::models::{AvailableModel, Matched, match_model};
-use crate::session::model::{expand_alias, known_providers, resolve_model, split_level};
+use crate::provider::models::{AvailableModel, serving};
+use crate::session::model::split_level;
 
 /// The largest answer read, so a runaway body cannot be held in memory. A
 /// 1.5 MB PNG is about 2 MB of base64, which leaves room for a large picture.
@@ -52,20 +52,11 @@ pub struct ImageError(pub String);
 
 /// Where the configured image model is drawn from, or why it cannot be.
 ///
-/// The name is read as `!model` reads one: a short name from `aliases`, a
-/// `provider/id`, or a bare id, with the effort to use as a level on the end.
-/// The level stays on the model, because it is part of the name the images
-/// endpoint is asked for, as `image:max`.
-///
-/// The provider is the one the catalog says serves the model, which is where
-/// the request goes. A bare id is not read as the provider a session runs on:
-/// that is a chat host, and sending an image request there reaches a route it
-/// does not serve. Only a catalog that lists nothing leaves the name to the
-/// configured provider, since then there is nothing better to go on.
-///
-/// The endpoint is the provider's own `baseUrl`. A provider whose key the
-/// daemon does not hold cannot be reached at all, and that is said rather than
-/// attempted with an empty one.
+/// The name is resolved by [`crate::provider::models::serving`], which is
+/// where the rule about aliases, `provider/id` and the catalog lives. The
+/// endpoint is the serving provider's own `baseUrl`, and its credential is
+/// sent as a bearer token. A provider whose key the daemon does not hold is
+/// still reachable, since a self-hosted server may need none.
 ///
 /// The effort is a level, and the images endpoint takes it as part of the
 /// model id, as `image:max`. One asked for on the command replaces the level
@@ -79,40 +70,13 @@ pub fn endpoint_with_effort(
     aliases: &BTreeMap<String, String>,
     effort: Option<&str>,
 ) -> Result<Endpoint, ImageError> {
-    let expanded = expand_alias(named, aliases);
-    // The provider is where the request goes; the model is what the endpoint
-    // is asked for, which is the id without the provider's name on it.
-    let (provider, model) = match match_model(available, &expanded, &agent.provider) {
-        Matched::One(found) => (found.provider, found.id),
-        Matched::Several(options) => {
-            return Err(ImageError(format!(
-                "more than one provider serves `{expanded}`. Name one of these as `agent.imageGen`: {}",
-                options.join(", ")
-            )));
-        }
-        // Nothing lists it, so the name is all there is to go on: a
-        // `provider/id` still names its provider, and a bare id falls back to
-        // the configured one.
-        Matched::None => {
-            let chosen = resolve_model(&expanded, &known_providers(agent));
-            (
-                chosen.provider.unwrap_or_else(|| agent.provider.clone()),
-                chosen.model,
-            )
-        }
-    };
-    let base_url = agent
-        .providers
-        .get(&provider)
-        .and_then(|definition| definition.get("baseUrl"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|url| !url.is_empty())
-        .ok_or_else(|| {
-            ImageError(format!(
-                "no endpoint is configured for `{provider}`; give it a `baseUrl`"
-            ))
-        })?;
+    let (provider, model) =
+        serving(agent, available, named, aliases, "agent.imageGen").map_err(ImageError)?;
+    let base_url = agent.base_url_of(&provider).ok_or_else(|| {
+        ImageError(format!(
+            "no endpoint is configured for `{provider}`; give it a `baseUrl`"
+        ))
+    })?;
     let credential = agent.credential_of(&provider).unwrap_or_default();
     // The level goes on the bare id, so an effort asked for on the command
     // replaces the one the name carried rather than stacking beside it.
