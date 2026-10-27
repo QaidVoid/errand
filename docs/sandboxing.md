@@ -44,6 +44,17 @@ list in the generated policy, while podman bounds the network by namespace
 rather than by port, so the list is inert there. A session with `network` set
 to `none` opens nothing, whatever ports are named.
 
+The proxy listener requires one shared credential per broker run. A `CONNECT`
+or plain `http://` request without the valid credential receives
+`407 Proxy Authentication Required` with a `Proxy-Authenticate: Basic`
+challenge, before any upstream connection is opened. The session's proxy
+variables carry the credential as URL userinfo, so ordinary tools send it
+automatically. The launcher argv still names only the bare proxy endpoint,
+not the credential. This authenticates the caller to the broker and prevents
+a local process that only discovers the port from using it. It does not
+isolate sessions: every session can read the shared credential from its own
+environment.
+
 The broker resolves a name itself, on this host and with this host's resolver,
 not the session's, and dials only the addresses it judged. A name that resolves
 only to the host's own network, loopback, private, or link-local, is refused

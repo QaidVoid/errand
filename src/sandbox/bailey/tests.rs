@@ -599,7 +599,83 @@ fn open_egress_never_names_the_proxy_even_given_a_port() {
 #[test]
 fn the_proxy_endpoint_and_url_are_built_from_the_map_address_and_port() {
     assert_eq!(egress_proxy_endpoint(8443), "169.254.169.1:8443");
-    assert_eq!(egress_proxy_url(8443), "http://169.254.169.1:8443");
+    let secret = "run-secret";
+    assert_eq!(
+        egress_proxy_url(8443, secret),
+        "http://session:run-secret@169.254.169.1:8443"
+    );
+    assert!(!egress_proxy_endpoint(8443).contains(secret));
+}
+
+#[test]
+fn egress_env_carries_the_credential_in_all_four_proxy_variables() {
+    let mut config = config();
+    config.env = Some(BTreeMap::from([(
+        "CARGO_HOME".to_owned(),
+        "/cache".to_owned(),
+    )]));
+    let (run, _) = fake_run(BTreeMap::new());
+    let sandbox = bailey_with(
+        &config,
+        "/state",
+        run,
+        BaileyOptions {
+            egress_proxy_port: Some(8443),
+            brokering: Some(ProviderBrokering {
+                proxy_secret: "run-secret".to_owned(),
+                credential_names: BTreeMap::new(),
+                nonces: BTreeMap::new(),
+            }),
+            ..BaileyOptions::default()
+        },
+    );
+    let env = sandbox.egress_env().unwrap();
+    for name in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+        assert_eq!(env[name], "http://session:run-secret@169.254.169.1:8443");
+    }
+    for name in ["NO_PROXY", "no_proxy"] {
+        assert_eq!(env[name], "169.254.169.1");
+    }
+    assert_eq!(env["NODE_USE_ENV_PROXY"], "1");
+    assert_eq!(env["CARGO_HOME"], "/cache");
+
+    let args = bailey_args(&config, &launch(), "/p.toml", Some(8443));
+    let proxy_flag = args.iter().position(|arg| arg == "--egress-proxy").unwrap();
+    assert_eq!(args[proxy_flag + 1], "169.254.169.1:8443");
+    assert!(!args.iter().any(|arg| arg.contains("run-secret")));
+}
+
+#[test]
+fn egress_env_without_brokering_or_port_preserves_only_the_operator_env() {
+    for (port, has_brokering) in [(Some(8443), false), (None, true), (None, false)] {
+        for env in [
+            None,
+            Some(BTreeMap::from([
+                ("CARGO_HOME".to_owned(), "/cache".to_owned()),
+                ("HTTP_PROXY".to_owned(), "http://operator:8080".to_owned()),
+                ("NO_PROXY".to_owned(), "operator.example".to_owned()),
+            ])),
+        ] {
+            let mut config = config();
+            config.env = env.clone();
+            let (run, _) = fake_run(BTreeMap::new());
+            let sandbox = bailey_with(
+                &config,
+                "/state",
+                run,
+                BaileyOptions {
+                    egress_proxy_port: port,
+                    brokering: has_brokering.then(|| ProviderBrokering {
+                        proxy_secret: "run-secret".to_owned(),
+                        credential_names: BTreeMap::new(),
+                        nonces: BTreeMap::new(),
+                    }),
+                    ..BaileyOptions::default()
+                },
+            );
+            assert_eq!(sandbox.egress_env(), env);
+        }
+    }
 }
 
 /// A session started on a provider other than the default still carries no
@@ -608,6 +684,7 @@ fn the_proxy_endpoint_and_url_are_built_from_the_map_address_and_port() {
 #[test]
 fn no_real_key_crosses_under_a_broker_whichever_provider_starts() {
     let brokering = ProviderBrokering {
+        proxy_secret: "run-secret".to_owned(),
         credential_names: BTreeMap::from([
             ("default".to_owned(), "DEFAULT_KEY".to_owned()),
             ("other".to_owned(), "OTHER_KEY".to_owned()),

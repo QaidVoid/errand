@@ -206,6 +206,34 @@ fn same_secret(a: &str, b: &str) -> bool {
     differences == 0
 }
 
+/// Whether exactly one proxy authorization header carries the run credential.
+fn carries_proxy_credential(head: &str, expected: &str) -> bool {
+    let Some(expected) = expected
+        .strip_prefix("Basic ")
+        .filter(|token| !token.is_empty())
+    else {
+        return false;
+    };
+    let mut credential = None;
+    for line in head.lines().skip(1).take_while(|line| !line.is_empty()) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("proxy-authorization") {
+            continue;
+        }
+        if credential.is_some() {
+            return false;
+        }
+        credential = Some(value.trim());
+    }
+    let Some((scheme, token)) = credential.and_then(|value| value.split_once(char::is_whitespace))
+    else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("basic") && same_secret(token.trim(), expected)
+}
+
 /// Whether a request carries this session's nonce as its key.
 ///
 /// A session sends its key in whichever header its provider kind uses:
@@ -484,6 +512,8 @@ pub(crate) struct ProviderState {
     pub allow: Vec<String>,
     /// The upstream ports the broker will open.
     pub ports: Vec<u16>,
+    /// The expected Basic proxy authorization header for this broker run.
+    pub proxy_authorization: String,
     /// Whether a literal internal address may be dialled.
     pub allow_internal: bool,
     /// The logger the refusals go to.

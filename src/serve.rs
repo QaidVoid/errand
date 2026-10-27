@@ -10,6 +10,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use serenity::client::Context;
 use serenity::client::EventHandler as SerenityEventHandler;
 use serenity::model::application::Interaction;
@@ -647,7 +649,7 @@ struct Brokered {
     broker: Broker,
     /// The loopback port the sandbox reaches it on.
     proxy_port: u16,
-    /// What stands in for each provider credential inside a sandbox.
+    /// Provider stand-ins and the shared proxy credential inside a sandbox.
     brokering: ProviderBrokering,
 }
 
@@ -682,7 +684,13 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
     }
     let (routes, nonces) = provider_routes(&config.agent, store.as_deref());
     check_provider_names(&routes, config.sandbox.egress.allow_internal, log).await;
+    let proxy_secret = provider_nonce();
+    let proxy_authorization = format!(
+        "Basic {}",
+        STANDARD.encode(format!("session:{proxy_secret}"))
+    );
     let brokering = ProviderBrokering {
+        proxy_secret,
         credential_names: brokering_credential_names(&config.agent),
         nonces,
     };
@@ -692,6 +700,7 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
         log.clone(),
         routes.clone(),
         config.sandbox.egress.allow_internal,
+        proxy_authorization,
     );
     // The listener sits on loopback; 169.254.169.1 is only what bailey
     // tells the sandbox to dial, mapped back to this host from inside.

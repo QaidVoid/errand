@@ -160,9 +160,12 @@ async fn try_connect(port: u16, authority: &str) -> String {
     let mut conn = TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("the broker");
-    conn.write_all(format!("CONNECT {authority} HTTP/1.1\r\n\r\n").as_bytes())
-        .await
-        .expect("written");
+    conn.write_all(
+        format!("CONNECT {authority} HTTP/1.1\r\nProxy-Authorization: {PROXY_CREDENTIAL}\r\n\r\n")
+            .as_bytes(),
+    )
+    .await
+    .expect("written");
     let mut buf = vec![0_u8; 128];
     let read = conn.read(&mut buf).await.unwrap_or(0);
     String::from_utf8_lossy(&buf[..read])
@@ -183,6 +186,7 @@ async fn the_broker_refuses_what_is_not_allowed_by_name_port_and_address() {
         silent(),
         Vec::new(),
         false,
+        PROXY_CREDENTIAL.to_owned(),
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
     // Allowed by name, but an internal address, so refused all the same.
@@ -206,6 +210,7 @@ async fn the_broker_refuses_a_non_connect_opener() {
         silent(),
         Vec::new(),
         false,
+        PROXY_CREDENTIAL.to_owned(),
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -290,6 +295,7 @@ async fn the_credential_is_put_on_at_the_broker_never_given_to_the_session() {
             credential: "the-real-key".to_owned(),
         }],
         true,
+        PROXY_CREDENTIAL.to_owned(),
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -367,6 +373,7 @@ async fn a_session_key_in_x_api_key_is_accepted_and_translated() {
             credential: "the-real-key".to_owned(),
         }],
         true,
+        PROXY_CREDENTIAL.to_owned(),
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -431,6 +438,7 @@ async fn each_provider_has_its_own_route_and_its_own_nonce() {
             },
         ],
         true,
+        PROXY_CREDENTIAL.to_owned(),
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -581,7 +589,14 @@ async fn a_name_that_does_not_resolve_is_not_called_internal() {
 /// The broker refuses to tunnel to the host's own loopback.
 #[tokio::test]
 async fn a_tunnel_to_loopback_is_refused_even_under_a_lone_star() {
-    let mut broker = Broker::new(vec!["*".to_owned()], vec![443], silent(), Vec::new(), false);
+    let mut broker = Broker::new(
+        vec!["*".to_owned()],
+        vec![443],
+        silent(),
+        Vec::new(),
+        false,
+        PROXY_CREDENTIAL.to_owned(),
+    );
     let port = broker.listen("127.0.0.1").await.expect("bound");
     let reply = try_connect(port, "127.0.0.1:443").await;
     assert!(reply.contains("403"));
@@ -626,6 +641,7 @@ async fn an_allowlisted_internal_address_is_dialled_only_when_allowed_on_purpose
         silent(),
         Vec::new(),
         false,
+        PROXY_CREDENTIAL.to_owned(),
     );
     let off_port = off.listen("127.0.0.1").await.expect("bound");
     assert!(try_connect(off_port, "127.0.0.1:443").await.contains("403"));
@@ -637,11 +653,14 @@ async fn an_allowlisted_internal_address_is_dialled_only_when_allowed_on_purpose
         silent(),
         Vec::new(),
         true,
+        PROXY_CREDENTIAL.to_owned(),
     );
     let on_port = on.listen("127.0.0.1").await.expect("bound");
     // Admitted now, so it gets as far as dialling: nothing listens on 443, so
     // it fails upstream rather than being refused at the gate.
-    assert!(!try_connect(on_port, "127.0.0.1:443").await.contains("403"));
+    let reply = try_connect(on_port, "127.0.0.1:443").await;
+    assert!(!reply.contains("403"), "{reply}");
+    assert!(!reply.contains("407"), "{reply}");
     on.close();
 }
 
@@ -662,6 +681,7 @@ async fn a_provider_at_an_internal_address_is_refused_unless_allowed_on_purpose(
             credential: "k".to_owned(),
         }],
         false,
+        PROXY_CREDENTIAL.to_owned(),
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -737,6 +757,7 @@ async fn closing_the_broker_stops_it_accepting() {
         silent(),
         Vec::new(),
         false,
+        PROXY_CREDENTIAL.to_owned(),
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
     assert!(TcpStream::connect(("127.0.0.1", port)).await.is_ok());
@@ -830,6 +851,7 @@ async fn a_plain_http_request_is_forwarded_only_on_an_allowed_port() {
         silent(),
         Vec::new(),
         true,
+        PROXY_CREDENTIAL.to_owned(),
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -837,7 +859,7 @@ async fn a_plain_http_request_is_forwarded_only_on_an_allowed_port() {
         .await
         .expect("the broker");
     conn.write_all(
-        format!("GET http://127.0.0.1:{origin_port}/a?b=c HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        format!("GET http://127.0.0.1:{origin_port}/a?b=c HTTP/1.1\r\nHost: 127.0.0.1\r\nProxy-Authorization: {PROXY_CREDENTIAL}\r\n\r\n")
             .as_bytes(),
     )
     .await
@@ -861,9 +883,14 @@ async fn a_plain_http_request_is_forwarded_only_on_an_allowed_port() {
     let mut conn = TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("the broker");
-    conn.write_all(b"GET http://127.0.0.1:1/ HTTP/1.1\r\n\r\n")
-        .await
-        .expect("written");
+    conn.write_all(
+        format!(
+            "GET http://127.0.0.1:1/ HTTP/1.1\r\nProxy-Authorization: {PROXY_CREDENTIAL}\r\n\r\n"
+        )
+        .as_bytes(),
+    )
+    .await
+    .expect("written");
     let mut refused = String::new();
     let _ = conn.read_to_string(&mut refused).await;
     assert!(refused.starts_with("HTTP/1.1 403"));
@@ -884,6 +911,7 @@ fn provider_state(routes: Vec<ProviderRoute>) -> super::ProviderState {
         routes,
         allow: Vec::new(),
         ports: vec![443],
+        proxy_authorization: PROXY_CREDENTIAL.to_owned(),
         allow_internal: false,
         log: silent(),
         resolve: None,
@@ -1195,4 +1223,226 @@ fn provider_forwarding_preserves_authority_path_query_and_replaces_credentials()
     assert_eq!(forwarded.headers()["authorization"], "Bearer operator-key");
     assert_eq!(forwarded.headers()["x-api-key"], "operator-key");
     assert!(!forwarded.headers().contains_key("host"));
+}
+
+const PROXY_CREDENTIAL: &str = "Basic c2Vzc2lvbjpzZWNyZXQ=";
+
+struct ProxyExchange {
+    answer: String,
+    lookups: usize,
+    dials: usize,
+    forwarded: String,
+    logged: Vec<String>,
+}
+
+async fn proxy_exchange(head: &str) -> ProxyExchange {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let lookups = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&lookups);
+    let mut state = provider_state(Vec::new());
+    state.allow = vec!["upstream.example".to_owned()];
+    state.ports = vec![80, 443];
+    state.resolve = Some(Arc::new(move |host| {
+        assert_eq!(host, "upstream.example");
+        counted.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(vec!["1.1.1.1".to_owned()]) })
+    }));
+    let logged = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&logged);
+    state.log = Logger::new(
+        LogFields::new(),
+        Arc::new(move |_level, line| recorded.lock().unwrap().push(line.to_owned())),
+    );
+    let (mut client, stream) = tokio::io::duplex(16_384);
+    let (upstream, mut origin) = tokio::io::duplex(16_384);
+    let dials = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&dials);
+    let handle = super::server::handle(stream, Arc::new(state), move |addresses, port, _| {
+        assert_eq!(addresses, ["1.1.1.1"]);
+        assert!([80, 443].contains(&port));
+        counted.fetch_add(1, Ordering::SeqCst);
+        async move { Ok(upstream) }
+    });
+    let exchange = async {
+        client.write_all(head.as_bytes()).await.unwrap();
+        client.shutdown().await.unwrap();
+        let mut answer = String::new();
+        client.read_to_string(&mut answer).await.unwrap();
+        answer
+    };
+    let origin = async {
+        let mut forwarded = String::new();
+        origin.read_to_string(&mut forwarded).await.unwrap();
+        if !forwarded.is_empty() {
+            origin
+                .write_all(b"HTTP/1.1 200 OK\r\n\r\nupstream answer")
+                .await
+                .unwrap();
+            origin.shutdown().await.unwrap();
+        }
+        forwarded
+    };
+    let ((), answer, forwarded) = tokio::join!(handle, exchange, origin);
+    ProxyExchange {
+        answer,
+        lookups: lookups.load(Ordering::SeqCst),
+        dials: dials.load(Ordering::SeqCst),
+        forwarded,
+        logged: logged.lock().unwrap().clone(),
+    }
+}
+
+/// The refusal is logged naming the target, so an operator can tell which
+/// request a tool sent without the credential.
+fn assert_refusal_names(exchange: &ProxyExchange, port: &str) {
+    assert!(
+        exchange
+            .logged
+            .iter()
+            .any(|line| line.contains("proxy authentication refused")
+                && line.contains("host=upstream.example")
+                && line.contains(port)),
+        "{:?}",
+        exchange.logged
+    );
+}
+
+#[tokio::test]
+async fn a_connect_without_the_credential_is_refused() {
+    let exchange = proxy_exchange("CONNECT upstream.example:443 HTTP/1.1\r\n\r\nping").await;
+    assert_refusal_names(&exchange, "port=443");
+    assert!(
+        exchange
+            .answer
+            .starts_with("HTTP/1.1 407 Proxy Authentication Required\r\n"),
+        "{}",
+        exchange.answer
+    );
+    assert!(
+        exchange
+            .answer
+            .contains("Proxy-Authenticate: Basic realm=\"errand\"\r\n")
+    );
+    assert_eq!((exchange.lookups, exchange.dials), (0, 0));
+    assert!(exchange.forwarded.is_empty());
+}
+
+#[tokio::test]
+async fn a_connect_with_the_credential_is_admitted() {
+    let exchange = proxy_exchange(&format!(
+        "CONNECT upstream.example:443 HTTP/1.1\r\nProxy-Authorization: {PROXY_CREDENTIAL}\r\n\r\nping"
+    ))
+    .await;
+    assert!(
+        exchange
+            .answer
+            .starts_with("HTTP/1.1 200 Connection Established\r\n\r\n")
+    );
+    assert!(exchange.answer.ends_with("upstream answer"));
+    assert_eq!((exchange.lookups, exchange.dials), (1, 1));
+    assert_eq!(exchange.forwarded, "ping");
+}
+
+#[tokio::test]
+async fn a_connect_with_the_wrong_credential_is_refused() {
+    let exchange = proxy_exchange(
+        "CONNECT upstream.example:443 HTTP/1.1\r\nProxy-Authorization: Basic wrong\r\n\r\nping",
+    )
+    .await;
+    assert!(exchange.answer.starts_with("HTTP/1.1 407"));
+    assert_eq!((exchange.lookups, exchange.dials), (0, 0));
+    assert!(exchange.forwarded.is_empty());
+}
+
+#[tokio::test]
+async fn the_credential_header_is_read_leniently_and_strictly() {
+    let token = PROXY_CREDENTIAL.strip_prefix("Basic ").unwrap();
+    for scheme in ["basic", "BASIC", "bAsIc"] {
+        let exchange = proxy_exchange(&format!(
+            "CONNECT upstream.example:443 HTTP/1.1\r\nproxy-authorization: {scheme}\t{token}  \r\n\r\nping"
+        ))
+        .await;
+        assert!(exchange.answer.starts_with("HTTP/1.1 200"), "{scheme}");
+        assert_eq!((exchange.lookups, exchange.dials), (1, 1));
+    }
+    for headers in [
+        format!("Proxy-Authorization: {PROXY_CREDENTIAL}\r\nProxy-Authorization: Basic wrong"),
+        format!("Proxy-Authorization: Basic wrong\r\nProxy-Authorization: {PROXY_CREDENTIAL}"),
+        format!(
+            "Proxy-Authorization: {PROXY_CREDENTIAL}\r\nproxy-authorization: {PROXY_CREDENTIAL}"
+        ),
+        "Proxy-Authorization: Basic".to_owned(),
+        "Proxy-Authorization: Basic ".to_owned(),
+        format!("Proxy-Authorization: Bearer {token}"),
+    ] {
+        let exchange = proxy_exchange(&format!(
+            "CONNECT upstream.example:443 HTTP/1.1\r\n{headers}\r\n\r\nping"
+        ))
+        .await;
+        assert!(exchange.answer.starts_with("HTTP/1.1 407"), "{headers}");
+        assert_eq!((exchange.lookups, exchange.dials), (0, 0));
+        assert!(exchange.forwarded.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_forward_without_the_credential_is_refused() {
+    let exchange = proxy_exchange(
+        "POST http://upstream.example/upload HTTP/1.1\r\nContent-Length: 4\r\n\r\nping",
+    )
+    .await;
+    assert_refusal_names(&exchange, "port=80");
+    assert!(exchange.answer.starts_with("HTTP/1.1 407"));
+    assert!(
+        exchange
+            .answer
+            .contains("Proxy-Authenticate: Basic realm=\"errand\"\r\n")
+    );
+    assert_eq!((exchange.lookups, exchange.dials), (0, 0));
+    assert!(exchange.forwarded.is_empty());
+}
+
+#[tokio::test]
+async fn an_authenticated_forward_does_not_relay_the_proxy_credential() {
+    let exchange = proxy_exchange(&format!(
+        "POST http://upstream.example/upload HTTP/1.1\r\nHost: upstream.example\r\nProxy-Authorization: {PROXY_CREDENTIAL}\r\nContent-Length: 4\r\n\r\nping"
+    ))
+    .await;
+    assert!(exchange.answer.starts_with("HTTP/1.1 200 OK"));
+    assert_eq!((exchange.lookups, exchange.dials), (1, 1));
+    assert_eq!(
+        exchange.forwarded,
+        "POST /upload HTTP/1.1\r\nHost: upstream.example\r\nContent-Length: 4\r\nConnection: close\r\n\r\nping"
+    );
+    assert!(!exchange.forwarded.contains(PROXY_CREDENTIAL));
+}
+
+#[tokio::test]
+async fn a_forward_with_invalid_credentials_is_refused_before_resolution() {
+    for (headers, body) in [
+        ("Proxy-Authorization: Basic wrong".to_owned(), "ping"),
+        ("Proxy-Authorization: Basic".to_owned(), "ping"),
+        (
+            format!("Proxy-Authorization: Bearer {}", &PROXY_CREDENTIAL[6..]),
+            "ping",
+        ),
+        (
+            format!("Proxy-Authorization: {PROXY_CREDENTIAL}\r\nProxy-Authorization: Basic wrong"),
+            "ping",
+        ),
+        (
+            "Content-Type: text/plain".to_owned(),
+            "Proxy-Authorization: Basic c2Vzc2lvbjpzZWNyZXQ=\r\n",
+        ),
+    ] {
+        let exchange = proxy_exchange(&format!(
+            "POST http://upstream.example/upload HTTP/1.1\r\n{headers}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ))
+        .await;
+        assert!(exchange.answer.starts_with("HTTP/1.1 407"), "{headers}");
+        assert_eq!((exchange.lookups, exchange.dials), (0, 0));
+        assert!(exchange.forwarded.is_empty());
+    }
 }
