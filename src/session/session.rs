@@ -23,7 +23,7 @@ use crate::agent::client::AnswerOutcome;
 use crate::agent::client::{AgentClient, AgentHandlers, AgentProcess};
 use crate::agent::delegate::{DelegationOutcome, TurnDelegations};
 use crate::agent::delegation::Sources;
-use crate::agent::protocol::{AgentImage, DialogRequest, ProducedImage, StreamingBehavior, Usage};
+use crate::agent::protocol::{AgentImage, DialogRequest, ProducedMedia, StreamingBehavior, Usage};
 use crate::agent::requests::{
     DELEGATE_COMMAND, RECALL_COMMAND, delegate_command_contents, recall_command_contents,
 };
@@ -181,14 +181,19 @@ const EDITING_TOOLS: [&str; 5] = ["edit", "write", "create", "str_replace", "mul
 /// Largest file diffed. Beyond this the change is summarised, not shown.
 const MAX_DIFFABLE_BYTES: u64 = 512 * 1024;
 
-/// Most images a turn posts, and most it may generate before it is stopped.
-/// In-flight or failed generation calls may already have incurred cost.
-const MAX_IMAGES_PER_TURN: usize = 4;
+/// Most images and clips a turn posts, and most it may generate before it is
+/// stopped. In-flight or failed generation calls may already have incurred
+/// cost.
+const MAX_MEDIA_PER_TURN: usize = 4;
 
-/// kage's image tool, which titles its calls with this name. Only its images
-/// and those the model draws into a reply cost a generation: a `read` of a
-/// picture returns one too, and must not stop a turn.
+/// kage's image tool, which titles its calls with this name. Only its media,
+/// the speech tool's, and what the model draws or speaks into a reply cost a
+/// generation: a `read` of a picture returns one too, and must not stop a
+/// turn.
 const GENERATE_IMAGE_TOOL: &str = "generate_image";
+
+/// kage's speech tool, beside [`GENERATE_IMAGE_TOOL`] under the same cap.
+const GENERATE_SPEECH_TOOL: &str = "generate_speech";
 
 /// Said when a session ends for a limit it could carry on past.
 ///
@@ -546,9 +551,9 @@ enum Signal {
         name: String,
         failed: bool,
         output: String,
-        images: Vec<ProducedImage>,
+        media: Vec<ProducedMedia>,
     },
-    AgentImage(ProducedImage),
+    AgentMedia(ProducedMedia),
     Thinking,
     Thought(String),
     Usage(Usage),
@@ -744,10 +749,11 @@ struct Running {
     /// Output tokens the session had produced when this turn opened, so the
     /// turn's own share can be told apart from the running total.
     turn_output_from: u64,
-    /// Every image returned this turn, counted toward the posting cap.
-    turn_images: usize,
-    /// Images generated this turn, including when posting is disabled.
-    /// Crossing [`MAX_IMAGES_PER_TURN`] requests interruption once.
+    /// Every image and clip returned this turn, counted toward the posting
+    /// cap.
+    turn_media: usize,
+    /// Media generated this turn, including when posting is disabled.
+    /// Crossing [`MAX_MEDIA_PER_TURN`] requests interruption once.
     turn_generated: usize,
     idle_timer: Option<u64>,
     disk_timer: Option<u64>,
@@ -767,7 +773,7 @@ struct Running {
     /// prompt. It is opened after the agent's turn ends, so the agent has
     /// not seen the outcome, and could only guess at why a retry is needed.
     pull_request_outcome: Option<String>,
-    /// Why the image cap interrupted the last turn, said once in the next prompt.
+    /// Why the media cap interrupted the last turn, said once in the next prompt.
     image_cap_note: Option<String>,
 
     /// Who has already been told why they cannot take part.
@@ -862,7 +868,7 @@ impl Running {
             turn_started_at: None,
             turn_first_output_at: None,
             turn_output_from: 0,
-            turn_images: 0,
+            turn_media: 0,
             turn_generated: 0,
             idle_timer: None,
             disk_timer: None,
@@ -997,11 +1003,11 @@ impl Running {
                     name,
                     failed,
                     output,
-                    images,
+                    media,
                 } => {
-                    self.on_tool_end(&id, &name, failed, &output, &images).await;
+                    self.on_tool_end(&id, &name, failed, &output, &media).await;
                 }
-                Signal::AgentImage(image) => self.on_image(&image, true).await,
+                Signal::AgentMedia(media) => self.on_media(&media, true).await,
                 Signal::Thought(text) => {
                     self.views.send(SessionEvent::Thinking { text }).await;
                 }
@@ -1640,7 +1646,7 @@ impl Running {
         self.turn_started_at = Some(now_ms());
         self.turn_first_output_at = None;
         self.turn_output_from = self.usage.output;
-        self.turn_images = 0;
+        self.turn_media = 0;
         self.turn_generated = 0;
         self.views.send(SessionEvent::Waiting { text: None }).await;
         self.views.send(SessionEvent::Busy { busy: true }).await;
@@ -1872,18 +1878,18 @@ impl Running {
         });
         on!(
             on_tool_end,
-            (String, String, bool, String, Vec<ProducedImage>),
-            |(id, name, failed, output, images)| {
+            (String, String, bool, String, Vec<ProducedMedia>),
+            |(id, name, failed, output, media)| {
                 Signal::ToolEnd {
                     id,
                     name,
                     failed,
                     output,
-                    images,
+                    media,
                 }
             }
         );
-        on!(on_agent_image, ProducedImage, Signal::AgentImage);
+        on!(on_agent_media, ProducedMedia, Signal::AgentMedia);
         on!(on_thought, String, Signal::Thought);
         on!(on_usage, Usage, Signal::Usage);
         on!(on_error, String, Signal::Error);
@@ -2074,15 +2080,16 @@ impl Running {
         name: &str,
         failed: bool,
         output: &str,
-        images: &[ProducedImage],
+        media: &[ProducedMedia],
     ) {
         self.open_tools.remove(id);
         if !failed && EDITING_TOOLS.contains(&name) {
             self.report_edit(name, id).await;
         }
         if !failed {
-            for image in images {
-                self.on_image(image, name == GENERATE_IMAGE_TOOL).await;
+            let generated = name == GENERATE_IMAGE_TOOL || name == GENERATE_SPEECH_TOOL;
+            for item in media {
+                self.on_media(item, generated).await;
             }
         }
 

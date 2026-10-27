@@ -252,13 +252,23 @@ pub fn method_not_found_frame(id: u64, method: &str) -> Value {
     })
 }
 
+/// What the agent's reply or a tool call carried, as its content block
+/// named it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaKind {
+    /// A picture, from an `image` block.
+    Image,
+    /// A clip, from an `audio` block.
+    Audio,
+}
+
 /// One `session/update` notification, classified for the turn it belongs to.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcpUpdate {
     /// Assistant text, to report as it arrives.
     AgentText(String),
-    /// An image the model drew into its reply.
-    AgentImage(ProducedImage),
+    /// Media the model drew or spoke into its reply.
+    AgentMedia(ProducedMedia),
     /// Reasoning text, to report as it arrives.
     ThoughtText(String),
     /// A tool call started, with its raw input for the target line.
@@ -281,13 +291,13 @@ pub enum AcpUpdate {
     /// between its start and its exit.
     ToolProgress { id: String, text: String },
     /// A tool call finished, with whether it failed, what it said, and the
-    /// images it returned.
+    /// media it returned.
     ToolEnd {
         id: String,
         title: Option<String>,
         failed: bool,
         output: String,
-        images: Vec<ProducedImage>,
+        media: Vec<ProducedMedia>,
     },
     /// Context usage, for the usage line and the window size.
     UsageInfo { usage: Usage, size: f64 },
@@ -304,28 +314,31 @@ pub enum AcpUpdate {
     Ignored,
 }
 
-/// An image the agent produced: one a tool call returned, such as kage's
-/// `generate_image`, or one the model drew into its reply.
+/// Media the agent produced: one a tool call returned, such as kage's
+/// `generate_image` or `generate_speech`, or one the model drew or spoke
+/// into its reply.
 ///
-/// Everything here is the agent's word. The daemon reads the image's type
-/// from its bytes before anything is posted.
+/// Everything here is the agent's word. The daemon reads the bytes' type
+/// from the bytes themselves before anything is posted.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ProducedImage {
-    /// The image's bytes.
+pub struct ProducedMedia {
+    /// What the media is, as its content block named it.
+    pub kind: MediaKind,
+    /// The media's bytes.
     pub bytes: Vec<u8>,
-    /// What the image's server said about it, such as a fallback to another
+    /// What the media's server said about it, such as a fallback to another
     /// model, when it said anything.
     pub note: Option<String>,
     /// Where the tool also saved it, as a path on the agent's side.
     pub path: Option<String>,
 }
 
-/// The images a completed tool call returned.
+/// The media a completed tool call returned.
 ///
-/// Each `image` block in its content, which is how kage hands a client the
-/// image a tool made. The `note` and `path` an object `rawOutput` carries
-/// ride on each, so they can be shown beside the picture.
-fn produced_images(update: &Value) -> Vec<ProducedImage> {
+/// Each `image` and `audio` block in its content, in order, which is how
+/// kage hands a client what a tool made. The `note` and `path` an object
+/// `rawOutput` carries ride on each, so they can be shown beside it.
+fn produced_media(update: &Value) -> Vec<ProducedMedia> {
     let raw = |field: &str| {
         update
             .get("rawOutput")
@@ -342,22 +355,28 @@ fn produced_images(update: &Value) -> Vec<ProducedImage> {
         .into_iter()
         .flatten()
         .filter_map(|part| part.get("content"))
-        .filter_map(image_bytes)
-        .map(|bytes| ProducedImage {
-            bytes,
-            note: note.clone(),
-            path: path.clone(),
+        .filter_map(|block| {
+            let (kind, bytes) = media_bytes(block)?;
+            Some(ProducedMedia {
+                kind,
+                bytes,
+                note: note.clone(),
+                path: path.clone(),
+            })
         })
         .collect()
 }
 
-/// The bytes of an `image` content block, or nothing for another block or
-/// data that is not base64.
-fn image_bytes(block: &Value) -> Option<Vec<u8>> {
-    if block.get("type").and_then(Value::as_str) != Some("image") {
-        return None;
-    }
-    decode_base64(block.get("data")?.as_str()?)
+/// The bytes of an `image` or `audio` content block with its kind, or
+/// nothing for another block or data that is not base64.
+fn media_bytes(block: &Value) -> Option<(MediaKind, Vec<u8>)> {
+    let kind = match block.get("type").and_then(Value::as_str) {
+        Some("image") => MediaKind::Image,
+        Some("audio") => MediaKind::Audio,
+        _ => return None,
+    };
+    let bytes = decode_base64(block.get("data")?.as_str()?)?;
+    Some((kind, bytes))
 }
 
 /// Decodes standard base64, padded or not. Nothing for any other character.
@@ -425,10 +444,12 @@ fn tool_output_text(content: Option<&Value>) -> String {
     out
 }
 
-/// A piece of the agent's reply: its words, or an image the model drew.
+/// A piece of the agent's reply: its words, or media the model drew or
+/// spoke into it.
 fn message_chunk(content: Option<&Value>) -> AcpUpdate {
-    if let Some(bytes) = content.and_then(image_bytes) {
-        return AcpUpdate::AgentImage(ProducedImage {
+    if let Some((kind, bytes)) = content.and_then(media_bytes) {
+        return AcpUpdate::AgentMedia(ProducedMedia {
+            kind,
             bytes,
             note: None,
             path: None,
@@ -482,10 +503,10 @@ fn tool_call_update(update: &Value) -> AcpUpdate {
                 .get("rawOutput")
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
-        images: if failed {
+        media: if failed {
             Vec::new()
         } else {
-            produced_images(update)
+            produced_media(update)
         },
     }
 }

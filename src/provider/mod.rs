@@ -3,6 +3,8 @@
 
 /// One question put to a model beside a session.
 pub mod ask;
+/// What audio bytes declare themselves to be, read from the bytes.
+pub mod audio;
 /// Asks providers which models they serve, and holds what sessions read.
 pub mod discover;
 /// Reads a metered window from a gateway that reports one.

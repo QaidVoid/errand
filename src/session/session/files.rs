@@ -7,13 +7,14 @@
 
 use std::fmt::Write as _;
 
-use super::{IncomingMessage, MAX_DIFFABLE_BYTES, MAX_IMAGES_PER_TURN, MAX_INLINE, Running};
-use crate::agent::protocol::ProducedImage;
+use super::{IncomingMessage, MAX_DIFFABLE_BYTES, MAX_INLINE, MAX_MEDIA_PER_TURN, Running};
+use crate::agent::protocol::{MediaKind, ProducedMedia};
 use crate::chat::diff::file_diff;
 use crate::chat::render::{
     bytes as byte_count, connection_line, directory_listing, file_view, inert, server_text, widen,
 };
 use crate::log::{LogValue, fields};
+use crate::provider::audio::audio_extension;
 use crate::provider::images::{endpoint_with_effort, image_extension};
 use crate::sandbox::paths;
 use crate::session::commands::image_args;
@@ -366,85 +367,102 @@ impl Running {
             .await;
     }
 
-    /// Counts a returned image, posts it while the turn is under the cap, and
-    /// stops a running turn once it generates more than the cap. Past the cap
-    /// the images are not posted, and the log and the thread say so.
-    pub(super) async fn on_image(&mut self, image: &ProducedImage, generated: bool) {
-        self.turn_images = self.turn_images.saturating_add(1);
+    /// Counts a returned image or clip, posts it while the turn is under the
+    /// cap, and stops a running turn once it generates more than the cap.
+    /// Past the cap the media is not posted, and the log and the thread say
+    /// so.
+    pub(super) async fn on_media(&mut self, media: &ProducedMedia, generated: bool) {
+        let posts = match media.kind {
+            MediaKind::Image => self.options.config.output.post_images,
+            MediaKind::Audio => self.options.config.output.post_audio,
+        };
+        self.turn_media = self.turn_media.saturating_add(1);
         if generated {
             self.turn_generated = self.turn_generated.saturating_add(1);
         }
         if generated
-            && self.turn_generated == MAX_IMAGES_PER_TURN + 1
+            && self.turn_generated == MAX_MEDIA_PER_TURN + 1
             && self.ticket.is_some()
             && !self.abort_in_flight
         {
             self.log.warn(
-                "the agent passed the image cap, so its turn is being stopped",
-                &fields([("cap", LogValue::from(MAX_IMAGES_PER_TURN))]),
+                "the agent passed the media cap, so its turn is being stopped",
+                &fields([("cap", LogValue::from(MAX_MEDIA_PER_TURN))]),
             );
             self.image_cap_note = Some(format!(
                 "(From errand: your last turn was stopped because it generated more than \
-                 {MAX_IMAGES_PER_TURN} images. Generate at most {MAX_IMAGES_PER_TURN} images \
-                 in a turn.)"
+                 {MAX_MEDIA_PER_TURN} images or clips. Generate at most {MAX_MEDIA_PER_TURN} \
+                 images or clips in a turn.)"
             ));
             self.aborting = true;
             self.abort();
             self.say(&format!(
-                "the agent made more than {MAX_IMAGES_PER_TURN} images this turn, so the turn \
-                 is being stopped; if the agent does not confirm, the session will end"
+                "the agent made more than {MAX_MEDIA_PER_TURN} images or clips this turn, so \
+                 the turn is being stopped; if the agent does not confirm, the session will end"
             ))
             .await;
-        } else if self.turn_images <= MAX_IMAGES_PER_TURN {
-            if self.options.config.output.post_images {
-                self.post_image(image).await;
+        } else if self.turn_media <= MAX_MEDIA_PER_TURN {
+            if posts {
+                self.post_media(media).await;
             }
-        } else if self.turn_images == MAX_IMAGES_PER_TURN + 1 {
+        } else if self.turn_media == MAX_MEDIA_PER_TURN + 1 {
             self.log.warn(
-                "the agent passed the image cap; the images past it are not posted",
-                &fields([("cap", LogValue::from(MAX_IMAGES_PER_TURN))]),
+                "the agent passed the media cap; the media past it are not posted",
+                &fields([("cap", LogValue::from(MAX_MEDIA_PER_TURN))]),
             );
-            if self.options.config.output.post_images {
+            if posts {
                 self.say(&format!(
-                    "the agent made more than {MAX_IMAGES_PER_TURN} images this turn, so the \
-                     rest were not posted"
+                    "the agent made more than {MAX_MEDIA_PER_TURN} images or clips this turn, \
+                     so the rest were not posted"
                 ))
                 .await;
             }
         }
     }
 
-    /// Posts an image the agent made as an upload, captioned with its size,
-    /// where the tool saved it when it did, and what its server said about
-    /// it. One that cannot be posted is reported in the thread with the
-    /// reason instead, so somebody told that an image was made is not left
-    /// waiting for it. The caller owns counting images toward the turn's cap.
-    pub(super) async fn post_image(&mut self, image: &ProducedImage) {
-        let saved = image
+    /// Posts an image or clip the agent made as an upload, captioned with
+    /// its size, where the tool saved it when it did, and what its server
+    /// said about it. One that cannot be posted is reported in the thread
+    /// with the reason instead, so somebody told that it was made is not left
+    /// waiting for it. The caller owns counting media toward the turn's cap.
+    pub(super) async fn post_media(&mut self, media: &ProducedMedia) {
+        let (made, noun, extension, formats) = match media.kind {
+            MediaKind::Image => (
+                "an image",
+                "image",
+                image_extension(&media.bytes),
+                "a PNG, JPEG, GIF or WebP",
+            ),
+            MediaKind::Audio => (
+                "a clip",
+                "clip",
+                audio_extension(&media.bytes),
+                "MP3 or WAV",
+            ),
+        };
+        let saved = media
             .path
             .as_deref()
             .filter(|path| self.host_path(path).is_some())
             .map(|path| self.display_path(path));
-        let size = u64::try_from(image.bytes.len()).unwrap_or(u64::MAX);
+        let size = u64::try_from(media.bytes.len()).unwrap_or(u64::MAX);
         let limit = self.options.config.output.max_upload_bytes;
         let refusal = if size > limit {
             Some(format!(
-                "the agent made a {} image, over the {} upload limit, so it was not posted",
+                "the agent made a {} {noun}, over the {} upload limit, so it was not posted",
                 byte_count(widen(size)),
                 byte_count(widen(limit))
             ))
-        } else if image_extension(&image.bytes).is_none() {
-            Some(
-                "the agent made an image that is not a PNG, JPEG, GIF or WebP, so it was not \
-                 posted"
-                    .to_owned(),
-            )
+        } else if extension.is_none() {
+            Some(format!(
+                "the agent made {made} that is not {formats}, so it was not posted"
+            ))
         } else {
             None
         };
         if let Some(refusal) = refusal {
             self.log.warn(
-                "an image the agent made was not posted",
+                &format!("{made} the agent made was not posted"),
                 &fields([("reason", LogValue::from(refusal.as_str()))]),
             );
             self.say(&refusal).await;
@@ -455,35 +473,36 @@ impl Running {
             .and_then(|path| path.rsplit('/').next())
             .filter(|name| !name.is_empty())
             .map_or_else(
-                || format!("image.{}", image_extension(&image.bytes).unwrap_or("png")),
+                || format!("{noun}.{}", extension.unwrap_or_default()),
                 str::to_owned,
             );
         self.log.info(
-            "posting an image the agent made",
+            &format!("posting {made} the agent made"),
             &fields([("name", LogValue::from(name.as_str()))]),
         );
-        let caption = image_caption(saved.as_deref(), widen(size), image.note.as_deref());
+        let caption = media_caption(saved.as_deref(), widen(size), media.note.as_deref(), made);
         self.views
             .send(SessionEvent::Upload {
                 name,
-                bytes: image.bytes.clone(),
+                bytes: media.bytes.clone(),
                 caption,
             })
             .await;
     }
 }
 
-/// The caption an image the agent made is posted with: where the tool saved
-/// it when it did, its size, and in brackets what its server said, such as a
-/// fallback to another model, so a reader sees it beside the picture.
+/// The caption an image or clip the agent made is posted with: where the
+/// tool saved it when it did, its size, and in brackets what its server
+/// said, such as a fallback to another model, so a reader sees it beside the
+/// media. `noun` is what was made, "an image" or "a clip".
 ///
 /// The note is the server's free text, so it goes through [`server_text`]
 /// and sits in a code span. The path is made inert, so neither can ping
 /// anyone or close the code span.
-fn image_caption(saved: Option<&str>, size: f64, note: Option<&str>) -> String {
+fn media_caption(saved: Option<&str>, size: f64, note: Option<&str>, noun: &str) -> String {
     let mut caption = match saved {
         Some(path) => format!("generated `{}` {}", inert(path), byte_count(size)),
-        None => format!("generated an image, {}", byte_count(size)),
+        None => format!("generated {noun}, {}", byte_count(size)),
     };
     let note = server_text(note.unwrap_or_default());
     if !note.is_empty() {

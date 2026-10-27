@@ -3170,6 +3170,9 @@ const GENERATED_PNG: &[u8] = &[
     0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R',
 ];
 
+/// An ID3 tag and padding past it, enough for the type to be read.
+const GENERATED_MP3: &[u8] = &[b'I', b'D', b'3', 0x04, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
 /// The completion kage sends for a generated image: the image itself as a
 /// block, and where the tool saved it and what its server said in
 /// `rawOutput`.
@@ -3201,6 +3204,27 @@ fn drawn_image(bytes: &[u8]) -> Value {
             "content": {
                 "type": "image", "data": super::encode_base64(bytes), "mimeType": "image/png",
             },
+        } },
+    })
+}
+
+/// The completion kage sends for a generated clip, mirroring
+/// `generated_image`: the clip itself as an `audio` block, and where the
+/// tool saved it and what its server said in `rawOutput`.
+fn generated_clip(call: &str, bytes: &[u8], path: Option<&str>, note: Option<&str>) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": { "sessionId": "s-1", "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": call, "status": "completed", "title": "generate_speech",
+            "content": [
+                { "type": "content", "content": { "type": "text", "text": "Generated a clip" } },
+                { "type": "content", "content": {
+                    "type": "audio", "data": super::encode_base64(bytes), "mimeType": "audio/mpeg",
+                } },
+            ],
+            "rawOutput": { "model": "tts", "path": path, "note": note },
         } },
     })
 }
@@ -3341,7 +3365,7 @@ async fn a_turn_posts_up_to_the_image_cap_and_is_then_interrupted() {
                  posted"
             );
             assert!(
-                posts[1].contains("more than 4 images this turn"),
+                posts[1].contains("more than 4 images or clips this turn"),
                 "{posts:?}"
             );
             assert_eq!(harness.written().matches("session/cancel").count(), 1);
@@ -3372,6 +3396,213 @@ async fn generated_images_are_not_posted_when_turned_off() {
 
             assert!(harness.thread.uploads().is_empty());
             assert!(harness.thread.posts().is_empty());
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_clip_the_agent_generated_is_posted_with_its_caption() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().send(&generated_clip(
+                "t1",
+                GENERATED_MP3,
+                Some("/workspace/generated/a voice.mp3"),
+                Some("tts was busy; this clip came from tts-low"),
+            ));
+            settle().await;
+
+            assert_eq!(
+                harness.thread.uploads(),
+                vec![("a voice.mp3".to_owned(), GENERATED_MP3.len())]
+            );
+            assert_eq!(
+                captions(harness),
+                vec![
+                    "generated `generated/a voice.mp3` 16 B [`tts was busy; this clip came \
+                     from tts-low`]"
+                        .to_owned()
+                ]
+            );
+
+            // Not saved, it goes by its kind.
+            harness
+                .controls()
+                .send(&generated_clip("t2", GENERATED_MP3, None, None));
+            settle().await;
+            assert_eq!(harness.thread.uploads()[1].0, "clip.mp3");
+            assert_eq!(captions(harness)[1], "generated a clip, 16 B");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_clip_that_is_not_audio_is_refused_rather_than_posted() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness
+                .controls()
+                .send(&generated_clip("t1", b"not audio at all!", None, None));
+            settle().await;
+
+            assert!(harness.thread.uploads().is_empty());
+            assert_eq!(
+                harness.thread.posts(),
+                vec![
+                    "the agent made a clip that is not MP3 or WAV, so it was not posted".to_owned()
+                ]
+            );
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_clip_over_the_upload_limit_is_refused_rather_than_posted() {
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({ "output": { "maxUploadBytes": 10 } }))),
+        ..SessionTestCase::default()
+    };
+    with_session(case, |harness| {
+        Box::pin(async move {
+            harness
+                .controls()
+                .send(&generated_clip("t1", GENERATED_MP3, None, None));
+            settle().await;
+
+            assert!(harness.thread.uploads().is_empty());
+            assert_eq!(
+                harness.thread.posts(),
+                vec![
+                    "the agent made a 16 B clip, over the 10 B upload limit, so it was not \
+                     posted"
+                        .to_owned()
+                ]
+            );
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn clips_are_not_posted_when_postaudio_is_off_but_still_counted() {
+    for post_audio in [true, false] {
+        with_session(
+            SessionTestCase {
+                config: Some(config_with(
+                    &json!({ "output": { "postAudio": post_audio } }),
+                )),
+                ..SessionTestCase::default()
+            },
+            |harness| {
+                Box::pin(async move {
+                    harness.controls().turn_start();
+                    settle().await;
+                    assert!(harness.thread.busy());
+                    for n in 0..super::MAX_MEDIA_PER_TURN + 2 {
+                        harness.controls().send(&generated_clip(
+                            &format!("t{n}"),
+                            GENERATED_MP3,
+                            None,
+                            None,
+                        ));
+                    }
+                    settle().await;
+                    assert_eq!(harness.written().matches("session/cancel").count(), 1);
+                    assert_eq!(
+                        harness
+                            .thread
+                            .everything()
+                            .matches("more than 4 images or clips this turn")
+                            .count(),
+                        1
+                    );
+                    assert_eq!(
+                        harness.thread.uploads().len(),
+                        if post_audio {
+                            super::MAX_MEDIA_PER_TURN
+                        } else {
+                            0
+                        }
+                    );
+                    harness.controls().turn_end();
+                    settle().await;
+                    assert_eq!(
+                        harness.thread.final_reaction("m1"),
+                        Some(ReactionOutcome::Interrupted)
+                    );
+                })
+            },
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn images_and_clips_share_one_generation_cap() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().turn_start();
+            settle().await;
+            assert!(harness.thread.busy());
+            for n in 0..3 {
+                harness.controls().send(&generated_image(
+                    &format!("img{n}"),
+                    GENERATED_PNG,
+                    None,
+                    None,
+                ));
+            }
+            for n in 0..2 {
+                harness.controls().send(&generated_clip(
+                    &format!("clip{n}"),
+                    GENERATED_MP3,
+                    None,
+                    None,
+                ));
+            }
+            settle().await;
+
+            let names: Vec<String> = harness
+                .thread
+                .uploads()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect();
+            assert_eq!(names, ["image.png", "image.png", "image.png", "clip.mp3"]);
+            assert_eq!(harness.written().matches("session/cancel").count(), 1);
+            let thread = harness.thread.everything();
+            assert_eq!(
+                thread
+                    .matches("more than 4 images or clips this turn")
+                    .count(),
+                1,
+                "{thread}"
+            );
+            harness.controls().turn_end();
+            settle().await;
+            assert_eq!(
+                harness.thread.final_reaction("m1"),
+                Some(ReactionOutcome::Interrupted)
+            );
+
+            // The next prompt is told why the turn stopped, in media words.
+            harness
+                .session
+                .handle(message_from("continue", OWNER, "m2"))
+                .await;
+            settle().await;
+            assert_eq!(
+                harness.controls().prompts().last().unwrap(),
+                &format!(
+                    "(From errand: your last turn was stopped because it generated more than {} \
+                     images or clips. Generate at most {} images or clips in a turn.)\n\ncontinue",
+                    super::MAX_MEDIA_PER_TURN,
+                    super::MAX_MEDIA_PER_TURN,
+                )
+            );
         })
     })
     .await;
@@ -4595,7 +4826,7 @@ async fn image_limits_interrupt_once_even_when_posting_is_disabled() {
                     harness.controls().turn_start();
                     settle().await;
                     assert!(harness.thread.busy());
-                    for n in 0..super::MAX_IMAGES_PER_TURN + 2 {
+                    for n in 0..super::MAX_MEDIA_PER_TURN + 2 {
                         if n % 2 == 0 {
                             harness.controls().send(&generated_image(
                                 &format!("t{n}"),
@@ -4613,14 +4844,14 @@ async fn image_limits_interrupt_once_even_when_posting_is_disabled() {
                         harness
                             .thread
                             .everything()
-                            .matches("more than 4 images this turn")
+                            .matches("more than 4 images or clips this turn")
                             .count(),
                         1
                     );
                     assert_eq!(
                         harness.thread.uploads().len(),
                         if post_images {
-                            super::MAX_IMAGES_PER_TURN
+                            super::MAX_MEDIA_PER_TURN
                         } else {
                             0
                         }
@@ -4648,7 +4879,7 @@ async fn the_next_prompt_says_the_image_cap_stopped_the_last_turn() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
             harness.controls().turn_start();
-            for _ in 0..=super::MAX_IMAGES_PER_TURN {
+            for _ in 0..=super::MAX_MEDIA_PER_TURN {
                 harness.controls().send(&drawn_image(GENERATED_PNG));
             }
             settle().await;
@@ -4668,9 +4899,9 @@ async fn the_next_prompt_says_the_image_cap_stopped_the_last_turn() {
                 harness.controls().prompts().last().unwrap(),
                 &format!(
                     "(From errand: your last turn was stopped because it generated more than {} \
-                     images. Generate at most {} images in a turn.)\n\ncontinue",
-                    super::MAX_IMAGES_PER_TURN,
-                    super::MAX_IMAGES_PER_TURN,
+                     images or clips. Generate at most {} images or clips in a turn.)\n\ncontinue",
+                    super::MAX_MEDIA_PER_TURN,
+                    super::MAX_MEDIA_PER_TURN,
                 )
             );
 
@@ -4692,7 +4923,7 @@ async fn a_turn_that_ends_under_the_cap_carries_no_note() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
             harness.controls().turn_start();
-            for _ in 0..super::MAX_IMAGES_PER_TURN {
+            for _ in 0..super::MAX_MEDIA_PER_TURN {
                 harness.controls().send(&drawn_image(GENERATED_PNG));
             }
             harness.controls().turn_end();
@@ -4737,7 +4968,7 @@ async fn crossing_the_image_cap_does_not_restart_an_existing_interrupt_wait() {
             assert_eq!(before.len(), 1);
             harness.timers.advance(1_000);
             settle().await;
-            for _ in 0..=super::MAX_IMAGES_PER_TURN {
+            for _ in 0..=super::MAX_MEDIA_PER_TURN {
                 harness.controls().send(&drawn_image(GENERATED_PNG));
             }
             settle().await;
@@ -4778,7 +5009,7 @@ async fn images_with_no_turn_open_do_not_request_interruption() {
                 .handle(message_from("!interrupt", OWNER, "m2"))
                 .await;
             assert!(harness.thread.everything().contains("nothing running"));
-            for _ in 0..=super::MAX_IMAGES_PER_TURN {
+            for _ in 0..=super::MAX_MEDIA_PER_TURN {
                 harness.controls().send(&drawn_image(GENERATED_PNG));
             }
             settle().await;
@@ -4804,13 +5035,13 @@ async fn images_another_tool_returns_do_not_stop_the_turn() {
             harness.controls().turn_start();
             settle().await;
             assert!(harness.thread.busy());
-            for n in 0..=super::MAX_IMAGES_PER_TURN {
+            for n in 0..=super::MAX_MEDIA_PER_TURN {
                 let mut read = generated_image(&format!("read{n}"), GENERATED_PNG, None, None);
                 read["params"]["update"]["title"] = json!("read");
                 harness.controls().send(&read);
             }
             settle().await;
-            assert_eq!(harness.thread.uploads().len(), super::MAX_IMAGES_PER_TURN);
+            assert_eq!(harness.thread.uploads().len(), super::MAX_MEDIA_PER_TURN);
             assert!(!harness.written().contains("session/cancel"));
             let thread = harness.thread.everything();
             assert_eq!(
@@ -4837,7 +5068,7 @@ async fn failed_image_tools_do_not_count_returned_images() {
             harness.controls().turn_start();
             settle().await;
             assert!(harness.thread.busy());
-            for n in 0..super::MAX_IMAGES_PER_TURN {
+            for n in 0..super::MAX_MEDIA_PER_TURN {
                 let mut failed = generated_image(&format!("failed{n}"), GENERATED_PNG, None, None);
                 failed["params"]["update"]["status"] = json!("failed");
                 harness.controls().send(&failed);

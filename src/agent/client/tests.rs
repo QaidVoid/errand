@@ -10,7 +10,7 @@ use tokio::sync::watch;
 
 use super::{AgentClient, AgentHandlers, AgentProcess, AnswerOutcome, without_inline_images};
 use crate::agent::protocol::DialogRequest;
-use crate::agent::protocol::ProducedImage;
+use crate::agent::protocol::ProducedMedia;
 use crate::agent::protocol::Usage;
 use crate::log::{LogFields, Logger};
 
@@ -747,7 +747,7 @@ async fn tool_calls_report_their_target_and_whether_they_failed() {
                     String,
                     bool,
                     String,
-                    Vec<ProducedImage>,
+                    Vec<ProducedMedia>,
                 )| {
                     end_seen
                         .lock()
@@ -788,26 +788,26 @@ async fn tool_calls_report_their_target_and_whether_they_failed() {
 }
 
 #[tokio::test]
-async fn images_reach_the_tool_end_and_agent_image_handlers() {
+async fn media_reaches_the_tool_end_and_agent_media_handlers() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let (end_seen, reply_seen) = (Arc::clone(&seen), Arc::clone(&seen));
     let setup = client(
         AgentHandlers {
             on_tool_end: Some(Box::new(
-                move |(_, _, _, _, images): (String, String, bool, String, Vec<ProducedImage>)| {
-                    for image in images {
+                move |(_, _, _, _, media): (String, String, bool, String, Vec<ProducedMedia>)| {
+                    for item in media {
                         end_seen
                             .lock()
                             .unwrap()
-                            .push(format!("tool:{}", image.bytes.len()));
+                            .push(format!("tool:{}", item.bytes.len()));
                     }
                 },
             )),
-            on_agent_image: Some(Box::new(move |image: ProducedImage| {
+            on_agent_media: Some(Box::new(move |media: ProducedMedia| {
                 reply_seen
                     .lock()
                     .unwrap()
-                    .push(format!("reply:{}", image.bytes.len()));
+                    .push(format!("reply:{}", media.bytes.len()));
             })),
             ..AgentHandlers::default()
         },

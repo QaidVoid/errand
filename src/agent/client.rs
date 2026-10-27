@@ -19,7 +19,7 @@ use tokio::sync::oneshot;
 
 use crate::agent::framing::LineFramer;
 use crate::agent::protocol::{
-    AcpUpdate, AgentRecord, DialogMethod, DialogRequest, FrameKind, ProducedImage,
+    AcpUpdate, AgentRecord, DialogMethod, DialogRequest, FrameKind, ProducedMedia,
     StreamingBehavior, Usage, as_permission_ask, ask_option_ids, cancel_ask_frame, cancel_frame,
     classify_frame, classify_update, compact_frame, detail_of, image_block, initialize_frame,
     is_retryable, method_not_found_frame, new_session_frame, prompt_frame, resume_session_frame,
@@ -91,13 +91,13 @@ pub struct AgentHandlers {
     /// The agent began a tool call.
     pub on_tool_start: Callback<(String, String, Option<String>)>,
     /// A tool call finished, with whether it failed, what it said, and the
-    /// images it returned.
-    pub on_tool_end: Callback<(String, String, bool, String, Vec<ProducedImage>)>,
+    /// media it returned.
+    pub on_tool_end: Callback<(String, String, bool, String, Vec<ProducedMedia>)>,
     /// A running tool call reported where it has got to, or what an agent it
     /// started is doing. Carries the call's id and the line to show.
     pub on_tool_progress: Callback<(String, String)>,
-    /// The model drew an image into its reply.
-    pub on_agent_image: Callback<ProducedImage>,
+    /// The model drew or spoke media into its reply.
+    pub on_agent_media: Callback<ProducedMedia>,
     /// The agent is thinking. Reported once per turn.
     pub on_thinking: Callback,
     /// What a finished turn cost, when the agent reported it.
@@ -1132,7 +1132,7 @@ impl Shared {
     fn apply_update(&self, update: AcpUpdate) {
         match update {
             AcpUpdate::AgentText(text) => self.apply_text(&text),
-            AcpUpdate::AgentImage(image) => self.apply_image(image),
+            AcpUpdate::AgentMedia(media) => self.apply_media(media),
             AcpUpdate::ThoughtText(text) => self.apply_thought(&text),
             AcpUpdate::ToolStart {
                 id,
@@ -1152,8 +1152,8 @@ impl Shared {
                 title,
                 failed,
                 output,
-                images,
-            } => self.apply_tool_end(id, title, failed, output, images),
+                media,
+            } => self.apply_tool_end(id, title, failed, output, media),
             AcpUpdate::UsageInfo { usage, size } => self.apply_usage(usage, size),
             AcpUpdate::TurnStart => self.apply_turn_start(),
             // An iteration boundary, not the end of the turn: the agent opens
@@ -1309,7 +1309,7 @@ impl Shared {
         title: Option<String>,
         failed: bool,
         output: String,
-        images: Vec<ProducedImage>,
+        media: Vec<ProducedMedia>,
     ) {
         self.flush_speech();
         let held = {
@@ -1322,16 +1322,16 @@ impl Shared {
                 held.or(title).unwrap_or_else(|| "tool".to_owned()),
                 failed,
                 output,
-                images,
+                media,
             ));
         }
     }
 
-    /// Reports an image the model drew, after the words before it.
-    fn apply_image(&self, image: ProducedImage) {
+    /// Reports media the model drew or spoke, after the words before it.
+    fn apply_media(&self, media: ProducedMedia) {
         self.flush_speech();
-        if let Some(on_agent_image) = &self.handlers.on_agent_image {
-            on_agent_image(image);
+        if let Some(on_agent_media) = &self.handlers.on_agent_media {
+            on_agent_media(media);
         }
     }
 
