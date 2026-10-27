@@ -1545,3 +1545,107 @@ fn an_id_kage_reserves_is_left_out() {
     assert!(!config.contains("acp"), "{config}");
     assert!(config.contains("[providers.custom.gw]"), "{config}");
 }
+
+/// An `editModel` on `images` writes `[tools.edit_image]` on the same
+/// endpoint, after the generation table; without one there is no edit
+/// table.
+#[test]
+fn an_edit_model_gives_the_edit_tool_the_images_endpoint() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "pictures".to_owned(),
+        json!({
+            "credential": "k",
+            "baseUrl": "https://images.example/v1",
+            "images": { "model": "image", "editModel": "image-edit" },
+        }),
+    );
+    let names = BTreeMap::from([(
+        "pictures".to_owned(),
+        "ERRAND_PROVIDER_PICTURES_API_KEY".to_owned(),
+    )]);
+    let config = kage_config(
+        &defined,
+        &through_broker("pictures"),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    )
+    .toml;
+    assert!(
+        config.contains(
+            "\n[tools.generate_image]\n\
+             base_url = \"http://169.254.169.1:8443/provider/pictures\"\n\
+             api_key_env = \"ERRAND_PROVIDER_PICTURES_API_KEY\"\n\
+             model = \"image\"\n\
+             \n[tools.edit_image]\n\
+             base_url = \"http://169.254.169.1:8443/provider/pictures\"\n\
+             api_key_env = \"ERRAND_PROVIDER_PICTURES_API_KEY\"\n\
+             model = \"image-edit\"\n"
+        ),
+        "{config}"
+    );
+
+    defined.insert(
+        "pictures".to_owned(),
+        json!({
+            "credential": "k",
+            "baseUrl": "https://images.example/v1",
+            "images": { "model": "image" },
+        }),
+    );
+    let config = kage_config(
+        &defined,
+        &through_broker("pictures"),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    )
+    .toml;
+    assert!(!config.contains("[tools.edit_image]"), "{config}");
+}
+
+/// A music-only provider is written for the music tool alone, through the
+/// broker, and is not reported as dropped.
+#[test]
+fn a_music_only_provider_is_written_for_the_music_tool_alone() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "songs".to_owned(),
+        json!({
+            "credential": "k",
+            "baseUrl": "https://music.example/v1",
+            "music": { "model": "music" },
+        }),
+    );
+    let names = BTreeMap::from([(
+        "songs".to_owned(),
+        "ERRAND_PROVIDER_SONGS_API_KEY".to_owned(),
+    )]);
+    let written = kage_config(
+        &defined,
+        &through_broker("songs"),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    );
+    assert!(written.dropped.is_empty(), "{:?}", written.dropped);
+    let config = written.toml;
+    assert!(!config.contains("[providers"), "{config}");
+    assert!(
+        config.contains(
+            "\n[tools.generate_music]\n\
+             base_url = \"http://169.254.169.1:8443/provider/songs\"\n\
+             api_key_env = \"ERRAND_PROVIDER_SONGS_API_KEY\"\n\
+             model = \"music\"\n"
+        ),
+        "{config}"
+    );
+    assert!(!config.contains("music.example"), "{config}");
+}

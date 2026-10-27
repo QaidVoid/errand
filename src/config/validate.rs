@@ -598,8 +598,9 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
                  credentialName"
             ));
         }
-        validate_images(name, definition, problems);
-        validate_speech(name, definition, problems);
+        for (entry, optional, words) in MEDIA_ENTRIES {
+            validate_media(name, definition, entry, optional, words, problems);
+        }
         match Discovery::of(name, definition) {
             Err(found) => {
                 for problem in found {
@@ -636,10 +637,21 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
         }
         defined.insert(name.trim().to_owned(), definition.clone());
     }
-    validate_single_carrier(&defined, "images", problems);
-    validate_single_carrier(&defined, "speech", problems);
+    for (entry, ..) in MEDIA_ENTRIES {
+        validate_single_carrier(&defined, entry, problems);
+    }
     defined
 }
+
+/// The media entries a provider may carry: the entry, its optional keys,
+/// and the tool and endpoint a message names. `editModel` is the model
+/// kage's `edit_image` asks for, since an edit server often names its
+/// models apart from the images it draws.
+const MEDIA_ENTRIES: [(&str, &[&str], (&str, &str)); 3] = [
+    ("images", &["editModel"], ("image", "images")),
+    ("speech", &["voice"], ("speech", "speech")),
+    ("music", &[], ("music", "music")),
+];
 
 /// Refuses more than one provider carrying `entry`, naming them all, since
 /// the agent can be pointed at only one endpoint per tool.
@@ -657,26 +669,40 @@ fn validate_single_carrier(defined: &Map<String, Value>, entry: &str, problems: 
     }
 }
 
-/// Reads what generating images through one provider needs, which errand
-/// translates into the agent's own configuration: an object naming the model
-/// every call asks for.
+/// Reads what one of kage's media tools needs from a provider, which errand
+/// translates into the agent's own configuration: an object named `entry`
+/// naming the model every call asks for, plus the `optional` keys the entry
+/// may carry. `tool` names the tool and `api` the endpoint in a message.
 ///
-/// The endpoint must speak the `OpenAI` Images API, which an `anthropic` kind
+/// The endpoint must speak an `OpenAI`-shaped API, which an `anthropic` kind
 /// does not, and errand must be able to name it, which it cannot for a
 /// provider a plugin registers. Which of kage's own providers speak it is
 /// kage's to say, so that is checked against its list once the backend is
-/// probed.
-fn validate_images(name: &str, definition: &Value, problems: &mut Problems) {
-    let Some(images) = definition.get("images") else {
+/// probed. One provider may carry several entries.
+fn validate_media(
+    name: &str,
+    definition: &Value,
+    entry: &str,
+    optional: &[&str],
+    (tool, api): (&str, &str),
+    problems: &mut Problems,
+) {
+    let Some(media) = definition.get(entry) else {
         return;
     };
-    let place = format!("agent.providers.{name}.images");
-    let Some(fields) = images.as_object() else {
+    let place = format!("agent.providers.{name}.{entry}");
+    let Some(fields) = media.as_object() else {
         problems.add(format!("{place} must be an object naming a model"));
         return;
     };
-    reject_unknown(fields, &["model"], &place, problems);
+    let known: Vec<&str> = std::iter::once("model")
+        .chain(optional.iter().copied())
+        .collect();
+    reject_unknown(fields, &known, &place, problems);
     let _ = required_string(fields, "model", &place, problems);
+    for key in optional {
+        let _ = optional_string(fields, key, &place, problems);
+    }
     if definition.get("extension").and_then(Value::as_bool) == Some(true) {
         problems.add(format!(
             "{place} needs an endpoint errand writes for the agent, and a provider a plugin \
@@ -693,61 +719,13 @@ fn validate_images(name: &str, definition: &Value, problems: &mut Problems) {
     {
         problems.add(format!(
             "{place} needs a baseUrl, or a credential when kage already knows the provider; \
-             otherwise sessions run without the image tool"
+             otherwise sessions run without the {tool} tool"
         ));
     }
     if definition.get("kind").and_then(Value::as_str) == Some("anthropic") {
         problems.add(format!(
             "{place} needs a provider that speaks the OpenAI API: the Anthropic API has no \
-             images endpoint"
-        ));
-    }
-}
-
-/// Reads what speaking through one provider needs, which errand translates
-/// into the agent's own configuration: an object naming the model every call
-/// asks for, and the voice used when the agent names none.
-///
-/// The endpoint must speak the `OpenAI` Audio API, which an `anthropic` kind
-/// does not, and errand must be able to name it, which it cannot for a
-/// provider a plugin registers. Which of kage's own providers speak it is
-/// kage's to say, so that is checked against its list once the backend is
-/// probed. One provider may carry `images` beside `speech`.
-fn validate_speech(name: &str, definition: &Value, problems: &mut Problems) {
-    let Some(speech) = definition.get("speech") else {
-        return;
-    };
-    let place = format!("agent.providers.{name}.speech");
-    let Some(fields) = speech.as_object() else {
-        problems.add(format!("{place} must be an object naming a model"));
-        return;
-    };
-    reject_unknown(fields, &["model", "voice"], &place, problems);
-    let _ = required_string(fields, "model", &place, problems);
-    let _ = optional_string(fields, "voice", &place, problems);
-    if definition.get("extension").and_then(Value::as_bool) == Some(true) {
-        problems.add(format!(
-            "{place} needs an endpoint errand writes for the agent, and a provider a plugin \
-             registers has none"
-        ));
-    }
-    if definition.get("extension").and_then(Value::as_bool) != Some(true)
-        && !["baseUrl", "credential"].iter().any(|field| {
-            definition
-                .get(*field)
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.trim().is_empty())
-        })
-    {
-        problems.add(format!(
-            "{place} needs a baseUrl, or a credential when kage already knows the provider; \
-             otherwise sessions run without the speech tool"
-        ));
-    }
-    if definition.get("kind").and_then(Value::as_str) == Some("anthropic") {
-        problems.add(format!(
-            "{place} needs a provider that speaks the OpenAI API: the Anthropic API has no \
-             speech endpoint"
+             {api} endpoint"
         ));
     }
 }

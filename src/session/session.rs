@@ -187,14 +187,16 @@ const MAX_DIFFABLE_BYTES: u64 = 512 * 1024;
 /// cost.
 const MAX_MEDIA_PER_TURN: usize = 4;
 
-/// kage's image tool, which titles its calls with this name. Only its media,
-/// the speech tool's, and what the model draws or speaks into a reply cost a
+/// kage's media tools, which title their calls with these names. Only their
+/// media, and what the model draws or speaks into a reply, cost a
 /// generation: a `read` of a picture returns one too, and must not stop a
 /// turn.
-const GENERATE_IMAGE_TOOL: &str = "generate_image";
-
-/// kage's speech tool, beside [`GENERATE_IMAGE_TOOL`] under the same cap.
-const GENERATE_SPEECH_TOOL: &str = "generate_speech";
+const GENERATING_TOOLS: [&str; 4] = [
+    "generate_image",
+    "edit_image",
+    "generate_speech",
+    "generate_music",
+];
 
 /// Said when a session ends for a limit it could carry on past.
 ///
@@ -2107,7 +2109,7 @@ impl Running {
             self.report_edit(name, id).await;
         }
         if !failed {
-            let generated = name == GENERATE_IMAGE_TOOL || name == GENERATE_SPEECH_TOOL;
+            let generated = GENERATING_TOOLS.contains(&name);
             for item in media {
                 self.on_media(item, generated).await;
             }

@@ -152,3 +152,17 @@ fn what_kage_takes_is_not_refused() {
     })));
     assert!(problems.is_empty(), "{problems:?}");
 }
+
+/// Music cannot reach a kage provider that speaks the Anthropic API either.
+#[test]
+fn music_on_a_kage_provider_without_a_music_endpoint_is_refused() {
+    let problems = as_installed().refuses(&defined(&serde_json::json!({
+        "anthropic": { "credential": "k", "music": { "model": "music" } },
+    })));
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0]
+            .contains("agent.providers.anthropic.music cannot use kage's anthropic provider"),
+        "{problems:?}"
+    );
+}

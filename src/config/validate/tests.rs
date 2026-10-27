@@ -1728,3 +1728,46 @@ fn post_audio_defaults_to_true_and_can_be_turned_off() {
         "output.postAudio must be true or false"
     ));
 }
+
+#[test]
+fn music_names_a_model_and_only_what_errand_reads() {
+    let problems = problems_of(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        "a": { "credential": "k", "baseUrl": "https://a.example/v1", "music": { "model": "music", "voice": "x" } },
+        "b": { "credential": "k", "baseUrl": "https://b.example/v1", "music": "music" },
+        "c": {
+            "credential": "k", "baseUrl": "https://c.example", "kind": "anthropic",
+            "models": [{ "id": "m" }], "music": { "model": "music" },
+        },
+    })))
+    .join("\n");
+    for wanted in [
+        "agent.providers.a.music.voice is not a setting",
+        "agent.providers.b.music must be an object naming a model",
+        "the Anthropic API has no music endpoint",
+        "only one provider may carry music, and a, b, c do",
+    ] {
+        assert!(problems.contains(wanted), "{wanted}: {problems}");
+    }
+}
+
+#[test]
+fn images_may_name_an_edit_model() {
+    let accepted = validate_config(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        "a": { "credential": "k", "baseUrl": "https://a.example/v1", "images": { "model": "image", "editModel": "image-edit" } },
+    })));
+    assert!(accepted.is_ok(), "{:?}", accepted.err());
+
+    let problems = problems_of(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        "a": { "credential": "k", "baseUrl": "https://a.example/v1", "images": { "model": "image", "editModel": " " } },
+    })))
+    .join("\n");
+    assert!(
+        problems.contains(
+            "agent.providers.a.images.editModel must be a non-empty string when it is set"
+        ),
+        "{problems}"
+    );
+}

@@ -315,8 +315,8 @@ pub enum AcpUpdate {
 }
 
 /// Media the agent produced: one a tool call returned, such as kage's
-/// `generate_image` or `generate_speech`, or one the model drew or spoke
-/// into its reply.
+/// `generate_image`, `edit_image`, `generate_speech` or `generate_music`, or
+/// one the model drew or spoke into its reply.
 ///
 /// Everything here is the agent's word. The daemon reads the bytes' type
 /// from the bytes themselves before anything is posted.

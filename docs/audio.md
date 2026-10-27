@@ -54,6 +54,27 @@ is interrupted, and the next prompt tells the agent why. The rules are the ones
 To refuse the agent's speech tool entirely, set `agent.deniedTools` to include
 `"generate_speech"`. This does not disable the human-invoked `!gen-speech`.
 
+## Music
+
+A `music` object on one provider, naming a `model`, gives sessions kage's
+`generate_music` tool, for an endpoint that answers
+`POST /music/generations`. The shapes are the ones `speech` takes:
+
+```json
+"songs": {
+  "baseUrl": "https://music.example/v1",
+  "credential": "...",
+  "music": { "model": "music" }
+}
+```
+
+Only one provider may carry `music`, and it may be the one carrying
+`images` or `speech`. A song is posted to the thread like a clip, under
+`output.postAudio` and the same four per turn. A song can take a minute or
+more. A song the server made but kage could not fetch comes back as a link
+in the agent's reply instead. Denying `"generate_music"` in
+`agent.deniedTools` turns the tool off. It needs a kage newer than 0.5.1.
+
 ## `!gen-speech`
 
 `!gen-speech <text>` reads a text aloud with the model `agent.speechGen` names,

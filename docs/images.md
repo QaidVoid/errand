@@ -51,6 +51,22 @@ registers.
 The tool needs kage 0.5.0 or later. An older kage ignores the setting, and its
 sessions run without the tool.
 
+## Editing
+
+An `editModel` beside the `model` also gives sessions kage's `edit_image`
+tool, on the same endpoint (`POST /images/edits`). Some servers name their
+edit models apart from the ones that draw:
+
+```json
+"images": { "model": "image", "editModel": "image-edit" }
+```
+
+The agent edits a file in the project, or, when it names none, the newest
+picture in the thread so far, such as one it drew or one you attached. The
+edited picture is posted like a drawn one and counts toward the same four
+per turn. Denying `"edit_image"` in `agent.deniedTools` turns it off.
+Editing the newest picture needs a kage newer than 0.5.1.
+
 ## An image model as the session's model
 
 An image provider's models can also be chosen with `!model` or `-m`, so a

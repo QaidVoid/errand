@@ -221,7 +221,9 @@ pub struct AgentConfig {
     /// chat lends the tool its endpoint and key. One kage does not know that
     /// lists no models is an images endpoint of its own, written for the tool
     /// alone so its image models are never offered as chat models, and it
-    /// needs a `baseUrl`.
+    /// needs a `baseUrl`. An `editModel` beside the `model` also gives
+    /// sessions kage's `edit_image` tool on the same endpoint, which answers
+    /// `POST /images/edits` with that model.
     ///
     /// A `speech` object on one provider, naming a `model` and an optional
     /// `voice`, gives sessions kage's `generate_speech` tool, for an endpoint
@@ -231,6 +233,11 @@ pub struct AgentConfig {
     /// models is a speech endpoint of its own and needs a `baseUrl`. The
     /// `voice` is the one asked for when the agent names none. It needs a
     /// kage newer than 0.5.1.
+    ///
+    /// A `music` object on one provider, naming a `model`, gives sessions
+    /// kage's `generate_music` tool, for an endpoint that answers
+    /// `POST /music/generations`, in the same three shapes. It needs a kage
+    /// newer than 0.5.1.
     ///
     /// A provider entry may instead be marked `extension: true`, which means
     /// a kage plugin registers it. Errand writes nothing for it into the

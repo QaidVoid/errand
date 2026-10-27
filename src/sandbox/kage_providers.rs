@@ -15,7 +15,7 @@ use crate::sandbox::RunResult;
 use crate::sandbox::backend::SandboxLaunchError;
 
 /// The wire protocols of kage providers that have no media endpoints for
-/// the image and speech tools to call.
+/// the image, speech and music tools to call.
 const NO_MEDIA_APIS: [&str; 2] = ["anthropic", "acp"];
 
 /// The arguments that ask kage for its provider list.
@@ -117,7 +117,11 @@ impl KageProviders {
             }
             let api = self.get(name).map(|provider| provider.api.as_str());
             if let Some(api) = api.filter(|api| NO_MEDIA_APIS.contains(api)) {
-                for (entry, tool) in [("images", "image"), ("speech", "speech")] {
+                for (entry, tool) in [
+                    ("images", "image"),
+                    ("speech", "speech"),
+                    ("music", "music"),
+                ] {
                     if definition.get(entry).is_some() {
                         problems.push(format!(
                             "agent.providers.{name}.{entry} cannot use kage's {name} provider, \
