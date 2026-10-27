@@ -733,6 +733,7 @@ fn message_from(content: &str, from: &str, id: &str) -> IncomingMessage {
         },
         content: content.to_owned(),
         attachments: Vec::new(),
+        from_interface: false,
     }
 }
 

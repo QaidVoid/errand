@@ -283,6 +283,19 @@ pub struct Daemon {
     options: DaemonOptions,
 }
 
+/// Where a slash command used in the channel is answered with a file.
+fn answered_in_channel(command: &SlashCommand) -> IncomingMessage {
+    IncomingMessage {
+        id: format!("slash-{}", command.user_id),
+        author_id: command.user_id.clone(),
+        channel_id: String::new(),
+        author_name: Some(command.user_name.clone()),
+        content: command.content.clone(),
+        attachments: Vec::new(),
+        from_interface: false,
+    }
+}
+
 impl Daemon {
     /// Builds the daemon over the given connections.
     pub fn new(options: DaemonOptions) -> Self {
@@ -673,6 +686,7 @@ impl Daemon {
                     content_type: file.content_type,
                 })
                 .collect(),
+            from_interface: false,
         };
 
         // Before anything is routed. These are not session commands, and being
@@ -955,14 +969,7 @@ impl Daemon {
                 return "say what to generate, as `/gen-image <prompt>`".to_owned();
             }
             let prompt = asked.prompt.to_owned();
-            let where_to = IncomingMessage {
-                id: format!("slash-{}", command.user_id),
-                author_id: command.user_id.clone(),
-                channel_id: String::new(),
-                author_name: Some(command.user_name.clone()),
-                content: command.content.clone(),
-                attachments: Vec::new(),
-            };
+            let where_to = answered_in_channel(command);
             let drawing = self
                 .draw(asked.model, asked.effort.as_deref(), &prompt)
                 .await;
@@ -987,14 +994,7 @@ impl Daemon {
                 Ok(asked) => asked,
                 Err(refused) => return refused,
             };
-            let where_to = IncomingMessage {
-                id: format!("slash-{}", command.user_id),
-                author_id: command.user_id.clone(),
-                channel_id: String::new(),
-                author_name: Some(command.user_name.clone()),
-                content: command.content.clone(),
-                attachments: Vec::new(),
-            };
+            let where_to = answered_in_channel(command);
             let reading = self
                 .read_aloud(asked.voice, asked.language, asked.text)
                 .await;
@@ -1023,6 +1023,7 @@ impl Daemon {
                     author_name: Some(command.user_name.clone()),
                     content: command.content.clone(),
                     attachments: Vec::new(),
+                    from_interface: false,
                 },
             )
             .await;

@@ -439,6 +439,7 @@ fn a_picture_replies_to_the_message_that_asked_for_it() {
         author_name: Some("amelia".to_owned()),
         content: "!gen-image a lighthouse".to_owned(),
         attachments: Vec::new(),
+        from_interface: false,
     };
 
     assert_eq!(

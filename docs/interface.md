@@ -60,6 +60,10 @@ account, never as the operator:
 - In a session they are what they would be in its thread: the owner, a guest
   the owner invited with `!allow`, or an operator.
 
+What anyone sends from the interface is posted in the session's thread under
+their name, so the thread stays the whole conversation for the people reading
+it in Discord.
+
 Membership is checked when they log in. A login lasts seven days, and every
 login ends when the daemon restarts.
 

@@ -85,6 +85,9 @@ pub struct IncomingMessage {
     pub content: String,
     /// Files it carried, in the order they were attached.
     pub attachments: Vec<RawAttachment>,
+    /// Said in the interface rather than in the thread, so the thread holds
+    /// no copy of it.
+    pub from_interface: bool,
 }
 
 /// Which of the session's own timers fired.
@@ -1532,8 +1535,7 @@ impl Running {
             // Recorded like any other prompt. It is what the agent was
             // waiting for, and a transcript without it shows a question that
             // answered itself.
-            self.note_prompt(&display_name(message), content, Some(&message.id))
-                .await;
+            self.note_prompt(message, content).await;
             self.react(&message.id, ReactionOutcome::Accepted).await;
             return;
         }
@@ -1602,8 +1604,7 @@ impl Running {
             .await;
 
         self.react(&message.id, ReactionOutcome::Accepted).await;
-        self.note_prompt(&display_name(&message), &said, Some(&message.id))
-            .await;
+        self.note_prompt(&message, &said).await;
 
         let with_context = self.introduce(&message, &said);
         self.last_speaker_id = Some(message.author_id.clone());
@@ -1724,18 +1725,18 @@ impl Running {
             .unwrap_or_default()
             .trim()
             .to_owned();
-        self.note_aside_recorded(&display_name(message), &said, Some(&message.id))
-            .await;
+        self.note_aside_recorded(message, &said).await;
         self.react(&message.id, ReactionOutcome::Succeeded).await;
     }
 
-    async fn note_aside_recorded(&self, author: &str, text: &str, id: Option<&str>) {
+    async fn note_aside_recorded(&self, message: &IncomingMessage, text: &str) {
         self.views
             .send(SessionEvent::Aside {
-                author: author.to_owned(),
+                author: display_name(message),
                 text: text.to_owned(),
-                id: id.map(str::to_owned),
+                id: Some(message.id.clone()),
                 withdrawn: false,
+                from_interface: message.from_interface,
             })
             .await;
     }
@@ -1746,8 +1747,7 @@ impl Running {
         self.last_speaker_id = Some(message.author_id.clone());
 
         self.react(&message.id, ReactionOutcome::Accepted).await;
-        self.note_prompt(&display_name(&message), content, Some(&message.id))
-            .await;
+        self.note_prompt(&message, content).await;
 
         let introduced = self.introduce(&message, content);
         let sent = self.client.as_ref().is_some_and(|client| {
@@ -2401,13 +2401,14 @@ impl Running {
     }
 
     /// Notes that somebody asked for something.
-    async fn note_prompt(&self, author: &str, text: &str, id: Option<&str>) {
+    async fn note_prompt(&self, message: &IncomingMessage, text: &str) {
         self.views
             .send(SessionEvent::Prompt {
-                author: author.to_owned(),
+                author: display_name(message),
                 text: text.to_owned(),
-                id: id.map(str::to_owned),
+                id: Some(message.id.clone()),
                 withdrawn: false,
+                from_interface: message.from_interface,
             })
             .await;
     }

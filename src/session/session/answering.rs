@@ -446,7 +446,15 @@ impl Running {
 
     /// Records a command that changed the agent's course.
     pub(super) async fn note_command(&self, message: &IncomingMessage, text: &str) {
-        self.note_prompt(&display_name(message), text, None).await;
+        self.views
+            .send(SessionEvent::Prompt {
+                author: display_name(message),
+                text: text.to_owned(),
+                id: None,
+                withdrawn: false,
+                from_interface: message.from_interface,
+            })
+            .await;
     }
 
     /// Summarises the conversation so far, freeing context to carry on in.

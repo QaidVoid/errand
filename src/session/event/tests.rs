@@ -22,6 +22,7 @@ fn a_prompt_is_written_the_way_the_transcript_writes_it() {
         text: "cache the secret".to_owned(),
         id: None,
         withdrawn: false,
+        from_interface: false,
     };
 
     assert_eq!(
@@ -37,6 +38,7 @@ fn a_prompt_keeps_its_id_and_its_withdrawal_when_it_has_them() {
         text: String::new(),
         id: Some("m-1".to_owned()),
         withdrawn: true,
+        from_interface: false,
     };
     let written = serde_json::to_string(&event).unwrap();
 
@@ -62,6 +64,7 @@ fn a_prompt_written_before_withdrawal_existed_still_reads() {
             text: "hello".to_owned(),
             id: None,
             withdrawn: false,
+            from_interface: false,
         }
     );
 }

@@ -713,10 +713,23 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
                 }
                 SessionEvent::Busy { busy } => self.set_busy(*busy),
                 SessionEvent::Close { reason } => self.close(*reason).await,
-                // The prompt is already in the thread, posted by the person
-                // who wrote it; an aside likewise; reasoning is long and a
-                // thread is a conversation; usage is a dashboard thing; and
-                // turn boundaries are plain from the messages themselves.
+                // Said in the interface, so nobody in the thread has seen it.
+                SessionEvent::Prompt {
+                    author,
+                    text,
+                    from_interface: true,
+                    ..
+                }
+                | SessionEvent::Aside {
+                    author,
+                    text,
+                    from_interface: true,
+                    ..
+                } => self.post(&format!("**{author}** via the web:\n{text}")),
+                // Otherwise the prompt is already in the thread, posted by the
+                // person who wrote it; an aside likewise; reasoning is long
+                // and a thread is a conversation; usage is a dashboard thing;
+                // and turn boundaries are plain from the messages themselves.
                 SessionEvent::Prompt { .. }
                 | SessionEvent::Aside { .. }
                 | SessionEvent::Thinking { .. }

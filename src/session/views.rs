@@ -460,6 +460,9 @@ impl ViewFanOut {
                         text: shown_text(*withdrawn, text).to_owned(),
                         id: None,
                         withdrawn: false,
+                        // Replayed into a view that may be a thread, which
+                        // was shown it when it was first said.
+                        from_interface: false,
                     })
                     .await?;
                 }

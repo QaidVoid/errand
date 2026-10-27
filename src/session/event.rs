@@ -193,8 +193,9 @@ pub enum SessionEvent {
     /// Notes that somebody asked the agent for something.
     ///
     /// A chat thread already holds the message that started a turn, so it
-    /// does nothing with this. Every other surface has no such copy, and
-    /// without it would show the agent talking to itself.
+    /// does nothing with this unless it was said in the interface. Every
+    /// other surface has no such copy, and without it would show the agent
+    /// talking to itself.
     Prompt {
         author: String,
         text: String,
@@ -206,6 +207,10 @@ pub enum SessionEvent {
         /// Set when the person who sent it took it back.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         withdrawn: bool,
+        /// Set when it was said in the interface, so the thread has to be
+        /// shown it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        from_interface: bool,
     },
     /// Notes something said to the people in the thread, not to the agent.
     ///
@@ -220,6 +225,8 @@ pub enum SessionEvent {
         id: Option<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         withdrawn: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        from_interface: bool,
     },
     /// Reports something the daemon did, rather than something the agent said.
     ///

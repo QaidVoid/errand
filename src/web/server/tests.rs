@@ -483,6 +483,7 @@ async fn started_session(harness: &Harness, _client: &reqwest::Client) {
             author_name: Some("amelia".to_owned()),
             content: "demo: go".to_owned(),
             attachments: Vec::new(),
+            from_interface: false,
         })
         .await;
     assert!(outcome.is_started(), "the session starts");

@@ -101,6 +101,7 @@ fn said(channel_id: &str) -> IncomingMessage {
         author_name: Some("QaidVoid".to_owned()),
         content: String::new(),
         attachments: Vec::new(),
+        from_interface: false,
     }
 }
 

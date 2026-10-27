@@ -42,22 +42,26 @@ pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
             text,
             id,
             withdrawn,
+            from_interface,
         } => SessionEvent::Prompt {
             author,
             text: clean(&text),
             id,
             withdrawn,
+            from_interface,
         },
         SessionEvent::Aside {
             author,
             text,
             id,
             withdrawn,
+            from_interface,
         } => SessionEvent::Aside {
             author,
             text: clean(&text),
             id,
             withdrawn,
+            from_interface,
         },
         SessionEvent::Notice { text, level } => SessionEvent::Notice {
             text: clean(&text),

@@ -67,12 +67,14 @@ fn calls() -> Vec<SessionEvent> {
             text: with_secret("use "),
             id: None,
             withdrawn: false,
+            from_interface: false,
         },
         SessionEvent::Aside {
             author: "amelia".to_owned(),
             text: with_secret("never mind "),
             id: None,
             withdrawn: false,
+            from_interface: false,
         },
         SessionEvent::Activity {
             line: with_secret("ran "),

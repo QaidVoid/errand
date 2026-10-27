@@ -453,3 +453,42 @@ fn a_message_notifies_a_named_person_and_nobody_else() {
     assert!(!parse.contains(&"everyone"), "{mentions}");
     assert!(!parse.contains(&"roles"), "{mentions}");
 }
+
+/// The thread already holds what was said in it, so only what was said in the
+/// interface is posted, and it says who said it.
+#[tokio::test]
+async fn only_what_was_said_in_the_interface_is_posted_to_the_thread() {
+    use crate::session::event::SessionEvent;
+    use crate::session::views::SessionView;
+
+    let (port, channel) = thread(false);
+    for (text, from_interface) in [("said in the thread", false), ("said on the web", true)] {
+        port.observe(&SessionEvent::Prompt {
+            author: "amelia".to_owned(),
+            text: text.to_owned(),
+            id: None,
+            withdrawn: false,
+            from_interface,
+        })
+        .await
+        .unwrap();
+    }
+    port.observe(&SessionEvent::Aside {
+        author: "amelia".to_owned(),
+        text: "an aside on the web".to_owned(),
+        id: None,
+        withdrawn: false,
+        from_interface: true,
+    })
+    .await
+    .unwrap();
+    port.flush().await;
+
+    assert_eq!(
+        channel.contents(),
+        [
+            "**amelia** via the web:\nsaid on the web",
+            "**amelia** via the web:\nan aside on the web",
+        ]
+    );
+}

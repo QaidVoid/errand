@@ -432,6 +432,7 @@ fn message(content: &str, id: &str) -> IncomingMessage {
         author_name: Some("amelia".to_owned()),
         content: content.to_owned(),
         attachments: Vec::new(),
+        from_interface: false,
     }
 }
 
@@ -963,6 +964,7 @@ async fn who_was_invited_survives_the_session_ending_and_coming_back() {
                     author_name: None,
                     content: "!allow <@200000000000000002>".to_owned(),
                     attachments: Vec::new(),
+                    from_interface: false,
                 })
                 .await;
             assert_eq!(

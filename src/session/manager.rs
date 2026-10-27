@@ -407,6 +407,7 @@ impl SessionManager {
             author_name: request.owner_name.clone(),
             content: request.prompt.clone(),
             attachments: Vec::new(),
+            from_interface: true,
         };
 
         let project = select_project(

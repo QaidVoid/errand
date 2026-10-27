@@ -708,6 +708,7 @@ async fn send(
                 author_name: Some(actor.name),
                 content: text,
                 attachments: Vec::new(),
+                from_interface: true,
             },
         )
         .await;
