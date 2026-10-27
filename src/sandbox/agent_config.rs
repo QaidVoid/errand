@@ -199,20 +199,23 @@ pub struct DroppedProvider {
     pub reason: Missing,
     /// Whether it carried `images`, so the session lacks the image tool too.
     pub images: bool,
+    /// Whether it carried `speech`, so the session lacks the speech tool too.
+    pub speech: bool,
 }
 
 impl DroppedProvider {
     /// The report for a provider the writer leaves out, `known` when kage
-    /// overrides it, or nothing for the image-only shape: an images provider
-    /// with an endpoint and no models is reached by the image tool through its
-    /// endpoint, so nothing is missing.
+    /// overrides it, or nothing for a media-only shape: a provider carrying
+    /// `images` or `speech` with an endpoint and no models is reached by that
+    /// tool through its endpoint, so nothing is missing.
     fn of(
         name: &str,
         definition: Option<&Map<String, Value>>,
         known: bool,
         has_endpoint: bool,
     ) -> Option<Self> {
-        let images = definition.is_some_and(|fields| fields.contains_key("images"));
+        let carries = |entry: &str| definition.is_some_and(|fields| fields.contains_key(entry));
+        let (images, speech) = (carries("images"), carries("speech"));
         let reason = if known {
             Missing::Credential
         } else if has_endpoint {
@@ -220,10 +223,11 @@ impl DroppedProvider {
         } else {
             Missing::Endpoint
         };
-        (!(images && reason == Missing::Models)).then(|| Self {
+        (!((images || speech) && reason == Missing::Models)).then(|| Self {
             name: name.to_owned(),
             reason,
             images,
+            speech,
         })
     }
 }
@@ -280,7 +284,8 @@ fn custom_models(
 /// wire protocol they speak, defaulting to `openai`. A provider an
 /// extension registers (`extension: true`) is left out entirely: the plugin
 /// brings its own endpoint, and writing errand's would only disagree with
-/// it. The provider carrying `images` also gives the agent its image tool.
+/// it. The providers carrying `images` and `speech` also give the agent
+/// those tools.
 pub fn kage_config(
     defined: &Map<String, Value>,
     brokered: &BTreeMap<String, BrokeredProvider>,
@@ -388,35 +393,95 @@ pub fn kage_config(
         &endpoints,
         credential_names,
     ));
+    out.push_str(&generate_speech(
+        defined,
+        &written,
+        &endpoints,
+        credential_names,
+    ));
     out.push_str(&plugin_capabilities(plugins));
     out.push_str(&permissions_section(denied));
     KageConfig { toml: out, dropped }
 }
 
 /// The `[tools.generate_image]` table, for the provider whose definition
-/// carries `images`, or nothing when none does.
-///
-/// A provider the agent is already told about is named, and lends the tool
-/// its endpoint and key the way the agent reaches it, broker and nonce
-/// included. One that lists no models is not told about above, since the
-/// agent refuses a provider without models and image models must not be
-/// offered for chat: it is named by its endpoint and the variable its key is
-/// read from instead, which under the broker are the broker's address and the
-/// nonce. One with neither is left out, and the session runs without the tool.
+/// carries `images`, or nothing when none does. See [`media_table`].
 fn generate_image(
     defined: &Map<String, Value>,
     written: &[&str],
     endpoints: &BTreeMap<&str, String>,
     credential_names: &BTreeMap<String, String>,
 ) -> String {
-    let Some((name, images)) = defined
+    media_table(
+        "images",
+        "tools.generate_image",
+        defined,
+        written,
+        endpoints,
+        credential_names,
+    )
+}
+
+/// The `[tools.generate_speech]` table, for the provider whose definition
+/// carries `speech`, or nothing when none does. A `voice` on the entry is
+/// the one asked for when the agent names none. See [`media_table`].
+fn generate_speech(
+    defined: &Map<String, Value>,
+    written: &[&str],
+    endpoints: &BTreeMap<&str, String>,
+    credential_names: &BTreeMap<String, String>,
+) -> String {
+    let mut out = media_table(
+        "speech",
+        "tools.generate_speech",
+        defined,
+        written,
+        endpoints,
+        credential_names,
+    );
+    if out.is_empty() {
+        return out;
+    }
+    let voice = defined
         .iter()
         .filter(|(_, fields)| fields.get("extension").and_then(Value::as_bool) != Some(true))
-        .find_map(|(name, fields)| Some((name, fields.get("images")?.as_object()?)))
+        .find_map(|(_, fields)| fields.get("speech")?.get("voice")?.as_str())
+        .map(str::trim)
+        .filter(|voice| !voice.is_empty());
+    if let Some(voice) = voice {
+        let _ = writeln!(out, "voice = {}", toml_string(voice));
+    }
+    out
+}
+
+/// The table one media tool is written as, shared by the image and speech
+/// tables: the header for `table`, the provider whose definition carries
+/// `entry`, and the model the entry names.
+///
+/// A provider the agent is already told about is named, and lends the tool
+/// its endpoint and key the way the agent reaches it, broker and nonce
+/// included. One that lists no models is not told about above, since the
+/// agent refuses a provider without models and a media endpoint's models
+/// must not be offered for chat: it is named by its endpoint and the
+/// variable its key is read from instead, which under the broker are the
+/// broker's address and the nonce. One with neither is left out, and the
+/// session runs without the tool.
+fn media_table(
+    entry: &str,
+    table: &str,
+    defined: &Map<String, Value>,
+    written: &[&str],
+    endpoints: &BTreeMap<&str, String>,
+    credential_names: &BTreeMap<String, String>,
+) -> String {
+    let Some((name, fields)) = defined
+        .iter()
+        .filter(|(_, fields)| fields.get("extension").and_then(Value::as_bool) != Some(true))
+        .find_map(|(name, fields)| Some((name, fields.get(entry)?.as_object()?)))
     else {
         return String::new();
     };
-    let Some(model) = images
+    let Some(model) = fields
         .get("model")
         .and_then(Value::as_str)
         .map(str::trim)
@@ -424,7 +489,7 @@ fn generate_image(
     else {
         return String::new();
     };
-    let mut out = String::from("\n[tools.generate_image]\n");
+    let mut out = format!("\n[{table}]\n");
     if written.contains(&name.as_str()) {
         let _ = writeln!(out, "provider = {}", toml_string(name));
     } else if let Some(url) = endpoints.get(name.as_str()) {
@@ -523,12 +588,14 @@ pub async fn write_agent_config(
         kage,
     );
     for provider in &body.dropped {
+        let missing = match (provider.images, provider.speech) {
+            (true, true) => "the image and speech tools or a provider declaration",
+            (true, false) => "the image tool or a provider declaration",
+            (false, true) => "the speech tool or a provider declaration",
+            (false, false) => "a provider declaration",
+        };
         log.warn(
-            if provider.images {
-                "the session runs without the image tool or a provider declaration"
-            } else {
-                "the session runs without a provider declaration"
-            },
+            &format!("the session runs without {missing}"),
             &fields([
                 ("session", launch.session_id.as_str().into()),
                 ("provider", provider.name.as_str().into()),

@@ -14,9 +14,9 @@ use serde_json::{Map, Value};
 use crate::sandbox::RunResult;
 use crate::sandbox::backend::SandboxLaunchError;
 
-/// The wire protocols of kage providers that have no images endpoint for the
-/// image tool to call.
-const NO_IMAGES_APIS: [&str; 2] = ["anthropic", "acp"];
+/// The wire protocols of kage providers that have no media endpoints for
+/// the image and speech tools to call.
+const NO_MEDIA_APIS: [&str; 2] = ["anthropic", "acp"];
 
 /// The arguments that ask kage for its provider list.
 pub const LIST_ARGS: [&str; 2] = ["providers", "--json"];
@@ -116,14 +116,16 @@ impl KageProviders {
                 continue;
             }
             let api = self.get(name).map(|provider| provider.api.as_str());
-            if let Some(api) = api.filter(|api| NO_IMAGES_APIS.contains(api))
-                && definition.get("images").is_some()
-            {
-                problems.push(format!(
-                    "agent.providers.{name}.images cannot use kage's {name} provider, which \
-                     speaks the {api} API: the image tool reaches only OpenAI-compatible \
-                     providers"
-                ));
+            if let Some(api) = api.filter(|api| NO_MEDIA_APIS.contains(api)) {
+                for (entry, tool) in [("images", "image"), ("speech", "speech")] {
+                    if definition.get(entry).is_some() {
+                        problems.push(format!(
+                            "agent.providers.{name}.{entry} cannot use kage's {name} provider, \
+                             which speaks the {api} API: the {tool} tool reaches only \
+                             OpenAI-compatible providers"
+                        ));
+                    }
+                }
             }
         }
         problems

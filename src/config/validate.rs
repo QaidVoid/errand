@@ -46,11 +46,12 @@ const KNOWN_CHAT: [&str; 6] = [
     "operatorUserIds",
     "startOnMention",
 ];
-const KNOWN_AGENT: [&str; 15] = [
+const KNOWN_AGENT: [&str; 16] = [
     "provider",
     "model",
     "visionModel",
     "imageGen",
+    "speechGen",
     "delegate",
     "rulesPath",
     "providers",
@@ -93,7 +94,7 @@ const KNOWN_EGRESS: [&str; 3] = ["mode", "allow", "allowInternal"];
 const KNOWN_POLICY_EXTRA: [&str; 3] = ["read", "write", "execute"];
 const KNOWN_SHUTDOWN: [&str; 1] = ["allowedUserIds"];
 const KNOWN_WEB: [&str; 4] = ["host", "port", "observer", "publicUrl"];
-const KNOWN_OUTPUT: [&str; 7] = [
+const KNOWN_OUTPUT: [&str; 8] = [
     "forwardToolOutput",
     "maxToolOutputChars",
     "maxAttachmentBytes",
@@ -101,6 +102,7 @@ const KNOWN_OUTPUT: [&str; 7] = [
     "maxUploadBytes",
     "postDiffs",
     "postImages",
+    "postAudio",
 ];
 const KNOWN_LIMITS: [&str; 4] = [
     "maxConcurrentTurns",
@@ -597,6 +599,7 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
             ));
         }
         validate_images(name, definition, problems);
+        validate_speech(name, definition, problems);
         match Discovery::of(name, definition) {
             Err(found) => {
                 for problem in found {
@@ -633,18 +636,25 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
         }
         defined.insert(name.trim().to_owned(), definition.clone());
     }
-    let imaging: Vec<&str> = defined
+    validate_single_carrier(&defined, "images", problems);
+    validate_single_carrier(&defined, "speech", problems);
+    defined
+}
+
+/// Refuses more than one provider carrying `entry`, naming them all, since
+/// the agent can be pointed at only one endpoint per tool.
+fn validate_single_carrier(defined: &Map<String, Value>, entry: &str, problems: &mut Problems) {
+    let carriers: Vec<&str> = defined
         .iter()
-        .filter(|(_, definition)| definition.get("images").is_some())
+        .filter(|(_, definition)| definition.get(entry).is_some())
         .map(|(name, _)| name.as_str())
         .collect();
-    if imaging.len() > 1 {
+    if carriers.len() > 1 {
         problems.add(format!(
-            "agent.providers: only one provider may carry images, and {} do",
-            imaging.join(", ")
+            "agent.providers: only one provider may carry {entry}, and {} do",
+            carriers.join(", ")
         ));
     }
-    defined
 }
 
 /// Reads what generating images through one provider needs, which errand
@@ -690,6 +700,54 @@ fn validate_images(name: &str, definition: &Value, problems: &mut Problems) {
         problems.add(format!(
             "{place} needs a provider that speaks the OpenAI API: the Anthropic API has no \
              images endpoint"
+        ));
+    }
+}
+
+/// Reads what speaking through one provider needs, which errand translates
+/// into the agent's own configuration: an object naming the model every call
+/// asks for, and the voice used when the agent names none.
+///
+/// The endpoint must speak the `OpenAI` Audio API, which an `anthropic` kind
+/// does not, and errand must be able to name it, which it cannot for a
+/// provider a plugin registers. Which of kage's own providers speak it is
+/// kage's to say, so that is checked against its list once the backend is
+/// probed. One provider may carry `images` beside `speech`.
+fn validate_speech(name: &str, definition: &Value, problems: &mut Problems) {
+    let Some(speech) = definition.get("speech") else {
+        return;
+    };
+    let place = format!("agent.providers.{name}.speech");
+    let Some(fields) = speech.as_object() else {
+        problems.add(format!("{place} must be an object naming a model"));
+        return;
+    };
+    reject_unknown(fields, &["model", "voice"], &place, problems);
+    let _ = required_string(fields, "model", &place, problems);
+    let _ = optional_string(fields, "voice", &place, problems);
+    if definition.get("extension").and_then(Value::as_bool) == Some(true) {
+        problems.add(format!(
+            "{place} needs an endpoint errand writes for the agent, and a provider a plugin \
+             registers has none"
+        ));
+    }
+    if definition.get("extension").and_then(Value::as_bool) != Some(true)
+        && !["baseUrl", "credential"].iter().any(|field| {
+            definition
+                .get(*field)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+    {
+        problems.add(format!(
+            "{place} needs a baseUrl, or a credential when kage already knows the provider; \
+             otherwise sessions run without the speech tool"
+        ));
+    }
+    if definition.get("kind").and_then(Value::as_str) == Some("anthropic") {
+        problems.add(format!(
+            "{place} needs a provider that speaks the OpenAI API: the Anthropic API has no \
+             speech endpoint"
         ));
     }
 }
@@ -868,6 +926,7 @@ fn validate_agent(raw: &Map<String, Value>, problems: &mut Problems) -> AgentCon
         model: optional_string(&source, "model", "agent", problems),
         vision_model: optional_string(&source, "visionModel", "agent", problems),
         image_gen: optional_string(&source, "imageGen", "agent", problems),
+        speech_gen: optional_string(&source, "speechGen", "agent", problems),
         delegate: validate_delegate(&source, problems),
         rules_path: optional_absolute_path(&source, "rulesPath", "agent", problems),
         providers: validate_providers(&source, problems),
@@ -1412,6 +1471,13 @@ fn validate_output(raw: &Map<String, Value>, problems: &mut Problems) -> OutputC
             &source,
             "postImages",
             schema::defaults::POST_IMAGES,
+            "output",
+            problems,
+        ),
+        post_audio: flag(
+            &source,
+            "postAudio",
+            schema::defaults::POST_AUDIO,
             "output",
             problems,
         ),

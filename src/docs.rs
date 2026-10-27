@@ -325,6 +325,7 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
         ),
         ("output/postdiffs", Value::Bool(defaults::POST_DIFFS)),
         ("output/postimages", Value::Bool(defaults::POST_IMAGES)),
+        ("output/postaudio", Value::Bool(defaults::POST_AUDIO)),
         (
             "limits/maxconcurrentturns",
             serde_json::json!(defaults::MAX_CONCURRENT_TURNS),

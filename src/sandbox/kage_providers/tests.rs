@@ -118,6 +118,26 @@ fn images_on_a_kage_provider_without_an_images_endpoint_are_refused() {
     }
 }
 
+/// The speech tool cannot reach a kage provider that speaks the Anthropic
+/// API either, whatever it is called, including catalog ones a name list
+/// never caught.
+#[test]
+fn speech_on_a_kage_provider_without_a_speech_endpoint_is_refused() {
+    for name in ["anthropic", "kenari-claude", "commandcode-claude"] {
+        let problems = as_installed().refuses(&defined(&serde_json::json!({
+            name: { "credential": "k", "speech": { "model": "tts" } },
+        })));
+        assert_eq!(problems.len(), 1, "{name}: {problems:?}");
+        assert!(
+            problems[0].contains(&format!(
+                "agent.providers.{name}.speech cannot use kage's {name} provider, which \
+                 speaks the anthropic API"
+            )),
+            "{problems:?}"
+        );
+    }
+}
+
 /// `openai`, an OpenAI-compatible catalog provider, an id kage no longer
 /// knows, and a gateway of the operator's own may all carry images, and a
 /// provider a plugin registers is not held to kage's list.

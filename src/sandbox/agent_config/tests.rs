@@ -891,6 +891,355 @@ fn no_image_tool_without_images_or_an_endpoint() {
     assert!(!config.contains("[tools.generate_image]"), "{config}");
 }
 
+/// A provider that serves speech and no chat model is not told to the agent
+/// as a provider, which would refuse it for listing no models and offer its
+/// speech models for chat. The speech tool is pointed at the broker with the
+/// nonce's variable instead, so the real endpoint and key stay outside.
+#[test]
+fn a_speech_only_provider_is_written_for_the_speech_tool_alone() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "voices".to_owned(),
+        json!({
+            "credential": "k",
+            "baseUrl": "https://speech.example/v1",
+            "speech": { "model": "tts" },
+        }),
+    );
+    let names = BTreeMap::from([(
+        "voices".to_owned(),
+        "ERRAND_PROVIDER_VOICES_API_KEY".to_owned(),
+    )]);
+    let written = kage_config(
+        &defined,
+        &through_broker("voices"),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    );
+    assert!(written.dropped.is_empty(), "{:?}", written.dropped);
+    let config = written.toml;
+
+    assert!(!config.contains("[providers"), "{config}");
+    assert!(
+        config.contains(
+            "\n[tools.generate_speech]\n\
+             base_url = \"http://169.254.169.1:8443/provider/voices\"\n\
+             api_key_env = \"ERRAND_PROVIDER_VOICES_API_KEY\"\n\
+             model = \"tts\"\n"
+        ),
+        "{config}"
+    );
+    assert!(!config.contains("speech.example"), "{config}");
+}
+
+/// Outside the broker the speech tool reaches the provider's own endpoint,
+/// with its key in the variable the operator named.
+#[test]
+fn an_unbrokered_speech_provider_points_the_tool_at_its_endpoint() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "voices".to_owned(),
+        json!({
+            "credential": "k",
+            "credentialName": "VOICES_KEY",
+            "baseUrl": "https://speech.example/v1",
+            "speech": { "model": "tts" },
+        }),
+    );
+    let names = BTreeMap::from([("voices".to_owned(), "VOICES_KEY".to_owned())]);
+    let written = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    );
+    assert!(written.dropped.is_empty(), "{:?}", written.dropped);
+    let config = written.toml;
+
+    assert!(
+        config.contains(
+            "\n[tools.generate_speech]\n\
+             base_url = \"https://speech.example/v1\"\n\
+             api_key_env = \"VOICES_KEY\"\n\
+             model = \"tts\"\n"
+        ),
+        "{config}"
+    );
+    assert!(!config.contains("models = ["), "{config}");
+}
+
+/// A provider the agent already reaches for chat lends the speech tool its
+/// endpoint and key, and names no voice when the entry gives none.
+#[test]
+fn a_chat_provider_carrying_speech_lends_the_tool_its_endpoint() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "gateway".to_owned(),
+        json!({
+            "credential": "k",
+            "baseUrl": "https://gateway.example/v1",
+            "models": [{ "id": "chat-model" }],
+            "speech": { "model": "tts" },
+        }),
+    );
+    let names = BTreeMap::from([(
+        "gateway".to_owned(),
+        "ERRAND_PROVIDER_GATEWAY_API_KEY".to_owned(),
+    )]);
+    let config = kage_config(
+        &defined,
+        &through_broker("gateway"),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    )
+    .toml;
+    assert!(config.contains("[providers.custom.gateway]"), "{config}");
+    assert!(
+        config.contains(
+            "\n[tools.generate_speech]\n\
+             provider = \"gateway\"\n\
+             model = \"tts\"\n"
+        ),
+        "{config}"
+    );
+    assert!(!config.contains("voice ="), "{config}");
+
+    let mut known = serde_json::Map::new();
+    known.insert(
+        "openai".to_owned(),
+        json!({ "credential": "k", "speech": { "model": "tts" } }),
+    );
+    let names = BTreeMap::from([("openai".to_owned(), "OPENAI_API_KEY".to_owned())]);
+    let config = kage_config(
+        &known,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    )
+    .toml;
+    assert!(config.contains("[providers.openai]"), "{config}");
+    assert!(
+        config.contains("\n[tools.generate_speech]\nprovider = \"openai\"\nmodel = \"tts\"\n"),
+        "{config}"
+    );
+}
+
+/// A `voice` on the speech entry is the one asked for when the agent names
+/// none, so it is written with the model.
+#[test]
+fn a_speech_voice_is_written_when_the_entry_names_one() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "voices".to_owned(),
+        json!({
+            "credential": "k",
+            "baseUrl": "https://speech.example/v1",
+            "speech": { "model": "tts", "voice": "alloy" },
+        }),
+    );
+    let names = BTreeMap::from([(
+        "voices".to_owned(),
+        "ERRAND_PROVIDER_VOICES_API_KEY".to_owned(),
+    )]);
+    let config = kage_config(
+        &defined,
+        &through_broker("voices"),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    )
+    .toml;
+    assert!(
+        config.contains(
+            "\n[tools.generate_speech]\n\
+             base_url = \"http://169.254.169.1:8443/provider/voices\"\n\
+             api_key_env = \"ERRAND_PROVIDER_VOICES_API_KEY\"\n\
+             model = \"tts\"\n\
+             voice = \"alloy\"\n"
+        ),
+        "{config}"
+    );
+}
+
+/// One provider may carry `images` and `speech` together, and both tool
+/// tables are written from it, the speech one after the image one.
+#[test]
+fn one_provider_carrying_images_and_speech_writes_both_tools() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "media".to_owned(),
+        json!({
+            "credential": "k",
+            "baseUrl": "https://media.example/v1",
+            "models": [{ "id": "chat-model" }],
+            "images": { "model": "image" },
+            "speech": { "model": "tts" },
+        }),
+    );
+    let names = BTreeMap::from([(
+        "media".to_owned(),
+        "ERRAND_PROVIDER_MEDIA_API_KEY".to_owned(),
+    )]);
+    let config = kage_config(
+        &defined,
+        &through_broker("media"),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    )
+    .toml;
+    assert!(
+        config.contains(
+            "\n[tools.generate_image]\n\
+             provider = \"media\"\n\
+             model = \"image\"\n"
+        ),
+        "{config}"
+    );
+    assert!(
+        config.contains(
+            "\n[tools.generate_speech]\n\
+             provider = \"media\"\n\
+             model = \"tts\"\n"
+        ),
+        "{config}"
+    );
+    let image_at = config
+        .find("[tools.generate_image]")
+        .expect("the image table");
+    let speech_at = config
+        .find("[tools.generate_speech]")
+        .expect("the speech table");
+    assert!(image_at < speech_at, "{config}");
+}
+
+/// No `speech` writes no table, and neither does a provider the agent could
+/// not be pointed at.
+#[test]
+fn no_speech_tool_without_speech_or_an_endpoint() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "chat".to_owned(),
+        json!({ "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] }),
+    );
+    let names = BTreeMap::from([("chat".to_owned(), "CHAT_KEY".to_owned())]);
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    )
+    .toml;
+    assert!(!config.contains("[tools.generate_speech]"), "{config}");
+
+    defined.insert(
+        "nowhere".to_owned(),
+        json!({ "credential": "k", "speech": { "model": "tts" } }),
+    );
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    )
+    .toml;
+    assert!(!config.contains("[tools.generate_speech]"), "{config}");
+}
+
+/// A provider carrying `speech` is reported like an images one: dropped when
+/// nothing can be written, silent when the speech tool reaches it by its
+/// endpoint alone.
+#[test]
+fn a_speech_provider_is_dropped_only_when_nothing_can_be_written() {
+    let defined = serde_json::Map::from_iter([
+        (
+            "voices".to_owned(),
+            json!({"credential": "k", "speech": {"model": "tts"}}),
+        ),
+        (
+            "quiet".to_owned(),
+            json!({"baseUrl": "https://speech.example/v1", "speech": {"model": "tts"}}),
+        ),
+    ]);
+    let written = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    );
+    let reported: Vec<(&str, &super::Missing, bool)> = written
+        .dropped
+        .iter()
+        .map(|dropped| (dropped.name.as_str(), &dropped.reason, dropped.speech))
+        .collect();
+    assert_eq!(
+        reported,
+        [("voices", &super::Missing::Endpoint, true)],
+        "{written:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_speech_entry_that_cannot_be_written_is_logged_at_launch() {
+    let root = tempfile::tempdir().unwrap();
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = std::sync::Arc::clone(&lines);
+    let log = Logger::new(
+        LogFields::new(),
+        std::sync::Arc::new(move |_, line| {
+            recorded.lock().unwrap().push(line.to_owned());
+        }),
+    );
+    let launch = SandboxLaunch {
+        state_dir: root.path().display().to_string(),
+        providers: serde_json::Map::from_iter([(
+            "voices".to_owned(),
+            json!({"credential": "super-secret", "speech": {"model": "tts"}}),
+        )]),
+        ..SandboxLaunch::default()
+    };
+    write_agent_config(
+        &launch,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &log,
+        &as_installed(),
+    )
+    .await
+    .unwrap();
+    let lines = lines.lock().unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("without the speech tool"), "{}", lines[0]);
+    assert!(lines[0].contains("voices"), "{}", lines[0]);
+    assert!(!lines[0].contains("super-secret"), "{}", lines[0]);
+}
+
 /// kage knows `google` as a built-in, so a brokered one is overridden in
 /// place: a custom table under that id would make kage refuse the config.
 #[test]

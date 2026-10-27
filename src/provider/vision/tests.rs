@@ -42,6 +42,7 @@ fn agent() -> AgentConfig {
         model: Some("glm-5.3".to_owned()),
         vision_model: None,
         image_gen: None,
+        speech_gen: None,
         delegate: None,
         rules_path: None,
         providers: serde_json::Map::from_iter([(

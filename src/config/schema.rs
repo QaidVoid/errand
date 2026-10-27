@@ -158,6 +158,13 @@ pub struct AgentConfig {
     /// guessed at. The provider a session runs on is preferred when it lists
     /// the name too. A provider with no `baseUrl` cannot draw.
     pub image_gen: Option<String>,
+    /// Model `!gen-speech` reads aloud with, or none.
+    ///
+    /// Named as `!model` names them: an alias, `provider/id`, or a bare model
+    /// id. It takes no effort level, because the speech tiers are model names
+    /// on the server. A name nothing lists is refused when the command is
+    /// used, not here.
+    pub speech_gen: Option<String>,
     /// A cheaper model to ask about one artefact, or none.
     pub delegate: Option<DelegateConfig>,
     /// File of standing instructions given to every session, or none.
@@ -215,6 +222,15 @@ pub struct AgentConfig {
     /// lists no models is an images endpoint of its own, written for the tool
     /// alone so its image models are never offered as chat models, and it
     /// needs a `baseUrl`.
+    ///
+    /// A `speech` object on one provider, naming a `model` and an optional
+    /// `voice`, gives sessions kage's `generate_speech` tool, for an endpoint
+    /// that answers `POST /audio/speech`. The three shapes are the same as
+    /// for `images`: a provider the agent already reaches for chat lends the
+    /// tool its endpoint and key, and one kage does not know that lists no
+    /// models is a speech endpoint of its own and needs a `baseUrl`. The
+    /// `voice` is the one asked for when the agent names none. It needs a
+    /// kage newer than 0.5.1.
     ///
     /// A provider entry may instead be marked `extension: true`, which means
     /// a kage plugin registers it. Errand writes nothing for it into the
@@ -495,6 +511,10 @@ pub struct ShutdownConfig {
 }
 
 /// How much of the agent's activity reaches the thread.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag stands for one configuration key"
+)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutputConfig {
@@ -515,6 +535,9 @@ pub struct OutputConfig {
     /// caption. A turn posts at most four, and generating a fifth stops the
     /// turn, whether or not images are posted.
     pub post_images: bool,
+    /// Post each clip the agent generates to the thread, as an upload with a
+    /// caption.
+    pub post_audio: bool,
 }
 
 /// The local web interface.
@@ -678,6 +701,8 @@ pub mod defaults {
     pub const POST_DIFFS: bool = true;
     /// Whether an image the agent generates is posted to the thread.
     pub const POST_IMAGES: bool = true;
+    /// Whether a clip the agent generates is posted to the thread.
+    pub const POST_AUDIO: bool = true;
 
     /// Sessions that may have a model turn in flight simultaneously.
     pub const MAX_CONCURRENT_TURNS: u32 = 2;

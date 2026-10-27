@@ -176,6 +176,7 @@ fn the_configured_model_may_name_its_provider_too() {
         model: Some("ajamxhacker/musecringe:max".to_owned()),
         vision_model: None,
         image_gen: None,
+        speech_gen: None,
         delegate: None,
         rules_path: None,
         providers: serde_json::Map::from_iter([

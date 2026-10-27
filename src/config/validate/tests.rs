@@ -1510,3 +1510,221 @@ fn an_extension_images_provider_gets_only_the_plugin_refusal() {
     );
     assert!(!problems.contains("needs a baseUrl"), "{problems}");
 }
+
+#[test]
+fn a_provider_may_carry_speech_for_the_agent_to_speak_through() {
+    let config = validate_config(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        "voices": {
+            "credential": "k2",
+            "baseUrl": "https://speech.example/v1",
+            "speech": { "model": "tts", "voice": "alloy" },
+        },
+    })))
+    .expect("resolves");
+
+    assert_eq!(
+        config.agent.providers["voices"]["speech"]["model"],
+        json!("tts")
+    );
+    assert_eq!(
+        config.agent.providers["voices"]["speech"]["voice"],
+        json!("alloy")
+    );
+}
+
+#[test]
+fn speech_names_a_model_and_a_voice_and_only_what_errand_reads() {
+    let problems = problems_of(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        "a": { "credential": "k", "baseUrl": "https://a.example/v1", "speech": { "models": ["x"], "modle": "y" } },
+        "b": { "credential": "k", "baseUrl": "https://b.example/v1", "speech": "tts" },
+        "c": { "credential": "k", "baseUrl": "https://c.example/v1", "speech": { "model": " ", "voice": "" } },
+        "d": { "credential": "k", "baseUrl": "https://d.example/v1", "speech": { "model": "tts", "voice": 7 } },
+    })))
+    .join("\n");
+
+    for wanted in [
+        "agent.providers.a.speech.model is required and must be a non-empty string",
+        "agent.providers.a.speech.models is not a setting",
+        "agent.providers.a.speech.modle is not a setting",
+        "agent.providers.b.speech must be an object naming a model",
+        "agent.providers.c.speech.model is required and must be a non-empty string",
+        "agent.providers.c.speech.voice must be a non-empty string when it is set",
+        "agent.providers.d.speech.voice must be a non-empty string when it is set",
+        "only one provider may carry speech, and a, b, c, d do",
+    ] {
+        assert!(problems.contains(wanted), "{wanted}: {problems}");
+    }
+}
+
+#[test]
+fn speech_needs_an_openai_endpoint_errand_can_name() {
+    let problems = problems_of(&with_providers(&json!({
+        "chat": {
+            "credential": "k", "baseUrl": "https://chat.example", "kind": "anthropic",
+            "models": [{ "id": "m" }], "speech": { "model": "tts" },
+        },
+    })))
+    .join("\n");
+    assert!(
+        problems.contains("the Anthropic API has no speech endpoint"),
+        "{problems}"
+    );
+
+    let problems = problems_of(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        "plugged": { "extension": true, "credential": "k", "speech": { "model": "tts" } },
+    })))
+    .join("\n");
+    assert!(
+        problems.contains("a provider a plugin registers has none"),
+        "{problems}"
+    );
+}
+
+#[test]
+fn two_providers_carrying_speech_are_refused() {
+    let problems = problems_of(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        "a": { "credential": "k", "baseUrl": "https://a.example/v1", "speech": { "model": "tts" } },
+        "b": { "credential": "k", "baseUrl": "https://b.example/v1", "speech": { "model": "tts2" } },
+    })))
+    .join("\n");
+    assert!(
+        problems.contains("only one provider may carry speech, and a, b do"),
+        "{problems}"
+    );
+}
+
+/// The tools are separate grants: the one provider allowed each may be the
+/// same one, which then draws and speaks through a single endpoint.
+#[test]
+fn one_provider_may_carry_both_images_and_speech() {
+    validate_config(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
+        "media": {
+            "credential": "k2",
+            "baseUrl": "https://media.example/v1",
+            "images": { "model": "image" },
+            "speech": { "model": "tts" },
+        },
+    })))
+    .expect("resolves");
+}
+
+#[test]
+fn speech_without_any_endpoint_or_credential_is_refused() {
+    for name in ["voices", "openai"] {
+        for definition in [
+            json!({"speech": {"model": "tts"}}),
+            json!({"speech": {"model": "tts"}, "models": [{"id": "m"}]}),
+            json!({"speech": {"model": "tts"}, "baseUrl": ""}),
+            json!({"speech": {"model": "tts"}, "baseUrl": "  ", "credential": " ", "credentialName": " "}),
+        ] {
+            let mut providers =
+                json!({"chat": {"credential": "k", "baseUrl": "https://chat.example/v1"}});
+            providers[name] = definition;
+            let problems = problems_of(&with_providers(&providers)).join("\n");
+            assert!(
+                problems.contains(&format!("agent.providers.{name}.speech needs a baseUrl")),
+                "{problems}"
+            );
+        }
+    }
+}
+
+#[test]
+fn speech_can_use_an_endpoint_or_a_builtin_credential_binding() {
+    for (name, extra) in [
+        ("voices", json!({"baseUrl": "https://speech.example/v1"})),
+        ("openai", json!({"credential": "k"})),
+        (
+            "openai",
+            json!({"credential": "k", "credentialName": "SPEECH_KEY"}),
+        ),
+        ("openai", json!({"baseUrl": "https://speech.example/v1"})),
+    ] {
+        let mut providers =
+            json!({"chat": {"credential": "k", "baseUrl": "https://chat.example/v1"}});
+        providers[name] = extra;
+        providers[name]["speech"] = json!({"model": "tts"});
+        validate_config(&with_providers(&providers)).expect("reachable speech provider");
+    }
+}
+
+/// A provider a plugin registers is refused for that alone, as for images.
+#[test]
+fn an_extension_speech_provider_gets_only_the_plugin_refusal() {
+    let problems = problems_of(&with_providers(&json!({
+        "chat": { "credential": "k", "baseUrl": "https://chat.example/v1" },
+        "plugged": { "extension": true, "speech": { "model": "tts" } },
+    })))
+    .join("\n");
+    assert!(
+        problems.contains("a provider a plugin registers has none"),
+        "{problems}"
+    );
+    assert!(!problems.contains("needs a baseUrl"), "{problems}");
+}
+
+/// The speech model `!gen-speech` reads aloud with is taken as written: an
+/// alias, `provider/id` and all, since what it names is settled when the
+/// command is used, and it takes no effort level to check here.
+#[test]
+fn a_speech_model_is_taken_as_written_and_absent_stays_absent() {
+    let config = validate_config(&valid(json!({
+        "agent": {
+            "provider": "anthropic",
+            "providers": {
+                "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+            },
+            "speechGen": "gateway/tts",
+        },
+    })))
+    .expect("a speech model is accepted");
+
+    assert_eq!(config.agent.speech_gen.as_deref(), Some("gateway/tts"));
+    assert_eq!(
+        validate_config(&valid(json!({})))
+            .expect("a minimal file resolves")
+            .agent
+            .speech_gen,
+        None
+    );
+}
+
+/// A speech model that is not a string is a typo worth naming.
+#[test]
+fn a_speech_model_that_is_not_a_string_is_refused() {
+    assert!(problems_contain(
+        &valid(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+                },
+                "speechGen": 7,
+            },
+        })),
+        "agent.speechGen"
+    ));
+}
+
+#[test]
+fn post_audio_defaults_to_true_and_can_be_turned_off() {
+    let config = validate_config(&valid(json!({}))).expect("resolves");
+    assert_eq!(config.output.post_audio, defaults::POST_AUDIO);
+    assert!(config.output.post_audio);
+
+    let config = validate_config(&valid(json!({
+        "output": { "postAudio": false },
+    })))
+    .expect("resolves");
+    assert!(!config.output.post_audio);
+
+    assert!(problems_contain(
+        &valid(json!({ "output": { "postAudio": "yes" } })),
+        "output.postAudio must be true or false"
+    ));
+}
