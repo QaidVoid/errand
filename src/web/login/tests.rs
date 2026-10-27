@@ -7,7 +7,8 @@ use axum::http::{HeaderMap, HeaderValue, header};
 use serde_json::json;
 
 use super::{
-    Discord, DiscordCall, LOGIN_TTL_MS, LoginFailure, Logins, PENDING_TTL_MS, Visitor, cookie,
+    Discord, DiscordCall, LOGIN_TTL_MS, LoginFailure, Logins, MAX_PENDING, PENDING_TTL_MS, Visitor,
+    cookie,
 };
 use crate::config::live::LiveConfig;
 use crate::config::schema::WebLoginConfig;
@@ -101,7 +102,7 @@ fn carrying(name: &str, value: &str) -> HeaderMap {
 }
 
 async fn logged_in(fixture: &Fixture, account: &str) -> HeaderMap {
-    let (state, _) = fixture.logins.begin();
+    let (state, _) = fixture.logins.begin().unwrap();
     let (token, _) = fixture
         .logins
         .finish(
@@ -119,7 +120,7 @@ async fn logged_in(fixture: &Fixture, account: &str) -> HeaderMap {
 #[test]
 fn a_login_sends_the_browser_to_discord_with_its_state_and_way_back() {
     let fixture = fixture(&["*"]);
-    let (state, url) = fixture.logins.begin();
+    let (state, url) = fixture.logins.begin().unwrap();
     let url = reqwest::Url::parse(&url).unwrap();
     let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
 
@@ -170,7 +171,7 @@ async fn a_blocked_or_unlisted_member_is_logged_in_but_may_not_act() {
 #[tokio::test]
 async fn without_a_known_server_nobody_may_act() {
     let fixture = fixture(&["*"]);
-    let (state, _) = fixture.logins.begin();
+    let (state, _) = fixture.logins.begin().unwrap();
     let (token, _) = fixture
         .logins
         .finish(Some(&state), Some(&state), Some(MEMBER), None, None)
@@ -187,8 +188,8 @@ async fn without_a_known_server_nobody_may_act() {
 #[tokio::test]
 async fn a_callback_for_another_browsers_login_is_refused() {
     let fixture = fixture(&["*"]);
-    let (state, _) = fixture.logins.begin();
-    let (other, _) = fixture.logins.begin();
+    let (state, _) = fixture.logins.begin().unwrap();
+    let (other, _) = fixture.logins.begin().unwrap();
 
     let refused = fixture
         .logins
@@ -206,7 +207,7 @@ async fn a_callback_for_another_browsers_login_is_refused() {
 #[tokio::test]
 async fn a_state_is_good_for_one_callback_and_only_in_time() {
     let fixture = fixture(&["*"]);
-    let (state, _) = fixture.logins.begin();
+    let (state, _) = fixture.logins.begin().unwrap();
     fixture
         .logins
         .finish(Some(&state), Some(&state), Some(MEMBER), None, Some("g"))
@@ -218,7 +219,7 @@ async fn a_state_is_good_for_one_callback_and_only_in_time() {
         .await;
     assert_eq!(replayed.unwrap_err(), LoginFailure::Expired);
 
-    let (late, _) = fixture.logins.begin();
+    let (late, _) = fixture.logins.begin().unwrap();
     fixture.clock.fetch_add(PENDING_TTL_MS, Ordering::SeqCst);
     let too_late = fixture
         .logins
@@ -230,7 +231,7 @@ async fn a_state_is_good_for_one_callback_and_only_in_time() {
 #[tokio::test]
 async fn declining_on_discord_and_discord_failing_are_told_apart() {
     let fixture = fixture(&["*"]);
-    let (state, _) = fixture.logins.begin();
+    let (state, _) = fixture.logins.begin().unwrap();
     let declined = fixture
         .logins
         .finish(
@@ -243,7 +244,7 @@ async fn declining_on_discord_and_discord_failing_are_told_apart() {
         .await;
     assert_eq!(declined.unwrap_err(), LoginFailure::Denied);
 
-    let (state, _) = fixture.logins.begin();
+    let (state, _) = fixture.logins.begin().unwrap();
     let failed = fixture
         .logins
         .finish(Some(&state), Some(&state), Some("broken"), None, Some("g"))
@@ -274,4 +275,18 @@ fn cookies_are_found_by_exact_name_and_marked_for_https() {
     assert!(set.contains("HttpOnly"));
     assert!(set.contains("SameSite=Lax"));
     assert!(set.ends_with("; Secure"));
+}
+
+/// Starting a login costs a stranger one request, so how many may be waiting
+/// is bounded, and the bound frees itself as they lapse.
+#[test]
+fn logins_in_progress_are_bounded_until_they_lapse() {
+    let fixture = fixture(&["*"]);
+    for _ in 0..MAX_PENDING {
+        assert!(fixture.logins.begin().is_some());
+    }
+    assert!(fixture.logins.begin().is_none());
+
+    fixture.clock.fetch_add(PENDING_TTL_MS, Ordering::SeqCst);
+    assert!(fixture.logins.begin().is_some());
 }

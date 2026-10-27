@@ -91,6 +91,68 @@ pub fn redact_text(text: &str, secrets: &[String]) -> String {
     scrubbed
 }
 
+/// Scrubs known secret values out of bytes that arrive in pieces.
+///
+/// A secret can be split across two pieces, so each piece is held back by one
+/// byte less than the longest secret: anything that could still be the start
+/// of one is kept until the next piece shows whether it is.
+pub struct ByteScrubber {
+    secrets: Vec<Vec<u8>>,
+    keep: usize,
+    carry: Vec<u8>,
+}
+
+impl ByteScrubber {
+    /// A scrubber for `secrets`, skipping any too short to be worth it.
+    pub fn new(secrets: &[String]) -> Self {
+        let secrets: Vec<Vec<u8>> = secrets
+            .iter()
+            .filter(|secret| secret.len() >= MIN_SCRUBBABLE_LENGTH)
+            .map(|secret| secret.as_bytes().to_vec())
+            .collect();
+        let keep = secrets.iter().map(Vec::len).max().unwrap_or(1) - 1;
+        Self {
+            secrets,
+            keep,
+            carry: Vec::new(),
+        }
+    }
+
+    /// Takes the next piece and returns what is safe to pass on.
+    pub fn push(&mut self, piece: &[u8]) -> Vec<u8> {
+        self.carry.extend_from_slice(piece);
+        let held = std::mem::take(&mut self.carry);
+        let scrubbed = self.scrub(held);
+        let split = scrubbed.len().saturating_sub(self.keep);
+        self.carry = scrubbed[split..].to_vec();
+        scrubbed[..split].to_vec()
+    }
+
+    /// Returns whatever was held back, once there are no more pieces.
+    pub fn finish(&mut self) -> Vec<u8> {
+        let rest = std::mem::take(&mut self.carry);
+        self.scrub(rest)
+    }
+
+    fn scrub(&self, mut bytes: Vec<u8>) -> Vec<u8> {
+        for secret in &self.secrets {
+            let mut out = Vec::with_capacity(bytes.len());
+            let mut at = 0;
+            while at < bytes.len() {
+                if bytes[at..].starts_with(secret) {
+                    out.extend_from_slice(REDACTION.as_bytes());
+                    at += secret.len();
+                } else {
+                    out.push(bytes[at]);
+                    at += 1;
+                }
+            }
+            bytes = out;
+        }
+        bytes
+    }
+}
+
 /// Walks a dotted path to the value it names, when every step is an object.
 fn read_path_mut<'a>(source: &'a mut Value, path: &str) -> Option<&'a mut Value> {
     let mut current = source;

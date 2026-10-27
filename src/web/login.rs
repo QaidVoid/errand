@@ -28,6 +28,12 @@ pub const LOGIN_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
 /// How long a browser has to come back from Discord after setting out.
 pub const PENDING_TTL_MS: i64 = 10 * 60 * 1_000;
 
+/// The most logins that may be in progress at once.
+///
+/// Starting one takes nothing but a request, so without a ceiling anybody
+/// could fill memory with logins they never mean to finish.
+pub const MAX_PENDING: usize = 1_024;
+
 /// The cookie a login is carried in.
 pub const LOGIN_COOKIE: &str = "errand_login";
 
@@ -139,12 +145,15 @@ impl Logins {
     }
 
     /// Starts a login. Returns the state to set as a cookie and the address
-    /// to send the browser to.
-    pub fn begin(&self) -> (String, String) {
+    /// to send the browser to, or nothing when too many are in progress.
+    pub fn begin(&self) -> Option<(String, String)> {
         let state = random_token();
         let now = (self.now)();
         let mut pending = self.pending.lock().expect("the pending lock");
         pending.retain(|_, expires_at| *expires_at > now);
+        if pending.len() >= MAX_PENDING {
+            return None;
+        }
         pending.insert(state.clone(), now + PENDING_TTL_MS);
         drop(pending);
 
@@ -160,7 +169,7 @@ impl Logins {
             ],
         )
         .expect("the authorize address is well formed");
-        (state, url.to_string())
+        Some((state, url.to_string()))
     }
 
     /// Completes a login from Discord's callback. Returns the token to set as

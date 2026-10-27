@@ -1344,6 +1344,13 @@ impl Running {
         // runs nothing. Deciding this later would make the marker
         // unreliable, which is the opposite of what it is for.
         if is_aside(&content) {
+            // Said in the thread, an aside is the person's own message there
+            // already. Said in the interface, the bot posts it for them, so it
+            // takes the same invitation a prompt does.
+            if message.from_interface && !self.may_take_part(&message.author_id) {
+                self.refuse(&message, &self.not_invited()).await;
+                return;
+            }
             self.note_aside(&content, &message).await;
             return;
         }

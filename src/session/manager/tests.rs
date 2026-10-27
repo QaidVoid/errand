@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::{
-    CreatedThread, DetachedRequest, FoundView, MadeThread, ManagerOptions, SandboxPool,
+    CreatedThread, Delivery, DetachedRequest, FoundView, MadeThread, ManagerOptions, SandboxPool,
     SessionManager, StartOutcome, ThreadFactory,
 };
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
@@ -1151,17 +1151,19 @@ async fn a_session_can_be_written_to_by_its_own_identifier() {
         Box::pin(async move {
             harness.manager.start(message("demo: go", "m1")).await;
 
-            assert!(
+            assert_eq!(
                 harness
                     .manager
                     .deliver_to_session("demo-s1", message("more", "m2"))
-                    .await
+                    .await,
+                Delivery::Sent
             );
-            assert!(
-                !harness
+            assert_eq!(
+                harness
                     .manager
                     .deliver_to_session("s404", message("more", "m3"))
-                    .await
+                    .await,
+                Delivery::NoSuchSession
             );
         })
     })
@@ -1180,13 +1182,42 @@ async fn writing_to_a_session_that_stopped_picks_it_up_again() {
                 .await;
             settle().await;
 
-            assert!(
+            assert_eq!(
                 harness
                     .manager
                     .deliver_to_session("demo-s1", message("carry on", "m2"))
-                    .await
+                    .await,
+                Delivery::Sent
             );
             assert_eq!(harness.manager.sessions().len(), 1);
+        })
+    })
+    .await;
+}
+
+/// Waking a session gives it a sandbox and tells its owner's thread, so only
+/// somebody who may take part in it can do that.
+#[tokio::test]
+async fn a_stranger_cannot_wake_somebody_elses_stopped_session() {
+    with_manager(|harness| {
+        Box::pin(async move {
+            harness.manager.start(message("demo: go", "m1")).await;
+            harness
+                .manager
+                .end_thread("thread-1", EndReason::Idle)
+                .await;
+            settle().await;
+
+            let mut stranger = message("wake up", "m2");
+            stranger.author_id = "999999999999999999".to_owned();
+            assert_eq!(
+                harness
+                    .manager
+                    .deliver_to_session("demo-s1", stranger)
+                    .await,
+                Delivery::NotInvited
+            );
+            assert!(harness.manager.sessions().is_empty());
         })
     })
     .await;

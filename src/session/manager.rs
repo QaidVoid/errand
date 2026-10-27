@@ -1101,10 +1101,14 @@ impl SessionManager {
     /// surfaces showing a session, and the browser never sees it. Writing to
     /// a session that has stopped resumes it, which is what sending to it is
     /// asking for.
-    pub async fn deliver_to_session(&self, session_id: &str, message: IncomingMessage) -> bool {
+    ///
+    /// Only somebody who may take part can wake one. A live session judges
+    /// that itself, but by then a stopped one has already been given a sandbox
+    /// and its owner's thread has been told it is back.
+    pub async fn deliver_to_session(&self, session_id: &str, message: IncomingMessage) -> Delivery {
         if let Some(session) = self.for_session(session_id) {
             session.handle(message).await;
-            return true;
+            return Delivery::Sent;
         }
 
         let Some(record) = self
@@ -1112,9 +1116,25 @@ impl SessionManager {
             .into_iter()
             .find(|candidate| candidate.session_id == session_id)
         else {
-            return false;
+            return Delivery::NoSuchSession;
         };
-        self.resume(&record.thread_id, message).await.is_started()
+        let author = &message.author_id;
+        let may_wake = *author == record.owner_id
+            || record.guests.contains(author)
+            || self.shared.operator_ids.contains(author);
+        if !may_wake {
+            return Delivery::NotInvited;
+        }
+        if self.resume(&record.thread_id, message).await.is_started() {
+            Delivery::Sent
+        } else {
+            Delivery::NoSuchSession
+        }
+    }
+
+    /// The secrets the configuration holds, for scrubbing what is shown.
+    pub fn secrets(&self) -> Vec<String> {
+        secret_values(&self.options.config.get())
     }
 
     /// Ends the session bound to a thread, if any.
@@ -1176,6 +1196,17 @@ enum ThreadKind {
     Created,
     /// Opened with a post of its own, for a session nobody typed to.
     Opened,
+}
+
+/// What became of a message sent to a session by its identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    /// The session has it.
+    Sent,
+    /// There is no such session, or it could not be woken.
+    NoSuchSession,
+    /// The session is stopped and the sender may not wake it.
+    NotInvited,
 }
 
 /// A request to start a session with no message to hang it on.

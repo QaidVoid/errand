@@ -184,3 +184,33 @@ fn a_defined_providers_credential_is_scrubbed_too() {
     assert!(secrets.contains(&"the-default-key".to_owned()));
     assert!(redact_text("key=the-meta-key here", &secrets).contains(REDACTION));
 }
+
+/// A file is sent in pieces, and a token split across two of them must not
+/// slip through because neither piece held all of it.
+#[test]
+fn a_secret_split_across_pieces_is_still_scrubbed() {
+    let secrets = [CREDENTIAL.to_owned(), GITHUB_TOKEN.to_owned()];
+    let whole = format!("export KEY={CREDENTIAL}\ntoken {GITHUB_TOKEN} end");
+
+    for size in 1..whole.len() {
+        let mut scrubber = super::ByteScrubber::new(&secrets);
+        let mut out = Vec::new();
+        for piece in whole.as_bytes().chunks(size) {
+            out.extend(scrubber.push(piece));
+        }
+        out.extend(scrubber.finish());
+        let out = String::from_utf8(out).unwrap();
+
+        assert_eq!(out, redact_text(&whole, &secrets), "pieces of {size}");
+    }
+}
+
+#[test]
+fn bytes_with_no_secret_pass_through_unchanged() {
+    let mut scrubber = super::ByteScrubber::new(&[CREDENTIAL.to_owned()]);
+    let mut out = scrubber.push(b"\x00\xffbinary");
+    out.extend(scrubber.push(b" data"));
+    out.extend(scrubber.finish());
+
+    assert_eq!(out, b"\x00\xffbinary data");
+}

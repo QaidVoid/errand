@@ -1258,6 +1258,30 @@ async fn an_aside_is_kept_for_the_thread_and_never_reaches_the_agent() {
     .await;
 }
 
+/// From the interface the bot posts an aside for whoever sent it, so a
+/// stranger cannot use one to speak in a thread they were never invited to.
+#[tokio::test]
+async fn an_aside_from_the_interface_takes_an_invitation() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            let mut from_web = message_from("!!! hello from nowhere", STRANGER, "m2");
+            from_web.from_interface = true;
+            harness.session.handle(from_web).await;
+
+            assert!(harness.thread.asides().is_empty());
+
+            // Said in the thread itself, it is the stranger's own message there
+            // already, and is kept as it always was.
+            harness
+                .session
+                .handle(message_from("!!! said in the thread", STRANGER, "m3"))
+                .await;
+            assert_eq!(harness.thread.asides().len(), 1);
+        })
+    })
+    .await;
+}
+
 /// Deciding this later would make the marker unreliable, which defeats it.
 #[tokio::test]
 async fn an_aside_that_reads_like_a_command_still_runs_nothing() {

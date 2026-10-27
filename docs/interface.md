@@ -47,7 +47,10 @@ copy the client id and secret and add `<publicUrl>/auth/callback` as a redirect.
 Without `publicUrl` the redirect is `http://<host>:<port>/auth/callback`.
 
 Reading stays open to anyone who can reach the interface, so a transcript
-linked from a pull request still opens for everyone. Starting or prompting a
+linked from a pull request still opens for everyone. What it serves from a
+project, read or downloaded, has the configuration's secrets scrubbed out of
+it, as the transcript does, since the agent can write whatever its sandbox was
+given into a file. Starting or prompting a
 session takes a login, and a logged-in visitor acts as their own Discord
 account, never as the operator:
 

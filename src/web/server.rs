@@ -18,6 +18,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::{Value, json};
 
+use crate::config::redact::{ByteScrubber, redact_text};
 use crate::config::schema::WebConfig;
 use crate::log::LogValue;
 use crate::log::Logger;
@@ -31,7 +32,7 @@ use crate::session::event::SessionEvent;
 use crate::session::files::MAX_INLINE_BYTES;
 use crate::session::files::{read_directory, read_file_for_display};
 use crate::session::manager::StartOutcome;
-use crate::session::manager::{DetachedRequest, SessionManager};
+use crate::session::manager::{Delivery, DetachedRequest, SessionManager};
 use crate::session::record::transcript_path;
 use crate::session::session::IncomingMessage;
 use crate::session::transcript::Transcript;
@@ -136,6 +137,7 @@ pub struct WebServer {
     guild_id: Option<String>,
     names: Option<NameLookup>,
     logins: Option<Logins>,
+    streams: Arc<std::sync::atomic::AtomicUsize>,
     started: Mutex<HashMap<String, i64>>,
     openings: Mutex<HashMap<String, String>>,
     shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -213,6 +215,7 @@ impl WebServer {
             guild_id,
             names,
             logins,
+            streams: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             started: Mutex::new(HashMap::new()),
             openings: Mutex::new(HashMap::new()),
             shutdown: Mutex::new(None),
@@ -429,33 +432,57 @@ impl WebServer {
             }
         };
 
-        let Some(host) = host_path_under(&project, &project, &relative) else {
+        if host_path_under(&project, &project, &relative).is_none() {
             return Err(refused(
                 json!({ "error": "outside this session's project" }),
                 StatusCode::FORBIDDEN,
             ));
-        };
+        }
         let relative = if relative == "." { "" } else { &relative };
         Ok(Located {
             root: project,
-            host,
             relative: relative.to_owned(),
         })
     }
 }
 
-/// A path inside one session's project, resolved three ways.
+impl Located {
+    /// What the path is, found the way it will be read: beneath the project
+    /// and refusing links. Asking the host path would follow a link the agent
+    /// planted, and say whether its target exists anywhere on the host.
+    fn metadata(&self) -> std::io::Result<std::fs::Metadata> {
+        paths::open_beneath(&self.root, &self.relative, &paths::OpenOptions::read())
+            .and_then(|file| file.metadata())
+    }
+}
+
+/// A path inside one session's project.
 ///
-/// The root is what a reader resolves beneath, the relative path is what it
-/// asks for, and the host path is what a plain `metadata` call needs. Only the
-/// first two decide what is opened.
+/// The root is what a reader resolves beneath and the relative path is what
+/// it asks for. Everything opened is opened beneath the one through the other.
 struct Located {
     /// The session's project directory.
     root: String,
-    /// The resolved host path, for asking what kind of thing it is.
-    host: String,
     /// The path under the root, as the browser asked for it.
     relative: String,
+}
+
+/// The most live streams open at once, across every session.
+pub const MAX_STREAMS: usize = 64;
+
+/// The most a message from the interface may say, in characters.
+///
+/// What a Discord message may hold, so what is sent here can be mirrored into
+/// the thread as one message rather than as a wall of them.
+pub const MAX_MESSAGE_CHARS: usize = 4_000;
+
+fn too_long(text: &str) -> Option<Response> {
+    (text.chars().count() > MAX_MESSAGE_CHARS).then(|| {
+        refused(
+            json!({ "error": format!("a message may be at most {MAX_MESSAGE_CHARS} characters") }),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        )
+    })
 }
 
 /// Who a change is made as.
@@ -534,7 +561,15 @@ async fn begin_login(State(server): State<ServerState>) -> Response {
             StatusCode::NOT_FOUND,
         );
     };
-    let (state, url) = logins.begin();
+    let Some((state, url)) = logins.begin() else {
+        server
+            .log
+            .warn("web login refused: too many in progress", &fields([]));
+        return refused(
+            json!({ "error": "too many logins are in progress; try again in a few minutes" }),
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+    };
     Response::builder()
         .status(StatusCode::SEE_OTHER)
         .header(header::LOCATION, url)
@@ -693,6 +728,9 @@ async fn start_session(
             StatusCode::BAD_REQUEST,
         );
     }
+    if let Some(refusal) = too_long(&prompt) {
+        return refusal;
+    }
 
     let outcome = server
         .sessions
@@ -737,6 +775,9 @@ async fn send(
             StatusCode::BAD_REQUEST,
         );
     }
+    if let Some(refusal) = too_long(&text) {
+        return refusal;
+    }
 
     // The same path a message in a thread takes, so prompts queue and
     // commands apply exactly as they do there.
@@ -756,13 +797,19 @@ async fn send(
         )
         .await;
 
-    if delivered {
-        ok(json!({ "accepted": true, "detail": "sent" }))
-    } else {
-        refused(
-            json!({ "accepted": false, "detail": "no such live session" }),
+    match delivered {
+        Delivery::Sent => ok(json!({ "accepted": true, "detail": "sent" })),
+        Delivery::NoSuchSession => refused(
+            json!({ "accepted": false, "error": "no such session" }),
             StatusCode::NOT_FOUND,
-        )
+        ),
+        Delivery::NotInvited => refused(
+            json!({
+                "accepted": false,
+                "error": "this session is stopped, and only its owner or someone they invited can pick it up again",
+            }),
+            StatusCode::FORBIDDEN,
+        ),
     }
 }
 
@@ -771,8 +818,25 @@ async fn stream_session(
     State(server): State<ServerState>,
     PathParam(id): PathParam<String>,
 ) -> Response {
+    use std::sync::atomic::Ordering;
+
+    // Anyone may watch, and each watcher holds a replay, a queue, and a task
+    // until it goes away. A ceiling keeps a crowd of them, or one client that
+    // opens streams and never reads them, from taking the daemon with it.
+    if server.streams.fetch_add(1, Ordering::SeqCst) >= MAX_STREAMS {
+        server.streams.fetch_sub(1, Ordering::SeqCst);
+        server.log.warn(
+            "web stream refused: too many open",
+            &fields([("max", LogValue::from(MAX_STREAMS))]),
+        );
+        return refused(
+            json!({ "error": "too many people are watching right now; try again shortly" }),
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+    }
     let (view, receiver) = WebView::new(server.names.clone());
     let Some(attached) = server.sessions.attach_view(&id, view.clone()).await else {
+        server.streams.fetch_sub(1, Ordering::SeqCst);
         return refused(
             json!({ "error": "no such live session" }),
             StatusCode::NOT_FOUND,
@@ -781,11 +845,13 @@ async fn stream_session(
 
     // The browser closing drops the stream, which is the only signal that a
     // view has gone. Detaching then keeps the fan out from growing forever.
+    let streams = Arc::clone(&server.streams);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
             if view.is_closed() {
                 attached.detach();
+                streams.fetch_sub(1, Ordering::SeqCst);
                 break;
             }
         }
@@ -865,7 +931,7 @@ async fn tree(
         Err(refusal) => return refusal,
     };
 
-    match std::fs::metadata(&located.host) {
+    match located.metadata() {
         Ok(metadata) if metadata.is_dir() => {
             let entries = read_directory(&located.root, &located.relative).unwrap_or_default();
             ok(json!(
@@ -884,7 +950,10 @@ async fn tree(
             json!({ "error": "not a directory" }),
             StatusCode::BAD_REQUEST,
         ),
-        Err(error) => refused(json!({ "error": error.to_string() }), StatusCode::NOT_FOUND),
+        Err(_) => refused(
+            json!({ "error": "no such directory" }),
+            StatusCode::NOT_FOUND,
+        ),
     }
 }
 
@@ -899,23 +968,26 @@ async fn file(
         Err(refusal) => return refusal,
     };
 
-    match std::fs::metadata(&located.host) {
+    match located.metadata() {
         Ok(metadata) if metadata.is_dir() => refused(
             json!({ "error": "is a directory" }),
             StatusCode::BAD_REQUEST,
         ),
         Ok(_) => match read_file_for_display(&located.root, &located.relative, MAX_INLINE_BYTES) {
+            // The agent writes these, and it holds whatever credentials its
+            // sandbox was given. The transcript is scrubbed for the same
+            // reason, and a file is no less public.
             Ok(contents) => ok(json!({
                 "path": contents.path,
                 "size": contents.size,
                 "binary": contents.binary,
                 "truncated": contents.truncated,
-                "text": contents.text,
+                "text": redact_text(&contents.text, &server.sessions.secrets()),
                 "language": contents.language,
             })),
-            Err(error) => refused(json!({ "error": error.to_string() }), StatusCode::NOT_FOUND),
+            Err(_) => refused(json!({ "error": "no such file" }), StatusCode::NOT_FOUND),
         },
-        Err(error) => refused(json!({ "error": error.to_string() }), StatusCode::NOT_FOUND),
+        Err(_) => refused(json!({ "error": "no such file" }), StatusCode::NOT_FOUND),
     }
 }
 
@@ -939,24 +1011,30 @@ async fn download(
     };
     let file = tokio::fs::File::from_std(file);
 
-    let name = located
-        .relative
-        .rsplit('/')
-        .next()
-        .unwrap_or("file")
-        .replace('"', "");
-    let chunks = futures_util::stream::try_unfold(file, |mut file| async move {
-        use tokio::io::AsyncReadExt;
-        let mut buffer = vec![0u8; 65_536];
-        match AsyncReadExt::read(&mut file, &mut buffer).await {
-            Ok(0) => Ok(None),
-            Ok(read) => {
-                buffer.truncate(read);
-                Ok(Some((buffer, file)))
+    let name = download_name(&located.relative);
+    // Scrubbed as it goes, for the same reason the file view is.
+    let scrubber = ByteScrubber::new(&server.sessions.secrets());
+    let chunks = futures_util::stream::try_unfold(
+        (Some(file), scrubber),
+        |(file, mut scrubber)| async move {
+            use tokio::io::AsyncReadExt;
+            let Some(mut file) = file else {
+                return Ok(None);
+            };
+            let mut buffer = vec![0u8; 65_536];
+            match AsyncReadExt::read(&mut file, &mut buffer).await {
+                Ok(0) => {
+                    let rest = scrubber.finish();
+                    Ok(Some((rest, (None, scrubber))))
+                }
+                Ok(read) => {
+                    let passed = scrubber.push(&buffer[..read]);
+                    Ok(Some((passed, (Some(file), scrubber))))
+                }
+                Err(error) => Err::<_, std::io::Error>(error),
             }
-            Err(error) => Err(error),
-        }
-    });
+        },
+    );
     Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(
@@ -965,6 +1043,31 @@ async fn download(
         )
         .body(axum::body::Body::from_stream(chunks))
         .unwrap_or_else(|_| unreachable!("a download response always builds"))
+}
+
+/// The name a download is saved under, made safe to put in a header.
+///
+/// The agent names its files, and a newline or a quote in one would either
+/// break the header or end the name early.
+fn download_name(relative: &str) -> String {
+    let name: String = relative
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if name.trim().is_empty() {
+        "file".to_owned()
+    } else {
+        name
+    }
 }
 
 /// Serves the built bundle, falling back to the application itself.

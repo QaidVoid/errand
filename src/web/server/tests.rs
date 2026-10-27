@@ -1254,3 +1254,105 @@ async fn the_interface_offers_the_commands_and_models_a_session_accepts() {
     })
     .await;
 }
+
+/// What the agent writes may hold a credential its sandbox was given, and a
+/// project is as public as the transcript that is already scrubbed.
+#[tokio::test]
+async fn a_secret_in_a_project_file_is_scrubbed_when_read_or_downloaded() {
+    with_server_where(false, true, |harness| {
+        Box::pin(async move {
+            started_session(harness, &reqwest::Client::new()).await;
+            let project = harness.root.path().join("projects").join("demo");
+            std::fs::write(project.join("env.txt"), "TOKEN=a.token.value\n").unwrap();
+            std::fs::write(project.join("odd\"na\nme"), "TOKEN=a.token.value\n").unwrap();
+            let client = reqwest::Client::new();
+
+            let file = message(
+                &client,
+                &harness.base,
+                "/api/sessions/demo-s1/file?path=env.txt",
+            )
+            .await
+            .json::<Value>()
+            .await
+            .unwrap();
+            assert_eq!(file["text"], "TOKEN=[redacted]\n");
+
+            let download = message(
+                &client,
+                &harness.base,
+                "/api/sessions/demo-s1/download?path=odd%22na%0Ame",
+            )
+            .await;
+            assert_eq!(download.status(), 200);
+            assert_eq!(
+                download.headers()[reqwest::header::CONTENT_DISPOSITION],
+                "attachment; filename=\"odd_na_me\""
+            );
+            assert_eq!(download.text().await.unwrap(), "TOKEN=[redacted]\n");
+        })
+    })
+    .await;
+}
+
+/// A link the agent planted is neither followed nor described, so it cannot
+/// be used to ask whether a path exists somewhere on the host.
+#[tokio::test]
+async fn a_planted_link_says_nothing_about_where_it_points() {
+    with_server_where(false, true, |harness| {
+        Box::pin(async move {
+            started_session(harness, &reqwest::Client::new()).await;
+            let project = harness.root.path().join("projects").join("demo");
+            std::os::unix::fs::symlink("/etc", project.join("there")).unwrap();
+            std::os::unix::fs::symlink("/nowhere-at-all", project.join("nowhere")).unwrap();
+            let client = reqwest::Client::new();
+
+            let mut answers = Vec::new();
+            for path in ["there", "nowhere", "there/hostname"] {
+                let answer = message(
+                    &client,
+                    &harness.base,
+                    &format!("/api/sessions/demo-s1/file?path={path}"),
+                )
+                .await;
+                answers.push((answer.status(), answer.text().await.unwrap()));
+            }
+            assert!(
+                answers.iter().all(|answer| *answer == answers[0]),
+                "{answers:?}"
+            );
+            assert_eq!(answers[0].0, 404);
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_message_longer_than_discord_would_take_is_refused() {
+    with_server_where(false, true, |harness| {
+        Box::pin(async move {
+            started_session(harness, &reqwest::Client::new()).await;
+            let client = reqwest::Client::new();
+            let long = "x".repeat(super::MAX_MESSAGE_CHARS + 1);
+
+            let sent = post(
+                &client,
+                &harness.base,
+                "/api/sessions/demo-s1/send",
+                &json!({ "text": long }),
+            )
+            .await;
+            let started = post(
+                &client,
+                &harness.base,
+                "/api/sessions",
+                &json!({ "project": "demo", "prompt": long }),
+            )
+            .await;
+
+            assert_eq!(sent.status(), 413);
+            assert_eq!(started.status(), 413);
+        })
+    })
+    .await;
+}
