@@ -125,6 +125,25 @@ export interface InterfaceInfo {
   mayAct: boolean;
 }
 
+/** The models a session can run on, named as `--model` and `!model` take them. */
+export interface ModelCatalog {
+  /** What a session starts on when nobody names a model, when one is set. */
+  default: string | null;
+  /** Every model the host lists, as `provider/id`. */
+  models: string[];
+  /** Short names, and what each stands for. */
+  aliases: Record<string, string>;
+}
+
+/** A command a session answers to. */
+export interface CommandInfo {
+  /** Spelled with its `!`. */
+  name: string;
+  /** The argument as a person would write it, when it takes one. */
+  argument: string | null;
+  summary: string;
+}
+
 /** A node in a project's file tree. */
 export interface TreeNode {
   name: string;

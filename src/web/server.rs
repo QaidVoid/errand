@@ -23,8 +23,10 @@ use crate::log::LogValue;
 use crate::log::Logger;
 use crate::log::fields;
 use crate::log::now_ms;
+use crate::provider::models::AvailableModel;
 use crate::sandbox::paths;
 use crate::sandbox::paths::host_path_under;
+use crate::session::commands::COMMANDS;
 use crate::session::event::SessionEvent;
 use crate::session::files::MAX_INLINE_BYTES;
 use crate::session::files::{read_directory, read_file_for_display};
@@ -316,6 +318,8 @@ impl WebServer {
             .route("/auth/callback", get(finish_login))
             .route("/auth/logout", post(logout))
             .route("/api/interface", get(describe))
+            .route("/api/models", get(models))
+            .route("/api/commands", get(commands))
             .route("/api/sessions", get(list_sessions).post(start_session))
             .route("/api/sessions/{id}/send", post(send))
             .route("/api/sessions/{id}/stream", get(stream_session))
@@ -481,6 +485,40 @@ async fn describe(State(server): State<ServerState>, headers: HeaderMap) -> Resp
         "visitor": signed.as_ref().map(|signed| &signed.visitor),
         "mayAct": may_act,
     }))
+}
+
+/// The models a session can be started on or switched to.
+///
+/// Named the way `--model` and `!model` take them, so what the interface
+/// offers is exactly what either would accept.
+async fn models(State(server): State<ServerState>) -> Response {
+    let catalog = server.sessions.catalog();
+    let names: Vec<String> = catalog
+        .models()
+        .iter()
+        .map(AvailableModel::qualified)
+        .collect();
+    ok(json!({
+        "default": server.sessions.default_model(),
+        "models": names,
+        "aliases": catalog.aliases(),
+    }))
+}
+
+/// The commands a session answers to, from the same table the thread's help
+/// is written from.
+async fn commands() -> Response {
+    let listed: Vec<Value> = COMMANDS
+        .iter()
+        .map(|(name, meta)| {
+            json!({
+                "name": name,
+                "argument": meta.argument,
+                "summary": meta.summary,
+            })
+        })
+        .collect();
+    ok(Value::Array(listed))
 }
 
 /// Sends the browser to Discord to log in.

@@ -1218,3 +1218,37 @@ async fn logging_out_ends_the_login() {
     })
     .await;
 }
+
+/// What the interface offers to type is what a session would accept, so it is
+/// read from the same table and catalog rather than kept beside them.
+#[tokio::test]
+async fn the_interface_offers_the_commands_and_models_a_session_accepts() {
+    with_server_where(false, true, |harness| {
+        Box::pin(async move {
+            let client = reqwest::Client::new();
+            let commands = message(&client, &harness.base, "/api/commands")
+                .await
+                .json::<Value>()
+                .await
+                .unwrap();
+            let listed = commands.as_array().unwrap();
+            assert_eq!(listed.len(), crate::session::commands::COMMANDS.len());
+            assert!(listed.contains(&json!({
+                "name": "!model",
+                "argument": "[name]",
+                "summary": "show the models, or switch to one",
+            })));
+
+            let models = message(&client, &harness.base, "/api/models")
+                .await
+                .json::<Value>()
+                .await
+                .unwrap();
+            assert_eq!(
+                models,
+                json!({ "default": null, "models": [], "aliases": {} })
+            );
+        })
+    })
+    .await;
+}

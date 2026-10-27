@@ -6,9 +6,11 @@
  */
 
 import type {
+  CommandInfo,
   Entry,
   FileContents,
   InterfaceInfo,
+  ModelCatalog,
   SessionSummary,
   State,
   TreeNode,
@@ -34,6 +36,10 @@ function send(path: string, body: unknown): Promise<{ id?: string }> {
 
 export const api = {
   describe: () => json<InterfaceInfo>("/interface"),
+
+  models: () => json<ModelCatalog>("/models"),
+
+  commands: () => json<CommandInfo[]>("/commands"),
 
   sessions: () => json<SessionSummary[]>("/sessions"),
 

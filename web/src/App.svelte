@@ -10,7 +10,15 @@
   import { counts, type Lens, LENS_HELP, LENSES } from "./lib/lens.ts";
   import { read } from "./lib/turns.ts";
   import { nameFrom } from "./lib/naming.ts";
-  import type { Entry, FileContents, SessionSummary, Usage, Visitor } from "./lib/types.ts";
+  import type {
+    CommandInfo,
+    Entry,
+    FileContents,
+    ModelCatalog,
+    SessionSummary,
+    Usage,
+    Visitor,
+  } from "./lib/types.ts";
 
   let sessions = $state<SessionSummary[]>([]);
   let selected = $state<string | null>(null);
@@ -38,6 +46,44 @@
   /** Whether this browser may start and prompt sessions. */
   let mayAct = $state(false);
   let appearanceOpen = $state(false);
+  let catalog = $state<ModelCatalog | null>(null);
+  let commandList = $state<CommandInfo[]>([]);
+  /** Whether the model switcher under the session's model is open. */
+  let switching = $state(false);
+  let switchTo = $state("");
+  let newModel = $state("");
+
+  /** Whether this browser may start and prompt sessions, whatever made it so. */
+  const canAct = $derived(!observer && (!login || mayAct));
+
+  /** Every name `--model` and `!model` accept, short names first. */
+  const modelNames = $derived(
+    catalog === null ? [] : [...Object.keys(catalog.aliases), ...catalog.models],
+  );
+
+  /**
+   * Commands that start with what has been typed, while the first word is
+   * still being typed. Once a space follows it the command is chosen, and the
+   * list would only cover what the argument is being written over.
+   */
+  const suggestions = $derived(
+    /^![^\s]*$/.test(draft)
+      ? commandList.filter((command) => command.name.startsWith(draft)).slice(0, 8)
+      : [],
+  );
+
+  function complete(command: CommandInfo): void {
+    draft = command.argument === null ? command.name : `${command.name} `;
+  }
+
+  async function switchModel(): Promise<void> {
+    const name = switchTo.trim();
+    if (name.length === 0) return;
+    switching = false;
+    switchTo = "";
+    draft = `!model ${name}`;
+    await send();
+  }
   /** Whether the list shows only this visitor's sessions, and only running ones. */
   let onlyMine = $state(localStorage.getItem("only-mine") === "true");
   let onlyRunning = $state(localStorage.getItem("only-running") === "true");
@@ -422,6 +468,12 @@
   }
 
   function onKey(event: KeyboardEvent): void {
+    const first = suggestions[0];
+    if (event.key === "Tab" && first !== undefined) {
+      event.preventDefault();
+      complete(first);
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void send();
@@ -430,14 +482,18 @@
 
   async function start(): Promise<void> {
     const project = newProject.trim();
-    const prompt = newPrompt.trim();
-    if (prompt.length === 0) return;
+    const asked = newModel.trim();
+    // The same flag a message in the channel would carry, so the daemon reads
+    // the model exactly as it would there.
+    const prompt = asked.length > 0 ? `--model ${asked} ${newPrompt.trim()}` : newPrompt.trim();
+    if (newPrompt.trim().length === 0) return;
 
     failure = null;
     try {
       const started = await api.start(project, prompt);
       newProject = "";
       newPrompt = "";
+      newModel = "";
       starting = false;
       await refresh();
       if (started.id !== undefined) select(started.id);
@@ -486,6 +542,14 @@
 
     takeLoginResult();
     void describe();
+    void api
+      .models()
+      .then((found) => (catalog = found))
+      .catch(() => undefined);
+    void api
+      .commands()
+      .then((found) => (commandList = found))
+      .catch(() => undefined);
     void refresh();
     const timer = setInterval(() => void refresh(), 4000);
     return () => {
@@ -629,7 +693,16 @@
            changes while it is read. -->
       <p class="facts">
         {#if usage !== null && usage.model !== undefined}
-          <span class="chip">{usage.model}</span>
+          {#if canAct && !ended}
+            <button
+              class="chip"
+              aria-expanded={switching}
+              title="Switch this session's model"
+              onclick={() => (switching = !switching)}>{usage.model} <span aria-hidden="true">v</span></button
+            >
+          {:else}
+            <span class="chip">{usage.model}</span>
+          {/if}
         {/if}
         {#if usage !== null && usage.contextWindow}
           {@const used = Math.round((usage.contextTokens / usage.contextWindow) * 100)}
@@ -654,6 +727,31 @@
           </span>
         {/if}
       </p>
+
+      {#if switching}
+        <form
+          class="switcher"
+          onsubmit={(event) => {
+            event.preventDefault();
+            void switchModel();
+          }}
+        >
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            bind:value={switchTo}
+            list="model-names"
+            autofocus
+            spellcheck="false"
+            placeholder="a model, provider/model, or a short name"
+            aria-label="Model to switch to"
+          />
+          <button class="primary" type="submit" disabled={switchTo.trim().length === 0}
+            >switch</button
+          >
+          <button type="button" class="quiet" onclick={() => (switching = false)}>cancel</button>
+          <span class="hint">Sends <code>!model</code>, so it applies from the next turn.</span>
+        </form>
+      {/if}
 
       {#if !connected}
         <p class="banner warn">Reconnecting to the daemon.</p>
@@ -754,6 +852,18 @@
         {:else if login && !mayAct}
           <p class="gate">Your account can read here, but cannot drive sessions.</p>
         {:else}
+          {#if suggestions.length > 0}
+            <ul class="suggestions" role="listbox" aria-label="Commands">
+              {#each suggestions as command, index (command.name)}
+                <li role="option" aria-selected={index === 0}>
+                  <button type="button" onclick={() => complete(command)}>
+                    <code>{command.name}{command.argument === null ? "" : ` ${command.argument}`}</code>
+                    <span>{command.summary}</span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
           <form
             class="composer"
             onsubmit={(event) => {
@@ -782,7 +892,7 @@
           </form>
           <p class="note">
             {#if visitor !== null}Sent as {visitor.name}, and posted in the thread.{/if}
-            Enter sends, Shift+Enter adds a line.
+            Enter sends, Shift+Enter adds a line, and <code>!</code> lists the commands.
           </p>
         {/if}
       </div>
@@ -863,6 +973,15 @@
           ></textarea>
         </label>
         <label>
+          <span>Model <em>optional</em></span>
+          <input
+            bind:value={newModel}
+            list="model-names"
+            spellcheck="false"
+            placeholder={catalog?.default ?? "the provider's default"}
+          />
+        </label>
+        <label>
           <span>Project <em>optional</em></span>
           <input
             bind:value={newProject}
@@ -912,6 +1031,12 @@
   {#if appearanceOpen}
     <Appearance onClose={() => (appearanceOpen = false)} />
   {/if}
+
+  <datalist id="model-names">
+    {#each modelNames as name (name)}
+      <option value={name}></option>
+    {/each}
+  </datalist>
 </div>
 
 <style>
@@ -1215,6 +1340,92 @@
     border-radius: 6px;
     background: var(--fill);
     font-family: var(--mono);
+    color: var(--muted);
+  }
+
+  button.chip {
+    color: var(--ink);
+    cursor: pointer;
+  }
+
+  button.chip:hover,
+  button.chip[aria-expanded="true"] {
+    background: var(--fill-hover);
+  }
+
+  button.chip span {
+    color: var(--faint);
+    font-size: 10px;
+  }
+
+  .switcher {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--subtle);
+    background: var(--surface);
+  }
+
+  .switcher input {
+    flex: 1;
+    min-width: 220px;
+    padding: 6px 10px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+  }
+
+  .switcher .hint {
+    font-size: 11.5px;
+    color: var(--faint);
+  }
+
+  .switcher code,
+  .note code {
+    padding: 0 4px;
+    border-radius: 4px;
+    background: var(--code-inline);
+  }
+
+  .suggestions {
+    max-width: var(--measure);
+    margin: 0 auto 6px;
+    padding: 4px;
+    list-style: none;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--menu);
+    box-shadow: 0 12px 32px -12px rgb(0 0 0 / 35%);
+  }
+
+  .suggestions button {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    width: 100%;
+    padding: 6px 10px;
+    border-radius: 8px;
+    text-align: left;
+  }
+
+  .suggestions li[aria-selected="true"] button,
+  .suggestions button:hover {
+    background: var(--hover);
+  }
+
+  .suggestions code {
+    flex-shrink: 0;
+    color: var(--accent);
+    font-size: 12.5px;
+  }
+
+  .suggestions span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12.5px;
     color: var(--muted);
   }
 

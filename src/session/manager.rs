@@ -23,7 +23,9 @@ use crate::sandbox::backend::{
 };
 use crate::session::event::{EndReason, NoticeLevel, SessionEvent};
 use crate::session::ids::{TOKEN_LENGTH, session_id, session_token};
-use crate::session::model::{ChosenModel, expand_alias, select_model, split_level};
+use crate::session::model::{
+    ChosenModel, configured_model, expand_alias, select_model, split_level,
+};
 use crate::session::pr;
 use crate::session::projects::{ProjectSelection, ensure_project_directory, select_project};
 use crate::session::record::{prepare_record_dir, record_dir, withdraw_from_record};
@@ -297,6 +299,21 @@ impl SessionManager {
             Some(unavailable) => unavailable(provider).await,
             None => None,
         }
+    }
+
+    /// The models a session may run on, and the short names for them.
+    pub fn catalog(&self) -> Catalog {
+        self.options.catalog.clone()
+    }
+
+    /// The model a session starts on when nobody names one, as `provider/id`
+    /// where the configuration says which provider.
+    pub fn default_model(&self) -> Option<String> {
+        let agent = self.options.config.get().agent;
+        configured_model(&agent).map(|chosen| match chosen.provider {
+            Some(provider) => format!("{provider}/{}", chosen.model),
+            None => format!("{}/{}", agent.provider, chosen.model),
+        })
     }
 
     /// Every live session.
