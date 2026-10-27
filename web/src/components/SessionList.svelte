@@ -117,37 +117,40 @@
   nav {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    padding: 8px;
+    gap: 1px;
+    padding: 4px 8px 12px;
     overflow-y: auto;
     min-height: 0;
   }
 
   .empty {
     margin: 8px;
-    color: var(--text-faint);
+    color: var(--faint);
     font-size: var(--type-work);
   }
 
   /* Where one day ends and another begins, which is how a reader looks for a
      session they had open before. */
   .day {
-    margin: 10px 0 2px;
+    margin: 14px 0 4px;
     padding: 0 10px;
-    font-size: var(--type-receipt);
-    color: var(--text-faint);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ghost);
   }
 
   .day:first-child {
-    margin-top: 2px;
+    margin-top: 4px;
   }
 
   .row {
     display: flex;
     align-items: flex-start;
-    gap: 9px;
-    padding: 9px 10px;
-    border-radius: var(--radius-sm);
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
     text-align: left;
     width: 100%;
     min-width: 0;
@@ -155,12 +158,15 @@
   }
 
   .row:hover {
-    background: var(--bg-raised);
+    background: var(--hover);
   }
 
   .row.active {
-    background: var(--bg-raised);
-    box-shadow: inset 2px 0 0 var(--accent);
+    background: var(--selected);
+  }
+
+  .row.active:hover {
+    background: var(--selected-hover);
   }
 
   .dot {
@@ -168,30 +174,44 @@
     height: 7px;
     margin-top: 6px;
     border-radius: 50%;
-    background: var(--text-faint);
+    background: var(--faint);
     flex-shrink: 0;
   }
 
   .dot.busy {
     background: var(--ok);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
+    box-shadow: 0 0 0 3px var(--ok-soft);
+    animation: pulse 1.6s ease-in-out infinite;
   }
 
   .dot.ended {
     background: transparent;
-    border: 1px solid var(--text-faint);
+    border: 1px solid var(--ghost);
+  }
+
+  @keyframes pulse {
+    50% {
+      box-shadow: 0 0 0 5px var(--ok-soft);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dot.busy {
+      animation: none;
+    }
   }
 
   .body {
     display: flex;
     flex-direction: column;
     min-width: 0;
-    gap: 1px;
+    gap: 2px;
   }
 
   .named {
     font-size: var(--type-work);
     line-height: 1.35;
+    color: var(--ink);
     /* Two lines is enough to recognise a task by, and bounds the row height. */
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -200,10 +220,14 @@
     overflow: hidden;
   }
 
+  .row.active .named {
+    color: var(--ink-strong);
+  }
+
   /* What was asked for, under the thing it was asked about. */
   .detail {
     font-size: var(--type-receipt);
-    color: var(--text-dim);
+    color: var(--muted);
     line-height: 1.35;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -216,7 +240,7 @@
     display: flex;
     gap: 8px;
     font-size: var(--type-receipt);
-    color: var(--text-faint);
+    color: var(--faint);
     min-width: 0;
   }
 
@@ -224,6 +248,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .state {
+    color: var(--ok);
   }
 
   .state,

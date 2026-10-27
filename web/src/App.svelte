@@ -1,15 +1,16 @@
 <script lang="ts">
+  import Appearance from "./components/Appearance.svelte";
   import FileTree from "./components/FileTree.svelte";
+  import Icon from "./components/Icon.svelte";
   import FileView from "./components/FileView.svelte";
   import SessionList from "./components/SessionList.svelte";
-  import ThemeToggle from "./components/ThemeToggle.svelte";
   import Transcript from "./components/Transcript.svelte";
   import { api, streamSession } from "./lib/api.ts";
   import { ago, cacheRate, money, tokens } from "./lib/format.ts";
   import { counts, type Lens, LENS_HELP, LENSES } from "./lib/lens.ts";
   import { read } from "./lib/turns.ts";
   import { nameFrom } from "./lib/naming.ts";
-  import type { Entry, FileContents, SessionSummary, Usage } from "./lib/types.ts";
+  import type { Entry, FileContents, SessionSummary, Usage, Visitor } from "./lib/types.ts";
 
   let sessions = $state<SessionSummary[]>([]);
   let selected = $state<string | null>(null);
@@ -30,6 +31,59 @@
   let failure = $state<string | null>(null);
   /** What this interface may do, which decides what is worth drawing. */
   let observer = $state(false);
+  /** Whether changing anything takes a Discord login. */
+  let login = $state(false);
+  /** Who this browser is logged in as. */
+  let visitor = $state<Visitor | null>(null);
+  /** Whether this browser may start and prompt sessions. */
+  let mayAct = $state(false);
+  let appearanceOpen = $state(false);
+  /** Whether the file pane is showing, kept so the choice survives a reload. */
+  let filesOpen = $state(localStorage.getItem("files-open") === "true");
+
+  /** What came back from Discord, said once and then taken out of the address. */
+  const LOGIN_RESULTS: Record<string, string> = {
+    denied: "Login was cancelled on Discord.",
+    expired: "That login took too long or was started in another tab. Try again.",
+    failed: "Discord could not confirm who you are. Try again in a moment.",
+  };
+
+  function takeLoginResult(): void {
+    const url = new URL(location.href);
+    const result = url.searchParams.get("login");
+    if (result === null) return;
+    failure = LOGIN_RESULTS[result] ?? null;
+    url.searchParams.delete("login");
+    history.replaceState(history.state, "", url);
+  }
+
+  function setFilesOpen(open: boolean): void {
+    filesOpen = open;
+    localStorage.setItem("files-open", String(open));
+  }
+
+  async function describe(): Promise<void> {
+    try {
+      const info = await api.describe();
+      observer = info.observer;
+      guildId = info.guildId;
+      login = info.login;
+      visitor = info.visitor ?? null;
+      mayAct = info.mayAct;
+    } catch {
+      // The list refreshing says plainly enough when the daemon is away.
+    }
+  }
+
+  async function logout(): Promise<void> {
+    await api.logout();
+    await describe();
+  }
+
+  /** What the session is doing, said in one word beside its name. */
+  const status = $derived(
+    ended ? "ended" : !live ? "stopped" : waiting !== null ? "waiting" : busy ? "working" : "idle",
+  );
   /** Width of the file pane, kept so a chosen size survives a reload. */
   let filesWidth = $state(Number(localStorage.getItem("files-width") ?? "300"));
   let guildId = $state<string | null>(null);
@@ -101,6 +155,7 @@
     { key: "n", does: "next session" },
     { key: "p", does: "previous session" },
     { key: "g", does: "jump to the end" },
+    { key: "f", does: "show or hide the files" },
     { key: "?", does: "show these keys" },
     { key: "Escape", does: "clear the search, or close this" },
   ];
@@ -124,6 +179,7 @@
     if (event.key === "Escape") {
       if (keysOpen) keysOpen = false;
       else if (drawer !== null) drawer = null;
+      else if (starting) starting = false;
       else if (search.length > 0) search = "";
       else if (searching) searching = false;
       else if (typing(event.target)) (event.target as HTMLElement).blur();
@@ -144,6 +200,7 @@
       n: () => moveSession(1),
       p: () => moveSession(-1),
       g: () => transcript?.toEnd(),
+      f: () => setFilesOpen(!filesOpen),
     };
 
     const run = act[event.key];
@@ -351,7 +408,7 @@
   async function start(): Promise<void> {
     const project = newProject.trim();
     const prompt = newPrompt.trim();
-    if (project.length === 0 || prompt.length === 0) return;
+    if (prompt.length === 0) return;
 
     failure = null;
     try {
@@ -404,13 +461,8 @@
     window.addEventListener("popstate", back);
     window.addEventListener("keydown", onKeys);
 
-    void api
-      .describe()
-      .then((info) => {
-        observer = info.observer;
-        guildId = info.guildId;
-      })
-      .catch(() => undefined);
+    takeLoginResult();
+    void describe();
     void refresh();
     const timer = setInterval(() => void refresh(), 4000);
     return () => {
@@ -423,92 +475,123 @@
   });
 </script>
 
-<div class="shell" data-drawer={drawer ?? "none"} style="--files: {filesWidth}px">
+<div
+  class="shell"
+  class:files-open={filesOpen && selected !== null}
+  data-drawer={drawer ?? "none"}
+  style="--files: {filesWidth}px"
+>
   <aside class="sidebar">
-    <header>
+    <header class="brand">
+      <span class="logo" aria-hidden="true">e</span>
       <h1>errand</h1>
-      <ThemeToggle />
       {#if observer}
         <span class="badge">read only</span>
-      {:else}
-        <button
-          class="new"
-          onclick={() => (starting = !starting)}
-          aria-expanded={starting}
-          aria-label="Start a session">+</button
-        >
       {/if}
     </header>
 
-    {#if starting && !observer}
-      <form
-        class="start"
-        onsubmit={(event) => {
-          event.preventDefault();
-          void start();
-        }}
-      >
-        <input bind:value={newProject} placeholder="project" aria-label="Project" />
-        <textarea
-          bind:value={newPrompt}
-          rows="2"
-          placeholder="What should it do?"
-          aria-label="Opening prompt"
-        ></textarea>
-        <button
-          type="submit"
-          disabled={newProject.trim().length === 0 || newPrompt.trim().length === 0}>Start</button
-        >
-      </form>
+    {#if !observer && (mayAct || !login)}
+      <button class="new" onclick={() => (starting = true)}>
+        <Icon name="plus" /> New session
+      </button>
     {/if}
 
     <SessionList {sessions} {selected} onSelect={select} />
+
+    <footer class="account">
+      {#if visitor !== null}
+        {#if visitor.avatar !== null}
+          <img class="avatar" src={visitor.avatar} alt="" />
+        {:else}
+          <span class="avatar initial" aria-hidden="true">{visitor.name.slice(0, 1)}</span>
+        {/if}
+        <span class="who">
+          <span class="name">{visitor.name}</span>
+          <span class="role">{mayAct ? "can chat" : "read only"}</span>
+        </span>
+        <button class="quiet" onclick={() => void logout()}>log out</button>
+      {:else if login}
+        <a class="discord" href={api.loginUrl}>Log in with Discord</a>
+      {/if}
+      <button
+        class="icon"
+        title="Appearance"
+        aria-label="Appearance"
+        onclick={() => (appearanceOpen = true)}><Icon name="palette" /></button
+      >
+    </footer>
   </aside>
 
   <main>
     {#if selected === null}
-      <p class="blank">No session selected.</p>
+      <div class="welcome">
+        <span class="logo big" aria-hidden="true">e</span>
+        <p>Pick a session, or start one.</p>
+      </div>
     {:else}
       <header class="bar">
-        <button class="pull" data-opens="sessions" onclick={() => (drawer = "sessions")} aria-label="Sessions"
-          >sessions</button
+        <button
+          class="pull"
+          onclick={() => (drawer = "sessions")}
+          aria-label="Sessions"><Icon name="menu" /></button
         >
-        <span class="named" title={current?.opening ?? current?.project ?? ""}>
-          {nameFrom(current?.opening)?.title ?? current?.project ?? selected}
-        </span>
+        <div class="title">
+          <span class="named" title={current?.opening ?? current?.project ?? ""}>
+            {nameFrom(current?.opening)?.title ?? current?.project ?? selected}
+          </span>
+          <span class="status {status}">{status}</span>
+        </div>
 
         {#if reading !== null}
           <span class="where">turn {reading.at} of {reading.of}</span>
-        {:else if usage !== null && usage.turns > 0}
-          <span class="where">{usage.turns} turns</span>
         {/if}
         {#if usage !== null && usage.turns > 0}
           <span class="spend">{money(usage.cost)}</span>
         {/if}
 
-        <button class="pull" data-opens="files" onclick={() => (drawer = "files")} aria-label="Files">files</button
-        >
         <button
           class="icon"
           aria-label="Search this session"
           aria-expanded={searching}
-          title="Search this session"
-          onclick={openSearch}>/</button
+          title="Search this session (/)"
+          onclick={openSearch}><Icon name="search" /></button
         >
-        <button class="icon" title="Keyboard shortcuts" onclick={() => (keysOpen = true)}>?</button>
+        {#if guildId !== null && current?.threadId !== undefined}
+          <a
+            class="icon thread"
+            href={`https://discord.com/channels/${guildId}/${current.threadId}`}
+            target="_blank"
+            rel="noreferrer"
+            title="Open the thread in Discord"
+            aria-label="Open the thread in Discord"><Icon name="hash" /></a
+          >
+        {/if}
+        <button
+          class="icon"
+          aria-pressed={filesOpen}
+          title="Files (f)"
+          aria-label="Files"
+          onclick={() => setFilesOpen(!filesOpen)}><Icon name="folder" /></button
+        >
+        <button class="icon" title="Keyboard shortcuts (?)" onclick={() => (keysOpen = true)}
+          ><Icon name="help" /></button
+        >
       </header>
 
       <!-- One quiet line for what holds for the whole session, since none of it
            changes while it is read. -->
       <p class="facts">
         {#if usage !== null && usage.model !== undefined}
-          <span>{usage.model}</span>
+          <span class="chip">{usage.model}</span>
         {/if}
         {#if usage !== null && usage.contextWindow}
-          <span title="{tokens(usage.contextTokens)} of {tokens(usage.contextWindow)}">
-            {Math.round((usage.contextTokens / usage.contextWindow) * 100)}% of {tokens(
-              usage.contextWindow,
-            )}
+          {@const used = Math.round((usage.contextTokens / usage.contextWindow) * 100)}
+          <span
+            class="meter"
+            title="{tokens(usage.contextTokens)} of {tokens(usage.contextWindow)} context"
+          >
+            <span class="track"><span class="fill" style="width: {Math.min(used, 100)}%"></span></span>
+            {used}% of {tokens(usage.contextWindow)}
           </span>
         {/if}
         {#if usage !== null && usage.totalTokens > 0}
@@ -523,75 +606,66 @@
             {ago(current.lastActiveAt)}
           </span>
         {/if}
-        {#if guildId !== null && current?.threadId !== undefined}
-          <a
-            class="thread"
-            href={`https://discord.com/channels/${guildId}/${current.threadId}`}
-            target="_blank"
-            rel="noreferrer">open the thread</a
-          >
-        {/if}
       </p>
 
       {#if !connected}
-        <p class="dropped">Reconnecting to the daemon.</p>
+        <p class="banner warn">Reconnecting to the daemon.</p>
       {/if}
 
-      {#if !live && !observer}
-        <p class="resumable">
-          This session is not running. Send a message to pick it up where it stopped.
-        </p>
-      {/if}
-
-      <div class="reading">
-        {#if searching}
-          <div class="finding">
-            <input
-              class="find"
-              bind:this={searchBox}
-              bind:value={search}
-              type="search"
-              placeholder="Search this session"
-              aria-label="Search this session"
-              onblur={() => {
-                if (search.length === 0) searching = false;
-              }}
-            />
-            <!-- Said as it is typed, so an empty result is plainly the search
-                 and not the session having nothing in it. -->
-            <span class="tally" aria-live="polite">
-              {#if search.trim().length === 0}
-                type to search
-              {:else if found.matches === 0}
-                no matches
-              {:else}
-                {found.matches} in {found.exchanges} exchange{found.exchanges === 1 ? "" : "s"}
-              {/if}
-            </span>
-            <button class="clear" title="Clear the search" aria-label="Clear the search"
-              onclick={() => {
-                search = "";
-                searching = false;
-              }}>x</button
-            >
+      {#if searching || lensCounts.all > 0}
+        <div class="reading">
+          {#if searching}
+            <div class="finding">
+              <input
+                class="find"
+                bind:this={searchBox}
+                bind:value={search}
+                type="search"
+                placeholder="Search this session"
+                aria-label="Search this session"
+                onblur={() => {
+                  if (search.length === 0) searching = false;
+                }}
+              />
+              <!-- Said as it is typed, so an empty result is plainly the search
+                   and not the session having nothing in it. -->
+              <span class="tally" aria-live="polite">
+                {#if search.trim().length === 0}
+                  type to search
+                {:else if found.matches === 0}
+                  no matches
+                {:else}
+                  {found.matches} in {found.exchanges} exchange{found.exchanges === 1 ? "" : "s"}
+                {/if}
+              </span>
+              <button
+                class="quiet"
+                title="Clear the search"
+                aria-label="Clear the search"
+                onclick={() => {
+                  search = "";
+                  searching = false;
+                }}>clear</button
+              >
+            </div>
+          {/if}
+          <div class="lenses" role="group" aria-label="Narrow this session to">
+            {#each LENSES as value}
+              {@const count = lensCounts[value]}
+              <button
+                class:on={lens === value}
+                aria-pressed={lens === value}
+                disabled={count === 0 && value !== "all"}
+                title={LENS_HELP[value]}
+                onclick={() => (lens = value)}
+              >
+                {value}
+                <span class="count">{count}</span>
+              </button>
+            {/each}
           </div>
-        {/if}
-        <div class="lenses" role="group" aria-label="Narrow this session to">
-          {#each LENSES as value}
-            {@const count = lensCounts[value]}
-            <button
-              class:on={lens === value}
-              aria-pressed={lens === value}
-              disabled={count === 0 && value !== "all"}
-              title={LENS_HELP[value]}
-              onclick={() => (lens = value)}
-            >
-              {value}
-              <span class="count">{count}</span>
-            </button>
-          {/each}
         </div>
-      </div>
+      {/if}
 
       <!-- Keyed on the session, so switching gives a fresh pane rather than one
            holding the last session's scroll position and follow state. -->
@@ -606,85 +680,166 @@
           {search}
           bind:lens
           onFound={(matches, exchanges) => (found = { matches, exchanges })}
-          onOpenFile={open}
+          onOpenFile={(path) => {
+            setFilesOpen(true);
+            void open(path);
+          }}
           wanted={wantedTurn}
           onReading={(at, of) => (reading = of === 0 ? null : { at, of })}
         />
       {/key}
 
-      {#if failure !== null}
-        <p class="failure" role="alert">
-          <span>{failure}</span>
-          <button onclick={() => (failure = null)} aria-label="Dismiss">dismiss</button>
-        </p>
-      {/if}
+      <div class="dock">
+        {#if failure !== null}
+          <p class="banner bad" role="alert">
+            <span>{failure}</span>
+            <button class="quiet" onclick={() => (failure = null)} aria-label="Dismiss">dismiss</button>
+          </p>
+        {/if}
 
-      {#if observer}
-        <p class="resumable">This interface is read only. Send messages from the chat thread.</p>
-      {:else}
-        <form
-        class="composer"
-        onsubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-      >
-        <textarea
-          bind:value={draft}
-          onkeydown={onKey}
-          rows="1"
-          disabled={ended}
-          placeholder={ended
-            ? "This session has ended."
-            : live
-              ? "Send a message, or !help"
-              : "Send a message to resume this session"}
-          aria-label="Message"
-        ></textarea>
-        <button type="submit" disabled={ended || draft.trim().length === 0}>Send</button>
-        </form>
-      {/if}
+        {#if observer}
+          <p class="gate">This interface is read only. Send messages from the chat thread.</p>
+        {:else if login && visitor === null}
+          <p class="gate">
+            <span>Log in to chat in this session.</span>
+            <a class="discord" href={api.loginUrl}>Log in with Discord</a>
+          </p>
+        {:else if login && !mayAct}
+          <p class="gate">Your account can read here, but cannot drive sessions.</p>
+        {:else}
+          <form
+            class="composer"
+            onsubmit={(event) => {
+              event.preventDefault();
+              void send();
+            }}
+          >
+            <textarea
+              bind:value={draft}
+              onkeydown={onKey}
+              rows="1"
+              disabled={ended}
+              placeholder={ended
+                ? "This session has ended."
+                : live
+                  ? "Message the agent, or !help"
+                  : "Send a message to pick this session up again"}
+              aria-label="Message"
+            ></textarea>
+            <button
+              class="send"
+              type="submit"
+              disabled={ended || draft.trim().length === 0}
+              aria-label="Send"><Icon name="send" /></button
+            >
+          </form>
+          <p class="note">
+            {#if visitor !== null}Sent as {visitor.name}, and posted in the thread.{/if}
+            Enter sends, Shift+Enter adds a line.
+          </p>
+        {/if}
+      </div>
     {/if}
   </main>
 
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div
-    class="grip"
-    role="separator"
-    aria-orientation="vertical"
-    aria-label="Resize the file pane"
-    onpointerdown={grab}
-    ondblclick={() => {
-      filesWidth = 300;
-      localStorage.setItem("files-width", "300");
-    }}
-  ></div>
+  {#if selected !== null}
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="grip"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the file pane"
+      onpointerdown={grab}
+      ondblclick={() => {
+        filesWidth = 360;
+        localStorage.setItem("files-width", "360");
+      }}
+    ></div>
 
-  <aside class="files">
-    {#if selected === null}
-      <p class="blank">No session selected.</p>
-    {:else if viewing === null}
-      <FileTree session={selected} bind:at={browsing} onOpen={open} />
-    {:else}
-      <FileView
-        session={selected}
-        file={viewing}
-        onClose={() => (viewing = null)}
-        onOpenPath={(path) => {
-          browsing = path;
-          viewing = null;
-        }}
-      />
-    {/if}
-  </aside>
+    <aside class="files" aria-label="Files">
+      <header class="pane-head">
+        <span>files</span>
+        <button class="quiet" onclick={() => setFilesOpen(false)} aria-label="Close the files"
+          >close</button
+        >
+      </header>
+      {#if viewing === null}
+        <FileTree session={selected} bind:at={browsing} onOpen={open} />
+      {:else}
+        <FileView
+          session={selected}
+          file={viewing}
+          onClose={() => (viewing = null)}
+          onOpenPath={(path) => {
+            browsing = path;
+            viewing = null;
+          }}
+        />
+      {/if}
+    </aside>
+  {/if}
 
   {#if drawer !== null}
     <button class="scrim" aria-label="Close" onclick={() => (drawer = null)}></button>
   {/if}
 
+  {#if starting}
+    <div class="modal" role="presentation" onclick={() => (starting = false)}>
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div
+        class="sheet"
+        role="dialog"
+        tabindex="-1"
+        aria-modal="true"
+        aria-label="Start a session"
+        onclick={(event) => event.stopPropagation()}
+      >
+      <form
+        class="start"
+        onsubmit={(event) => {
+          event.preventDefault();
+          void start();
+        }}
+      >
+        <h2>New session</h2>
+        <label>
+          <span>What should it do?</span>
+          <!-- svelte-ignore a11y_autofocus -->
+          <textarea
+            bind:value={newPrompt}
+            rows="4"
+            autofocus
+            placeholder="Describe the task"
+            onkeydown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void start();
+            }}
+          ></textarea>
+        </label>
+        <label>
+          <span>Project <em>optional</em></span>
+          <input
+            bind:value={newProject}
+            placeholder="a name to come back to the same directory"
+            spellcheck="false"
+          />
+        </label>
+        <p class="note">
+          It gets a thread in the channel too{#if visitor !== null}, started as {visitor.name}{/if}.
+        </p>
+        <footer>
+          <button type="button" class="quiet" onclick={() => (starting = false)}>cancel</button>
+          <button class="primary" type="submit" disabled={newPrompt.trim().length === 0}
+            >Start</button
+          >
+        </footer>
+      </form>
+      </div>
+    </div>
+  {/if}
+
   {#if keysOpen}
     <div
-      class="keys"
+      class="modal"
       role="dialog"
       aria-label="Keyboard shortcuts"
       aria-modal="true"
@@ -707,99 +862,167 @@
     </div>
   {/if}
 
+  {#if appearanceOpen}
+    <Appearance onClose={() => (appearanceOpen = false)} />
+  {/if}
 </div>
 
 <style>
   .shell {
     display: grid;
-    grid-template-columns: 232px minmax(0, 1fr) 6px clamp(200px, var(--files, 300px), 38vw);
+    grid-template-columns: 264px minmax(0, 1fr);
     height: 100%;
     min-height: 0;
     overflow: hidden;
+    background: var(--bg);
   }
 
-  .sidebar,
-  .files {
+  .shell.files-open {
+    grid-template-columns: 264px minmax(0, 1fr) 6px clamp(260px, var(--files, 360px), 42vw);
+  }
+
+  .sidebar {
     display: flex;
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
-    background: var(--bg-inset);
-  }
-
-  .sidebar {
+    background: var(--sidebar);
     border-right: 1px solid var(--line);
   }
 
-  .files {
-    border-left: 1px solid var(--line);
-  }
-
-  .grip {
-    cursor: col-resize;
-    background: var(--line);
-    transition: background 120ms ease;
-    touch-action: none;
-  }
-
-  .grip:hover {
-    background: var(--accent);
-  }
-
-  /*
-   * Wraps rather than squeezes. A narrow drawer, or a larger default font,
-   * used to shrink whatever sat at the end until its text broke mid-word and
-   * was clipped by the edge.
-   */
-  header {
+  .brand {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 14px 14px 10px;
-    border-bottom: 1px solid var(--line-soft);
+    gap: 10px;
+    padding: 16px 16px 12px;
   }
 
-  header > :global(*) {
-    flex-shrink: 0;
+  .logo {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: var(--send-icon);
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 14px;
   }
 
-  header h1 {
-    margin-right: auto;
+  .logo.big {
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
+    font-size: 24px;
   }
 
   h1 {
-    margin: 0;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-dim);
+    margin: 0 auto 0 0;
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    color: var(--ink-strong);
+  }
+
+  .badge {
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--faint);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 2px 8px;
   }
 
   .new {
-    width: 22px;
-    height: 22px;
-    border-radius: var(--radius-sm);
-    color: var(--text-faint);
-    font-size: 15px;
-    line-height: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 12px 8px;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--fill);
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 550;
+    transition: background 120ms ease, border-color 120ms ease;
   }
 
   .new:hover {
-    background: var(--bg-raised);
-    color: var(--text);
+    background: var(--fill-hover);
+    border-color: var(--line-strong);
   }
 
-  .start {
+  .new :global(svg) {
+    color: var(--accent);
+  }
+
+  .account {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: auto;
+    padding: 12px;
+    border-top: 1px solid var(--line);
+  }
+
+  .avatar {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    border-radius: 50%;
+  }
+
+  .avatar.initial {
+    display: grid;
+    place-items: center;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .who {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 10px;
-    border-bottom: 1px solid var(--line-soft);
+    flex: 1;
+    min-width: 0;
+    line-height: 1.25;
+  }
+
+  .who .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--ink-strong);
+  }
+
+  .who .role {
+    font-size: 11.5px;
+    color: var(--faint);
+  }
+
+  /* Discord's own button colours, which are the same in every theme. */
+  .discord {
+    flex: 1;
+    padding: 7px 12px;
+    border-radius: 8px;
+    background: #5865f2;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    text-decoration: none;
+  }
+
+  .discord:hover {
+    background: #4752c4;
   }
 
   main {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -809,107 +1032,165 @@
     overflow: hidden;
   }
 
-  .blank {
+  .welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
     margin: auto;
-    padding: 24px;
-    color: var(--text-faint);
-    font-size: 12.5px;
+    color: var(--faint);
   }
 
-  .dropped,
-  .failure {
+  .welcome p {
     margin: 0;
-    padding: 8px 22px;
-    font-size: 12.5px;
-  }
-
-  .dropped {
-    color: var(--warn);
-    border-bottom: 1px solid var(--line-soft);
   }
 
   .bar {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 12px 22px;
-    border-bottom: 1px solid var(--line-soft);
+    gap: 6px;
+    padding: 12px 20px 6px;
+  }
+
+  .title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
   }
 
   .named {
-    flex: 1;
     min-width: 0;
-    font-size: var(--type-work);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink-strong);
   }
 
-  /* What changes while reading, which is why it sits beside the name. */
+  .status {
+    flex-shrink: 0;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    border: 1px solid var(--line);
+    color: var(--faint);
+  }
+
+  .status.working {
+    color: var(--ok);
+    border-color: var(--ok-bd, var(--line));
+    background: var(--ok-soft);
+  }
+
+  .status.waiting {
+    color: var(--warn);
+    background: var(--warn-soft);
+  }
+
+  .status.ended {
+    color: var(--ghost);
+  }
+
   .where,
   .spend {
     flex-shrink: 0;
+    padding: 0 6px;
     font-family: var(--mono);
     font-size: var(--type-receipt);
-    color: var(--text-faint);
+    color: var(--faint);
   }
 
   .icon {
+    display: grid;
+    place-items: center;
     flex-shrink: 0;
-    width: 22px;
-    height: 22px;
-    border-radius: var(--radius-sm);
-    font-family: var(--mono);
-    font-size: var(--type-receipt);
-    color: var(--text-faint);
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    font-size: 14px;
+    color: var(--muted);
+    text-decoration: none;
   }
 
   .icon:hover,
-  .icon[aria-expanded="true"] {
-    background: var(--bg-raised);
-    color: var(--text);
+  .icon[aria-expanded="true"],
+  .icon[aria-pressed="true"] {
+    background: var(--hover);
+    color: var(--ink);
   }
 
-  .when {
-    color: var(--text-faint);
-  }
-
-  /*
-   * What holds for the whole session, said once and quietly. None of it
-   * changes while the session is read, so none of it earns a row of its own.
-   */
   .facts {
     display: flex;
     flex-wrap: wrap;
-    align-items: baseline;
-    gap: 2px 14px;
+    align-items: center;
+    gap: 4px 14px;
     margin: 0;
-    padding: 5px 22px 7px;
-    border-bottom: 1px solid var(--line-soft);
+    padding: 0 20px 10px;
     font-size: var(--type-receipt);
-    color: var(--text-faint);
+    color: var(--faint);
+    border-bottom: 1px solid var(--subtle);
   }
 
-  .facts span {
+  .facts:empty {
+    display: none;
+  }
+
+  .chip {
+    padding: 1px 8px;
+    border-radius: 6px;
+    background: var(--fill);
+    font-family: var(--mono);
+    color: var(--muted);
+  }
+
+  .meter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .track {
+    width: 48px;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--fill-hover);
+  }
+
+  .fill {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+  }
+
+  .banner {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin: 0;
+    padding: 8px 20px;
+    font-size: 12.5px;
+  }
+
+  .banner span {
+    flex: 1;
     min-width: 0;
     overflow-wrap: anywhere;
   }
 
-  .thread {
-    color: var(--text-faint);
+  .banner.warn {
+    color: var(--warn);
+    background: var(--warn-soft);
   }
 
-  .thread:hover {
-    color: var(--accent);
-  }
-
-  .badge {
-    white-space: nowrap;
-    font-size: 11px;
-    color: var(--text-faint);
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    padding: 2px 8px;
+  .banner.bad {
+    margin: 0 0 8px;
+    border-radius: 10px;
+    color: var(--danger);
+    background: var(--danger-soft);
   }
 
   .reading {
@@ -918,7 +1199,7 @@
     gap: 10px;
     flex-wrap: wrap;
     padding: 8px 18px;
-    border-bottom: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--subtle);
   }
 
   .finding {
@@ -932,27 +1213,14 @@
   .find {
     flex: 1;
     min-width: 120px;
-    padding: 5px 10px;
+    padding: 6px 10px;
     font-size: 12.5px;
-    background: var(--bg-inset);
   }
 
-  /* What the search found, beside the box rather than somewhere else. */
   .tally {
     font-size: 11.5px;
-    color: var(--text-faint);
+    color: var(--faint);
     white-space: nowrap;
-  }
-
-  .clear {
-    padding: 2px 7px;
-    border-radius: var(--radius-sm);
-    font-size: 11.5px;
-    color: var(--text-faint);
-  }
-
-  .clear:hover {
-    color: var(--text);
   }
 
   .lenses,
@@ -968,31 +1236,30 @@
 
   .lenses button,
   .doing button {
-    padding: 3px 8px;
-    border-radius: var(--radius-sm);
+    padding: 3px 9px;
+    border-radius: 999px;
     font-size: 11.5px;
-    color: var(--text-faint);
+    color: var(--faint);
   }
 
   .lenses button:hover,
   .doing button:hover {
-    color: var(--text);
+    color: var(--ink);
   }
 
   .lenses button.on {
-    background: var(--bg-raised);
-    color: var(--text);
+    background: var(--selected);
+    color: var(--ink);
   }
 
-  /* How much the lens would show, so it says what it does before it is used. */
   .lenses .count {
     margin-left: 5px;
     font-variant-numeric: tabular-nums;
-    color: var(--text-faint);
+    color: var(--ghost);
   }
 
   .lenses button.on .count {
-    color: var(--text-dim);
+    color: var(--muted);
   }
 
   .lenses button:disabled {
@@ -1000,42 +1267,279 @@
     cursor: default;
   }
 
-  .lenses button:disabled:hover {
-    color: var(--text-faint);
+  .dock {
+    padding: 8px 20px 16px;
+    background: linear-gradient(to bottom, transparent, var(--bg) 18px);
   }
 
-  .keys {
+  .composer {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: 8px 8px 8px 14px;
+    border: 1px solid var(--composer-line);
+    border-radius: 16px;
+    background: var(--composer-bg);
+    box-shadow: 0 6px 20px -8px rgb(0 0 0 / 25%);
+    transition: border-color 120ms ease;
+  }
+
+  .composer:focus-within {
+    border-color: var(--composer-focus-line);
+  }
+
+  .composer textarea {
+    flex: 1;
+    min-height: 34px;
+    max-height: 200px;
+    padding: 7px 0;
+    border: none;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    resize: none;
+    field-sizing: content;
+  }
+
+  .composer textarea:focus {
+    outline: none;
+  }
+
+  .composer textarea::placeholder {
+    color: var(--faint);
+  }
+
+  .send {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 10px;
+    background: var(--send-bg);
+    color: var(--send-icon);
+    font-size: 16px;
+    font-weight: 700;
+    transition: background 120ms ease;
+  }
+
+  .send:hover {
+    background: var(--send-bg-hover);
+  }
+
+  .send:disabled {
+    background: var(--send-bg-off);
+    color: var(--send-icon-off);
+    cursor: default;
+  }
+
+  .note {
+    max-width: var(--measure);
+    margin: 6px auto 0;
+    font-size: 11.5px;
+    color: var(--ghost);
+    text-align: center;
+  }
+
+  .gate {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: 12px 16px;
+    border: 1px dashed var(--line-strong);
+    border-radius: 14px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .gate .discord {
+    flex: 0 0 auto;
+  }
+
+  .grip {
+    cursor: col-resize;
+    background: var(--line);
+    transition: background 120ms ease;
+    touch-action: none;
+  }
+
+  .grip:hover {
+    background: var(--accent);
+  }
+
+  .shell:not(.files-open) .grip,
+  .shell:not(.files-open) .files {
+    display: none;
+  }
+
+  .files {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--sidebar);
+  }
+
+  .pane-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--faint);
+    border-bottom: 1px solid var(--subtle);
+  }
+
+  .quiet {
+    padding: 4px 9px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: normal;
+    text-transform: none;
+    color: var(--muted);
+  }
+
+  .quiet:hover {
+    background: var(--hover);
+    color: var(--ink);
+  }
+
+  .primary {
+    padding: 7px 16px;
+    border-radius: 9px;
+    background: var(--send-bg);
+    color: var(--send-icon);
+    font-weight: 600;
+  }
+
+  .primary:hover {
+    background: var(--send-bg-hover);
+  }
+
+  .primary:disabled {
+    background: var(--send-bg-off);
+    color: var(--send-icon-off);
+    cursor: default;
+  }
+
+  input,
+  textarea {
+    color: var(--ink);
+    background: var(--composer-bg);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 8px 10px;
+    font: inherit;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--faint);
+  }
+
+  .pull {
+    display: none;
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    color: var(--muted);
+  }
+
+  .pull:hover {
+    background: var(--hover);
+  }
+
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 8;
+    background: var(--overlay);
+    border-radius: 0;
+    cursor: default;
+  }
+
+  .modal {
     position: fixed;
     inset: 0;
     z-index: 10;
     display: grid;
     place-items: center;
     background: var(--overlay);
+    backdrop-filter: blur(2px);
   }
 
   .sheet {
-    width: min(360px, 90vw);
-    max-height: 80vh;
+    width: min(380px, 92vw);
+    max-height: 82vh;
     overflow: auto;
-    padding: 18px 20px;
+    padding: 20px;
     border: 1px solid var(--line);
-    border-radius: var(--radius);
-    background: var(--bg-raised);
+    border-radius: 14px;
+    background: var(--menu);
+    box-shadow: 0 24px 64px rgb(0 0 0 / 40%);
+  }
+
+  .sheet:has(.start) {
+    width: min(520px, 94vw);
+  }
+
+  .start {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
   }
 
   .sheet h2 {
-    margin: 0 0 12px;
-    font-size: 13px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-dim);
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink-strong);
+  }
+
+  .start label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  .start em {
+    font-style: normal;
+    color: var(--ghost);
+  }
+
+  .start textarea {
+    resize: vertical;
+  }
+
+  .start .note {
+    margin: 0;
+    text-align: left;
+  }
+
+  .start footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
   }
 
   .sheet dl {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin: 0;
+    margin: 12px 0 0;
   }
 
   .sheet dl div {
@@ -1054,153 +1558,43 @@
   .sheet dd {
     margin: 0;
     font-size: 12.5px;
-    color: var(--text-dim);
-  }
-
-  .resumable {
-    margin: 0;
-    padding: 10px 22px;
-    font-size: 12.5px;
-    color: var(--text-faint);
-    border-bottom: 1px solid var(--line-soft);
-  }
-
-  .failure {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    color: var(--bad);
-    background: color-mix(in srgb, var(--bad) 10%, transparent);
-    border-top: 1px solid color-mix(in srgb, var(--bad) 30%, transparent);
-  }
-
-  .failure span {
-    flex: 1;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .failure button {
-    flex-shrink: 0;
-    font-size: 11.5px;
-    color: var(--bad);
-    text-decoration: underline;
-  }
-
-  .composer {
-    display: flex;
-    gap: 8px;
-    padding: 12px 16px 16px;
-    border-top: 1px solid var(--line);
-    background: var(--bg);
-  }
-
-  input,
-  textarea {
-    color: var(--text);
-    background: var(--bg-raised);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 8px 10px;
-    font: inherit;
-  }
-
-  input::placeholder,
-  textarea::placeholder {
-    color: var(--text-faint);
-  }
-
-  .composer textarea {
-    flex: 1;
-    resize: none;
-    min-height: 40px;
-    max-height: 180px;
-    background: var(--bg-inset);
-    field-sizing: content;
-  }
-
-  .start textarea {
-    resize: none;
-  }
-
-  .composer button,
-  .start button {
-    padding: 8px 16px;
-    border-radius: var(--radius);
-    background: var(--accent);
-    color: var(--accent-ink);
-    font-weight: 600;
-    transition: opacity 120ms ease;
-  }
-
-  .composer button:disabled,
-  .start button:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-
-  /* The handles exist only where a pane is a drawer rather than a column. */
-  .pull {
-    display: none;
-    flex-shrink: 0;
-    padding: 3px 8px;
-    border: 1px solid var(--line-soft);
-    border-radius: var(--radius-sm);
-    font-size: 11.5px;
-    color: var(--text-faint);
-  }
-
-  .pull:hover {
-    color: var(--text);
-  }
-
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 8;
-    background: var(--overlay);
-    border-radius: 0;
-    cursor: default;
+    color: var(--muted);
   }
 
   /*
-   * Below three columns the files become a drawer rather than a narrower
-   * column, because past this width taking more from the session costs more
-   * than the pane is worth.
+   * Below this the files become a drawer over the session rather than a
+   * column, because taking more width from the conversation costs more than
+   * the pane is worth.
    */
   @media (max-width: 1080px) {
+    .shell.files-open {
+      grid-template-columns: 240px minmax(0, 1fr);
+    }
+
     .shell {
-      grid-template-columns: 208px minmax(0, 1fr);
+      grid-template-columns: 240px minmax(0, 1fr);
     }
 
     .grip {
       display: none;
     }
 
-    .files {
+    .shell.files-open .files {
       position: fixed;
       z-index: 9;
       top: 0;
       right: 0;
       bottom: 0;
-      width: min(360px, 86vw);
+      width: min(420px, 88vw);
       border-left: 1px solid var(--line);
-      transform: translateX(101%);
-      transition: transform 160ms ease;
-    }
-
-    .shell[data-drawer="files"] .files {
-      transform: none;
-    }
-
-    .pull[data-opens="files"] {
-      display: inline-block;
+      box-shadow: -16px 0 40px rgb(0 0 0 / 30%);
     }
   }
 
-  /* Narrower still, and the session is the only column left. */
+  /* Narrower still, and the conversation is the only column left. */
   @media (max-width: 780px) {
-    .shell {
+    .shell,
+    .shell.files-open {
       grid-template-columns: minmax(0, 1fr);
     }
 
@@ -1210,8 +1604,7 @@
       top: 0;
       left: 0;
       bottom: 0;
-      width: min(320px, 84vw);
-      border-right: 1px solid var(--line);
+      width: min(300px, 84vw);
       transform: translateX(-101%);
       transition: transform 160ms ease;
     }
@@ -1220,56 +1613,40 @@
       transform: none;
     }
 
-    .pull[data-opens="sessions"] {
-      display: inline-block;
-    }
-
-    /*
-     * The name is what the bar is for, so it keeps a readable width and the
-     * rest gives way. It used to be squeezed to a single letter and an
-     * ellipsis while a turn counter beside it kept its own.
-     */
-    .bar .named {
-      min-width: 9ch;
+    .pull {
+      display: grid;
+      place-items: center;
     }
 
     .bar .where {
       display: none;
     }
 
-    .composer {
-      padding: 10px 12px;
-    }
-
     .bar,
     .facts,
-    .dropped,
-    .failure,
-    .resumable {
+    .reading,
+    .dock {
       padding-left: 12px;
       padding-right: 12px;
     }
-
   }
 
-  /*
-   * The time and the cost are both in the session list, so on a screen this
-   * narrow they give way rather than wrapping the line they sit on.
-   */
+  /* The name is what the bar is for, so on a phone it gets a line to itself
+     rather than being squeezed to a few letters by the buttons beside it. */
   @media (max-width: 560px) {
-    /* Wrapping beats squeezing: the name stays legible on its own line. */
     .bar {
       flex-wrap: wrap;
-      gap: 6px 10px;
+      row-gap: 2px;
     }
 
-    .bar .named {
+    .title {
       flex-basis: 100%;
-      order: -1;
+      order: 1;
+      padding-bottom: 4px;
     }
 
-    .facts {
-      gap: 2px 12px;
+    .pull {
+      margin-right: auto;
     }
 
     .facts .when,

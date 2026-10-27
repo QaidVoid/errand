@@ -59,7 +59,7 @@ export type Entry =
     | { kind: "message"; text: string; at: number }
     | { kind: "prompt"; author: string; text: string; at: number }
     | { kind: "aside"; author: string; text: string; at: number }
-    | { kind: "activity"; line: string; tool?: ToolActivity; at: number }
+    | { kind: "activity"; line: string; tool?: ToolActivity | null; at: number }
     | { kind: "notice"; text: string; level: NoticeLevel; at: number }
     | { kind: "thinking"; text: string; at: number }
     | { kind: "reply"; text: string; command: string; at: number }
@@ -104,12 +104,25 @@ export interface SessionSummary {
   lastActiveAt: number;
 }
 
+/** A Discord account logged in to the interface. */
+export interface Visitor {
+  id: string;
+  name: string;
+  avatar: string | null;
+}
+
 /** What the interface may do, as the daemon reports it. */
 export interface InterfaceInfo {
-  /** True when nothing may be changed from here. */
+  /** True when nothing may be changed from here, logged in or not. */
   observer: boolean;
   /** The guild the channel is in, for linking to a thread. */
   guildId: string | null;
+  /** Whether changing anything takes a Discord login. */
+  login: boolean;
+  /** Who this browser is logged in as, when it is. */
+  visitor: Visitor | null;
+  /** Whether this browser may start and prompt sessions right now. */
+  mayAct: boolean;
 }
 
 /** A node in a project's file tree. */

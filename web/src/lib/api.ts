@@ -53,6 +53,13 @@ export const api = {
   prompt: (session: string, text: string) => send(`/sessions/${session}/send`, { text }),
 
   start: (project: string, prompt: string) => send("/sessions", { project, prompt }),
+
+  /** Where the browser goes to log in with Discord. */
+  loginUrl: "/auth/login",
+
+  logout: async (): Promise<void> => {
+    await fetch("/auth/logout", { method: "POST" });
+  },
 };
 
 /** What a subscriber is told, as the stream reports it. */

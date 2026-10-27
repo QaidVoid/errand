@@ -324,21 +324,18 @@
   }
 
   /*
-   * What somebody asked, marked by a rail and named. The agent's own words are
-   * the body of the session and are left plain: one of the two needs marking,
-   * and marking both would be noise on every line.
+   * What somebody asked, as a bubble with their name on it. The agent's own
+   * words are the body of the session and are left plain: one of the two
+   * needs marking, and marking both would be noise on every line.
    */
   .asked {
-    width: 100%;
+    align-self: flex-start;
+    max-width: min(100%, var(--measure));
     min-width: 0;
-    margin: 4px 0;
-    padding: 6px 0 6px 12px;
-    border-left: 2px solid var(--accent);
-    background: linear-gradient(
-      to right,
-      color-mix(in srgb, var(--accent) 7%, transparent),
-      transparent 60%
-    );
+    margin: 6px 0 4px;
+    padding: 10px 14px 11px;
+    border-radius: 4px 16px 16px 16px;
+    background: var(--bubble);
   }
 
   .asked.matching {
@@ -347,10 +344,10 @@
 
   .who {
     display: block;
-    font-family: var(--mono);
     font-size: var(--type-receipt);
+    font-weight: 600;
     color: var(--accent);
-    margin-bottom: 2px;
+    margin-bottom: 3px;
   }
 
   .asked.matching .who {
@@ -369,7 +366,7 @@
     max-width: var(--measure);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    color: var(--text);
+    color: var(--ink-strong);
   }
 
   .message {

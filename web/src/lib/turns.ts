@@ -135,7 +135,7 @@ export function label(turn: Turn): string {
   const first = turn.items.find((item) => item.kind === "call");
   if (first?.kind === "call") {
     const tool = first.call.entry.tool;
-    return tool === undefined ? "worked" : `${tool.name} ${tool.target ?? ""}`.trim();
+    return tool === undefined || tool === null ? "worked" : `${tool.name} ${tool.target ?? ""}`.trim();
   }
   return turn.number === 0 ? "session opened" : "worked";
 }

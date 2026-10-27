@@ -16,6 +16,6 @@ export default defineConfig({
   server: {
     // Development proxies the API to the running daemon, so the interface can
     // be edited against real sessions rather than against fixtures.
-    proxy: { "/api": "http://127.0.0.1:8787" },
+    proxy: { "/api": "http://127.0.0.1:8787", "/auth": "http://127.0.0.1:8787" },
   },
 });

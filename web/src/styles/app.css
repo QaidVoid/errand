@@ -44,138 +44,97 @@
   --type-work: 13px;
   --type-receipt: 11.5px;
 
-  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: "Schibsted Grotesk", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    sans-serif;
 }
 
 /*
- * Dark, and the default.
+ * Colour comes from the theme and nowhere else.
  *
- * Written as a named block so that the light theme and an explicit dark choice
- * can both reuse it rather than restating every value.
+ * The theme module writes kage's `[gui]` tokens onto the root element before
+ * the first paint. The values here are kage shadow's, so a page that somehow
+ * runs without that script still reads, and the names below them are what the
+ * components were written against, each derived from a token rather than
+ * holding a colour of its own.
  */
-:root,
-:root[data-theme="dark"] {
+:root {
   color-scheme: dark;
 
-  --bg: #0f131a;
-  --bg-raised: #161b24;
-  --bg-inset: #0b0e14;
-  --line: #232c3a;
-  --line-soft: #1a212c;
+  --bg: #0f0e13;
+  --sidebar: #0b0a0e;
+  --surface: #17151d;
+  --raised: #221f2a;
+  --sunken: #0b0a0e;
+  --deep: #09080c;
+  --fill: #e8e2f50d;
+  --fill-hover: #e8e2f516;
+  --ink: #ece8f6db;
+  --ink-strong: #f4f1fa;
+  --muted: #ece8f694;
+  --faint: #ece8f66b;
+  --ghost: #ece8f640;
+  --line: #e8e2f51c;
+  --subtle: #e8e2f50d;
+  --line-strong: #e8e2f530;
+  --hover: #e8e2f50d;
+  --selected: #e8e2f516;
+  --selected-hover: #e8e2f51f;
+  --accent: #f2a65a;
+  --accent-hover: #f6b674;
+  --accent-soft: #f2a65a1f;
+  --accent-bd: #f2a65a57;
+  --ok: #8bd49c;
+  --ok-soft: #8bd49c1c;
+  --warn: #e8c96a;
+  --warn-soft: #e8c96a1c;
+  --danger: #f2727f;
+  --danger-soft: #f2727f1c;
+  --danger-bd: #f2727f4d;
+  --done: #a98bfa;
+  --info: #9ab4ff;
+  --composer-bg: #15131b;
+  --composer-line: #e8e2f51c;
+  --composer-focus-line: #f2a65a6b;
+  --send-bg: #f2a65a;
+  --send-bg-hover: #f6b674;
+  --send-icon: #1a1208;
+  --send-bg-off: #e8e2f514;
+  --send-icon-off: #e8e2f542;
+  --stop-glyph: #f2727fbf;
+  --diff-add: #8bd49c;
+  --diff-add-bg: #8bd49c1f;
+  --diff-del: #f2727f;
+  --diff-del-bg: #f2727f1f;
+  --bubble: #221f2a;
+  --selection: #f2a65a42;
+  --menu: #16141cf2;
+  --code-inline: #e8e2f514;
 
-  --text: #dbe3ef;
-  --text-dim: #8a97ab;
-  --text-faint: #79869b;
+  --bg-raised: var(--surface);
+  --bg-inset: var(--sunken);
+  --line-soft: var(--subtle);
+  --text: var(--ink);
+  --text-dim: var(--muted);
+  --text-faint: var(--faint);
+  --accent-ink: var(--send-icon);
+  --mark: var(--warn-soft);
+  --bad: var(--danger);
+  --add-bg: var(--diff-add-bg);
+  --add-fg: var(--diff-add);
+  --del-bg: var(--diff-del-bg);
+  --del-fg: var(--diff-del);
+  --scrollbar: var(--line-strong);
+  --scrollbar-hover: var(--ghost);
+  --overlay: color-mix(in srgb, var(--sidebar) 72%, transparent);
 
-  --accent: #8ab4ff;
-  --accent-ink: #0d1220;
-  --mark: #4a3f12;
-  --ok: #7ee2b8;
-  --warn: #f5c877;
-  --bad: #ff8b8b;
-
-  --add-bg: #12301f;
-  --add-fg: #8fe0ab;
-  --del-bg: #34161a;
-  --del-fg: #ff9d9d;
-
-  --scrollbar: #232c3a;
-  --scrollbar-hover: #2f3a4c;
-  --overlay: rgb(6 9 14 / 62%);
-
-  --code-keyword: #c99bf5;
-  --code-string: #9bd6a4;
-  --code-number: #f0b98a;
-  --code-name: #8ab4ff;
-  --code-type: #6fd6c6;
-  --code-comment: #6f7c91;
-  --code-punctuation: #97a3b6;
-}
-
-/*
- * Light.
- *
- * Not the dark values inverted: on a light surface the same hues read as
- * washed out, so each is darkened enough to hold its meaning against white
- * while staying quieter than the code it sits beside.
- */
-:root[data-theme="light"] {
-  color-scheme: light;
-
-  --bg: #fbfcfe;
-  --bg-raised: #f2f5f9;
-  --bg-inset: #eaeef4;
-  --line: #d3dae4;
-  --line-soft: #e4e9f0;
-
-  --text: #1a2230;
-  --text-dim: #55637a;
-  --text-faint: #5f6a7f;
-
-  --accent: #2f5fd0;
-  --accent-ink: #ffffff;
-  --mark: #fff3a3;
-  --ok: #157f52;
-  --warn: #8a5a00;
-  --bad: #c0392f;
-
-  --add-bg: #e2f5e9;
-  --add-fg: #12633f;
-  --del-bg: #fdeaea;
-  --del-fg: #a52f25;
-
-  --scrollbar: #cdd5e0;
-  --scrollbar-hover: #b3bece;
-  --overlay: rgb(26 34 48 / 34%);
-
-  --code-keyword: #7038a8;
-  --code-string: #146b34;
-  --code-number: #9a4a05;
-  --code-name: #23479c;
-  --code-type: #0d6b62;
-  --code-comment: #5f6a7f;
-  --code-punctuation: #4a5568;
-}
-
-/* Followed only when nothing has been chosen, which is what the attribute says. */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) {
-    color-scheme: light;
-
-    --bg: #fbfcfe;
-    --bg-raised: #f2f5f9;
-    --bg-inset: #eaeef4;
-    --line: #d3dae4;
-    --line-soft: #e4e9f0;
-
-    --text: #1a2230;
-    --text-dim: #55637a;
-    --text-faint: #5f6a7f;
-
-    --accent: #2f5fd0;
-    --accent-ink: #ffffff;
-    --ok: #157f52;
-    --warn: #8a5a00;
-    --bad: #c0392f;
-
-    --add-bg: #e2f5e9;
-    --add-fg: #12633f;
-    --del-bg: #fdeaea;
-    --del-fg: #a52f25;
-
-    --scrollbar: #cdd5e0;
-    --scrollbar-hover: #b3bece;
-    --overlay: rgb(26 34 48 / 34%);
-
-    --code-keyword: #7038a8;
-    --code-string: #146b34;
-    --code-number: #9a4a05;
-    --code-name: #23479c;
-    --code-type: #0d6b62;
-    --code-comment: #5f6a7f;
-    --code-punctuation: #4a5568;
-  }
+  --code-keyword: var(--done);
+  --code-string: var(--ok);
+  --code-number: var(--warn);
+  --code-name: var(--info);
+  --code-type: var(--accent);
+  --code-comment: var(--faint);
+  --code-punctuation: var(--muted);
 }
 
 * {
@@ -211,6 +170,10 @@ button {
 
 a {
   color: var(--accent);
+}
+
+::selection {
+  background: var(--selection);
 }
 
 code,

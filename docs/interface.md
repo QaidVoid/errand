@@ -82,6 +82,20 @@ so it says what it will do before it is used.
 A session that has stopped is listed too, and reads back from its stored
 transcript. Sending to one picks the conversation up again.
 
+## Themes
+
+The interface ships kage's palettes: kage shadow and kage dawn, and kimi dark
+and kimi light. System follows the desktop, showing one of a dark and light
+pair that can be changed under Appearance.
+
+A theme of your own starts from one of those and changes some of its colours.
+It is the same thing as a kage theme file: `base` names the palette to start
+from, and the `[gui]` table holds the colours, under kage's token names. A kage
+theme can be imported as it is, and a theme made here can be exported and
+dropped into `~/.config/kage/themes/`. The terminal's `[colors]` and `[groups]`
+tables are skipped. Themes you make are kept in your browser, not on the
+daemon.
+
 ## What it does not show
 
 A command's answer, which belongs to the thread it was asked in, and reactions,

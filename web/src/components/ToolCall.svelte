@@ -18,7 +18,7 @@
     command,
     onOpenFile,
   }: {
-    tool?: ToolActivity | undefined;
+    tool?: ToolActivity | null | undefined;
     /** The rendered line, used when there are no parts to lay out. */
     line: string;
     result?: ToolResult | undefined;
@@ -118,7 +118,8 @@
     title={open ? "Collapse" : "Expand"}
   >
     <span class="dot" aria-hidden="true">{glyph(tool?.name)}</span>
-    {#if tool === undefined}
+    <!-- An older recording says null where a newer one leaves the field out. -->
+    {#if tool === undefined || tool === null}
       <span class="target">{line}</span>
     {:else}
       <span class="name">{tool.name}</span>
