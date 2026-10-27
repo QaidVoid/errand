@@ -767,6 +767,8 @@ struct Running {
     /// prompt. It is opened after the agent's turn ends, so the agent has
     /// not seen the outcome, and could only guess at why a retry is needed.
     pull_request_outcome: Option<String>,
+    /// Why the image cap interrupted the last turn, said once in the next prompt.
+    image_cap_note: Option<String>,
 
     /// Who has already been told why they cannot take part.
     explained: HashSet<String>,
@@ -849,6 +851,7 @@ impl Running {
             aborting: false,
             abort_in_flight: false,
             pull_request_outcome: None,
+            image_cap_note: None,
             abort_timer: None,
             sandbox: None,
             client: None,
@@ -1644,6 +1647,10 @@ impl Running {
         let content = match self.pull_request_outcome.take() {
             Some(outcome) => format!("{outcome}\n\n{content}"),
             None => content.to_owned(),
+        };
+        let content = match self.image_cap_note.take() {
+            Some(note) => format!("{note}\n\n{content}"),
+            None => content,
         };
         let content = content.as_str();
 
