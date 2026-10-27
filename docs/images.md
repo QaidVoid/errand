@@ -83,9 +83,10 @@ said about it, such as that it fell back to another model.
 The daemon checks that the bytes are a PNG, JPEG, GIF or WebP before anything is
 posted. Anything else is refused, and the thread is told that a picture was not
 posted, and why. A picture larger than `output.maxUploadBytes` is named instead
-of posted. A turn posts at most four images. A turn that generates a fifth,
-through `generate_image` or in the model's own reply, is interrupted, including
-when `output.postImages` is `false`. The count includes images that cannot be
+of posted. A turn posts at most four images, and [audio clips](audio.md) count
+toward the same four. A turn that generates a fifth, through `generate_image`,
+`generate_speech`, or in the model's own reply, is interrupted, including when
+`output.postImages` is `false`. The count includes images that cannot be
 uploaded. An image another tool returns, such as a `read` of a picture, counts
 toward the four posted but does not interrupt the turn. The interruption follows
 the same deadline as `!interrupt`: if the agent does not confirm within
