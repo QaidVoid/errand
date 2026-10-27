@@ -817,7 +817,7 @@ async fn run(
         Err(error) => {
             log.error(&error.to_string(), &fields([]));
             return match error {
-                StartError::Unavailable(_) => Exit::Refused,
+                StartError::Unavailable(_) | StartError::Refused(_) => Exit::Refused,
                 StartError::EnforcementGap(_) => Exit::EnforcementGap,
             };
         }
@@ -1280,6 +1280,7 @@ async fn run(
     }));
     *sessions_holder.lock().await = Some(Arc::clone(&daemon));
 
+    let kage_providers = report.kage_providers.clone();
     if daemon.start(Some(report)).await.is_err() {
         return Exit::Failed;
     }
@@ -1395,6 +1396,7 @@ async fn run(
         live.clone(),
         path.to_owned(),
         env.clone(),
+        kage_providers,
         log.clone(),
         POLL,
         after,

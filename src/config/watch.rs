@@ -17,7 +17,9 @@ use std::time::{Duration, SystemTime};
 
 use crate::config::live::{LiveConfig, Reloaded};
 use crate::config::load::{Environment, file_exists, load_config};
+use crate::config::schema::ConfigError;
 use crate::log::{LogValue, Logger, fields};
+use crate::sandbox::kage_providers::KageProviders;
 
 /// How often the file is looked at. Long enough not to matter, short enough
 /// that an edit is in force while the person who made it is still looking.
@@ -59,13 +61,29 @@ pub fn looks_changed(last: &mut Option<Stamp>, path: &str) -> bool {
 ///
 /// The whole file is read and validated before anything is applied, so a
 /// half-written one is refused whole and the daemon carries on rather than
-/// running on half an edit.
+/// running on half an edit. Validation includes what `kage`, the list the
+/// backend's probe read, would refuse, since a provider it cannot take ends
+/// every session the new file would start.
 ///
 /// Reads the file directly, so it is called from a blocking task rather than
 /// on the runtime's own threads. A configuration file is a few kilobytes, and
 /// blocking a worker on it is cheaper than moving the read off one.
-pub fn reload(live: &LiveConfig, path: &str, env: &Environment, log: &Logger) -> Reloaded {
-    let incoming = load_config(path, |path| std::fs::read_to_string(path), env, file_exists);
+pub fn reload(
+    live: &LiveConfig,
+    path: &str,
+    env: &Environment,
+    kage: &KageProviders,
+    log: &Logger,
+) -> Reloaded {
+    let incoming = load_config(path, |path| std::fs::read_to_string(path), env, file_exists)
+        .and_then(|config| {
+            let problems = kage.refuses(&config.agent.providers);
+            if problems.is_empty() {
+                Ok(config)
+            } else {
+                Err(ConfigError { problems })
+            }
+        });
     let outcome = live.reload(incoming);
     report(&outcome, path, log);
     outcome
@@ -126,6 +144,7 @@ pub fn watch(
     live: LiveConfig,
     path: String,
     env: Environment,
+    kage: KageProviders,
     log: Logger,
     every: Duration,
     after: AfterReload,
@@ -140,9 +159,15 @@ pub fn watch(
             // Off the runtime's threads, since the read is blocking and the
             // other tasks here are answering messages. The handle is a clone
             // of a shared configuration, not a copy of it.
-            let (live, path, env, log) = (live.clone(), path.clone(), env.clone(), log.clone());
+            let (live, path, env, kage, log) = (
+                live.clone(),
+                path.clone(),
+                env.clone(),
+                kage.clone(),
+                log.clone(),
+            );
             let applied =
-                tokio::task::spawn_blocking(move || reload(&live, &path, &env, &log)).await;
+                tokio::task::spawn_blocking(move || reload(&live, &path, &env, &kage, &log)).await;
             // Only a change that was actually applied reaches what is derived
             // from the configuration. A refused one left the same
             // configuration in force, so there is nothing new to derive from.

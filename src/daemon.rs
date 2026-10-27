@@ -16,7 +16,7 @@ use crate::chat::render::listed_models;
 use crate::config::live::LiveConfig;
 use crate::config::redact::redact_config;
 use crate::config::schema::defaults::IMAGE;
-use crate::config::schema::{ALLOW_EVERY_USER, ChatConfig, Config, SandboxBackend};
+use crate::config::schema::{ALLOW_EVERY_USER, ChatConfig, Config, ConfigError, SandboxBackend};
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::{MemoryStore, Scope};
 use crate::provider::discover::Catalog;
@@ -64,6 +64,9 @@ pub enum StartError {
     /// forbids that.
     #[error(transparent)]
     EnforcementGap(#[from] EnforcementGapError),
+    /// The configuration names a provider the kage sessions run would refuse.
+    #[error(transparent)]
+    Refused(#[from] ConfigError),
 }
 
 /// Builds the backend named in configuration. Never falls back to the other.
@@ -958,6 +961,11 @@ pub async fn probe_sandbox(
     let report = sandbox.probe().await?;
     for line in render_startup_report(&report, &inert_settings(config), Some(&config.chat)) {
         log.info(&line, &fields([]));
+    }
+
+    let problems = report.kage_providers.refuses(&config.agent.providers);
+    if !problems.is_empty() {
+        return Err(StartError::Refused(ConfigError { problems }));
     }
 
     if !report.gaps.is_empty() && config.sandbox.require_full_enforcement {

@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 
 use crate::config::schema::{PluginConfig, SandboxBackend};
 use crate::memory::store::BLOCK_FILENAME;
+use crate::sandbox::kage_providers::KageProviders;
 
 /// Where a session's project appears to the agent, under every backend.
 ///
@@ -106,6 +107,9 @@ pub struct CapabilityReport {
     pub gaps: Vec<String>,
     /// Facts worth stating that are not gaps.
     pub notes: Vec<String>,
+    /// The provider ids the agent knows, as the kage sessions run reported
+    /// them.
+    pub kage_providers: KageProviders,
 }
 
 /// Raised when a backend cannot run at all, so the daemon refuses to start.

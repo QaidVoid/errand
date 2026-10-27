@@ -24,6 +24,7 @@ use crate::provider::models::AvailableModel;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
+use crate::sandbox::kage_providers::KageProviders;
 use crate::sandbox::paths;
 use crate::session::event::EndReason;
 use crate::session::event::SessionEvent;
@@ -268,6 +269,7 @@ impl SandboxPool for FakeSandbox {
                 backend: SandboxBackend::Bailey,
                 gaps: Vec::new(),
                 notes: Vec::new(),
+                kage_providers: KageProviders::default(),
             })
         })
     }

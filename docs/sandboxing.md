@@ -14,6 +14,14 @@ Sessions use the host's own tools, so there is no image to build or keep.
 Use it when you would rather the session saw a filesystem you assembled than the
 host's.
 
+Either way, the daemon asks the kage that sessions run which providers it
+knows when it starts: the host's under bailey, and the image's under podman. A
+provider kage already knows is written into its configuration as an override,
+keeping kage's models, and any other as a custom provider. A configuration
+naming one kage would refuse, such as `acp`, which it reserves, is refused
+when the daemon starts and on every reload. Without that check, every session
+would fail at launch. A kage too old to answer stops the daemon starting.
+
 Both hold a session to one project directory and one state directory, and give
 it network access only to reach the model provider, over HTTPS. If a session
 needs another outbound port, name it under `sandbox.egressPorts`:

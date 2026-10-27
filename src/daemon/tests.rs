@@ -28,6 +28,7 @@ use crate::sandbox::Backend;
 use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
+use crate::sandbox::kage_providers::{KageProviders, as_installed};
 use crate::sandbox::paths;
 use crate::session::event::EndReason;
 use crate::session::event::SessionEvent;
@@ -208,6 +209,7 @@ impl SandboxPool for FakeSandbox {
                 backend: SandboxBackend::Bailey,
                 gaps: Vec::new(),
                 notes: Vec::new(),
+                kage_providers: KageProviders::default(),
             });
         Box::pin(async move { Ok(report) })
     }
@@ -1389,6 +1391,7 @@ fn the_startup_report_always_states_what_cannot_be_enforced() {
             backend: SandboxBackend::Bailey,
             gaps: ["seccomp is unavailable".to_owned()].into_iter().collect(),
             notes: ["landlock v5".to_owned()].into_iter().collect(),
+            kage_providers: KageProviders::default(),
         },
         &[],
         None,
@@ -1408,6 +1411,7 @@ fn a_backend_with_nothing_missing_says_so_plainly() {
             backend: SandboxBackend::Podman,
             gaps: Vec::new(),
             notes: Vec::new(),
+            kage_providers: KageProviders::default(),
         },
         &[],
         None,
@@ -1433,6 +1437,7 @@ fn an_open_allowlist_is_reported_as_the_decision_it_is() {
             backend: SandboxBackend::Bailey,
             gaps: Vec::new(),
             notes: Vec::new(),
+            kage_providers: KageProviders::default(),
         },
         &[],
         Some(&config.chat),
@@ -1470,6 +1475,7 @@ async fn a_gap_the_configuration_forbids_stops_the_daemon_starting() {
                 backend: SandboxBackend::Bailey,
                 gaps: ["no landlock here".to_owned()].into_iter().collect(),
                 notes: Vec::new(),
+                kage_providers: KageProviders::default(),
             }),
             ..Default::default()
         },
@@ -1479,6 +1485,45 @@ async fn a_gap_the_configuration_forbids_stops_the_daemon_starting() {
                     harness.daemon.start(None).await,
                     Err(StartError::EnforcementGap(_))
                 ));
+            })
+        },
+    )
+    .await;
+}
+
+/// A provider the backend's kage would refuse stops the daemon starting,
+/// naming it, rather than failing every session once it is serving.
+#[tokio::test]
+async fn a_provider_the_installed_kage_refuses_stops_the_daemon_starting() {
+    with_daemon(
+        DaemonCase {
+            start: false,
+            settings: Some(json!({
+                "agent": {
+                    "provider": "anthropic",
+                    "providers": {
+                        "anthropic": { "credential": "secret" },
+                        "acp": { "credential": "other" },
+                    },
+                },
+            })),
+            report: Some(CapabilityReport {
+                backend: SandboxBackend::Bailey,
+                gaps: Vec::new(),
+                notes: Vec::new(),
+                kage_providers: as_installed(),
+            }),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                let refused = harness.daemon.start(None).await.expect_err("refused");
+                assert!(matches!(refused, StartError::Refused(_)), "{refused}");
+                assert!(
+                    refused.to_string().contains("agent.providers.acp"),
+                    "{refused}"
+                );
+                assert!(!harness.daemon.is_accepting());
             })
         },
     )
@@ -1495,6 +1540,7 @@ async fn the_same_gap_is_allowed_when_the_configuration_allows_it() {
                 backend: SandboxBackend::Bailey,
                 gaps: ["no landlock here".to_owned()].into_iter().collect(),
                 notes: Vec::new(),
+                kage_providers: KageProviders::default(),
             }),
             ..Default::default()
         },

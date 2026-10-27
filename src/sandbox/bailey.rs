@@ -23,6 +23,7 @@ use crate::sandbox::backend::{
     AgentCommand, CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
     agent_command, agent_memory_path, fresh_disk_tmp, sandbox_name,
 };
+use crate::sandbox::kage_providers::{KageProviders, LIST_ARGS, Probed};
 use crate::sandbox::paths;
 use crate::sandbox::policy::{
     AGENT_PROFILE, OFFLINE_PROFILE, POLICY_FILENAME, PolicyOptions, RESOLV_CONF, RESOLV_FILENAME,
@@ -45,8 +46,35 @@ const INHERITED_VARIABLES: [&str; 5] = ["PATH", "LANG", "LC_ALL", "TERM", "BAILE
 
 /// Runs the installed tool. Injected for tests.
 pub fn run_bailey(args: Vec<String>, cwd: Option<String>) -> super::RunFuture<super::RunResult> {
+    run_program("bailey".to_owned(), args, cwd, true)
+}
+
+/// Runs the host's kage, named by its path ahead of the arguments. Injected
+/// for tests.
+///
+/// The environment is emptied: the daemon's own holds the chat token, and
+/// asking kage what it knows needs none of it.
+pub fn run_kage(args: Vec<String>, cwd: Option<String>) -> super::RunFuture<super::RunResult> {
+    let mut args = args.into_iter();
+    let Some(program) = args.next() else {
+        return Box::pin(async { Err(std::io::Error::other("no kage was named to run")) });
+    };
+    run_program(program, args.collect(), cwd, false)
+}
+
+/// Runs `program` with `args` and collects what it wrote, inheriting the
+/// daemon's environment only when `inherit` says so.
+fn run_program(
+    program: String,
+    args: Vec<String>,
+    cwd: Option<String>,
+    inherit: bool,
+) -> super::RunFuture<super::RunResult> {
     Box::pin(async move {
-        let mut command = tokio::process::Command::new("bailey");
+        let mut command = tokio::process::Command::new(program);
+        if !inherit {
+            command.env_clear();
+        }
         command
             .args(&args)
             .stdin(std::process::Stdio::null())
@@ -235,6 +263,9 @@ pub struct BaileyOptions {
     pub brokering: Option<ProviderBrokering>,
     /// Finds the agent. Injected so a test needs no agent installed.
     pub lookup: Option<Lookup>,
+    /// Runs the host's kage, its path first, to ask which providers it knows.
+    /// Injected so a test needs no agent installed.
+    pub kage: Option<super::Run>,
     /// The host store's definitions of each defined provider's models, by
     /// provider, for an entry naming one of them to be laid over.
     pub built_in: BTreeMap<String, Vec<Value>>,
@@ -300,6 +331,7 @@ pub struct BaileySandbox {
     state_root: String,
     run: super::Run,
     options: BaileyOptions,
+    kage_providers: Probed,
 }
 
 impl BaileySandbox {
@@ -317,6 +349,7 @@ impl BaileySandbox {
             state_root,
             run,
             options,
+            kage_providers: Probed::default(),
         }
     }
 
@@ -422,7 +455,7 @@ impl BaileySandbox {
         // image, so an agent that is not installed is a reason to refuse to
         // start.
         let lookup = self.lookup();
-        if agent_runtime(&lookup).is_none() {
+        let Some(launcher) = agent_runtime(&lookup).and(lookup("kage")) else {
             return Err(SandboxUnavailableError {
                 backend: SandboxBackend::Bailey,
                 reasons: vec![
@@ -431,7 +464,8 @@ impl BaileySandbox {
                         .to_owned(),
                 ],
             });
-        }
+        };
+        let kage_providers = self.ask_kage(&launcher).await?;
 
         let mut notes = vec![
             "sessions run as confined host processes using the host's own tools".to_owned(),
@@ -499,7 +533,34 @@ impl BaileySandbox {
             backend: SandboxBackend::Bailey,
             gaps,
             notes,
+            kage_providers,
         })
+    }
+
+    /// Asks the kage at `launcher`, the one sessions run, which providers it
+    /// knows, and keeps the answer for every launch.
+    async fn ask_kage(&self, launcher: &str) -> Result<KageProviders, SandboxUnavailableError> {
+        let run = self
+            .options
+            .kage
+            .clone()
+            .unwrap_or_else(|| Arc::new(run_kage));
+        let mut args = vec![launcher.to_owned()];
+        args.extend(LIST_ARGS.iter().map(|arg| (*arg).to_owned()));
+        let result = run(args, None)
+            .await
+            .unwrap_or_else(|error| super::RunResult {
+                code: -1,
+                stdout: String::new(),
+                stderr: error.to_string(),
+            });
+        let listed =
+            KageProviders::from_run(&result).map_err(|reason| SandboxUnavailableError {
+                backend: SandboxBackend::Bailey,
+                reasons: vec![reason],
+            })?;
+        self.kage_providers.keep(listed.clone());
+        Ok(listed)
     }
 
     fn lookup(&self) -> Lookup {
@@ -536,6 +597,7 @@ impl BaileySandbox {
             &self.options.built_in,
             &launch.credential_names,
             &self.log,
+            &self.kage_providers.get()?,
         )
         .await?;
         let env = match &self.options.brokering {

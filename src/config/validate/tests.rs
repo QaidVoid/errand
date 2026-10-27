@@ -737,6 +737,39 @@ fn with_providers(providers: &Value) -> Value {
     }))
 }
 
+/// kage refuses its whole configuration over one provider id it cannot
+/// take, so errand refuses the id first and names it.
+#[test]
+fn a_provider_id_kage_cannot_take_is_refused() {
+    for name in ["My_Gateway", "gateway.eu", "GW"] {
+        let problems = problems_of(&with_providers(&json!({
+            "chat": { "credential": "k" },
+            name: { "credential": "k", "baseUrl": "https://gw.example/v1", "models": [{ "id": "m" }] },
+        })))
+        .join("\n");
+        assert!(
+            problems.contains(&format!(
+                "agent.providers.{name} must be named with lowercase letters, digits and dashes"
+            )),
+            "{name}: {problems}"
+        );
+    }
+}
+
+/// Lowercase letters, digits and dashes pass, and a provider a plugin
+/// registers is never written for kage, so its id is not held to kage's
+/// rule.
+#[test]
+fn a_provider_id_kage_takes_passes() {
+    validate_config(&with_providers(&json!({
+        "chat": { "credential": "k" },
+        "zai-coding-cn": { "credential": "k" },
+        "my-gw2": { "credential": "k", "baseUrl": "https://gw.example/v1", "models": [{ "id": "m" }] },
+        "My_Plugin": { "extension": true },
+    })))
+    .expect("every id is one kage takes, or one kage never reads");
+}
+
 #[test]
 fn a_provider_may_carry_images_for_the_agent_to_generate_through() {
     let config = validate_config(&with_providers(&json!({
@@ -798,21 +831,6 @@ fn images_need_an_openai_endpoint_errand_can_name() {
         problems.contains("a provider a plugin registers has none"),
         "{problems}"
     );
-
-    // kage knows these by name, whatever `kind` says, and none of them
-    // serves images.
-    for name in ["anthropic", "openai-responses"] {
-        let mut providers = json!({
-            "chat": { "credential": "k", "baseUrl": "https://chat.example/v1", "models": [{ "id": "m" }] },
-        });
-        providers[name] =
-            json!({ "credential": "k", "kind": "openai", "images": { "model": "image" } });
-        let problems = problems_of(&with_providers(&providers)).join("\n");
-        assert!(
-            problems.contains(&format!("cannot use kage's own {name} provider")),
-            "{name}: {problems}"
-        );
-    }
 }
 
 #[test]
@@ -931,7 +949,7 @@ fn ids_that_cannot_differ_in_a_variable_are_kept_apart() {
             "provider": "pg-oc",
             "providers": {
                 "pg-oc": { "credential": "a" },
-                "pg.oc": { "credential": "b" },
+                "pg.oc": { "credential": "b", "extension": true },
             },
         },
     })))
@@ -1393,6 +1411,7 @@ fn denied_tools_are_read_into_the_configuration() {
 fn a_denied_command_reaches_the_agent_as_a_rule_it_can_match() {
     use crate::sandbox::agent_config::kage_config;
     use crate::sandbox::backend::Denials;
+    use crate::sandbox::kage_providers::as_installed;
 
     let config = kage_config(
         &serde_json::Map::new(),
@@ -1404,6 +1423,7 @@ fn a_denied_command_reaches_the_agent_as_a_rule_it_can_match() {
             commands: vec!["rm -rf *".to_owned()],
             tools: vec!["web_search".to_owned()],
         },
+        &as_installed(),
     )
     .toml;
 

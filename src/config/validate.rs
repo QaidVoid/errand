@@ -514,6 +514,25 @@ fn validate_chat(raw: &Map<String, Value>, problems: &mut Problems) -> ChatConfi
     }
 }
 
+/// Refuses a provider id kage would not accept: anything but lowercase ASCII
+/// letters, digits and dashes. kage refuses the whole configuration over one
+/// id it cannot take, which would end every session rather than the one
+/// provider. A provider a plugin registers is never written into kage's
+/// configuration, so kage never reads its id.
+fn validate_provider_id(name: &str, definition: &Value, problems: &mut Problems) {
+    let id = name.trim();
+    let takes = !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    if !takes && definition.get("extension").and_then(Value::as_bool) != Some(true) {
+        problems.add(format!(
+            "agent.providers.{name} must be named with lowercase letters, digits and dashes \
+             only, which is all kage accepts in a provider id"
+        ));
+    }
+}
+
 /// Reads the operator's provider definitions, which are passed through as they
 /// are written.
 ///
@@ -543,6 +562,7 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
             ));
             continue;
         }
+        validate_provider_id(name, definition, problems);
         if let Some(flag) = definition.get("broker")
             && !flag.is_boolean()
         {
@@ -627,18 +647,15 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
     defined
 }
 
-/// kage's own providers, which it knows by these names whatever `kind` says,
-/// that its image tool cannot reach: their APIs are not the `OpenAI` one it
-/// calls.
-const NO_IMAGES_ENDPOINT: [&str; 2] = ["anthropic", "openai-responses"];
-
 /// Reads what generating images through one provider needs, which errand
 /// translates into the agent's own configuration: an object naming the model
 /// every call asks for.
 ///
 /// The endpoint must speak the `OpenAI` Images API, which an `anthropic` kind
-/// and the providers in [`NO_IMAGES_ENDPOINT`] do not, and errand must be able
-/// to name it, which it cannot for a provider a plugin registers.
+/// does not, and errand must be able to name it, which it cannot for a
+/// provider a plugin registers. Which of kage's own providers speak it is
+/// kage's to say, so that is checked against its list once the backend is
+/// probed.
 fn validate_images(name: &str, definition: &Value, problems: &mut Problems) {
     let Some(images) = definition.get("images") else {
         return;
@@ -669,13 +686,7 @@ fn validate_images(name: &str, definition: &Value, problems: &mut Problems) {
              otherwise sessions run without the image tool"
         ));
     }
-    if NO_IMAGES_ENDPOINT.contains(&name.trim()) {
-        problems.add(format!(
-            "{place} cannot use kage's own {} provider: the image tool reaches only openai and \
-             OpenAI-compatible providers",
-            name.trim()
-        ));
-    } else if definition.get("kind").and_then(Value::as_str) == Some("anthropic") {
+    if definition.get("kind").and_then(Value::as_str) == Some("anthropic") {
         problems.add(format!(
             "{place} needs a provider that speaks the OpenAI API: the Anthropic API has no \
              images endpoint"

@@ -42,9 +42,11 @@ it runs without the image tool. With `sandbox.egress.mode` set to `proxy` the
 provider is brokered like any other, so the sandbox holds a nonce in place of
 its key.
 
-Only one provider may carry `images`. An `anthropic` provider cannot, since that
-API has no images endpoint, and neither can kage's own `openai-responses`
-provider, or one a plugin registers.
+Only one provider may carry `images`. One that speaks the Anthropic API cannot,
+since that API has no images endpoint. That covers a `kind` of `anthropic`, and
+a provider kage knows as one, such as `anthropic` or `kenari-claude`, which is
+checked against kage's own list when the daemon starts. Neither can one a plugin
+registers.
 
 The tool needs kage 0.5.0 or later. An older kage ignores the setting, and its
 sessions run without the tool.
