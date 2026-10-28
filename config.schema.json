@@ -450,6 +450,25 @@
         "abortMs"
       ]
     },
+    "retention": {
+      "type": "object",
+      "description": "When what a cold session left on disk is collected.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the daemon collects at all. `errand threads gc` works either way."
+        },
+        "olderThan": {
+          "type": "string",
+          "description": "How long a session goes unused before it is collected, such as `30d`, `2w` or `7d 12h`. A month is 30 days and a year 365."
+        },
+        "every": {
+          "type": "string",
+          "description": "How often the daemon looks, as well as once when it starts."
+        }
+      }
+    },
     "problems": {
       "description": "Every problem found, in the order the checks ran."
     },
@@ -468,6 +487,7 @@
     "shutdown",
     "limits",
     "timeouts",
+    "retention",
     "problems"
   ],
   "$schema": "https://json-schema.org/draft/2020-12/schema",

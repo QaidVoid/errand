@@ -132,3 +132,27 @@ fn the_store_is_private_and_a_later_shape_is_refused() {
     assert!(ReceiptStore::open(&path).is_err());
     assert!(receipts_for(&path, "s-1", 20).is_err());
 }
+
+/// A collected session's receipts go with it, and only its.
+#[test]
+fn a_collected_sessions_receipts_go_with_it() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("receipts.db");
+    assert_eq!(
+        super::forget_sessions(&path, &["s-1".to_owned()]).unwrap(),
+        0
+    );
+    let store = ReceiptStore::open(&path).unwrap();
+    let (log, _) = recording();
+    for session in ["s-1", "s-1", "s-2"] {
+        store.record(&receipt(session, "/chat"), &log);
+    }
+
+    assert_eq!(
+        super::forget_sessions(&path, &["s-1".to_owned()]).unwrap(),
+        2
+    );
+
+    assert!(receipts_for(&path, "s-1", 20).unwrap().is_empty());
+    assert_eq!(receipts_for(&path, "s-2", 20).unwrap().len(), 1);
+}

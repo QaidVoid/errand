@@ -925,6 +925,38 @@ async fn a_thread_this_daemon_never_saw_is_not_resumed() {
     .await;
 }
 
+/// A thread a sweep holds is not reopened under it, and is again once the
+/// sweep lets it go.
+#[tokio::test]
+async fn a_thread_held_by_a_sweep_is_not_resumed_until_it_is_let_go() {
+    with_manager(|harness| {
+        Box::pin(async move {
+            harness.manager.start(message("demo: go", "m1")).await;
+            harness
+                .manager
+                .end_thread("thread-1", EndReason::Idle)
+                .await;
+            settle().await;
+
+            let claim = harness.manager.claim_thread("thread-1").expect("claimed");
+            assert!(harness.manager.claim_thread("thread-1").is_none());
+            let outcome = harness
+                .manager
+                .resume("thread-1", message("carry on", "m2"))
+                .await;
+            assert!(refused_reason(&outcome).contains("being reopened or cleaned up"));
+
+            drop(claim);
+            let outcome = harness
+                .manager
+                .resume("thread-1", message("carry on", "m3"))
+                .await;
+            assert!(outcome.is_started());
+        })
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_thread_that_already_has_a_session_is_not_resumed_on_top_of_it() {
     with_manager(|harness| {

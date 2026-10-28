@@ -3,6 +3,8 @@
 
 /// Fetches what a message carried into the project.
 pub mod attachments;
+/// What a cold session left on disk, collected together.
+pub mod collect;
 /// Every `!` command, who may run it, and what it says.
 pub mod commands;
 /// Answers the agent's delegation requests from disk.

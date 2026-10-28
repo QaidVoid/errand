@@ -110,9 +110,9 @@ credential or stand-in is ever kept. A call for a provider the broker does not
 serve, or one that arrives after the session stopped, leaves no receipt, only a
 log line or nothing. A tunnel carries no brokered credential and leaves no
 receipt, so its log lines are its only record. `errand threads show <thread>`
-lists the newest calls a thread's session made. Nothing prunes the store yet, so
-it grows with use. A receipt that cannot be written does not fail the call, and
-the log says so.
+lists the newest calls a thread's session made. A session's receipts go when
+the session is collected, as [threads](/threads) describes. A receipt that
+cannot be written does not fail the call, and the log says so.
 
 The proxy listener requires that credential. A `CONNECT` or plain `http://`
 request without it receives `407 Proxy Authentication Required` with a

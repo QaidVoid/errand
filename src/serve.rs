@@ -645,6 +645,27 @@ fn refresh_presence(
     });
 }
 
+/// Collects cold sessions now, then every `retention.every`, off the async
+/// workers. Each round reads the retention settings as the file says then,
+/// so a change to any of them takes effect without a restart.
+fn collect_cold_sessions(daemon: Arc<Daemon>, live: LiveConfig, log: Logger) {
+    tokio::spawn(async move {
+        loop {
+            let sweeping = Arc::clone(&daemon);
+            if let Err(error) = tokio::task::spawn_blocking(move || sweeping.collect_cold()).await {
+                log.error(
+                    "a sweep for cold sessions failed, and the next is tried on schedule",
+                    &fields([("detail", LogValue::from(error.to_string()))]),
+                );
+            }
+            let every = crate::config::duration::parse_duration(&live.get().retention.every)
+                .and_then(|ms| u64::try_from(ms).ok())
+                .expect("validated as a length of time");
+            tokio::time::sleep(std::time::Duration::from_millis(every)).await;
+        }
+    });
+}
+
 /// Works out what each session's egress broker is built from.
 ///
 /// Under `egress.mode = proxy` every session's outbound is forced through a
@@ -1297,6 +1318,7 @@ async fn run(
     if daemon.start(Some(report)).await.is_err() {
         return Exit::Failed;
     }
+    collect_cold_sessions(Arc::clone(&daemon), live.clone(), log.clone());
     if let (Some(github), Some(router)) = (config.github.as_ref(), &issue_router)
         && let Some(trigger) = &github.trigger
     {
