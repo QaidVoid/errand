@@ -90,6 +90,28 @@ A start that is turned away, for a spent usage window or a project that
 already has a session, is said in the channel rather than on the issue: that
 is for whoever runs the bot, not for everybody watching the repository.
 
+## How work is pushed
+
+A pull request is pushed from the daemon's own copy of the project's git
+directory, never from the tree the session writes. The copy is made first,
+walked without following a single link, and everything the push reads, its
+branch, its remote, its history, is read from that copy, so nothing the
+session changes while the push runs can reach it. A link inside `.git` is
+left out of the copy rather than followed.
+
+A repository that borrows from outside itself is refused: an
+`objects/info/alternates` file, a `commondir`, an `include` in its
+configuration, a ref store named by path, or a partial clone, which fetches
+what it lacks from another repository. Borrowed objects could make the push
+publish another repository's commits under the bot's token, and borrowed
+configuration could make the daemon read another file. A project cloned with
+`--shared` or `--reference` borrows its objects this way. To push from one,
+keep its objects in it with `git repack -a -d`, then delete
+`.git/objects/info/alternates`. Each push copies the git directory, so a very
+large history costs a moment and the disk space of one copy while it runs. A
+git directory holding more than 2 GiB is not copied, and its pull request is
+refused.
+
 ## Trying it
 
 1. Add `trigger` with your own login and restart the daemon. The log says

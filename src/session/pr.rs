@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 
 use crate::config::schema::GithubConfig;
 use crate::sandbox::backend::WORKSPACE_PATH;
+use crate::sandbox::paths;
 use crate::session::github::{SessionLinks, attribution_footer};
 
 /// A repository on GitHub, as the API addresses it.
@@ -178,9 +179,10 @@ const CREDENTIAL_HELPER: &str =
 /// Overriding named settings is a denylist, and a denylist against git is a
 /// losing game: signature verification runs `gpg.program`, a textconv filter
 /// runs its command, and the list grows with git. So this is only the first
-/// layer. The push happens in a clone the session never wrote, and anything
-/// that reads a commit reads it there too, where the repository's
-/// configuration is gone rather than merely overridden. See [`push_work`].
+/// layer. Everything the daemon reads is read from its own copy of the git
+/// directory, checked to borrow nothing, and the push happens in a fresh
+/// clone of that copy, whose own configuration is git's default. See
+/// [`push_work`].
 const SAFE_CONFIG: &[&str] = &[
     "-c",
     "core.hooksPath=/dev/null",
@@ -262,6 +264,157 @@ async fn assert_contained(run: &Run, repo: &str) -> Result<(), PullRequestError>
         ));
     }
     Ok(())
+}
+
+/// Copies a repository's git directory into the daemon's staging directory,
+/// and returns the copy's work tree path.
+///
+/// Walked from the session's project root without following a link, since
+/// the session can rearrange its tree while the copy is made; see
+/// [`paths::copy_tree_beneath`]. A link inside `.git` is left out of the copy,
+/// so nothing it points at is read.
+async fn snapshot_git_directory(
+    session_root: &str,
+    project_path: &str,
+    staging: &std::path::Path,
+) -> Result<String, PullRequestError> {
+    let relative = project_path
+        .strip_prefix(session_root)
+        .unwrap_or(project_path)
+        .trim_start_matches('/');
+    let git_directory = if relative.is_empty() {
+        ".git".to_owned()
+    } else {
+        format!("{relative}/.git")
+    };
+    let snapshot = staging.join("repository");
+    std::fs::create_dir(&snapshot)
+        .map_err(|error| PullRequestError(format!("could not prepare the push: {error}")))?;
+    let session_root = session_root.to_owned();
+    let destination = snapshot.join(".git");
+    let copied = tokio::task::spawn_blocking(move || {
+        paths::copy_tree_beneath(
+            &session_root,
+            &git_directory,
+            &destination,
+            GIT_DIRECTORY_DEPTH,
+            MAX_GIT_DIRECTORY_BYTES,
+        )
+    })
+    .await
+    .map_err(|error| PullRequestError(format!("could not prepare the push: {error}")))?;
+    copied.map_err(|error| {
+        PullRequestError(format!(
+            "could not copy the repository at {project_path} to push it: {error}"
+        ))
+    })?;
+    Ok(snapshot.display().to_string())
+}
+
+/// How deep a git directory is copied before the copy is refused.
+const GIT_DIRECTORY_DEPTH: usize = 16;
+
+/// The most of a git directory copied for a push.
+///
+/// The copy sits in the host's temp directory, often memory, and the
+/// session decides how big its `.git` is.
+const MAX_GIT_DIRECTORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Refuses a repository that borrows objects or configuration from
+/// somewhere else.
+///
+/// The session writes its own `.git`, so each of these can make a push carry
+/// another repository's commits under the daemon's token, or make the daemon
+/// read refs or configuration from elsewhere: an alternates file, a
+/// `commondir`, a configuration include, a ref store named by path, or a
+/// partial clone's promisor remote. Checked on the daemon's copy, which the
+/// session cannot change after, and the configuration is listed by git
+/// itself, so what is checked is what git would act on.
+async fn refuse_borrowed_store(
+    run: &Run,
+    snapshot: &str,
+    project_path: &str,
+) -> Result<(), PullRequestError> {
+    let git_directory = std::path::Path::new(snapshot).join(".git");
+    let refused = |why: &str| {
+        PullRequestError(format!(
+            "the repository at {project_path} is not one the daemon will push: {why}"
+        ))
+    };
+    if !git_directory.is_dir() {
+        return Err(PullRequestError(format!(
+            "could not prepare the push: the copy of {project_path} holds no git directory"
+        )));
+    }
+    for name in ["alternates", "http-alternates"] {
+        if std::fs::symlink_metadata(git_directory.join("objects/info").join(name)).is_ok() {
+            return Err(refused(&format!(
+                "it borrows objects from outside itself through .git/objects/info/{name}. \
+                 A clone made with --shared or --reference keeps its own objects after \
+                 `git repack -a -d` and deleting that file"
+            )));
+        }
+    }
+    if std::fs::symlink_metadata(git_directory.join("commondir")).is_ok() {
+        return Err(refused(
+            "its .git/commondir points its git directory somewhere else",
+        ));
+    }
+    // Run from the staging root, which is not a repository, so git reads
+    // only the file it is pointed at and nothing it would discover itself.
+    let staging = std::path::Path::new(snapshot)
+        .parent()
+        .map_or_else(String::new, |parent| parent.display().to_string());
+    for name in ["config", "config.worktree"] {
+        let file = git_directory.join(name);
+        if std::fs::symlink_metadata(&file).is_err() {
+            continue;
+        }
+        let file = file.display().to_string();
+        let listed = git(
+            run,
+            &staging,
+            &["config", "--file", &file, "--no-includes", "--list"],
+            None,
+        )
+        .await;
+        if listed.code != 0 {
+            return Err(refused(&format!(
+                ".git/{name} is not configuration git can read: {}",
+                first_line(&listed.stderr)
+            )));
+        }
+        if let Some(setting) = listed.stdout.lines().find_map(borrowing_setting) {
+            return Err(refused(&format!(".git/{name} {setting}")));
+        }
+    }
+    Ok(())
+}
+
+/// What a configuration line, as git lists it, borrows from elsewhere, if
+/// anything.
+fn borrowing_setting(line: &str) -> Option<String> {
+    let (key, value) = line.split_once('=').unwrap_or((line, ""));
+    let key = key.to_ascii_lowercase();
+    if key.starts_with("include.") || key.starts_with("includeif.") {
+        return Some(format!(
+            "includes {value}, configuration from outside the repository"
+        ));
+    }
+    if key == "extensions.partialclone"
+        || (key.starts_with("remote.")
+            && (key.ends_with(".promisor") || key.ends_with(".partialclonefilter")))
+    {
+        return Some(
+            "makes it a partial clone, which fetches what it lacks from another \
+             repository. Fetch the whole history first, or clone without --filter"
+                .to_owned(),
+        );
+    }
+    if key == "extensions.refstorage" && value.contains("://") {
+        return Some(format!("keeps its refs at {value}, outside the repository"));
+    }
+    None
 }
 
 /// The branch the work is on, refusing a detached head.
@@ -614,34 +767,33 @@ async fn default_branch(api: &Api, token: &str, repo: &Repo) -> String {
 /// so against that tree none of those can be trusted, and the last two cannot
 /// be overridden from the command line at all.
 ///
-/// So the commit is pushed from a bare repository made here, holding one ref
-/// and a pointer to the session's objects. Objects are data and are only ever
-/// read; the configuration, which is code, is left behind. The session never
-/// learns of this directory and cannot write to it.
+/// So the commit is pushed from a bare clone made here of the daemon's own
+/// copy of the git directory, which borrows that copy's objects. The clone's
+/// configuration is git's default, not the repository's. The session never
+/// learns of either directory and cannot write to them.
 async fn push_work(
     run: &Run,
-    project_path: &str,
+    staging: &std::path::Path,
+    snapshot: &str,
     branch: &str,
     url: &str,
     token: &str,
 ) -> Result<String, PullRequestError> {
-    let staging = tempfile::tempdir()
-        .map_err(|error| PullRequestError(format!("could not prepare the push: {error}")))?;
-    let repository = staging.path().join("repository.git");
+    let repository = staging.join("repository.git");
 
     // A clone takes the refs and leaves the configuration: the copy gets a
     // fresh one, and hooks are never carried over. `--shared` borrows the
-    // objects rather than copying them, so a long history costs nothing here,
-    // and objects are read-only data in any case.
+    // objects of the daemon's own snapshot rather than copying them again,
+    // which the session cannot reach.
     let cloned = git(
         run,
-        staging.path().to_str().unwrap_or_default(),
+        staging.to_str().unwrap_or_default(),
         &[
             "clone",
             "--shared",
             "--bare",
             "--quiet",
-            project_path,
+            snapshot,
             &repository.display().to_string(),
         ],
         None,
@@ -704,9 +856,18 @@ pub async fn open_pull_request(
     sleep: &Sleep,
 ) -> Result<String, PullRequestError> {
     let project_path = find_repository(&request.project_path, request.repository.as_deref())?;
-    assert_contained(run, &project_path).await?;
-    let branch = current_branch(run, &project_path).await?;
-    let origin = origin_remote(run, &project_path).await?;
+    // The session can write its tree while this runs, so nothing below reads
+    // it after this copy: what is checked is what is pushed.
+    let staging = tempfile::tempdir()
+        .map_err(|error| PullRequestError(format!("could not prepare the push: {error}")))?;
+    let staging_root = std::fs::canonicalize(staging.path())
+        .map_err(|error| PullRequestError(format!("could not prepare the push: {error}")))?;
+    let snapshot =
+        snapshot_git_directory(&request.project_path, &project_path, &staging_root).await?;
+    refuse_borrowed_store(run, &snapshot, &project_path).await?;
+    assert_contained(run, &snapshot).await?;
+    let branch = current_branch(run, &snapshot).await?;
+    let origin = origin_remote(run, &snapshot).await?;
 
     let looked = look_at(api, &request.github.token, &origin).await;
     let (base, pushing_to) = if looked.can_push {
@@ -721,7 +882,8 @@ pub async fn open_pull_request(
 
     let summary = push_work(
         run,
-        &project_path,
+        &staging_root,
+        &snapshot,
         &branch,
         &format!(
             "https://github.com/{}/{}.git",

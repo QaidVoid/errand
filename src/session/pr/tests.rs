@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use super::{
     Api, ApiCall, ApiReply, PullRequestError, Ran, Repo, Request, Run, Sleep, current_branch,
     find_repository, open_pull_request, origin_remote, parse_remote, pull_request_body,
+    refuse_borrowed_store, run_command, snapshot_git_directory,
 };
 use crate::config::schema::GithubConfig;
 use crate::session::github::SessionLinks;
@@ -724,7 +725,7 @@ async fn the_sessions_repository_cannot_make_the_daemon_run_anything() {
     .unwrap();
 
     let calls = fake.calls.lock().unwrap();
-    for call in calls.iter() {
+    for call in calls.iter().filter(|call| call.args[0] == "git") {
         let line = call.args.join(" ");
         // Hooks are the direct route: a pre-push in the session's own tree.
         assert!(line.contains("core.hooksPath=/dev/null"));
@@ -794,9 +795,18 @@ async fn the_commit_is_never_read_in_the_tree_the_session_can_write() {
     assert_ne!(log.cwd.as_deref(), Some(kept.project.as_str()));
 
     // And every host-side git call refuses to verify a signature, which is
-    // what invoked the program a repository could name.
-    for call in calls.iter() {
+    // what invoked the program a repository could name, and none runs in, or
+    // names, the session's repository: the copy is the one that reads it.
+    for call in calls.iter().filter(|call| call.args[0] == "git") {
         assert!(call.args.join(" ").contains("log.showSignature=false"));
+        assert!(
+            call.cwd
+                .as_ref()
+                .is_some_and(|cwd| cwd.starts_with(staging_root)),
+            "{:?}",
+            call.args
+        );
+        assert!(!call.args.contains(&kept.repo), "{:?}", call.args);
     }
 }
 
@@ -1148,4 +1158,357 @@ async fn somebodys_fork_is_forked_and_opened_against_itself() {
     );
     // The branch the request merges into is the fork's own default.
     assert_eq!(pull.get("base"), Some(&serde_json::json!("main")));
+}
+
+/// Runs real git in `cwd` with a fixed identity, for building repositories.
+fn real_git(cwd: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// A repository with one commit, in `root/name`.
+fn real_repository(root: &std::path::Path, name: &str, file: &str) -> std::path::PathBuf {
+    let repo = root.join(name);
+    std::fs::create_dir_all(&repo).unwrap();
+    real_git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    std::fs::write(repo.join(file), file).unwrap();
+    real_git(&repo, &["add", file]);
+    real_git(&repo, &["commit", "--quiet", "-m", file]);
+    repo
+}
+
+/// The real copy and the borrowed-store check, as a push runs them, with the
+/// staging directory the copy lives in.
+async fn snapshot_and_check(
+    repo: &std::path::Path,
+) -> (tempfile::TempDir, Result<String, PullRequestError>) {
+    let staging = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(staging.path()).unwrap();
+    let run: Run = Arc::new(run_command);
+    let repo = repo.display().to_string();
+    let session_root = std::path::Path::new(&repo)
+        .parent()
+        .unwrap()
+        .display()
+        .to_string();
+    let checked = async {
+        let snapshot = snapshot_git_directory(&session_root, &repo, &root).await?;
+        refuse_borrowed_store(&run, &snapshot, &repo).await?;
+        Ok(snapshot)
+    }
+    .await;
+    (staging, checked)
+}
+
+/// The issue's own reproduction: a repository whose object store borrows
+/// another's, and a ref to a commit only the other holds, is refused before
+/// anything could push that commit.
+#[tokio::test]
+async fn the_guard_refuses_a_borrowed_object_store() {
+    let root = tempfile::tempdir().unwrap();
+    let secret = real_repository(root.path(), "secret", "secret.txt");
+    let session = real_repository(root.path(), "session", "work.txt");
+    let secret_commit = real_git(&secret, &["rev-parse", "HEAD"]);
+    for name in ["alternates", "http-alternates"] {
+        let info = session.join(".git/objects/info");
+        std::fs::write(
+            info.join(name),
+            format!("{}\n", secret.join(".git/objects").display()),
+        )
+        .unwrap();
+        // Only a local alternates file lends objects, so only it can back a
+        // ref to the borrowed commit. Either file is refused.
+        if name == "alternates" {
+            real_git(
+                &session,
+                &["update-ref", "refs/heads/stolen", &secret_commit],
+            );
+        }
+
+        let refused = snapshot_and_check(&session).await.1.expect_err("refused");
+        assert!(refused.0.contains("alternates"), "{name}: {}", refused.0);
+        assert!(refused.0.contains("git repack -a -d"), "{}", refused.0);
+        std::fs::remove_file(info.join(name)).unwrap();
+        if name == "alternates" {
+            real_git(&session, &["update-ref", "-d", "refs/heads/stolen"]);
+        }
+    }
+}
+
+/// A `commondir`, a link anywhere in the git directory, and a config include
+/// each borrow from outside the repository, and each is refused.
+#[tokio::test]
+async fn the_guard_refuses_a_commondir_a_link_and_an_include() {
+    let root = tempfile::tempdir().unwrap();
+    let elsewhere = real_repository(root.path(), "elsewhere", "other.txt");
+
+    let commondir = real_repository(root.path(), "commondir", "a.txt");
+    std::fs::write(
+        commondir.join(".git/commondir"),
+        elsewhere.join(".git").display().to_string(),
+    )
+    .unwrap();
+    let refused = snapshot_and_check(&commondir).await.1.expect_err("refused");
+    assert!(refused.0.contains("commondir"), "{}", refused.0);
+
+    let linked = real_repository(root.path(), "linked", "b.txt");
+    std::os::unix::fs::symlink(
+        elsewhere.join(".git/refs"),
+        linked.join(".git/refs/borrowed"),
+    )
+    .unwrap();
+    let (_staging, checked) = snapshot_and_check(&linked).await;
+    let snapshot = checked.expect("a link is left out, not refused");
+    assert!(
+        std::fs::symlink_metadata(std::path::Path::new(&snapshot).join(".git/refs/borrowed"))
+            .is_err(),
+        "the link reached the copy"
+    );
+
+    let included = real_repository(root.path(), "included", "c.txt");
+    let config = included.join(".git/config");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        format!(
+            "{text}[includeIf \"gitdir:/\"]\n\tpath = {}\n",
+            elsewhere.join(".git/config").display()
+        ),
+    )
+    .unwrap();
+    let refused = snapshot_and_check(&included).await.1.expect_err("refused");
+    assert!(refused.0.contains("include"), "{}", refused.0);
+}
+
+/// An ordinary clone borrows nothing, so it is never turned away.
+#[tokio::test]
+async fn an_ordinary_clone_passes_the_guard() {
+    let root = tempfile::tempdir().unwrap();
+    let upstream = real_repository(root.path(), "upstream", "a.txt");
+    real_git(
+        root.path(),
+        &[
+            "clone",
+            "--quiet",
+            &upstream.display().to_string(),
+            "cloned",
+        ],
+    );
+
+    let (_staging, checked) = snapshot_and_check(&root.path().join("cloned")).await;
+    let snapshot = checked.expect("an ordinary clone passes");
+    assert!(std::path::Path::new(&snapshot).join(".git/HEAD").is_file());
+}
+
+/// A partial clone fetches what it lacks from its promisor remote, which a
+/// session can point at another repository, and configuration git reads
+/// past a stray byte or a byte-order mark still includes what it names. Each
+/// is refused, as git itself reads the configuration.
+#[tokio::test]
+async fn the_guard_refuses_a_promisor_and_an_include_git_would_still_read() {
+    let root = tempfile::tempdir().unwrap();
+    let elsewhere = real_repository(root.path(), "elsewhere", "other.txt");
+
+    let promisor = real_repository(root.path(), "promisor", "a.txt");
+    real_git(&promisor, &["config", "extensions.partialClone", "promi"]);
+    real_git(
+        &promisor,
+        &[
+            "config",
+            "remote.promi.url",
+            &elsewhere.display().to_string(),
+        ],
+    );
+    real_git(&promisor, &["config", "remote.promi.promisor", "true"]);
+    let refused = snapshot_and_check(&promisor).await.1.expect_err("refused");
+    assert!(refused.0.contains("partial clone"), "{}", refused.0);
+
+    for prefix in [&b"# \xff\n"[..], b"\xef\xbb\xbf"] {
+        let odd = real_repository(root.path(), &format!("odd-{}", prefix.len()), "b.txt");
+        let config = odd.join(".git/config");
+        let mut bytes = prefix.to_vec();
+        bytes.extend(std::fs::read(&config).unwrap());
+        bytes.extend(
+            format!(
+                "[include]\n\tpath = {}\n",
+                elsewhere.join(".git/config").display()
+            )
+            .as_bytes(),
+        );
+        std::fs::write(&config, bytes).unwrap();
+        let refused = snapshot_and_check(&odd).await.1.expect_err("refused");
+        assert!(refused.0.contains("include"), "{}", refused.0);
+    }
+
+    let worktree = real_repository(root.path(), "worktree", "c.txt");
+    std::fs::write(
+        worktree.join(".git/config.worktree"),
+        format!(
+            "[include]\n\tpath = {}\n",
+            elsewhere.join(".git/config").display()
+        ),
+    )
+    .unwrap();
+    let refused = snapshot_and_check(&worktree).await.1.expect_err("refused");
+    assert!(
+        refused.0.contains("config.worktree includes"),
+        "{}",
+        refused.0
+    );
+}
+
+/// A runner that runs git for real, but answers a push itself, handing
+/// `on_push` the clone it would have pushed from while it is still there,
+/// and calls `after_copy` before the first git call, which comes once the
+/// copy is made.
+fn real_runner_but_push(
+    on_push: Arc<dyn Fn(&str) + Send + Sync>,
+    after_copy: Arc<dyn Fn() + Send + Sync>,
+) -> Run {
+    Arc::new(move |command: Vec<String>, cwd, env| {
+        let on_push = Arc::clone(&on_push);
+        let after_copy = Arc::clone(&after_copy);
+        Box::pin(async move {
+            if command.iter().any(|word| word == "push") {
+                on_push(cwd.as_deref().unwrap_or_default());
+                return ok("");
+            }
+            if command.iter().any(|word| word == "--absolute-git-dir") {
+                after_copy();
+            }
+            run_command(command, cwd, env).await
+        })
+    })
+}
+
+/// A repository on a branch, with a GitHub origin, as a session leaves it.
+fn real_session_repository(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let project = root.join("project");
+    let repo = real_repository(&project, "repo", "work.txt");
+    real_git(&repo, &["checkout", "--quiet", "-b", "the-work"]);
+    real_git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/upstream/project.git",
+        ],
+    );
+    (project, repo)
+}
+
+/// A borrowed store in the session's repository stops the pull request
+/// before anything is pushed.
+#[tokio::test]
+async fn a_borrowed_store_stops_the_pull_request_before_the_push() {
+    let root = tempfile::tempdir().unwrap();
+    let secret = real_repository(root.path(), "secret", "secret.txt");
+    let (project, repo) = real_session_repository(root.path());
+    std::fs::write(
+        repo.join(".git/objects/info/alternates"),
+        format!("{}\n", secret.join(".git/objects").display()),
+    )
+    .unwrap();
+    let pushed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let noted = Arc::clone(&pushed);
+    let run = real_runner_but_push(
+        Arc::new(move |_| noted.store(true, Ordering::SeqCst)),
+        Arc::new(|| {}),
+    );
+    let (_api_fake, api) = working_api();
+
+    let refused = open_pull_request(
+        &request(&project.display().to_string(), "t", "amelia"),
+        &run,
+        &api,
+        &immediate_sleep(),
+    )
+    .await
+    .expect_err("refused");
+
+    assert!(refused.0.contains("alternates"), "{}", refused.0);
+    assert!(!pushed.load(Ordering::SeqCst), "a push happened");
+}
+
+/// What a session plants once the copy is made does not reach the push: the
+/// clone pushed from is of the daemon's copy, so a commit borrowed from
+/// elsewhere is not in it, and nothing in it points at the session's tree.
+#[tokio::test]
+async fn a_planted_alternates_after_the_copy_does_not_reach_the_push() {
+    let root = tempfile::tempdir().unwrap();
+    let secret = real_repository(root.path(), "secret", "secret.txt");
+    let secret_commit = real_git(&secret, &["rev-parse", "HEAD"]);
+    let (project, repo) = real_session_repository(root.path());
+    let seen = Arc::new(Mutex::new(None));
+    let inspect = {
+        let seen = Arc::clone(&seen);
+        let secret_commit = secret_commit.clone();
+        Arc::new(move |clone: &str| {
+            let found = std::process::Command::new("git")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .args(["cat-file", "-e", &secret_commit])
+                .current_dir(clone)
+                .status()
+                .unwrap()
+                .success();
+            let alternates = std::fs::read_to_string(
+                std::path::Path::new(clone).join("objects/info/alternates"),
+            )
+            .unwrap_or_default();
+            *seen.lock().unwrap() = Some((clone.to_owned(), found, alternates));
+        })
+    };
+    let plant = {
+        let repo = repo.clone();
+        let secret = secret.clone();
+        let secret_commit = secret_commit.clone();
+        Arc::new(move || {
+            std::fs::write(
+                repo.join(".git/objects/info/alternates"),
+                format!("{}\n", secret.join(".git/objects").display()),
+            )
+            .unwrap();
+            real_git(
+                &repo,
+                &["update-ref", "refs/heads/the-work", &secret_commit],
+            );
+        })
+    };
+    let run = real_runner_but_push(inspect, plant);
+    let (_api_fake, api) = working_api();
+
+    open_pull_request(
+        &request(&project.display().to_string(), "t", "amelia"),
+        &run,
+        &api,
+        &immediate_sleep(),
+    )
+    .await
+    .expect("the pull request opens from the copy");
+
+    let (clone, found, alternates) = seen.lock().unwrap().clone().expect("a push happened");
+    assert!(!clone.starts_with(&repo.display().to_string()), "{clone}");
+    assert!(!found, "the borrowed commit reached the push");
+    assert!(
+        !alternates.contains(&repo.display().to_string()),
+        "{alternates}"
+    );
+    assert!(
+        !alternates.contains(&secret.display().to_string()),
+        "{alternates}"
+    );
 }
