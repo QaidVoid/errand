@@ -22,9 +22,44 @@ naming one kage would refuse, such as `acp`, which it reserves, is refused
 when the daemon starts and on every reload. Without that check, every session
 would fail at launch. A kage too old to answer stops the daemon starting.
 
-Both hold a session to one project directory and one state directory, and give
-it network access only to reach the model provider, over HTTPS. If a session
-needs another outbound port, name it under `sandbox.egressPorts`:
+Both hold a session to one project directory and one state directory. What a
+session may reach on the network depends on the backend and on
+`sandbox.egress.mode`, and out of the box it is more than the model provider.
+
+Under the bailey backend with `sandbox.egress.mode` set to `proxy`, the
+default, every connection goes through the egress broker. With no `egress`
+block written, the built-in allowlist is `["*"]`. The broker then still gates
+the port, refuses the host's own network and Azure's fabric address, and logs
+every connection, but restricts no host. To hold sessions to the hosts a
+project needs, name them, and no other host is reached through the broker:
+
+```json
+{
+  "sandbox": {
+    "egress": { "allow": ["api.anthropic.com", "github.com", "*.github.com"] }
+  }
+}
+```
+
+An `egress` block that leaves out `allow` names no host. Only a block left out
+altogether means `["*"]`. A brokered provider is reached through the broker's
+own provider route, which this list does not govern, and the host the model
+store names for the configured model is added to the list. A provider that is
+not brokered, one marked `broker: false` or registered by an `extension`, is
+reached as any other host, so name its host when the list is not `["*"]`.
+With an empty list and no provider host from the store, the daemon refuses to
+start.
+
+With `sandbox.egress.mode` set to `open`, bailey runs no broker. The generated
+policy admits any host on the allowed ports, the host's own network included,
+and `sandbox.egress.allow` does nothing.
+
+Under podman there is no broker either. The container's network is bounded by
+its namespace alone, so a session reaches any host on any port, and neither
+the allowlist nor the ports below apply.
+
+If a session needs another outbound port, name it under
+`sandbox.egressPorts`:
 
 ```json
 {
@@ -48,8 +83,8 @@ Each session has a broker of its own. It is started when the session's
 sandbox launches, on a loopback port no other session uses, and it mints a
 proxy credential and a stand-in for every brokered provider key for that
 session alone. Each reads `errand-session-` and 64 hex digits, so an echoed
-one is plainly errand's rather than a provider key. A credential or stand-in read out of one session is refused
-by every other session's broker. Stopping the session closes its broker
+one is plainly errand's rather than a provider key. A credential or stand-in
+read out of one session is refused by every other session's broker. Stopping the session closes its broker
 first: from then on neither is honoured, even on a connection the session
 opened earlier, and the port is released. A tunnel already open is not cut,
 and ends when the session's processes do. The broker's log lines name the
@@ -65,7 +100,8 @@ that only discovers the port from using it.
 
 The broker resolves a name itself, on this host and with this host's resolver,
 not the session's, and dials only the addresses it judged. A name that resolves
-only to the host's own network, loopback, private, or link-local, is refused
+only to the host's own network, loopback, private, or link-local, or to a
+reserved or cloud fabric address such as Azure's `168.63.129.16`, is refused
 with `403 not a public host`, and `sandbox.egress.allowInternal` lifts that only
 for an address written as a literal: what a name points at is not the
 operator's to decide. A name that does not resolve at all is answered with
@@ -181,7 +217,7 @@ something outside its own project. A report that did not say so would describe
 a tighter boundary than the one in force.
 
 There is deliberately no way to supply a whole policy file. That would let the
-report claim guarantees the file does not make; editing `src/sandbox/policy.ts`
+report claim guarantees the file does not make; editing `src/sandbox/policy.rs`
 is the honest way to change the floor itself.
 
 ## Telling a toolchain where to look

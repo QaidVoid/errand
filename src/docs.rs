@@ -266,6 +266,11 @@ fn default_of(section: &str, field: &str) -> String {
 /// Written out rather than reflected, because the constants are named for the
 /// code that reads them and the page is named for the file that holds them.
 fn defaults_table() -> BTreeMap<&'static str, Value> {
+    let egress = serde_json::json!({
+        "mode": defaults::EGRESS_MODE,
+        "allow": defaults::EGRESS_ALLOW,
+        "allowInternal": defaults::EGRESS_ALLOW_INTERNAL,
+    });
     BTreeMap::from([
         (
             "chat/startonmention",
@@ -276,15 +281,18 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
             Value::Bool(defaults::REQUIRE_FULL_ENFORCEMENT),
         ),
         ("sandbox/network", Value::from("restricted")),
-        ("sandbox/egressports", serde_json::json!([443])),
         (
-            "sandbox/egress",
-            serde_json::json!({
-                "mode": "proxy",
-                "allow": ["*"],
-                "allowInternal": defaults::EGRESS_ALLOW_INTERNAL,
-            }),
+            "sandbox/egressports",
+            serde_json::json!(defaults::EGRESS_PORTS),
         ),
+        ("sandbox/egress", egress.clone()),
+        // The sub-section's own rows are looked up as `egress/<field>`, with
+        // the whole key lower-cased.
+        ("egress/mode", egress["mode"].clone()),
+        // A block that leaves `allow` out names no host. Only the whole block
+        // left out means the default list above.
+        ("egress/allow", serde_json::json!([])),
+        ("egress/allowinternal", egress["allowInternal"].clone()),
         (
             "sandbox/hidehostaddress",
             Value::Bool(defaults::HIDE_HOST_ADDRESS),
@@ -380,7 +388,7 @@ pub fn configuration_page(
          \n\
          # Configuration\n\
          \n\
-         Every field the daemon reads, taken from `src/config/schema.ts`. A key that\n\
+         Every field the daemon reads, taken from `src/config/schema.rs`. A key that\n\
          is not one of these is a refusal to start rather than a setting quietly\n\
          ignored, so a misspelling says so.\n\
          \n\

@@ -501,13 +501,14 @@ fn host_internal_addresses_are_refused_whatever_the_allowlist_says() {
     // Reserved rather than host-internal, but nothing a session legitimately
     // talks to answers on them.
     for address in [
-        "192.0.2.9",    // TEST-NET-1
-        "198.51.100.9", // TEST-NET-2
-        "203.0.113.9",  // TEST-NET-3
-        "192.0.0.8",    // IETF protocol assignments
-        "192.88.99.1",  // 6to4 relay anycast
-        "198.18.0.1",   // benchmarking
-        "198.19.255.1", // benchmarking, the far end
+        "192.0.2.9",     // TEST-NET-1
+        "198.51.100.9",  // TEST-NET-2
+        "203.0.113.9",   // TEST-NET-3
+        "192.0.0.8",     // IETF protocol assignments
+        "192.88.99.1",   // 6to4 relay anycast
+        "198.18.0.1",    // benchmarking
+        "198.19.255.1",  // benchmarking, the far end
+        "168.63.129.16", // Azure fabric, public by number
     ] {
         assert!(is_private_address(address), "{address}");
     }
@@ -564,6 +565,15 @@ async fn a_name_is_judged_by_where_it_resolves_not_by_its_spelling() {
     // A literal internal target does not even reach the resolver.
     assert_eq!(
         public_addresses("169.254.169.254", false, None).await,
+        Err(NoAddress::Internal)
+    );
+    // Azure's fabric address is refused as a literal and as an answer.
+    assert_eq!(
+        public_addresses("168.63.129.16", false, None).await,
+        Err(NoAddress::Internal)
+    );
+    assert_eq!(
+        public_addresses("fabric.test", false, Some(&resolver(&["168.63.129.16"]))).await,
         Err(NoAddress::Internal)
     );
 }
