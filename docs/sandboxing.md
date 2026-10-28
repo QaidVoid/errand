@@ -47,7 +47,8 @@ to `none` opens nothing, whatever ports are named.
 Each session has a broker of its own. It is started when the session's
 sandbox launches, on a loopback port no other session uses, and it mints a
 proxy credential and a stand-in for every brokered provider key for that
-session alone. A credential or stand-in read out of one session is refused
+session alone. Each reads `errand-session-` and 64 hex digits, so an echoed
+one is plainly errand's rather than a provider key. A credential or stand-in read out of one session is refused
 by every other session's broker. Stopping the session closes its broker
 first: from then on neither is honoured, even on a connection the session
 opened earlier, and the port is released. A tunnel already open is not cut,
@@ -234,6 +235,7 @@ configured, because reading issues and checking builds is most of working on
 somebody's repository.
 
 It does not hold the chat token, and everything a session reports is scrubbed of
-every configured secret before it reaches a channel, a browser, or the
-transcript on disk. That is damage control on an unavoidable exposure rather
+every configured secret, and of every stand-in its broker minted, before it
+reaches a channel, a browser, or the transcript on disk. The bytes of an
+uploaded file are not scrubbed. That is damage control on an unavoidable exposure rather
 than a boundary: an agent that re-encodes a key defeats it.

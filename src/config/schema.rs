@@ -183,10 +183,16 @@ pub struct AgentConfig {
     /// kage knows needs no `kind`, since its name already says it. Endpoints reach the
     /// agent's own configuration translated, because that schema belongs to
     /// the agent; the credential never enters it, traveling in the
-    /// environment instead. The credential is swapped for a nonce at the
-    /// broker under `egress.mode = proxy`. An entry of `models` naming a
-    /// model the host's store already defines for that provider lends its
-    /// name and context to the declaration, so the agent can address it.
+    /// environment instead. Under the bailey backend with `egress.mode =
+    /// proxy`, a provider the broker routes, unless marked `broker: false`,
+    /// is given to the session as a stand-in, `errand-session-` and 64 hex
+    /// digits, minted for that session alone and honoured only by its broker
+    /// until the session stops. It authenticates the session to its broker,
+    /// which puts the real credential on; it is worth nothing to the
+    /// provider, and the session's reported text is scrubbed of it. An
+    /// entry of `models` naming a model the host's store already defines for
+    /// that provider lends its name and context to the declaration, so the
+    /// agent can address it.
     ///
     /// `discover` asks the provider which models it serves, at startup, after
     /// a change to this file, and on `!models refresh`, under its `baseUrl`.

@@ -38,9 +38,12 @@ A provider kage already knows, such as `openai`, needs a `baseUrl` or a
 `credential`. A configuration with neither is refused at load. One with a
 credential but no `baseUrl` for a provider kage does not know passes, since
 errand cannot tell it from a known one, and each session logs a warning that
-it runs without the image tool. With `sandbox.egress.mode` set to `proxy` the
-provider is brokered like any other, so the sandbox holds a nonce in place of
-its key.
+it runs without the image tool. Under the bailey backend with
+`sandbox.egress.mode` set to `proxy` the provider is brokered like any other,
+so the sandbox holds a stand-in in place of its key: `errand-session-` and 64
+hex digits, minted for that session and honoured only by its broker until the
+session stops. The session's reported text is scrubbed of it; the bytes of
+an uploaded file are not.
 
 Only one provider may carry `images`. One that speaks the Anthropic API cannot,
 since that API has no images endpoint. That covers a `kind` of `anthropic`, and

@@ -12,8 +12,9 @@
 //! the transcript, so there is no path that reports something the others
 //! scrubbed.
 //!
-//! It replaces the value verbatim. An agent that splits or re-encodes the key
-//! defeats it, which is why this is damage control on an unavoidable exposure
+//! It replaces a configured value verbatim, and a secret minted for the
+//! session by its shape. An agent that splits or re-encodes either defeats
+//! it, which is why this is damage control on an unavoidable exposure
 //! rather than a boundary.
 
 use std::sync::Arc;
@@ -29,9 +30,6 @@ use crate::session::views::ViewFanOut;
 /// carries agent output, and neither does a turn number, a reaction, a usage
 /// total, nor the author a message is attributed to.
 pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
-    if secrets.is_empty() {
-        return event;
-    }
     let clean = |text: &str| redact_text(text, secrets);
     let maybe = |text: &Option<String>| text.as_deref().map(clean);
 

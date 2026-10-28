@@ -1,5 +1,5 @@
 use super::redact_event;
-use crate::config::redact::REDACTION;
+use crate::config::redact::{MINTED_PREFIX, REDACTION};
 use crate::session::event::{
     Delegated, EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage, ToolActivity,
     ToolResult,
@@ -212,4 +212,21 @@ fn the_operators_house_rules_are_scrubbed_out_of_tool_output() {
     // The tool result itself still reports; only the rules went.
     assert!(said.contains("total 4 files"));
     assert!(said.contains("cat /state/memory.md"));
+}
+
+/// A stand-in the session's broker minted is scrubbed from what the session
+/// reports, though the session's own list of secrets was fixed before it.
+#[test]
+fn a_minted_stand_in_is_scrubbed_from_a_session_event() {
+    let minted = format!("{MINTED_PREFIX}{}", "9".repeat(64));
+    let event = redact_event(
+        SessionEvent::Post {
+            text: format!("ANTHROPIC_API_KEY={minted}"),
+        },
+        &[],
+    );
+    let SessionEvent::Post { text } = event else {
+        panic!("still a post");
+    };
+    assert_eq!(text, format!("ANTHROPIC_API_KEY={REDACTION}"));
 }
