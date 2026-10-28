@@ -11,12 +11,13 @@ use serde_json::{Map, Value};
 
 use super::{is_absolute, resolve};
 use crate::config::discover::Discovery;
+use crate::config::duration::parse_duration;
 use crate::config::redact::MIN_SCRUBBABLE_LENGTH;
 use crate::config::schema::{
     self, AgentConfig, ChatConfig, Config, ConfigError, DelegateConfig, EgressConfig, EgressMode,
     GithubConfig, GithubTrigger, LimitsConfig, NetworkMode, OutputConfig, PluginConfig,
-    PolicyExtraConfig, SandboxBackend, SandboxConfig, ShutdownConfig, TimeoutsConfig, WebConfig,
-    WebLoginConfig,
+    PolicyExtraConfig, RetentionConfig, SandboxBackend, SandboxConfig, ShutdownConfig,
+    TimeoutsConfig, WebConfig, WebLoginConfig,
 };
 use crate::config::size::parse_size;
 use crate::config::usage::UsageShape;
@@ -24,7 +25,7 @@ use crate::config::usage::UsageShape;
 /// Variables the policy sets itself, and so refuses to take from a file.
 const SET_BY_THE_POLICY: [&str; 2] = ["PATH", "HOME"];
 
-const KNOWN_ROOT: [&str; 12] = [
+const KNOWN_ROOT: [&str; 13] = [
     // Not a setting: it is how an editor finds the schema to check the file
     // against, and refusing it would make the file uncheckable.
     "$schema",
@@ -39,7 +40,9 @@ const KNOWN_ROOT: [&str; 12] = [
     "web",
     "limits",
     "timeouts",
+    "retention",
 ];
+const KNOWN_RETENTION: [&str; 3] = ["enabled", "olderThan", "every"];
 const KNOWN_CHAT: [&str; 6] = [
     "token",
     "channelId",
@@ -1628,6 +1631,37 @@ fn validate_timeouts(raw: &Map<String, Value>, problems: &mut Problems) -> Timeo
     }
 }
 
+fn validate_retention(raw: &Map<String, Value>, problems: &mut Problems) -> RetentionConfig {
+    let source = section(raw, "retention");
+    reject_unknown(&source, &KNOWN_RETENTION, "retention", problems);
+    let length = |key: &str, default: &str, problems: &mut Problems| {
+        let written = optional_string(&source, key, "retention", problems)
+            .unwrap_or_else(|| default.to_owned());
+        if parse_duration(&written).is_none() {
+            problems.add(format!(
+                "retention.{key} must be a length of time such as 30d, 2w or 7d 12h"
+            ));
+            return default.to_owned();
+        }
+        written
+    };
+    RetentionConfig {
+        enabled: flag(
+            &source,
+            "enabled",
+            schema::defaults::RETENTION_ENABLED,
+            "retention",
+            problems,
+        ),
+        older_than: length(
+            "olderThan",
+            schema::defaults::RETENTION_OLDER_THAN,
+            problems,
+        ),
+        every: length("every", schema::defaults::RETENTION_EVERY, problems),
+    }
+}
+
 /// Validates a parsed configuration file.
 ///
 /// Returns a [`ConfigError`] carrying every problem found, so that a first run
@@ -1652,6 +1686,7 @@ pub fn validate_config(parsed: &Value) -> Result<Config, ConfigError> {
     let web = validate_web(raw, &mut problems);
     let limits = validate_limits(raw, &mut problems);
     let timeouts = validate_timeouts(raw, &mut problems);
+    let retention = validate_retention(raw, &mut problems);
 
     // Asked once both sections are read, since the name is the operator's own.
     // Shadowing it would authenticate the agent with whatever was set here.
@@ -1686,6 +1721,7 @@ pub fn validate_config(parsed: &Value) -> Result<Config, ConfigError> {
             web,
             limits,
             timeouts,
+            retention,
         })
     } else {
         Err(ConfigError {

@@ -289,6 +289,24 @@ pub fn receipts_for(path: &Path, session_id: &str, limit: u32) -> rusqlite::Resu
     rows.collect()
 }
 
+/// Deletes the receipts of the sessions named, as a session that is collected
+/// leaves none behind. A store that is not there holds none to delete.
+pub fn forget_sessions(path: &Path, session_ids: &[String]) -> rusqlite::Result<usize> {
+    if !path.exists() || session_ids.is_empty() {
+        return Ok(0);
+    }
+    let db = Connection::open(path)?;
+    known_shape(&db)?;
+    let mut forgotten = 0;
+    for session_id in session_ids {
+        forgotten += db.execute(
+            "DELETE FROM broker_receipts WHERE session_id = ?1",
+            params![session_id],
+        )?;
+    }
+    Ok(forgotten)
+}
+
 /// Where one session's broker writes its receipts.
 #[derive(Clone)]
 pub struct Ledger {

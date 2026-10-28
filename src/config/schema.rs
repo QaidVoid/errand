@@ -639,6 +639,25 @@ pub struct TimeoutsConfig {
     pub abort_ms: u64,
 }
 
+/// When what a cold session left on disk is collected.
+///
+/// A session that has not been used for `olderThan` loses its state
+/// directory, its record, its index entry and the receipts of its provider
+/// calls, and an unnamed session its project too. A named project is never
+/// collected. A live session is never collected, however old.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionConfig {
+    /// Whether the daemon collects at all. `errand threads gc` works either
+    /// way.
+    pub enabled: bool,
+    /// How long a session goes unused before it is collected, such as `30d`,
+    /// `2w` or `7d 12h`. A month is 30 days and a year 365.
+    pub older_than: String,
+    /// How often the daemon looks, as well as once when it starts.
+    pub every: String,
+}
+
 /// The fully resolved configuration the daemon runs on.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -669,6 +688,8 @@ pub struct Config {
     pub limits: LimitsConfig,
     /// Deadlines that end or unblock a session.
     pub timeouts: TimeoutsConfig,
+    /// When what a cold session left on disk is collected.
+    pub retention: RetentionConfig,
 }
 
 /// Allowlist entry that admits everyone who can post in the served channel.
@@ -778,6 +799,12 @@ pub mod defaults {
     pub const QUESTION_MS: u64 = 300_000;
     /// How long an abort waits for the agent before it is forced.
     pub const ABORT_MS: u64 = 15_000;
+    /// Whether the daemon collects cold sessions.
+    pub const RETENTION_ENABLED: bool = true;
+    /// How long a session goes unused before it is collected.
+    pub const RETENTION_OLDER_THAN: &str = "30d";
+    /// How often the daemon looks for cold sessions.
+    pub const RETENTION_EVERY: &str = "1d";
 }
 
 /// Every reason the configuration was rejected, not just the first.

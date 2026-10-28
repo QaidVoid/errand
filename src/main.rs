@@ -172,6 +172,11 @@ async fn threads(args: &[String], env: &Vars, level: LogLevel) -> Result<i32, Co
     registry.lock().expect("the registry lock").load();
     let receipts =
         std::path::Path::new(&config.state_dir).join(crate::sandbox::broker::RECEIPTS_FILENAME);
+    let forgotten = receipts.clone();
+    let lock_dir = config.state_dir.clone();
+    let projects = config.project_root.clone();
+    let older_than_ms = crate::config::duration::parse_duration(&config.retention.older_than)
+        .expect("validated as a length of time");
 
     Ok(run_threads(
         args,
@@ -207,6 +212,22 @@ async fn threads(args: &[String], env: &Vars, level: LogLevel) -> Result<i32, Co
                     crate::cli::threads::RECEIPTS_SHOWN,
                 )
                 .map_err(|error| error.to_string())
+            }),
+            project_root: projects.clone(),
+            remove_project: Arc::new(move |session_id: String| {
+                crate::session::collect::remove_beneath(&projects, &session_id)
+                    .map_err(|error| error.to_string())
+            }),
+            older_than_ms,
+            hold_lock: Arc::new(move || {
+                let pid = i32::try_from(std::process::id()).unwrap_or(i32::MAX);
+                crate::lock::acquire_lock(&lock_dir, pid)
+                    .map(|mut held| Box::new(move || held.release()) as Box<dyn FnOnce() + Send>)
+                    .map_err(|error| error.to_string())
+            }),
+            forget_receipts: Arc::new(move |session_ids: Vec<String>| {
+                crate::sandbox::broker::receipts::forget_sessions(&forgotten, &session_ids)
+                    .map_err(|error| error.to_string())
             }),
         },
     )

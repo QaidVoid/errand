@@ -35,7 +35,7 @@ one enforces, and what the daemon does when a host cannot enforce it.
 
 ```sh
 errand run       # run the daemon until it is told to stop
-errand threads   # list, inspect, and remove what past sessions left on disk
+errand threads   # list, inspect, remove and collect what sessions left behind
 errand help
 ```
 

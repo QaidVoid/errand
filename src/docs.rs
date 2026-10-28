@@ -294,6 +294,15 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
         ("egress/allow", serde_json::json!([])),
         ("egress/allowinternal", egress["allowInternal"].clone()),
         (
+            "retention/enabled",
+            Value::Bool(defaults::RETENTION_ENABLED),
+        ),
+        (
+            "retention/olderthan",
+            Value::from(defaults::RETENTION_OLDER_THAN),
+        ),
+        ("retention/every", Value::from(defaults::RETENTION_EVERY)),
+        (
             "sandbox/hidehostaddress",
             Value::Bool(defaults::HIDE_HOST_ADDRESS),
         ),
@@ -361,7 +370,7 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
 ///
 /// Ordered here rather than taken from the file, because what a reader needs
 /// first is not the order the types happen to be declared in.
-const KEYS: [(&str, &str); 14] = [
+const KEYS: [(&str, &str); 15] = [
     ("Root", "top level"),
     ("Chat", "chat"),
     ("Agent", "agent"),
@@ -376,6 +385,7 @@ const KEYS: [(&str, &str); 14] = [
     ("Shutdown", "shutdown"),
     ("Limits", "limits"),
     ("Timeouts", "timeouts"),
+    ("Retention", "retention"),
 ];
 
 /// The configuration reference.

@@ -34,7 +34,7 @@ struct Harness {
     registry: Arc<Mutex<ThreadRegistry>>,
     removed: Arc<Mutex<Vec<String>>>,
     written: Arc<Mutex<Vec<String>>>,
-    _root: tempfile::TempDir,
+    root: tempfile::TempDir,
     /// Whether deletes succeed; off to simulate a refused removal.
     remove_ok: Arc<Mutex<bool>>,
     /// Bytes the commands see for a state directory.
@@ -97,13 +97,18 @@ fn harness(records: Vec<ThreadRecord>) -> Harness {
         },
         now: Arc::new(|| NOW),
         receipts_of: Arc::new(|_| Ok(Vec::new())),
+        project_root: "/projects".to_owned(),
+        remove_project: Arc::new(|_| Ok(())),
+        older_than_ms: 30 * 24 * 60 * 60 * 1_000,
+        hold_lock: Arc::new(|| Ok(Box::new(|| {}))),
+        forget_receipts: Arc::new(|_| Ok(0)),
     };
     Harness {
         deps,
         registry,
         removed,
         written,
-        _root: root,
+        root,
         remove_ok,
         sizes,
         projects,
@@ -633,6 +638,11 @@ async fn reviving_reads_the_project_from_what_the_session_left_on_disk() {
         },
         now: Arc::new(|| NOW),
         receipts_of: Arc::new(|_| Ok(Vec::new())),
+        project_root: "/projects".to_owned(),
+        remove_project: Arc::new(|_| Ok(())),
+        older_than_ms: 30 * 24 * 60 * 60 * 1_000,
+        hold_lock: Arc::new(|| Ok(Box::new(|| {}))),
+        forget_receipts: Arc::new(|_| Ok(0)),
     };
 
     let session_dir = root.path().join("s-9");
@@ -664,4 +674,256 @@ async fn reviving_reads_the_project_from_what_the_session_left_on_disk() {
     assert_eq!(put.project_path, "/srv/errand/projects/demo");
     assert_eq!(put.project_name, "demo");
     drop(written);
+}
+
+/// The roots a sweep looks in, made real, with one cold unnamed session in
+/// them and the harness pointed there.
+fn cold_harness() -> (Harness, tempfile::TempDir, std::path::PathBuf) {
+    let roots = tempfile::tempdir().unwrap();
+    let state = roots.path().join("state");
+    let projects = roots.path().join("projects");
+    for directory in [
+        state.join("cold1"),
+        state.join("cold1.record"),
+        projects.join("cold1"),
+    ] {
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("held"), "x").unwrap();
+    }
+    let mut cold = record_with(
+        "thread-cold",
+        "cold1",
+        &state.join("cold1").display().to_string(),
+    );
+    cold.project_name = "cold1".to_owned();
+    cold.updated_at = NOW - 40 * 24 * 60 * 60 * 1_000;
+    let mut harness = harness(vec![cold, record()]);
+    harness.deps.state_root = state.display().to_string();
+    harness.deps.project_root = projects.display().to_string();
+    (harness, roots, state)
+}
+
+/// A dry run says what would go and deletes nothing, and needs no lock.
+#[tokio::test]
+async fn a_dry_run_names_what_would_be_collected_and_deletes_nothing() {
+    let (mut harness, roots, state) = cold_harness();
+    harness.deps.hold_lock = Arc::new(|| Err("the daemon is running".to_owned()));
+
+    assert_eq!(
+        run_threads(&["gc".to_owned(), "--dry-run".to_owned()], &harness.deps).await,
+        0
+    );
+
+    assert!(
+        harness.out().contains("would collect thread-cold"),
+        "{}",
+        harness.out()
+    );
+    assert!(!harness.out().contains("thread-aaaa"));
+    assert!(state.join("cold1").exists());
+    assert!(roots.path().join("projects/cold1").exists());
+    assert_eq!(harness.registry.lock().unwrap().size(), 2);
+}
+
+/// A sweep that deletes refuses while the daemon holds its lock, since the
+/// daemon owns the index and alone knows which sessions are live.
+#[tokio::test]
+async fn a_sweep_refuses_while_the_daemon_runs() {
+    let (mut harness, _roots, state) = cold_harness();
+    harness.deps.hold_lock = Arc::new(|| Err("the daemon is running".to_owned()));
+
+    assert_eq!(run_threads(&["gc".to_owned()], &harness.deps).await, 1);
+
+    assert!(
+        harness.out().contains("stop the daemon first"),
+        "{}",
+        harness.out()
+    );
+    assert!(state.join("cold1").exists());
+}
+
+/// A sweep collects the cold session whole, its project, state, record,
+/// index entry and receipts, and leaves the warm one alone.
+#[tokio::test]
+async fn a_sweep_collects_a_cold_session_whole() {
+    let (mut harness, roots, state) = cold_harness();
+    let forgot = Arc::new(Mutex::new(Vec::new()));
+    let noted = Arc::clone(&forgot);
+    harness.deps.forget_receipts = Arc::new(move |ids| {
+        noted.lock().unwrap().extend(ids);
+        Ok(1)
+    });
+
+    assert_eq!(run_threads(&["gc".to_owned()], &harness.deps).await, 0);
+
+    for gone in [
+        state.join("cold1"),
+        state.join("cold1.record"),
+        roots.path().join("projects/cold1"),
+    ] {
+        assert!(!gone.exists(), "{}", gone.display());
+    }
+    let left: Vec<String> = harness
+        .registry
+        .lock()
+        .unwrap()
+        .all()
+        .into_iter()
+        .map(|record| record.thread_id)
+        .collect();
+    assert_eq!(left, ["thread-aaaa"]);
+    assert_eq!(*forgot.lock().unwrap(), ["cold1"]);
+}
+
+/// A window given on the command line is read as written, and one that is not
+/// a length of time is refused.
+#[tokio::test]
+async fn the_window_can_be_given_and_is_checked() {
+    let (harness, _roots, state) = cold_harness();
+
+    assert_eq!(
+        run_threads(
+            &[
+                "gc".to_owned(),
+                "--older-than".to_owned(),
+                "soon".to_owned()
+            ],
+            &harness.deps
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        run_threads(
+            &["gc".to_owned(), "--older-than".to_owned(), "1y".to_owned()],
+            &harness.deps
+        )
+        .await,
+        0
+    );
+    assert!(state.join("cold1").exists(), "a year has not passed");
+}
+
+/// Removing an unnamed session takes its own project with it, and says so;
+/// a named project is the operator's and stays.
+#[tokio::test]
+async fn removing_an_unnamed_session_takes_its_project_and_a_named_one_keeps_it() {
+    let mut unnamed = record_with("thread-un", "un1", "/state/un1");
+    unnamed.project_name = "un1".to_owned();
+    unnamed.project_path = "/projects/un1".to_owned();
+    let mut harness = harness(vec![unnamed, record()]);
+    let projects_removed = Arc::new(Mutex::new(Vec::new()));
+    let noted = Arc::clone(&projects_removed);
+    harness.deps.remove_project = Arc::new(move |id| {
+        noted.lock().unwrap().push(id);
+        Ok(())
+    });
+
+    run_threads(
+        &["remove".to_owned(), "thread-un".to_owned()],
+        &harness.deps,
+    )
+    .await;
+    assert!(
+        harness
+            .out()
+            .contains("the session's own project at /projects/un1")
+    );
+    run_threads(
+        &[
+            "remove".to_owned(),
+            "thread-un".to_owned(),
+            "--yes".to_owned(),
+        ],
+        &harness.deps,
+    )
+    .await;
+    run_threads(
+        &[
+            "remove".to_owned(),
+            "thread-aaaa".to_owned(),
+            "--yes".to_owned(),
+        ],
+        &harness.deps,
+    )
+    .await;
+
+    assert_eq!(*projects_removed.lock().unwrap(), ["un1"]);
+    assert!(harness.out().contains("and /projects/un1"));
+}
+
+/// An argument `gc` does not know is refused rather than ignored, so a
+/// misspelt `--dry-run` never runs a sweep that deletes.
+#[tokio::test]
+async fn gc_refuses_an_argument_it_does_not_know() {
+    let (harness, _roots, state) = cold_harness();
+
+    assert_eq!(
+        run_threads(&["gc".to_owned(), "--dryrun".to_owned()], &harness.deps).await,
+        2
+    );
+
+    assert!(harness.out().contains("gc does not take --dryrun"));
+    assert!(state.join("cold1").exists());
+}
+
+/// Removing a thread deletes nothing while the daemon runs, since the daemon
+/// may be running its session.
+#[tokio::test]
+async fn removing_refuses_while_the_daemon_runs() {
+    let mut harness = harness(vec![record()]);
+    harness.deps.hold_lock = Arc::new(|| Err("the daemon is running".to_owned()));
+
+    assert_eq!(
+        run_threads(
+            &[
+                "remove".to_owned(),
+                "thread-aaaa".to_owned(),
+                "--yes".to_owned()
+            ],
+            &harness.deps
+        )
+        .await,
+        1
+    );
+
+    assert!(harness.removed.lock().unwrap().is_empty());
+    assert_eq!(harness.registry.lock().unwrap().size(), 1);
+}
+
+/// What the daemon wrote before the lock was taken is what removal judges:
+/// a thread it forgot meanwhile is not deleted, and the lock is let go.
+#[tokio::test]
+async fn removing_reads_the_index_again_under_the_lock() {
+    let mut harness = harness(vec![record()]);
+    let path = harness.root.path().join("threads.json");
+    let released = Arc::new(Mutex::new(false));
+    harness.deps.hold_lock = {
+        let released = Arc::clone(&released);
+        Arc::new(move || {
+            let mut daemon = ThreadRegistry::new(
+                path.display().to_string(),
+                Logger::new(LogFields::new(), Arc::new(|_level, _line| {})),
+            );
+            daemon.load();
+            daemon.forget("thread-aaaa");
+            let released = Arc::clone(&released);
+            Ok(Box::new(move || *released.lock().unwrap() = true))
+        })
+    };
+
+    let code = run_threads(
+        &[
+            "remove".to_owned(),
+            "thread-aaaa".to_owned(),
+            "--yes".to_owned(),
+        ],
+        &harness.deps,
+    )
+    .await;
+
+    assert_eq!(code, 1);
+    assert!(harness.out().contains("no longer remembered"));
+    assert!(harness.removed.lock().unwrap().is_empty());
+    assert!(*released.lock().unwrap());
 }

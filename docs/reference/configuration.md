@@ -33,6 +33,7 @@ The fully resolved configuration the daemon runs on.
 | `shutdown` | `ShutdownConfig` | none | Who may power off the host. Empty means nobody, which is the default. |
 | `limits` | `LimitsConfig` | none | Bounds on how much work exists at once. |
 | `timeouts` | `TimeoutsConfig` | none | Deadlines that end or unblock a session. |
+| `retention` | `RetentionConfig` | none | When what a cold session left on disk is collected. |
 | `problems` | `Vec<String` | none | Every problem found, in the order the checks ran. |
 
 ## chat
@@ -203,4 +204,14 @@ Deadlines that end or unblock a session.
 | `startupMs` | `number` | none | How long the agent has to become ready before it is abandoned. |
 | `questionMs` | `number` | none | How long a question posted to a thread waits for an answer. |
 | `abortMs` | `number` | none | How long an abort waits for the agent before it is forced. |
+
+## retention
+
+When what a cold session left on disk is collected.  A session that has not been used for `olderThan` loses its state directory, its record, its index entry and the receipts of its provider calls, and an unnamed session its project too. A named project is never collected. A live session is never collected, however old.
+
+| field | type | default | what it does |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `true` | Whether the daemon collects at all. `errand threads gc` works either way. |
+| `olderThan` | `string` | `"30d"` | How long a session goes unused before it is collected, such as `30d`, `2w` or `7d 12h`. A month is 30 days and a year 365. |
+| `every` | `string` | `"1d"` | How often the daemon looks, as well as once when it starts. |
 

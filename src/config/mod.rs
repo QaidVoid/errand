@@ -10,6 +10,8 @@ use std::path::{Component, Path, PathBuf};
 
 /// How a provider definition says to ask it for its models.
 pub mod discover;
+/// Lengths of time as configuration writes them.
+pub mod duration;
 /// The configuration in force, which a change to the file may replace.
 pub mod live;
 /// Finds the configuration file and reads it.
