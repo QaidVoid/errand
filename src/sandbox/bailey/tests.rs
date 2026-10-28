@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use super::{
-    BaileyOptions, BaileySandbox, ProviderBrokering, bailey_args, brokered_env,
-    egress_proxy_endpoint, egress_proxy_url, parse_doctor, session_environment,
+    BaileyOptions, BaileySandbox, bailey_args, brokered_env, egress_proxy_endpoint,
+    egress_proxy_url, parse_doctor, session_environment,
 };
 use crate::config::schema::NetworkMode;
 use crate::config::schema::PolicyExtraConfig;
@@ -13,6 +13,7 @@ use crate::config::schema::{EgressConfig, EgressMode, SandboxBackend, SandboxCon
 use crate::log::{LogFields, Logger};
 use crate::sandbox::Run;
 use crate::sandbox::backend::{Denials, SandboxLaunch};
+use crate::sandbox::broker::{Broker, BrokerTemplate, ProviderUpstream, SessionBroker};
 use crate::sandbox::kage_providers::INSTALLED_JSON;
 use tempfile::TempDir;
 
@@ -615,21 +616,9 @@ fn egress_env_carries_the_credential_in_all_four_proxy_variables() {
         "/cache".to_owned(),
     )]));
     let (run, _) = fake_run(BTreeMap::new());
-    let sandbox = bailey_with(
-        &config,
-        "/state",
-        run,
-        BaileyOptions {
-            egress_proxy_port: Some(8443),
-            brokering: Some(ProviderBrokering {
-                proxy_secret: "run-secret".to_owned(),
-                credential_names: BTreeMap::new(),
-                nonces: BTreeMap::new(),
-            }),
-            ..BaileyOptions::default()
-        },
-    );
-    let env = sandbox.egress_env().unwrap();
+    let sandbox = bailey_with(&config, "/state", run, BaileyOptions::default());
+    let broker = session_broker(8443, "run-secret");
+    let env = sandbox.egress_env(Some(&broker)).unwrap();
     for name in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
         assert_eq!(env[name], "http://session:run-secret@169.254.169.1:8443");
     }
@@ -646,8 +635,8 @@ fn egress_env_carries_the_credential_in_all_four_proxy_variables() {
 }
 
 #[test]
-fn egress_env_without_brokering_or_port_preserves_only_the_operator_env() {
-    for (port, has_brokering) in [(Some(8443), false), (None, true), (None, false)] {
+fn egress_env_names_no_proxy_without_a_broker_or_outside_proxy_mode() {
+    for broker in [None, Some(session_broker(8443, "run-secret"))] {
         for env in [
             None,
             Some(BTreeMap::from([
@@ -658,22 +647,14 @@ fn egress_env_without_brokering_or_port_preserves_only_the_operator_env() {
         ] {
             let mut config = config();
             config.env = env.clone();
+            // A broker only matters under proxy mode, and none at all leaves
+            // the operator env as it was in any mode.
+            if broker.is_some() {
+                config.egress.mode = EgressMode::Open;
+            }
             let (run, _) = fake_run(BTreeMap::new());
-            let sandbox = bailey_with(
-                &config,
-                "/state",
-                run,
-                BaileyOptions {
-                    egress_proxy_port: port,
-                    brokering: has_brokering.then(|| ProviderBrokering {
-                        proxy_secret: "run-secret".to_owned(),
-                        credential_names: BTreeMap::new(),
-                        nonces: BTreeMap::new(),
-                    }),
-                    ..BaileyOptions::default()
-                },
-            );
-            assert_eq!(sandbox.egress_env(), env);
+            let sandbox = bailey_with(&config, "/state", run, BaileyOptions::default());
+            assert_eq!(sandbox.egress_env(broker.as_ref()), env);
         }
     }
 }
@@ -683,18 +664,15 @@ fn egress_env_without_brokering_or_port_preserves_only_the_operator_env() {
 /// provider the broker cannot route loses its variable.
 #[test]
 fn no_real_key_crosses_under_a_broker_whichever_provider_starts() {
-    let brokering = ProviderBrokering {
-        proxy_secret: "run-secret".to_owned(),
-        credential_names: BTreeMap::from([
-            ("default".to_owned(), "DEFAULT_KEY".to_owned()),
-            ("other".to_owned(), "OTHER_KEY".to_owned()),
-            ("unrouted".to_owned(), "UNROUTED_KEY".to_owned()),
-        ]),
-        nonces: BTreeMap::from([
-            ("default".to_owned(), "n-default".to_owned()),
-            ("other".to_owned(), "n-other".to_owned()),
-        ]),
-    };
+    let credential_names = BTreeMap::from([
+        ("default".to_owned(), "DEFAULT_KEY".to_owned()),
+        ("other".to_owned(), "OTHER_KEY".to_owned()),
+        ("unrouted".to_owned(), "UNROUTED_KEY".to_owned()),
+    ]);
+    let nonces = BTreeMap::from([
+        ("default".to_owned(), "n-default".to_owned()),
+        ("other".to_owned(), "n-other".to_owned()),
+    ]);
     let env = BTreeMap::from([
         ("OTHER_KEY".to_owned(), "real-other".to_owned()),
         ("UNROUTED_KEY".to_owned(), "real-unrouted".to_owned()),
@@ -702,7 +680,7 @@ fn no_real_key_crosses_under_a_broker_whichever_provider_starts() {
     ]);
 
     assert_eq!(
-        brokered_env(&env, &brokering),
+        brokered_env(&env, &credential_names, &nonces),
         BTreeMap::from([
             ("DEFAULT_KEY".to_owned(), "n-default".to_owned()),
             ("OTHER_KEY".to_owned(), "n-other".to_owned()),
@@ -711,8 +689,150 @@ fn no_real_key_crosses_under_a_broker_whichever_provider_starts() {
     );
 }
 
-/// What the brokering type carries; kept where the daemon wiring reads it.
-#[allow(dead_code)]
-fn brokering_shape() -> Option<ProviderBrokering> {
-    None
+/// A session broker that never listened, for what a launch derives from one.
+fn session_broker(port: u16, secret: &str) -> SessionBroker {
+    SessionBroker {
+        broker: Broker::new(
+            Vec::new(),
+            vec![443],
+            silent(),
+            Vec::new(),
+            false,
+            String::new(),
+        ),
+        port,
+        proxy_secret: secret.to_owned(),
+        nonces: BTreeMap::new(),
+        credential_names: BTreeMap::new(),
+    }
+}
+
+fn template() -> BrokerTemplate {
+    BrokerTemplate {
+        allow: vec!["api.example.com".to_owned()],
+        ports: vec![443],
+        allow_internal: false,
+        log: silent(),
+        providers: vec![ProviderUpstream {
+            name: "zai-coding-cn".to_owned(),
+            prefix: "/provider/zai-coding-cn".to_owned(),
+            upstream: "https://api.example.com/v4".to_owned(),
+            credential: "real-key".to_owned(),
+        }],
+        credential_names: BTreeMap::from([("zai-coding-cn".to_owned(), "ZAI_KEY".to_owned())]),
+    }
+}
+
+/// Whether nothing accepts on a loopback port any more. The accept loop
+/// learns of a close on the runtime, so the port is given a moment to go.
+async fn stops_listening(port: u16) -> bool {
+    for _ in 0..100 {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_err()
+        {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    false
+}
+
+/// The proxy secret and broker port a launch wrote into its policy.
+fn proxy_in_policy(state_dir: &std::path::Path) -> (String, u16) {
+    let policy = std::fs::read_to_string(state_dir.join("policy.toml")).expect("a policy");
+    let url = policy
+        .split_once("HTTPS_PROXY = \"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(url, _)| url)
+        .expect("the proxy variable");
+    let (secret, port) = url
+        .strip_prefix("http://session:")
+        .and_then(|rest| rest.split_once("@169.254.169.1:"))
+        .expect("a proxy URL with a credential");
+    (secret.to_owned(), port.parse().expect("a port"))
+}
+
+/// Each launch starts a broker of its own, and one that fails after starting
+/// it leaves nothing listening: a session that never ran must not leave a
+/// port behind that still honours what it was handed.
+#[tokio::test]
+async fn each_launch_has_its_own_broker_and_a_failed_one_leaves_none() {
+    let root = TempDir::new().expect("a temporary directory");
+    let mut answers = BTreeMap::new();
+    answers.insert(
+        "trust".to_owned(),
+        (Some(1), None, Some("refused".to_owned())),
+    );
+    let (run, _calls) = fake_run(answers);
+    let sandbox = Arc::new(bailey_with(
+        &config(),
+        &root.path().to_string_lossy(),
+        run,
+        BaileyOptions {
+            broker: Some(template()),
+            lookup: Some(Arc::new(fake_agent)),
+            kage: Some(fake_kage(0, INSTALLED_JSON).0),
+            ..BaileyOptions::default()
+        },
+    ));
+    sandbox.probe().await.expect("a report");
+
+    let mut seen = Vec::new();
+    for session in ["s-1", "s-2"] {
+        let state_dir = root.path().join(session);
+        let launch = SandboxLaunch {
+            session_id: session.to_owned(),
+            state_dir: state_dir.to_string_lossy().into_owned(),
+            project_path: root.path().to_string_lossy().into_owned(),
+            ..launch()
+        };
+        let Err(error) = sandbox.launch(&launch).await else {
+            panic!("the launch was meant to fail at trust");
+        };
+        assert!(error.0.contains("could not trust"), "{}", error.0);
+        let (secret, port) = proxy_in_policy(&state_dir);
+        assert!(
+            stops_listening(port).await,
+            "{session} left port {port} open"
+        );
+        seen.push((secret, port));
+    }
+    assert_ne!(seen[0].0, seen[1].0, "two sessions shared a proxy secret");
+}
+
+/// Stopping a session closes its broker, so nothing it was handed is
+/// honoured once it is asked to stop.
+#[tokio::test]
+async fn stopping_a_session_closes_its_broker() {
+    let started = template().start("s-1").await.expect("a broker");
+    let port = started.port;
+    let env = BTreeMap::from([("PATH".to_owned(), std::env::var("PATH").unwrap_or_default())]);
+    let spawned = crate::sandbox::spawn::spawn_agent("sleep", &["30".to_owned()], Some(&env), None)
+        .expect("a stand-in for the launcher");
+    let (run, _calls) = fake_run(BTreeMap::new());
+    let handle = crate::sandbox::SandboxHandle::Bailey(Box::new(crate::sandbox::BaileyStop {
+        session_id: "s-1".to_owned(),
+        name: "errand-s-1".to_owned(),
+        project_path: "/projects/demo".to_owned(),
+        spawned: Arc::new(spawned),
+        policy: "/state/s-1/policy.toml".to_owned(),
+        run,
+        grace_ms: 1_000,
+        log: silent(),
+        broker: Mutex::new(Some(started.broker)),
+        stopped: std::sync::atomic::AtomicBool::new(false),
+    }));
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+    );
+
+    handle.stop().await;
+
+    assert!(
+        stops_listening(port).await,
+        "the broker outlived its session"
+    );
 }

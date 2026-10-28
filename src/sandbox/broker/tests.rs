@@ -7,10 +7,10 @@ use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::server::{Broker, dial, read_request_head};
+use super::server::{Broker, BrokerTemplate, dial, proxy_authorization, read_request_head};
 use super::{
-    NoAddress, ProviderRoute, Resolve, carries_nonce, host_allowed, is_private_address,
-    parse_connect, parse_forward, public_addresses,
+    NoAddress, ProviderRoute, ProviderUpstream, Resolve, carries_nonce, host_allowed,
+    is_private_address, parse_connect, parse_forward, public_addresses,
 };
 use crate::log::{LogFields, Logger};
 
@@ -411,8 +411,8 @@ async fn a_session_key_in_x_api_key_is_accepted_and_translated() {
     broker.close();
 }
 
-/// A nonce is per provider, so reading one out of a session buys nothing
-/// against another provider the same broker serves.
+/// A nonce is per provider within a session, so reading one out of a session
+/// buys nothing against another provider the same broker serves.
 #[tokio::test]
 async fn each_provider_has_its_own_route_and_its_own_nonce() {
     let seen: Arc<Mutex<BTreeMap<String, String>>> = Arc::new(Mutex::new(BTreeMap::new()));
@@ -917,6 +917,7 @@ fn provider_state(routes: Vec<ProviderRoute>) -> super::ProviderState {
         resolve: None,
         provider_port: 0,
         client: reqwest::Client::builder().no_proxy().build().unwrap(),
+        closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
 
@@ -1454,4 +1455,234 @@ async fn a_forward_with_invalid_credentials_is_refused_before_resolution() {
         assert_eq!((exchange.lookups, exchange.dials), (0, 0));
         assert!(exchange.forwarded.is_empty());
     }
+}
+
+/// A template over one provider at a stand-in upstream on loopback.
+fn template_for(upstream_port: u16, log: Logger) -> BrokerTemplate {
+    BrokerTemplate {
+        allow: vec!["api.example.com".to_owned()],
+        ports: vec![443],
+        allow_internal: true,
+        log,
+        providers: vec![ProviderUpstream {
+            name: "zai".to_owned(),
+            prefix: "/provider/zai".to_owned(),
+            upstream: format!("http://127.0.0.1:{upstream_port}/v4"),
+            credential: "the-real-key".to_owned(),
+        }],
+        credential_names: BTreeMap::new(),
+    }
+}
+
+/// What a provider call with `nonce` on a session broker's `port` answers.
+async fn call_provider(port: u16, nonce: &str) -> u16 {
+    reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{port}/provider/zai/chat"))
+        .header("authorization", format!("Bearer {nonce}"))
+        .body("{}")
+        .send()
+        .await
+        .expect("answered")
+        .status()
+        .as_u16()
+}
+
+/// Whether nothing accepts on `port` any more, allowing the accept loop a
+/// moment to learn of a close on the runtime.
+async fn stops_listening(port: u16) -> bool {
+    for _ in 0..100 {
+        if TcpStream::connect(("127.0.0.1", port)).await.is_err() {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    false
+}
+
+/// Two sessions started from the same template share no listener, no proxy
+/// credential, and no nonce, so what is read out of one is refused by the
+/// other.
+#[tokio::test]
+async fn sessions_share_no_listener_and_no_nonce() {
+    let seen: Arc<Mutex<BTreeMap<String, String>>> = Arc::new(Mutex::new(BTreeMap::new()));
+    let upstream_port = start_upstream(Arc::clone(&seen), "one").await;
+    let template = template_for(upstream_port, silent());
+
+    let a = template.start("s-a").await.expect("a broker for a");
+    let b = template.start("s-b").await.expect("a broker for b");
+
+    assert_ne!(a.port, b.port);
+    assert_ne!(a.proxy_secret, b.proxy_secret);
+    assert_ne!(a.nonces["zai"], b.nonces["zai"]);
+
+    assert_eq!(call_provider(a.port, &a.nonces["zai"]).await, 200);
+    assert_eq!(call_provider(b.port, &b.nonces["zai"]).await, 200);
+    assert_eq!(call_provider(b.port, &a.nonces["zai"]).await, 401);
+    assert_eq!(call_provider(a.port, &b.nonces["zai"]).await, 401);
+}
+
+/// A session broker that is dropped, as one is when a launch fails part way
+/// or a handle is let go without a stop, stops listening all the same.
+#[tokio::test]
+async fn a_dropped_session_broker_stops_listening() {
+    let template = template_for(9, silent());
+    let started = template.start("s-1").await.expect("a broker");
+    let port = started.port;
+    assert!(TcpStream::connect(("127.0.0.1", port)).await.is_ok());
+
+    drop(started);
+
+    assert!(
+        stops_listening(port).await,
+        "a dropped broker kept accepting"
+    );
+}
+
+/// The broker's own log lines name the session whose listener the request
+/// arrived on, a tunnel included, though a tunnel carries no nonce.
+#[tokio::test]
+async fn what_a_session_broker_logs_names_the_session() {
+    let logged = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorded = Arc::clone(&logged);
+    let log = Logger::new(
+        LogFields::new(),
+        Arc::new(move |_level, line| recorded.lock().unwrap().push(line.to_owned())),
+    );
+    let template = template_for(9, log);
+    let started = template.start("s-7").await.expect("a broker");
+
+    let mut conn = TcpStream::connect(("127.0.0.1", started.port))
+        .await
+        .expect("the broker");
+    conn.write_all(
+        format!(
+            "CONNECT elsewhere.example:443 HTTP/1.1\r\nProxy-Authorization: {}\r\n\r\n",
+            proxy_authorization(&started.proxy_secret)
+        )
+        .as_bytes(),
+    )
+    .await
+    .expect("written");
+    let mut refused = String::new();
+    let _ = conn.read_to_string(&mut refused).await;
+    assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+
+    assert_eq!(call_provider(started.port, "not-the-nonce").await, 401);
+
+    let logged = logged.lock().unwrap();
+    for message in ["egress refused", "without this session's key"] {
+        assert!(
+            logged
+                .iter()
+                .any(|line| line.contains(message) && line.contains("session=s-7")),
+            "{message}: {logged:?}"
+        );
+    }
+}
+
+/// A connection the session opened before it was stopped is still its to
+/// write on, so a request arriving on it after the close is refused rather
+/// than admitted with the credential it carries.
+#[tokio::test]
+async fn a_request_after_the_close_is_refused_on_an_earlier_connection() {
+    let exchange = |closed: bool| async move {
+        let mut state = provider_state(Vec::new());
+        state.allow = vec!["upstream.example".to_owned()];
+        state.resolve = Some(resolver(&["1.1.1.1"]));
+        state
+            .closed
+            .store(closed, std::sync::atomic::Ordering::SeqCst);
+        let (mut client, stream) = tokio::io::duplex(4096);
+        let (upstream, origin) = tokio::io::duplex(4096);
+        let dialled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let marked = Arc::clone(&dialled);
+        let handle = super::server::handle(stream, Arc::new(state), move |_, _, _| {
+            marked.store(true, std::sync::atomic::Ordering::SeqCst);
+            async move { Ok(upstream) }
+        });
+        let ask = async {
+            client
+                .write_all(
+                    format!(
+                        "CONNECT upstream.example:443 HTTP/1.1\r\nProxy-Authorization: \
+                         {PROXY_CREDENTIAL}\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut buf = vec![0_u8; 128];
+            let read = client.read(&mut buf).await.unwrap_or(0);
+            // Both ends hung up, so an admitted tunnel has nothing to copy.
+            drop(client);
+            drop(origin);
+            String::from_utf8_lossy(&buf[..read]).into_owned()
+        };
+        let ((), answer) = tokio::join!(handle, ask);
+        (answer, dialled.load(std::sync::atomic::Ordering::SeqCst))
+    };
+
+    let (open, dialled) = exchange(false).await;
+    assert!(open.starts_with("HTTP/1.1 200"), "{open}");
+    assert!(dialled);
+
+    let (closed, dialled) = exchange(true).await;
+    assert!(closed.starts_with("HTTP/1.1 503"), "{closed}");
+    assert!(!dialled, "a stopped session's request was dialled");
+}
+
+/// The provider endpoint refuses a request after the close too, as a
+/// connection kept alive to it would otherwise carry one.
+#[tokio::test]
+async fn a_provider_call_after_the_close_is_refused() {
+    let state = provider_state(vec![provider_route(
+        "/provider/zai",
+        "https://api.example.com/v4",
+    )]);
+    state
+        .closed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let request = http::Request::builder()
+        .uri("/provider/zai/chat")
+        .header("authorization", "Bearer session-nonce")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let answered = super::serve_provider_request(Arc::new(state), request).await;
+    assert_eq!(answered.status().as_u16(), 503);
+}
+
+/// A session stopped while a tunnel's dial was still running gets no tunnel:
+/// the close is weighed again once the dial returns, before the tunnel is
+/// confirmed.
+#[tokio::test]
+async fn a_session_stopped_during_a_dial_gets_no_tunnel() {
+    let mut state = provider_state(Vec::new());
+    state.allow = vec!["*".to_owned()];
+    state.allow_internal = true;
+    let closed = Arc::clone(&state.closed);
+    let (mut client, stream) = tokio::io::duplex(4096);
+    let (upstream, _far) = tokio::io::duplex(64);
+    let handle = super::server::handle(stream, Arc::new(state), move |_, _, _| {
+        closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        async move { Ok(upstream) }
+    });
+    let session = async {
+        client
+            .write_all(
+                format!(
+                    "CONNECT 127.0.0.1:443 HTTP/1.1\r\nProxy-Authorization: {PROXY_CREDENTIAL}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut answer = String::new();
+        client.read_to_string(&mut answer).await.unwrap();
+        answer
+    };
+
+    let (answer, ()) = tokio::join!(session, handle);
+
+    assert!(answer.starts_with("HTTP/1.1 503"), "{answer}");
+    assert!(!answer.contains("200 Connection Established"), "{answer}");
 }

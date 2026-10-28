@@ -44,16 +44,23 @@ list in the generated policy, while podman bounds the network by namespace
 rather than by port, so the list is inert there. A session with `network` set
 to `none` opens nothing, whatever ports are named.
 
-The proxy listener requires one shared credential per broker run. A `CONNECT`
-or plain `http://` request without the valid credential receives
-`407 Proxy Authentication Required` with a `Proxy-Authenticate: Basic`
-challenge, before any upstream connection is opened. The session's proxy
-variables carry the credential as URL userinfo, so ordinary tools send it
-automatically. The launcher argv still names only the bare proxy endpoint,
-not the credential. This authenticates the caller to the broker and prevents
-a local process that only discovers the port from using it. It does not
-isolate sessions: every session can read the shared credential from its own
-environment.
+Each session has a broker of its own. It is started when the session's
+sandbox launches, on a loopback port no other session uses, and it mints a
+proxy credential and a stand-in for every brokered provider key for that
+session alone. A credential or stand-in read out of one session is refused
+by every other session's broker. Stopping the session closes its broker
+first: from then on neither is honoured, even on a connection the session
+opened earlier, and the port is released. A tunnel already open is not cut,
+and ends when the session's processes do. The broker's log lines name the
+session they belong to, tunnels included.
+
+The proxy listener requires that credential. A `CONNECT` or plain `http://`
+request without it receives `407 Proxy Authentication Required` with a
+`Proxy-Authenticate: Basic` challenge, before any upstream connection is
+opened. The session's proxy variables carry the credential as URL userinfo,
+so ordinary tools send it automatically. The launcher argv still names only
+the bare proxy endpoint, not the credential. This prevents a local process
+that only discovers the port from using it.
 
 The broker resolves a name itself, on this host and with this host's resolver,
 not the session's, and dials only the addresses it judged. A name that resolves

@@ -1,21 +1,135 @@
 //! The listener that admits a session's connections, gates them, and tunnels.
 //!
-//! One `Broker` serves one session's namespace: the allowlist is fixed for the
-//! life of that session.
+//! One `Broker` serves one session: it is started when the session's sandbox
+//! is launched and closed when the sandbox is stopped. Its allowlist, its
+//! proxy credential, and its provider nonces are honoured only until then,
+//! on any connection, including one opened before the close.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
 use super::{
-    DIAL_BUDGET, DIAL_TIMEOUT, LOOKUP_TIMEOUT, NoAddress, ProviderRoute, ProviderState, Target,
-    carries_proxy_credential, host_allowed, parse_connect, parse_forward, public_addresses,
+    DIAL_BUDGET, DIAL_TIMEOUT, LOOKUP_TIMEOUT, NoAddress, ProviderRoute, ProviderState,
+    ProviderUpstream, Target, carries_proxy_credential, host_allowed, parse_connect, parse_forward,
+    public_addresses,
 };
 use crate::log::Logger;
 use crate::log::fields;
+
+/// What every session's broker is built from, fixed when the daemon starts.
+///
+/// The allowlist, the ports, and where each provider is are the daemon's.
+/// What a session is handed to reach them is not: [`BrokerTemplate::start`]
+/// mints a proxy credential and a nonce per provider for each session, so
+/// nothing read out of one session is worth anything to another, or outlives
+/// it.
+#[derive(Clone)]
+pub struct BrokerTemplate {
+    /// The egress allowlist, by host.
+    pub allow: Vec<String>,
+    /// The upstream ports a broker will open.
+    pub ports: Vec<u16>,
+    /// Whether a literal internal address may be dialled.
+    pub allow_internal: bool,
+    /// The logger each session's broker writes to, under its session's name.
+    pub log: Logger,
+    /// The providers a broker stands in front of.
+    pub providers: Vec<ProviderUpstream>,
+    /// The variable the agent reads each provider's key from, by provider
+    /// name, for every brokered provider that names one.
+    pub credential_names: BTreeMap<String, String>,
+}
+
+/// How long the accept loop waits before trying again after a failed accept,
+/// such as the daemon running out of file descriptors for a moment.
+const ACCEPT_RETRY: Duration = Duration::from_secs(1);
+
+/// One session's running broker, and what the session is handed to reach it.
+pub struct SessionBroker {
+    /// The running broker. Closing or dropping it refuses every request made
+    /// after, on any connection, so everything below is worthless from then.
+    pub broker: Broker,
+    /// The loopback port the broker listens on.
+    pub port: u16,
+    /// The proxy credential this session's tools send.
+    pub proxy_secret: String,
+    /// What stands in for each provider's credential, by provider name.
+    pub nonces: BTreeMap<String, String>,
+    /// The variable the agent reads each provider's key from, by provider
+    /// name, as the template has it.
+    pub credential_names: BTreeMap<String, String>,
+}
+
+impl BrokerTemplate {
+    /// Starts a broker for `session_id`, with its own listener, its own proxy
+    /// credential, and its own nonce for every provider.
+    pub async fn start(&self, session_id: &str) -> std::io::Result<SessionBroker> {
+        let mut nonces = BTreeMap::new();
+        let routes = self
+            .providers
+            .iter()
+            .map(|provider| {
+                let nonce = fresh_secret();
+                nonces.insert(provider.name.clone(), nonce.clone());
+                ProviderRoute {
+                    prefix: provider.prefix.clone(),
+                    upstream: provider.upstream.clone(),
+                    nonce,
+                    credential: provider.credential.clone(),
+                }
+            })
+            .collect();
+        let proxy_secret = fresh_secret();
+        let mut broker = Broker::new(
+            self.allow.clone(),
+            self.ports.clone(),
+            self.log.with(fields([("session", session_id.into())])),
+            routes,
+            self.allow_internal,
+            proxy_authorization(&proxy_secret),
+        );
+        // The listener sits on loopback; the address a sandbox dials is only
+        // mapped back to this host from inside it.
+        let port = broker.listen("127.0.0.1").await?;
+        Ok(SessionBroker {
+            broker,
+            port,
+            proxy_secret,
+            nonces,
+            credential_names: self.credential_names.clone(),
+        })
+    }
+}
+
+/// The `Proxy-Authorization` value a session's tools send for `secret`.
+pub(super) fn proxy_authorization(secret: &str) -> String {
+    format!("Basic {}", STANDARD.encode(format!("session:{secret}")))
+}
+
+/// A stand-in for a credential, for one session.
+///
+/// Drawn from the system generator rather than anything derived from what it
+/// stands for, so holding it says nothing about the key behind it. It is
+/// honoured only by the broker it was minted for, which ends with the session.
+fn fresh_secret() -> String {
+    use std::fmt::Write as _;
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("the system generator is available");
+    bytes.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
+}
 
 /// A running proxy that admits only allowlisted hosts on allowed ports.
 pub struct Broker {
@@ -27,7 +141,7 @@ pub struct Broker {
     proxy_authorization: String,
     accept_shutdown: Option<oneshot::Sender<()>>,
     provider_shutdown: Option<oneshot::Sender<()>>,
-    closed: bool,
+    closed: Arc<AtomicBool>,
 }
 
 impl Broker {
@@ -51,7 +165,7 @@ impl Broker {
             proxy_authorization,
             accept_shutdown: None,
             provider_shutdown: None,
-            closed: false,
+            closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -68,7 +182,7 @@ impl Broker {
         let provider_port = if self.routes.is_empty() {
             0
         } else {
-            self.start_provider(client.clone()).await
+            self.start_provider(client.clone()).await?
         };
         let listener = TcpListener::bind((host, 0)).await?;
         let port = listener.local_addr()?.port();
@@ -82,15 +196,37 @@ impl Broker {
             resolve: None,
             provider_port,
             client,
+            closed: Arc::clone(&self.closed),
         });
         let (shutdown_sender, mut shutdown_receiver) = oneshot::channel::<()>();
         tokio::spawn(async move {
             loop {
+                // A close is seen ahead of a connection already queued, so
+                // nothing is admitted once the session has been stopped.
                 let accepted = tokio::select! {
-                    accepted = listener.accept() => accepted,
+                    biased;
                     _ = &mut shutdown_receiver => break,
+                    accepted = listener.accept() => accepted,
                 };
-                let Ok((stream, _peer)) = accepted else { break };
+                let (stream, _peer) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        state.log.warn(
+                            "the egress broker could not accept a connection, and tries again",
+                            &fields([
+                                ("detail", error.to_string().into()),
+                                (
+                                    "retry_ms",
+                                    u64::try_from(ACCEPT_RETRY.as_millis())
+                                        .unwrap_or(u64::MAX)
+                                        .into(),
+                                ),
+                            ]),
+                        );
+                        tokio::time::sleep(ACCEPT_RETRY).await;
+                        continue;
+                    }
+                };
                 let state = Arc::clone(&state);
                 tokio::spawn(handle(
                     stream,
@@ -103,7 +239,7 @@ impl Broker {
         Ok(port)
     }
 
-    async fn start_provider(&mut self, client: reqwest::Client) -> u16 {
+    async fn start_provider(&mut self, client: reqwest::Client) -> std::io::Result<u16> {
         let (shutdown_sender, shutdown_receiver) = oneshot::channel::<()>();
         let app = axum::Router::new().fallback(
             |axum::extract::State(state): axum::extract::State<Arc<ProviderState>>,
@@ -121,11 +257,10 @@ impl Broker {
             resolve: None,
             provider_port: 0,
             client,
+            closed: Arc::clone(&self.closed),
         });
-        let listener = TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .expect("a loopback port for the provider endpoint");
-        let port = listener.local_addr().expect("a local address").port();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let port = listener.local_addr()?.port();
         self.provider_shutdown = Some(shutdown_sender);
         tokio::spawn(async move {
             let shutdown = async {
@@ -136,22 +271,30 @@ impl Broker {
                 .await
                 .expect("the provider server serves");
         });
-        port
+        Ok(port)
     }
 
-    /// Stops accepting and closes the listener. A tunnel already running is
-    /// left to finish, as it is under the listener this replaces.
+    /// Stops accepting, closes the listener, and refuses any request still to
+    /// come on a connection accepted before. A tunnel already running is left
+    /// to finish; it ends when the session's processes do.
     pub fn close(&mut self) {
-        if self.closed {
+        if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
-        self.closed = true;
         if let Some(shutdown) = self.accept_shutdown.take() {
             let _ = shutdown.send(());
         }
         if let Some(shutdown) = self.provider_shutdown.take() {
             let _ = shutdown.send(());
         }
+    }
+}
+
+/// A broker that goes out of scope stops listening, so a launch that fails
+/// after starting one leaves nothing behind that still honours its nonces.
+impl Drop for Broker {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -169,6 +312,12 @@ pub(super) async fn handle<S, U, F>(
     let Some(head) = read_request_head(&mut stream).await else {
         return;
     };
+    // A connection opened before the session was stopped may still be held
+    // open by it, so a request is weighed against the close when it arrives.
+    if state.closed.load(Ordering::SeqCst) {
+        let _ = refuse(&mut stream, 503, "this session has stopped", &[]).await;
+        return;
+    }
     if let Some(target) = parse_connect(head.lines().next().unwrap_or("")) {
         if !authenticate_proxy(&mut stream, &head, &target, &state).await {
             return;
@@ -290,6 +439,16 @@ where
 
     let deadline = tokio::time::Instant::now() + DIAL_BUDGET;
     match dial_upstream(addresses, target.port, deadline).await {
+        // The lookup and the dial take seconds, and the session may have been
+        // stopped while they ran. A tunnel is not opened for a stopped one.
+        Ok(_) if state.closed.load(Ordering::SeqCst) => {
+            state.log.info(
+                "egress refused, since the session stopped while it was dialled",
+                &fields([("host", host.into()), ("port", port.into())]),
+            );
+            let _ = refuse(writer, 503, "this session has stopped", &[]).await;
+            None
+        }
         Ok(upstream) => {
             state.log.info(
                 "egress allowed",

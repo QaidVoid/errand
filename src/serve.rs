@@ -10,8 +10,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use serenity::client::Context;
 use serenity::client::EventHandler as SerenityEventHandler;
 use serenity::model::application::Interaction;
@@ -68,10 +66,9 @@ use crate::provider::usage::{
 use crate::provider::vision::HttpPost;
 use crate::provider::vision::image_describer;
 use crate::provider::zai::fetch_quota;
-use crate::sandbox::bailey::ProviderBrokering;
-use crate::sandbox::bailey::{EGRESS_MAP_ADDRESS, provider_prefix};
-use crate::sandbox::broker::Broker;
-use crate::sandbox::broker::ProviderRoute;
+use crate::sandbox::bailey::provider_prefix;
+use crate::sandbox::broker::BrokerTemplate;
+use crate::sandbox::broker::ProviderUpstream;
 use crate::sandbox::broker::{LOOKUP_TIMEOUT, NoAddress, public_addresses};
 use crate::sandbox::paths;
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
@@ -417,30 +414,21 @@ fn brokerable_providers(agent: &AgentConfig, store: Option<&str>) -> Vec<(String
         .collect()
 }
 
-/// The broker's route for each provider it can stand in front of, and the
-/// nonce each is reached with, by provider name.
+/// The broker's route for each provider it can stand in front of.
 ///
 /// The credential is held back from the session and put on at the broker
-/// instead, so what a sandbox carries is a nonce that is worth nothing
-/// anywhere else. One route per provider whose upstream and credential the
-/// daemon knows, each with a nonce of its own.
-fn provider_routes(
-    agent: &AgentConfig,
-    store: Option<&str>,
-) -> (Vec<ProviderRoute>, BTreeMap<String, String>) {
-    let mut nonces = BTreeMap::new();
-    let mut routes = Vec::new();
-    for (name, upstream, credential) in brokerable_providers(agent, store) {
-        let nonce = provider_nonce();
-        nonces.insert(name.clone(), nonce.clone());
-        routes.push(ProviderRoute {
+/// instead. Each session's broker mints its own nonce for every route, so
+/// what a sandbox carries is worth nothing anywhere else.
+fn provider_upstreams(agent: &AgentConfig, store: Option<&str>) -> Vec<ProviderUpstream> {
+    brokerable_providers(agent, store)
+        .into_iter()
+        .map(|(name, upstream, credential)| ProviderUpstream {
             prefix: provider_prefix(&name),
+            name,
             upstream,
-            nonce,
             credential,
-        });
-    }
-    (routes, nonces)
+        })
+        .collect()
 }
 
 /// The provider variables the broker rewrites or strips, by provider.
@@ -463,9 +451,9 @@ fn brokering_credential_names(agent: &AgentConfig) -> BTreeMap<String, String> {
 /// host whose resolver answers nothing leaves every session unable to reach
 /// the provider. Said now, naming the resolver, rather than first seen as a
 /// failed turn. Startup goes on: the resolver may come up after the daemon.
-async fn check_provider_names(routes: &[ProviderRoute], allow_internal: bool, log: &Logger) {
-    for route in routes {
-        let Some(host) = host_of(&route.upstream) else {
+async fn check_provider_names(providers: &[ProviderUpstream], allow_internal: bool, log: &Logger) {
+    for provider in providers {
+        let Some(host) = host_of(&provider.upstream) else {
             continue;
         };
         let lookup = public_addresses(&host, allow_internal, None);
@@ -478,28 +466,12 @@ async fn check_provider_names(routes: &[ProviderRoute], allow_internal: bool, lo
             "this host cannot resolve a provider, and the broker resolves names with this \
              host's resolver; check /etc/resolv.conf",
             &fields([
-                ("provider", LogValue::from(route.prefix.as_str())),
+                ("provider", LogValue::from(provider.prefix.as_str())),
                 ("host", LogValue::from(host)),
                 ("detail", LogValue::from(why)),
             ]),
         );
     }
-}
-
-/// A per-run stand-in for the provider credential.
-///
-/// Drawn from the system generator rather than anything derived from the
-/// credential, so holding the nonce says nothing about the key it stands
-/// for. It lasts as long as the daemon: the broker is the only thing that
-/// honours it, and a restart brings a new one.
-fn provider_nonce() -> String {
-    use std::fmt::Write as _;
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).expect("the system generator is available");
-    bytes.iter().fold(String::new(), |mut out, byte| {
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
 }
 
 /// The lower-cased host of a base URL, for the egress allowlist.
@@ -646,29 +618,17 @@ fn refresh_presence(
     });
 }
 
-/// The broker a session's egress is forced through, when one is asked for.
+/// Works out what each session's egress broker is built from.
 ///
-/// Nothing here is set under any other egress mode, so the three travel
-/// together rather than as three options the caller has to keep in step.
-struct Brokered {
-    /// The running broker, held so shutdown can close it.
-    broker: Broker,
-    /// The loopback port the sandbox reaches it on.
-    proxy_port: u16,
-    /// Provider stand-ins and the shared proxy credential inside a sandbox.
-    brokering: ProviderBrokering,
-}
-
-/// Starts the egress broker and works out what a sandbox is told about it.
-///
-/// Under `egress.mode = proxy` every session's outbound is forced through one
-/// broker the daemon runs here on the host. Its allowlist is the provider,
-/// which a session cannot work without, plus whatever the operator named. The
-/// provider host is read from the model store the agent would reach it at.
+/// Under `egress.mode = proxy` every session's outbound is forced through a
+/// broker the daemon runs here on the host, one per session, started when its
+/// sandbox launches. Its allowlist is the provider, which a session cannot
+/// work without, plus whatever the operator named. The provider host is read
+/// from the model store the agent would reach it at.
 ///
 /// Returns nothing when the mode asks for no broker, and an exit code when
 /// one was asked for and could not be had.
-async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>, Exit> {
+async fn broker_template(config: &Config, log: &Logger) -> Result<Option<BrokerTemplate>, Exit> {
     if config.sandbox.egress.mode != EgressMode::Proxy {
         return Ok(None);
     }
@@ -688,61 +648,25 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
         );
         return Err(Exit::Refused);
     }
-    let (routes, nonces) = provider_routes(&config.agent, store.as_deref());
-    check_provider_names(&routes, config.sandbox.egress.allow_internal, log).await;
-    let proxy_secret = provider_nonce();
-    let proxy_authorization = format!(
-        "Basic {}",
-        STANDARD.encode(format!("session:{proxy_secret}"))
+    let providers = provider_upstreams(&config.agent, store.as_deref());
+    check_provider_names(&providers, config.sandbox.egress.allow_internal, log).await;
+    log.info(
+        "egress is brokered",
+        &fields([
+            ("allow", LogValue::from(allow.join(", "))),
+            (
+                "providers",
+                LogValue::from(
+                    providers
+                        .iter()
+                        .map(|provider| provider.prefix.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+            ),
+        ]),
     );
-    let brokering = ProviderBrokering {
-        proxy_secret,
-        credential_names: brokering_credential_names(&config.agent),
-        nonces,
-    };
-    let mut broker_instance = Broker::new(
-        allow.clone(),
-        config.sandbox.egress_ports.clone(),
-        log.clone(),
-        routes.clone(),
-        config.sandbox.egress.allow_internal,
-        proxy_authorization,
-    );
-    // The listener sits on loopback; 169.254.169.1 is only what bailey
-    // tells the sandbox to dial, mapped back to this host from inside.
-    let proxy_port = match broker_instance.listen("127.0.0.1").await {
-        Ok(port) => {
-            log.info(
-                "egress is brokered",
-                &fields([
-                    (
-                        "via",
-                        LogValue::from(format!("{EGRESS_MAP_ADDRESS}:{port}")),
-                    ),
-                    ("allow", LogValue::from(allow.join(", "))),
-                    (
-                        "providers",
-                        LogValue::from(
-                            routes
-                                .iter()
-                                .map(|route| route.prefix.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                        ),
-                    ),
-                ]),
-            );
-            port
-        }
-        Err(error) => {
-            log.error(
-                &format!("the egress broker could not be started: {error}"),
-                &fields([]),
-            );
-            return Err(Exit::Refused);
-        }
-    };
-    if routes.is_empty() {
+    if providers.is_empty() {
         log.warn(
             "the model store does not say where the provider is, so the credential is given to the session",
             &fields([]),
@@ -750,13 +674,16 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
     } else {
         log.info(
             "provider credentials stay outside the sandbox",
-            &fields([("providers", LogValue::from(routes.len()))]),
+            &fields([("providers", LogValue::from(providers.len()))]),
         );
     }
-    Ok(Some(Brokered {
-        broker: broker_instance,
-        proxy_port,
-        brokering,
+    Ok(Some(BrokerTemplate {
+        allow,
+        ports: config.sandbox.egress_ports.clone(),
+        allow_internal: config.sandbox.egress.allow_internal,
+        log: log.clone(),
+        providers,
+        credential_names: brokering_credential_names(&config.agent),
     }))
 }
 
@@ -769,8 +696,8 @@ async fn start_broker(config: &Config, log: &Logger) -> Result<Option<Brokered>,
 /// replaces what is in it while the daemon is already running. The copy read
 /// here is what startup committed to; the handle is what a later change to
 /// the file reaches. What was committed to cannot be rewound: the connection
-/// and the broker are already up, and a running session keeps what it was
-/// launched with.
+/// is already up, what each session's broker is built from is fixed, and a
+/// running session keeps what it was launched with.
 #[expect(clippy::too_many_lines)]
 async fn run(
     live: &LiveConfig,
@@ -801,13 +728,10 @@ async fn run(
         return code;
     }
 
-    let brokered = match start_broker(config, log).await {
-        Ok(brokered) => brokered,
+    let broker = match broker_template(config, log).await {
+        Ok(broker) => broker,
         Err(code) => return code,
     };
-    let egress_proxy_port = brokered.as_ref().map(|brokered| brokered.proxy_port);
-    let brokering = brokered.as_ref().map(|brokered| brokered.brokering.clone());
-    let mut broker = brokered.map(|brokered| brokered.broker);
 
     // The sandbox is checked before the chat service is touched, so a missing
     // image or an unenforceable guarantee fails immediately rather than after
@@ -820,13 +744,7 @@ async fn run(
         .map(|name| (name.clone(), store_entries(store.as_deref(), name)))
         .filter(|(_, models)| !models.is_empty())
         .collect();
-    let sandbox = Arc::new(create_sandbox(
-        config,
-        log.clone(),
-        egress_proxy_port,
-        brokering,
-        built_in,
-    ));
+    let sandbox = Arc::new(create_sandbox(config, log.clone(), broker, built_in));
     let report = match probe_sandbox(sandbox.as_ref(), config, log).await {
         Ok(report) => report,
         Err(error) => {
@@ -1430,9 +1348,10 @@ async fn run(
 
     // Started once the daemon is serving, so a change to the file is applied
     // to a daemon that is already answering. What was committed to at startup
-    // is not rewound by it: the connection and the broker are already up, and a
-    // session already running keeps what it was launched with. The next
-    // session, and the daemon's own answers, are what read the new file.
+    // is not rewound by it: the connection is already up, what each session's
+    // broker is built from is fixed, and a session already running keeps what
+    // it was launched with. The next session, and the daemon's own answers,
+    // are what read the new file.
     //
     // The catalog is derived from the file as well, so it is derived again
     // after a change. Without that, an edited `models` list would be in force
@@ -1468,9 +1387,6 @@ async fn run(
         "shutting down",
         &fields([("reason", LogValue::from("signal"))]),
     );
-    if let Some(mut broker) = broker.take() {
-        broker.close();
-    }
     if let Some(web) = &web {
         web.stop();
     }

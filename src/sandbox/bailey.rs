@@ -23,6 +23,7 @@ use crate::sandbox::backend::{
     AgentCommand, CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
     agent_command, agent_memory_path, fresh_disk_tmp, sandbox_name,
 };
+use crate::sandbox::broker::{BrokerTemplate, SessionBroker};
 use crate::sandbox::kage_providers::{KageProviders, LIST_ARGS, Probed};
 use crate::sandbox::paths;
 use crate::sandbox::policy::{
@@ -219,36 +220,21 @@ pub fn provider_broker_url(port: u16, provider: &str) -> String {
     )
 }
 
-/// Provider stand-ins and the shared proxy credential given to a session.
-///
-/// Provider credentials never cross into a sandbox: the broker puts them on
-/// at the other end. Sessions carry provider nonces and one proxy secret
-/// shared by every session for this broker run.
-#[derive(Debug, Clone)]
-pub struct ProviderBrokering {
-    /// The proxy credential shared by every session for this broker run.
-    pub proxy_secret: String,
-    /// The variable the agent reads each provider's key from, by provider
-    /// name, for those that name one.
-    pub credential_names: BTreeMap<String, String>,
-    /// What stands in for each brokered provider's credential, by provider
-    /// name.
-    pub nonces: BTreeMap<String, String>,
-}
-
 /// A session's environment with every provider key taken out.
 ///
 /// The session is handed the key of the provider it starts on, whichever that
-/// is. Under a broker that variable carries the provider's nonce instead,
-/// and a provider the broker has no route to loses the variable altogether,
-/// so no real key crosses into the sandbox.
+/// is. Under a broker that variable, named in `credential_names` by provider,
+/// carries the session's nonce for the provider instead, and a provider the
+/// broker has no route to loses the variable altogether, so no real key
+/// crosses into the sandbox.
 pub fn brokered_env(
     env: &BTreeMap<String, String>,
-    brokering: &ProviderBrokering,
+    credential_names: &BTreeMap<String, String>,
+    nonces: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut env = env.clone();
-    for (provider, name) in &brokering.credential_names {
-        match brokering.nonces.get(provider) {
+    for (provider, name) in credential_names {
+        match nonces.get(provider) {
             Some(nonce) => env.insert(name.clone(), nonce.clone()),
             None => env.remove(name),
         };
@@ -259,10 +245,8 @@ pub fn brokered_env(
 /// Extras the daemon supplies, which a test has no need of.
 #[derive(Default)]
 pub struct BaileyOptions {
-    /// Host loopback port of the broker, under `egress.mode = proxy`.
-    pub egress_proxy_port: Option<u16>,
-    /// Provider stand-ins and the shared proxy credential inside a session.
-    pub brokering: Option<ProviderBrokering>,
+    /// What each session's broker is built from, under `egress.mode = proxy`.
+    pub broker: Option<BrokerTemplate>,
     /// Finds the agent. Injected so a test needs no agent installed.
     pub lookup: Option<Lookup>,
     /// Runs the host's kage, its path first, to ask which providers it knows.
@@ -366,19 +350,17 @@ impl BaileySandbox {
             })
     }
 
-    /// The broker's route for each provider it stands in front of.
-    fn brokered_providers(&self) -> BTreeMap<String, BrokeredProvider> {
-        let (Some(brokering), Some(port)) =
-            (&self.options.brokering, self.options.egress_proxy_port)
-        else {
+    /// The session broker's route for each provider it stands in front of.
+    fn brokered_providers(broker: Option<&SessionBroker>) -> BTreeMap<String, BrokeredProvider> {
+        let Some(broker) = broker else {
             return BTreeMap::new();
         };
-        brokering
+        broker
             .nonces
             .keys()
             .map(|name| {
                 let through = BrokeredProvider {
-                    base_url: provider_broker_url(port, name),
+                    base_url: provider_broker_url(broker.port, name),
                 };
                 (name.clone(), through)
             })
@@ -392,17 +374,15 @@ impl BaileySandbox {
     /// tools are pointed at it with the standard proxy variables, lower and
     /// upper case, since programs read one or the other. Outside proxy mode
     /// this is the operator env unchanged.
-    fn egress_env(&self) -> Option<BTreeMap<String, String>> {
+    fn egress_env(&self, broker: Option<&SessionBroker>) -> Option<BTreeMap<String, String>> {
         let mut base = self.config.env.clone().unwrap_or_default();
         if self.config.egress.mode != EgressMode::Proxy {
             return if base.is_empty() { None } else { Some(base) };
         }
-        let (Some(port), Some(brokering)) =
-            (self.options.egress_proxy_port, &self.options.brokering)
-        else {
+        let Some(broker) = broker else {
             return if base.is_empty() { None } else { Some(base) };
         };
-        let url = egress_proxy_url(port, &brokering.proxy_secret);
+        let url = egress_proxy_url(broker.port, &broker.proxy_secret);
         base.insert("HTTPS_PROXY".to_owned(), url.clone());
         base.insert("https_proxy".to_owned(), url.clone());
         base.insert("HTTP_PROXY".to_owned(), url.clone());
@@ -587,6 +567,10 @@ impl BaileySandbox {
             ));
         };
 
+        // Started first and dropped on any failure below, which closes it, so a
+        // launch that does not finish leaves no listener honouring its nonces.
+        let broker = self.start_broker(&launch.session_id).await?;
+
         tokio::fs::create_dir_all(&launch.state_dir)
             .await
             .map_err(|error| SandboxLaunchError(error.to_string()))?;
@@ -597,19 +581,18 @@ impl BaileySandbox {
         }
         write_agent_config(
             launch,
-            &self.brokered_providers(),
+            &Self::brokered_providers(broker.as_ref()),
             &self.options.built_in,
             &launch.credential_names,
             &self.log,
             &self.kage_providers.get()?,
         )
         .await?;
-        let env = match &self.options.brokering {
-            Some(brokering) => brokered_env(&launch.env, brokering),
-            None => launch.env.clone(),
-        };
         let launch = SandboxLaunch {
-            env,
+            env: match &broker {
+                Some(broker) => brokered_env(&launch.env, &broker.credential_names, &broker.nonces),
+                None => launch.env.clone(),
+            },
             ..launch.clone()
         };
         let resolv = self.write_resolv_conf().await;
@@ -632,7 +615,7 @@ impl BaileySandbox {
                 disk_tmp: self.config.disk_tmp,
                 resolv_conf: &resolv,
                 extra: self.config.policy_extra.as_ref(),
-                env: self.egress_env().as_ref(),
+                env: self.egress_env(broker.as_ref()).as_ref(),
                 path_extra: self.config.path_extra.as_deref(),
             })
             .as_bytes(),
@@ -661,7 +644,7 @@ impl BaileySandbox {
             &self.config,
             &launch,
             &policy,
-            self.options.egress_proxy_port,
+            broker.as_ref().map(|broker| broker.port),
         );
         let cwd = launch.project_path.clone();
         let run = Arc::clone(&self.run);
@@ -688,8 +671,32 @@ impl BaileySandbox {
             run,
             grace_ms: self.config.grace_period_ms,
             log: self.log.clone(),
+            broker: std::sync::Mutex::new(broker.map(|broker| broker.broker)),
             stopped: std::sync::atomic::AtomicBool::new(false),
         })))
+    }
+
+    /// Starts this session's own egress broker, when egress is brokered.
+    async fn start_broker(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionBroker>, SandboxLaunchError> {
+        let Some(template) = &self.options.broker else {
+            return Ok(None);
+        };
+        let broker = template.start(session_id).await.map_err(|error| {
+            SandboxLaunchError(format!(
+                "the session's egress broker could not be started: {error}"
+            ))
+        })?;
+        self.log.info(
+            "egress is brokered for this session",
+            &fields([
+                ("session", session_id.into()),
+                ("via", egress_proxy_endpoint(broker.port).into()),
+            ]),
+        );
+        Ok(Some(broker))
     }
 
     /// Names of sandboxes this system owns that no live session claims.
