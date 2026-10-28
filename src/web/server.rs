@@ -903,7 +903,13 @@ async fn transcript(
         };
     };
 
-    let stored = Transcript::new(transcript_path(&record.state_dir), None).read();
+    let path = transcript_path(&record.state_dir);
+    let Ok(stored) = blocking(move || Transcript::new(path, None).read()).await else {
+        return refused(
+            json!({ "error": "the transcript could not be read" }),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+    };
 
     // The turn is carried on each entry rather than announced between them,
     // because a stored transcript is read in one piece rather than streamed.
@@ -944,26 +950,33 @@ async fn tree(
         Err(refusal) => return refusal,
     };
 
-    match located.metadata() {
-        Ok(metadata) if metadata.is_dir() => {
-            let entries = read_directory(&located.root, &located.relative).unwrap_or_default();
-            ok(json!(
-                entries
-                    .into_iter()
-                    .map(|entry| json!({
-                        "name": entry.name,
-                        "path": entry.path,
-                        "directory": entry.directory,
-                        "size": entry.size,
-                    }))
-                    .collect::<Vec<_>>()
-            ))
+    let listed = blocking(move || {
+        let metadata = located.metadata()?;
+        if !metadata.is_dir() {
+            return Ok(None);
         }
-        Ok(_) => refused(
+        Ok::<_, std::io::Error>(Some(
+            read_directory(&located.root, &located.relative).unwrap_or_default(),
+        ))
+    })
+    .await;
+    match listed {
+        Ok(Ok(Some(entries))) => ok(json!(
+            entries
+                .into_iter()
+                .map(|entry| json!({
+                    "name": entry.name,
+                    "path": entry.path,
+                    "directory": entry.directory,
+                    "size": entry.size,
+                }))
+                .collect::<Vec<_>>()
+        )),
+        Ok(Ok(None)) => refused(
             json!({ "error": "not a directory" }),
             StatusCode::BAD_REQUEST,
         ),
-        Err(_) => refused(
+        _ => refused(
             json!({ "error": "no such directory" }),
             StatusCode::NOT_FOUND,
         ),
@@ -981,26 +994,36 @@ async fn file(
         Err(refusal) => return refusal,
     };
 
-    match located.metadata() {
-        Ok(metadata) if metadata.is_dir() => refused(
+    let secrets = server.sessions.secrets();
+    // Every way of not finding one is answered the same, so the reason is
+    // not kept: it is the error text that would describe the host.
+    let read = blocking(move || {
+        let metadata = located.metadata().map_err(drop)?;
+        if metadata.is_dir() {
+            return Ok(None);
+        }
+        read_file_for_display(&located.root, &located.relative, MAX_INLINE_BYTES)
+            .map(Some)
+            .map_err(drop)
+    })
+    .await;
+    match read {
+        // The agent writes these, and it holds whatever credentials its
+        // sandbox was given. The transcript is scrubbed for the same reason,
+        // and a file is no less public.
+        Ok(Ok(Some(contents))) => ok(json!({
+            "path": contents.path,
+            "size": contents.size,
+            "binary": contents.binary,
+            "truncated": contents.truncated,
+            "text": redact_text(&contents.text, &secrets),
+            "language": contents.language,
+        })),
+        Ok(Ok(None)) => refused(
             json!({ "error": "is a directory" }),
             StatusCode::BAD_REQUEST,
         ),
-        Ok(_) => match read_file_for_display(&located.root, &located.relative, MAX_INLINE_BYTES) {
-            // The agent writes these, and it holds whatever credentials its
-            // sandbox was given. The transcript is scrubbed for the same
-            // reason, and a file is no less public.
-            Ok(contents) => ok(json!({
-                "path": contents.path,
-                "size": contents.size,
-                "binary": contents.binary,
-                "truncated": contents.truncated,
-                "text": redact_text(&contents.text, &server.sessions.secrets()),
-                "language": contents.language,
-            })),
-            Err(_) => refused(json!({ "error": "no such file" }), StatusCode::NOT_FOUND),
-        },
-        Err(_) => refused(json!({ "error": "no such file" }), StatusCode::NOT_FOUND),
+        _ => refused(json!({ "error": "no such file" }), StatusCode::NOT_FOUND),
     }
 }
 
@@ -1056,6 +1079,17 @@ async fn download(
         )
         .body(axum::body::Body::from_stream(chunks))
         .unwrap_or_else(|_| unreachable!("a download response always builds"))
+}
+
+/// Runs file work on the blocking pool.
+///
+/// Reading a project is ordinary file access, which blocks. On the async
+/// workers a slow disk, or a directory with a million entries in it, would
+/// hold up every other request and the chat connection with them.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, tokio::task::JoinError> {
+    tokio::task::spawn_blocking(work).await
 }
 
 /// The name a download is saved under, made safe to put in a header.

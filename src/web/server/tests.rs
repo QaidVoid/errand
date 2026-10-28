@@ -1307,21 +1307,23 @@ async fn a_planted_link_says_nothing_about_where_it_points() {
             std::os::unix::fs::symlink("/nowhere-at-all", project.join("nowhere")).unwrap();
             let client = reqwest::Client::new();
 
-            let mut answers = Vec::new();
-            for path in ["there", "nowhere", "there/hostname"] {
-                let answer = message(
-                    &client,
-                    &harness.base,
-                    &format!("/api/sessions/demo-s1/file?path={path}"),
-                )
-                .await;
-                answers.push((answer.status(), answer.text().await.unwrap()));
+            for route in ["file", "tree"] {
+                let mut answers = Vec::new();
+                for path in ["there", "nowhere", "there/hostname", "never-made"] {
+                    let answer = message(
+                        &client,
+                        &harness.base,
+                        &format!("/api/sessions/demo-s1/{route}?path={path}"),
+                    )
+                    .await;
+                    answers.push((answer.status(), answer.text().await.unwrap()));
+                }
+                assert!(
+                    answers.iter().all(|answer| *answer == answers[0]),
+                    "{route}: {answers:?}"
+                );
+                assert_eq!(answers[0].0, 404, "{route}");
             }
-            assert!(
-                answers.iter().all(|answer| *answer == answers[0]),
-                "{answers:?}"
-            );
-            assert_eq!(answers[0].0, 404);
         })
     })
     .await;
