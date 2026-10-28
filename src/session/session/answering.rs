@@ -149,6 +149,9 @@ impl Running {
                 })
                 .await;
             }
+            "!grant" if rest.trim().is_empty() => self.list_grants().await,
+            "!grant" => self.grant_host(rest, message).await,
+            "!revoke" => self.revoke_host(rest, message).await,
             "!guests" => {
                 let guests = self.guests.iter().cloned().collect::<Vec<_>>();
                 self.say(&if guests.is_empty() {

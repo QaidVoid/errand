@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use crate::log::{Logger, fields};
 use crate::sandbox::agent_config::BrokeredProvider;
 use crate::sandbox::backend::SandboxLaunchError;
+use crate::sandbox::broker::grants::GrantStore;
 use crate::sandbox::broker::{BrokerTemplate, SessionBroker};
 
 /// The variables that point a session's tools at its broker. Each carries the
@@ -81,17 +82,19 @@ pub fn add_proxy_env(env: &mut BTreeMap<String, String>, host: &str, broker: &Se
 }
 
 /// Starts a session's own egress broker from `template`, when egress is
-/// brokered, and says where the session reaches it.
+/// brokered, admitting what `grants` holds, and says where the session
+/// reaches it.
 pub async fn start_session_broker(
     template: Option<&BrokerTemplate>,
     session_id: &str,
+    grants: Option<std::sync::Arc<GrantStore>>,
     reached_at: &str,
     log: &Logger,
 ) -> Result<Option<SessionBroker>, SandboxLaunchError> {
     let Some(template) = template else {
         return Ok(None);
     };
-    let broker = template.start(session_id).await.map_err(|error| {
+    let broker = template.start(session_id, grants).await.map_err(|error| {
         SandboxLaunchError(format!(
             "the session's egress broker could not be started: {error}"
         ))

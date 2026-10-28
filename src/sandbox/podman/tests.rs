@@ -81,6 +81,7 @@ fn launch() -> SandboxLaunch {
         plugins: Vec::new(),
         denied: Denials::default(),
         resume: false,
+        grants: None,
     }
 }
 
@@ -581,7 +582,7 @@ async fn stopping_a_container_closes_its_broker() {
         receipts: None,
         now: Arc::new(|| 0),
     };
-    let started = template.start("s-1").await.expect("a broker");
+    let started = template.start("s-1", None).await.expect("a broker");
     let port = started.port;
     let env = BTreeMap::from([("PATH".to_owned(), std::env::var("PATH").unwrap_or_default())]);
     let spawned = crate::sandbox::spawn::spawn_agent("sleep", &["30".to_owned()], Some(&env), None)

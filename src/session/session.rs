@@ -42,6 +42,7 @@ use crate::provider::discover::Catalog;
 use crate::provider::images::{Drawn, Endpoint as ImageEndpoint};
 use crate::provider::speech::{Endpoint as SpeechEndpoint, Spoken};
 use crate::sandbox::backend::{Denials, SandboxLaunch, SandboxLaunchError, WORKSPACE_PATH};
+use crate::sandbox::broker::grants::{GRANTS_FILENAME, GrantStore};
 use crate::sandbox::paths;
 use crate::session::attachments::{self, RawAttachment, is_image, receive};
 use crate::session::commands::{
@@ -62,7 +63,9 @@ use crate::session::model::ChosenModel;
 use crate::session::pr::{self, PullRequestError};
 use crate::session::projects::ProjectSelection;
 use crate::session::recalling::Recalling;
-use crate::session::record::{withdraw_from_agent_session, withdraw_from_record};
+use crate::session::record::{
+    prepare_record_dir, withdraw_from_agent_session, withdraw_from_record,
+};
 use crate::session::redacted::Redacting;
 use crate::session::rules::rules_block;
 
@@ -570,6 +573,11 @@ enum Signal {
     PositionChanged {
         position: usize,
     },
+    /// The broker refused a host nothing granted, and the thread is to be
+    /// told how to grant it.
+    Ungranted {
+        host: String,
+    },
     /// The agent began a turn.
     TurnStart,
     AssistantText(String),
@@ -776,6 +784,8 @@ struct Running {
 
     sandbox: Option<RunningBox>,
     client: Option<AgentClient>,
+    /// What the owner granted this session's broker, once it has started.
+    grants: Option<Arc<GrantStore>>,
     ticket: Option<Ticket>,
     pending_withdrawals: Vec<String>,
     current_message_id: Option<String>,
@@ -902,6 +912,7 @@ impl Running {
             image_cap_note: None,
             abort_timer: None,
             sandbox: None,
+            grants: None,
             client: None,
             ticket: None,
             pending_withdrawals: Vec::new(),
@@ -996,6 +1007,17 @@ impl Running {
                     ))
                     .await;
                     self.react(&message_id, ReactionOutcome::Failed).await;
+                }
+                Signal::Ungranted { host } => {
+                    if !self.ended {
+                        self.say(&format!(
+                            "this session tried to reach `{host}`, which is not on the egress \
+                             allowlist or granted. `!grant {host}` lets its next connection \
+                             through, and `!grant {host} 10m` or `!grant {host} always` lets \
+                             it through for longer"
+                        ))
+                        .await;
+                    }
                 }
                 Signal::PositionChanged { position } => {
                     self.views
@@ -1226,6 +1248,46 @@ impl Running {
         }
     }
 
+    /// Opens what the owner granted this thread's broker, kept beside the
+    /// session's state where the session cannot write it, and says so in the
+    /// thread when the grants kept there could not be read.
+    ///
+    /// A refused host is asked about through the session's own channel. The
+    /// ask is a courtesy beside the refusal, which the agent sees anyway, so
+    /// one that finds the channel full is logged and dropped.
+    async fn open_grants(&mut self) {
+        let path = std::path::Path::new(&prepare_record_dir(&self.options.state_dir))
+            .join(GRANTS_FILENAME);
+        let sink = self.commands.clone();
+        let log = self.log.clone();
+        let (store, problem) = GrantStore::open(
+            path,
+            Arc::new(now_ms),
+            Arc::new(move |host: &str| {
+                if sink
+                    .try_send(Signal::Ungranted {
+                        host: host.to_owned(),
+                    })
+                    .is_err()
+                {
+                    log.warn(
+                        "a refused host could not be asked about in the thread",
+                        &fields([("host", LogValue::from(host))]),
+                    );
+                }
+            }),
+            self.log.clone(),
+        );
+        self.grants = Some(Arc::new(store));
+        if let Some(why) = problem {
+            self.say(&format!(
+                "the hosts granted to this thread could not be read, so it starts with none \
+                 granted: {why}"
+            ))
+            .await;
+        }
+    }
+
     async fn start(&mut self, first: IncomingMessage) -> bool {
         let github = self.options.config.github.clone();
         self.write_git_config(github.as_ref());
@@ -1233,6 +1295,7 @@ impl Running {
         let system_prompt_path = self.write_memory_block();
 
         let (env, credential_names) = self.launch_env(github.as_ref());
+        self.open_grants().await;
 
         let launch = SandboxLaunch {
             session_id: self.options.id.clone(),
@@ -1250,6 +1313,7 @@ impl Running {
             },
             system_prompt_path,
             resume: self.options.resume,
+            grants: self.grants.clone(),
         };
         self.sandbox = match (self.options.launcher)(launch).await {
             Ok(sandbox) => Some(sandbox),
@@ -3012,6 +3076,7 @@ fn chained(error: &dyn std::error::Error) -> String {
 
 mod answering;
 mod files;
+mod granting;
 mod memory;
 mod pulls;
 

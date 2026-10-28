@@ -18,6 +18,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
+use super::grants::{GrantStore, askable};
 use super::receipts::{Clock, Ledger, ReceiptStore};
 use super::{
     DIAL_BUDGET, DIAL_TIMEOUT, JudgedResolver, LOOKUP_TIMEOUT, NoAddress, ProviderRoute,
@@ -78,8 +79,13 @@ pub struct SessionBroker {
 
 impl BrokerTemplate {
     /// Starts a broker for `session_id`, with its own listener, its own proxy
-    /// credential, and its own nonce for every provider.
-    pub async fn start(&self, session_id: &str) -> std::io::Result<SessionBroker> {
+    /// credential, and its own nonce for every provider, admitting what
+    /// `grants` holds beyond the allowlist.
+    pub async fn start(
+        &self,
+        session_id: &str,
+        grants: Option<Arc<GrantStore>>,
+    ) -> std::io::Result<SessionBroker> {
         let mut nonces = BTreeMap::new();
         let routes = self
             .providers
@@ -111,6 +117,7 @@ impl BrokerTemplate {
                 session_id: session_id.to_owned(),
             }),
         );
+        broker.grants = grants;
         // The listener sits on loopback; the address a sandbox dials is only
         // mapped back to this host from inside it.
         let port = broker.listen("127.0.0.1").await?;
@@ -174,6 +181,9 @@ pub struct Broker {
     allow_internal: bool,
     proxy_authorization: String,
     ledger: Option<Ledger>,
+    /// What the session's owner granted beyond `allow`, consulted for a host
+    /// `allow` does not name.
+    pub(super) grants: Option<Arc<GrantStore>>,
     accept_shutdown: Option<oneshot::Sender<()>>,
     provider_shutdown: Option<oneshot::Sender<()>>,
     closed: Arc<AtomicBool>,
@@ -201,6 +211,7 @@ impl Broker {
             allow_internal,
             proxy_authorization,
             ledger,
+            grants: None,
             accept_shutdown: None,
             provider_shutdown: None,
             closed: Arc::new(AtomicBool::new(false)),
@@ -234,6 +245,7 @@ impl Broker {
             closed: Arc::clone(&self.closed),
             ledger: self.ledger.clone(),
             denied: std::sync::Mutex::default(),
+            grants: self.grants.clone(),
         });
         let (shutdown_sender, mut shutdown_receiver) = oneshot::channel::<()>();
         tokio::spawn(async move {
@@ -297,6 +309,7 @@ impl Broker {
             closed: Arc::clone(&self.closed),
             ledger: self.ledger.clone(),
             denied: std::sync::Mutex::default(),
+            grants: self.grants.clone(),
         });
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
@@ -423,6 +436,33 @@ async fn authenticate_proxy<W: tokio::io::AsyncWrite + Unpin>(
     false
 }
 
+/// What a client refused for a host nothing granted is told, asking the
+/// thread about it when a grant could admit it.
+///
+/// A grant never opens the host's own network, so an internal address
+/// written as a literal is refused without a command to paste.
+fn ungranted_hint(state: &ProviderState, host: &str) -> String {
+    let Some(grants) = &state.grants else {
+        return String::new();
+    };
+    let literal = host.trim_matches(['[', ']']);
+    let internal = literal.parse::<std::net::IpAddr>().is_ok()
+        && super::is_private_address(literal)
+        && !state.allow_internal;
+    if internal {
+        return format!("errand: {host} is on the host's own network, which no grant opens.\n");
+    }
+    if !askable(host) {
+        return format!("errand: {host} is not a name a grant can be written for.\n");
+    }
+    grants.refused(host);
+    let host = host.to_ascii_lowercase();
+    format!(
+        "errand: {host} is not granted for this session. Ask the thread's owner to run: \
+         !grant {host} 10m\n"
+    )
+}
+
 /// Gates a target and dials it, or refuses the client and says why.
 async fn admit<W, U, F>(
     writer: &mut W,
@@ -436,12 +476,27 @@ where
 {
     let host = target.host.as_str();
     let port = i64::from(target.port);
-    if !state.ports.contains(&target.port) || !host_allowed(host, &state.allow) {
+    // A grant widens the hosts, never the ports, and is asked about only for
+    // a host the allowlist does not already admit. It is spent below, once
+    // the address is judged.
+    let listed = host_allowed(host, &state.allow);
+    let granted = || {
+        state
+            .grants
+            .as_ref()
+            .is_some_and(|grants| grants.holds(host))
+    };
+    if !state.ports.contains(&target.port) || !(listed || granted()) {
         state.log.info(
             "egress refused",
             &fields([("host", host.into()), ("port", port.into())]),
         );
-        let _ = refuse(writer, 403, "not on the egress allowlist", &[]).await;
+        let hint = if state.ports.contains(&target.port) {
+            ungranted_hint(state, host)
+        } else {
+            String::new()
+        };
+        let _ = refuse_with(writer, 403, "not on the egress allowlist", &[], &hint).await;
         return None;
     }
 
@@ -475,17 +530,34 @@ where
             return None;
         }
     };
-
     let deadline = tokio::time::Instant::now() + DIAL_BUDGET;
     match dial_upstream(addresses, target.port, deadline).await {
         // The lookup and the dial take seconds, and the session may have been
-        // stopped while they ran. A tunnel is not opened for a stopped one.
+        // stopped while they ran. A tunnel is not opened for a stopped one,
+        // and no grant is spent on it.
         Ok(_) if state.closed.load(Ordering::SeqCst) => {
             state.log.info(
                 "egress refused, since the session stopped while it was dialled",
                 &fields([("host", host.into()), ("port", port.into())]),
             );
             let _ = refuse(writer, 503, "this session has stopped", &[]).await;
+            None
+        }
+        // A grant is spent only on a connection that was made, so one for
+        // once is not used up by a host that would not answer.
+        Ok(_)
+            if !listed
+                && !state
+                    .grants
+                    .as_ref()
+                    .is_some_and(|grants| grants.spend(host)) =>
+        {
+            state.log.info(
+                "egress refused, since no grant was in force by the time it was dialled",
+                &fields([("host", host.into()), ("port", port.into())]),
+            );
+            let hint = ungranted_hint(state, host);
+            let _ = refuse_with(writer, 403, "not on the egress allowlist", &[], &hint).await;
             None
         }
         Ok(upstream) => {
@@ -612,6 +684,17 @@ async fn refuse<W: tokio::io::AsyncWrite + Unpin>(
     reason: &str,
     headers: &[(&str, &str)],
 ) -> std::io::Result<()> {
+    refuse_with(writer, code, reason, headers, "").await
+}
+
+/// [`refuse`], with a body a client can show.
+async fn refuse_with<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    code: u16,
+    reason: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> std::io::Result<()> {
     let mut head = format!("HTTP/1.1 {code} {reason}\r\n");
     for (name, value) in headers {
         head.push_str(name);
@@ -623,7 +706,10 @@ async fn refuse<W: tokio::io::AsyncWrite + Unpin>(
     // git probes the proxy without a credential first, and on a 407 it then
     // retries on a socket the broker has already closed and aborts, where an
     // explicit close makes it reconnect with the credential.
-    head.push_str("Connection: close\r\nContent-Length: 0\r\n\r\n");
+    let head = format!(
+        "{head}Connection: close\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
     // The client may have gone; the refusal is best-effort.
     let _ = writer.write_all(head.as_bytes()).await;
     writer.shutdown().await

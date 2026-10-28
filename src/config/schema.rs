@@ -63,7 +63,8 @@ pub struct EgressConfig {
     /// Whether egress is port-only or forced through the broker.
     pub mode: EgressMode,
     /// Hosts the broker permits, on top of the provider. A leading `*.`
-    /// matches subdomains; a lone `*` admits any host.
+    /// matches subdomains, and a lone `*` admits any host. A host not named
+    /// here is refused, and a thread's owner can grant it with `!grant`.
     pub allow: Vec<String>,
     /// Whether the broker may dial an address on the host's own network.
     ///

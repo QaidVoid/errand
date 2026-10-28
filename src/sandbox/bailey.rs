@@ -493,7 +493,7 @@ impl BaileySandbox {
 
         // Started first and dropped on any failure below, which closes it, so a
         // launch that does not finish leaves no listener honouring its nonces.
-        let broker = self.start_broker(&launch.session_id).await?;
+        let broker = self.start_broker(launch).await?;
 
         tokio::fs::create_dir_all(&launch.state_dir)
             .await
@@ -600,10 +600,16 @@ impl BaileySandbox {
     /// Starts this session's own egress broker, when egress is brokered.
     async fn start_broker(
         &self,
-        session_id: &str,
+        launch: &SandboxLaunch,
     ) -> Result<Option<SessionBroker>, SandboxLaunchError> {
-        let template = self.options.broker.as_ref();
-        start_session_broker(template, session_id, EGRESS_MAP_ADDRESS, &self.log).await
+        start_session_broker(
+            self.options.broker.as_ref(),
+            &launch.session_id,
+            launch.grants.clone(),
+            EGRESS_MAP_ADDRESS,
+            &self.log,
+        )
+        .await
     }
 
     /// Names of sandboxes this system owns that no live session claims.

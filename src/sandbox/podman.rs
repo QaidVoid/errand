@@ -394,6 +394,7 @@ impl PodmanSandbox {
         let broker = start_session_broker(
             self.broker.as_ref(),
             &launch.session_id,
+            launch.grants.clone(),
             BROKER_ADDRESS,
             &self.log,
         )

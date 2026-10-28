@@ -5523,3 +5523,103 @@ async fn failed_image_tools_do_not_count_returned_images() {
     })
     .await;
 }
+
+/// The owner grants a host the allowlist does not name, sees it listed, and
+/// revokes it, and the grant is written to the file in the record directory
+/// that a resume opens. A guest may not grant, and a host the allowlist already admits needs
+/// no grant.
+#[tokio::test]
+async fn the_owner_grants_and_revokes_a_host_and_a_guest_cannot() {
+    with_session(
+        SessionTestCase {
+            config: Some(config_with(&json!({
+                "sandbox": { "egress": { "mode": "proxy", "allow": ["github.com"] } },
+            }))),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .session
+                    .handle(message_from(&format!("!allow <@{GUEST}>"), OWNER, "m1"))
+                    .await;
+                harness
+                    .session
+                    .handle(message_from("!grant api.example.com", GUEST, "m2"))
+                    .await;
+                harness
+                    .session
+                    .handle(message_from("!grant github.com", OWNER, "m3"))
+                    .await;
+                harness
+                    .session
+                    .handle(message_from("!grant API.example.com 10m", OWNER, "m4"))
+                    .await;
+                harness
+                    .session
+                    .handle(message_from("!grant", OWNER, "m5"))
+                    .await;
+                let kept = std::fs::read_to_string(
+                    std::path::Path::new(&crate::session::record::record_dir(&harness.state_dir))
+                        .join(crate::sandbox::broker::grants::GRANTS_FILENAME),
+                )
+                .unwrap_or_default();
+                harness
+                    .session
+                    .handle(message_from("!revoke api.example.com", OWNER, "m6"))
+                    .await;
+
+                let said = harness.thread.everything();
+                assert!(said.contains("can use !grant"), "{said}");
+                assert!(said.contains("needs no grant"), "{said}");
+                assert!(
+                    said.contains("granted `api.example.com` for 10 minutes"),
+                    "{said}"
+                );
+                assert!(said.contains("`g1` `api.example.com`, for 10 minutes more"));
+                assert!(kept.contains("\"host\": \"api.example.com\""), "{kept}");
+                assert!(said.contains("`api.example.com` is no longer granted"));
+            })
+        },
+    )
+    .await;
+}
+
+/// The store the broker is launched with is the thread's own: a host the
+/// broker refuses reaches the thread as how to grant it, and a grant made in
+/// the thread is what the broker then admits.
+#[tokio::test]
+async fn the_brokers_refusal_reaches_the_thread_and_its_grant_reaches_the_broker() {
+    with_session(
+        SessionTestCase {
+            config: Some(config_with(&json!({
+                "sandbox": { "egress": { "mode": "proxy", "allow": ["github.com"] } },
+            }))),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                let grants = harness.sandbox.launched.lock().unwrap()[0]
+                    .grants
+                    .clone()
+                    .expect("the launch carries the grants");
+
+                grants.refused("api.example.com");
+                settle().await;
+                harness
+                    .session
+                    .handle(message_from("!grant api.example.com", OWNER, "m1"))
+                    .await;
+
+                assert!(
+                    harness
+                        .thread
+                        .everything()
+                        .contains("tried to reach `api.example.com`")
+                );
+                assert!(grants.spend("api.example.com"));
+            })
+        },
+    )
+    .await;
+}

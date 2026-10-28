@@ -129,7 +129,7 @@ What a session may reach outbound, and how that is enforced.
 | field | type | default | what it does |
 | --- | --- | --- | --- |
 | `mode` | `EgressMode` | `"proxy"` | Whether egress is port-only or forced through the broker. |
-| `allow` | `Vec<String` | `[]` | Hosts the broker permits, on top of the provider. A leading `*.` matches subdomains; a lone `*` admits any host. |
+| `allow` | `Vec<String` | `[]` | Hosts the broker permits, on top of the provider. A leading `*.` matches subdomains, and a lone `*` admits any host. A host not named here is refused, and a thread's owner can grant it with `!grant`. |
 | `allowInternal` | `boolean` | `false` | Whether the broker may dial an address on the host's own network.  Only an address written as a literal: a name that resolves somewhere internal stays refused, since what it points at is not the operator's to decide. |
 
 ## sandbox.policyExtra

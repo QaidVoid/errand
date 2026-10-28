@@ -250,6 +250,47 @@ and the ports a session may open are unchanged. The podman backend already gives
 each session its own network, so it does not need this. Under the broker that
 network reaches only the broker.
 
+## Granting a host from the thread
+
+Under `egress.mode = proxy`, a host that `sandbox.egress.allow` does not
+name is refused at once with `403`, and never held while somebody decides. A
+thread cannot be a dialog the agent waits on. The refusal says what to ask
+for, and the thread is told once a minute for each host, and of no more than
+three hosts a minute, so an agent that retries in a loop is one message a
+minute rather than one an attempt:
+
+```
+this session tried to reach `api.example.com`, which is not on the egress
+allowlist or granted. `!grant api.example.com` lets its next connection
+through, and `!grant api.example.com 10m` or `!grant api.example.com always`
+lets it through for longer
+```
+
+The owner answers in the thread, and the agent's next attempt goes through:
+
+| command | meaning |
+| --- | --- |
+| `!grant <host>` | the next connection to the host the broker makes, and no more |
+| `!grant <host> 10m` | any length of time, written as `retention` lengths are |
+| `!grant <host> always` | the rest of the session, resumes included |
+| `!grant` | list what is granted, how long is left, and by whom |
+| `!revoke <host>` | drop every grant written for the host, saying so when a wildcard still covers it |
+
+A host may be written as `*.example.com` for every name beneath it. A grant
+names a host alone, never a path, since a tunnel is opaque once it is open,
+and it never opens a port outside `sandbox.egressPorts` or a host-internal
+address the broker refuses anyway. Every entry of `sandbox.egress.allow`,
+the lone `*` of the default included, is a standing grant, so with the
+default nothing is ever refused for want of one. Grants are for an operator
+who narrowed the list. Each session has grants of its own, kept in its record
+directory beside the state directory, where the session cannot write them. A
+grant file holds hosts, times and account ids, never a credential. A
+connection already open to a revoked host stays open until it ends, and a
+grant for once that was never used stays until it is. Only a single exact
+name is ever suggested, so a session that asks for `*.com` is refused without
+a command to paste. The owner and the daemon's operators may grant, as they
+may stop the session.
+
 ## Checking it on this host
 
 The test suite checks the flags each backend is given, not what the kernel

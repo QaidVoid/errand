@@ -335,6 +335,7 @@ mod tests {
             plugins: Vec::new(),
             denied: Denials::default(),
             resume: false,
+            grants: None,
         };
         let runtime = AgentRuntime {
             read_paths: vec!["/opt/agent/bin".to_owned()],
