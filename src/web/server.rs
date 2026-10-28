@@ -37,7 +37,7 @@ use crate::session::record::transcript_path;
 use crate::session::session::IncomingMessage;
 use crate::session::transcript::Transcript;
 use crate::web::address::check_bind_address;
-use crate::web::login::{Authorized, LoginFailure, Logins, STATE_COOKIE, cookie};
+use crate::web::login::{Authorized, LoginFailure, Logins};
 use crate::web::view::{NameLookup, WebView, wire};
 
 /// The identity a request from the interface acts under when no login is
@@ -614,7 +614,7 @@ async fn finish_login(
     let finished = logins
         .finish(
             query.state.as_deref(),
-            cookie(&headers, STATE_COOKIE).as_deref(),
+            logins.state_of(&headers).as_deref(),
             query.code.as_deref(),
             query.error.as_deref(),
             server.guild_id.as_deref(),

@@ -41,10 +41,11 @@ pub const MEMBERSHIP_TTL_MS: i64 = 10 * 60 * 1_000;
 /// could fill memory with logins they never mean to finish.
 pub const MAX_PENDING: usize = 1_024;
 
-/// The cookie a login is carried in.
+/// The cookie a login is carried in, before any prefix.
 pub const LOGIN_COOKIE: &str = "errand_login";
 
-/// The cookie that ties a callback to the browser that set out.
+/// The cookie that ties a callback to the browser that set out, before any
+/// prefix.
 pub const STATE_COOKIE: &str = "errand_login_state";
 
 const DISCORD_API: &str = "https://discord.com/api/v10";
@@ -255,7 +256,7 @@ impl Logins {
 
     /// Who a request is from, when it carries a login still in time.
     pub fn signed(&self, headers: &HeaderMap) -> Option<Signed> {
-        let token = cookie(headers, LOGIN_COOKIE)?;
+        let token = cookie(headers, &self.named(LOGIN_COOKIE))?;
         let now = (self.now)();
         let mut active = self.active.lock().expect("the active lock");
         let login = active.get(&token)?;
@@ -273,7 +274,7 @@ impl Logins {
     /// Who a request that would change something is from, with membership
     /// asked again when the last answer is older than [`MEMBERSHIP_TTL_MS`].
     pub async fn authorize(&self, headers: &HeaderMap, guild_id: Option<&str>) -> Authorized {
-        let Some(token) = cookie(headers, LOGIN_COOKIE) else {
+        let Some(token) = cookie(headers, &self.named(LOGIN_COOKIE)) else {
             return Authorized::Anonymous;
         };
         let now = (self.now)();
@@ -309,36 +310,57 @@ impl Logins {
 
     /// Ends the login a request carries, if it carries one.
     pub fn end(&self, headers: &HeaderMap) {
-        if let Some(token) = cookie(headers, LOGIN_COOKIE) {
+        if let Some(token) = cookie(headers, &self.named(LOGIN_COOKIE)) {
             self.active.lock().expect("the active lock").remove(&token);
         }
     }
 
+    /// The login in progress a request carries, if it carries one.
+    pub fn state_of(&self, headers: &HeaderMap) -> Option<String> {
+        cookie(headers, &self.named(STATE_COOKIE))
+    }
+
     /// The `Set-Cookie` value carrying a login.
     pub fn login_cookie(&self, token: &str) -> String {
-        self.cookie_header(LOGIN_COOKIE, token, "/", LOGIN_TTL_MS / 1_000)
+        self.cookie_header(LOGIN_COOKIE, token, LOGIN_TTL_MS / 1_000)
     }
 
     /// The `Set-Cookie` value that removes a login.
     pub fn cleared_login_cookie(&self) -> String {
-        self.cookie_header(LOGIN_COOKIE, "", "/", 0)
+        self.cookie_header(LOGIN_COOKIE, "", 0)
     }
 
     /// The `Set-Cookie` value carrying a login in progress.
     pub fn state_cookie(&self, state: &str) -> String {
-        self.cookie_header(STATE_COOKIE, state, "/auth", PENDING_TTL_MS / 1_000)
+        self.cookie_header(STATE_COOKIE, state, PENDING_TTL_MS / 1_000)
     }
 
     /// The `Set-Cookie` value that removes a login in progress.
     pub fn cleared_state_cookie(&self) -> String {
-        self.cookie_header(STATE_COOKIE, "", "/auth", 0)
+        self.cookie_header(STATE_COOKIE, "", 0)
+    }
+
+    /// A cookie's name as this interface sends and reads it.
+    ///
+    /// Over https it carries the `__Host-` prefix, which a browser accepts
+    /// only from this exact host, secure, for the whole path. Without it a
+    /// site on a sibling subdomain could set a cookie of the same name here,
+    /// and plant a login or a login in progress of its own choosing.
+    fn named(&self, base: &str) -> String {
+        if self.secure {
+            format!("__Host-{base}")
+        } else {
+            base.to_owned()
+        }
     }
 
     // Lax rather than Strict: the callback is a navigation from Discord, and a
-    // Strict cookie would not come with it.
-    fn cookie_header(&self, name: &str, value: &str, path: &str, max_age: i64) -> String {
+    // Strict cookie would not come with it. The whole path, because the prefix
+    // requires it.
+    fn cookie_header(&self, base: &str, value: &str, max_age: i64) -> String {
+        let name = self.named(base);
         let secure = if self.secure { "; Secure" } else { "" };
-        format!("{name}={value}; Path={path}; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}")
+        format!("{name}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}")
     }
 }
 

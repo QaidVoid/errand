@@ -18,6 +18,9 @@ const MEMBER: &str = "200000000000000001";
 const STRANGER: &str = "200000000000000002";
 const BLOCKED: &str = "200000000000000003";
 
+/// The login cookie as an https interface names it.
+const HOST_LOGIN: &str = "__Host-errand_login";
+
 /// Discord as a table: who each code belongs to, and who is in the guild.
 struct FakeDiscord {
     members: Mutex<Vec<&'static str>>,
@@ -122,7 +125,7 @@ async fn logged_in(fixture: &Fixture, account: &str) -> HeaderMap {
         )
         .await
         .expect("the login completes");
-    carrying(super::LOGIN_COOKIE, &token)
+    carrying(HOST_LOGIN, &token)
 }
 
 #[test]
@@ -187,7 +190,7 @@ async fn without_a_known_server_nobody_may_act() {
         .unwrap();
     let signed = fixture
         .logins
-        .signed(&carrying(super::LOGIN_COOKIE, &token))
+        .signed(&carrying(HOST_LOGIN, &token))
         .unwrap();
 
     assert!(!signed.may_act);
@@ -280,9 +283,38 @@ fn cookies_are_found_by_exact_name_and_marked_for_https() {
 
     let fixture = fixture(&["*"]);
     let set = fixture.logins.login_cookie("abc");
+    assert!(set.starts_with("__Host-errand_login=abc; Path=/;"), "{set}");
     assert!(set.contains("HttpOnly"));
     assert!(set.contains("SameSite=Lax"));
     assert!(set.ends_with("; Secure"));
+    assert!(
+        fixture
+            .logins
+            .state_cookie("s")
+            .starts_with("__Host-errand_login_state=s; Path=/;")
+    );
+}
+
+/// A site on a sibling subdomain can set a cookie without the prefix, and only
+/// without it, so one it sets is never read as a login.
+#[tokio::test]
+async fn a_cookie_without_the_prefix_is_not_a_login_over_https() {
+    let fixture = fixture(&["*"]);
+    let held = logged_in(&fixture, MEMBER).await;
+    let token = cookie(&held, HOST_LOGIN).unwrap();
+
+    assert!(
+        fixture
+            .logins
+            .signed(&carrying("errand_login", &token))
+            .is_none()
+    );
+    assert!(
+        fixture
+            .logins
+            .state_of(&carrying("errand_login_state", "s"))
+            .is_none()
+    );
 }
 
 /// Starting a login costs a stranger one request, so how many may be waiting
