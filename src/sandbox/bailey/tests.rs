@@ -72,6 +72,7 @@ fn launch() -> SandboxLaunch {
         plugins: Vec::new(),
         denied: Denials::default(),
         resume: false,
+        grants: None,
     }
 }
 
@@ -811,7 +812,7 @@ async fn each_launch_has_its_own_broker_and_a_failed_one_leaves_none() {
 /// honoured once it is asked to stop.
 #[tokio::test]
 async fn stopping_a_session_closes_its_broker() {
-    let started = template().start("s-1").await.expect("a broker");
+    let started = template().start("s-1", None).await.expect("a broker");
     let port = started.port;
     let env = BTreeMap::from([("PATH".to_owned(), std::env::var("PATH").unwrap_or_default())]);
     let spawned = crate::sandbox::spawn::spawn_agent("sleep", &["30".to_owned()], Some(&env), None)

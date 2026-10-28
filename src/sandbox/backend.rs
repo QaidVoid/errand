@@ -82,6 +82,9 @@ pub struct SandboxLaunch {
     pub denied: Denials,
     /// Continue the conversation already stored in the state directory.
     pub resume: bool,
+    /// What the session's owner granted its broker beyond the allowlist,
+    /// shared with the thread that grants it.
+    pub grants: Option<std::sync::Arc<crate::sandbox::broker::grants::GrantStore>>,
 }
 
 /// What the agent may not run, in the two shapes the agent refuses it in.
