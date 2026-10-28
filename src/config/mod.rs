@@ -20,6 +20,8 @@ pub mod load;
 pub mod path;
 /// Removes secrets from anything about to leave the daemon.
 pub mod redact;
+/// What a brokered provider's route lets a session do with its key.
+pub mod route;
 /// The shape of a resolved configuration, and its defaults.
 pub mod schema;
 /// Reads a byte size written the way people write one.

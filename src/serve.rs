@@ -28,6 +28,7 @@ use crate::chat::threads::plain;
 use crate::config::live::LiveConfig;
 use crate::config::load::Environment;
 use crate::config::redact::{contains_secret, redact_text, secret_values};
+use crate::config::route::RoutePolicy;
 use crate::config::schema::{AgentConfig, Config, EgressMode, GithubConfig, GithubTrigger};
 use crate::config::usage::UsageShape;
 use crate::config::watch::{AfterReload, POLL, watch};
@@ -424,10 +425,35 @@ fn provider_upstreams(agent: &AgentConfig, store: Option<&str>) -> Vec<ProviderU
         .into_iter()
         .map(|(name, upstream, credential)| ProviderUpstream {
             prefix: provider_prefix(&name),
+            policy: agent
+                .providers
+                .get(&name)
+                .map(|definition| RoutePolicy::of(&name, definition).expect("validated at load"))
+                .unwrap_or_default(),
             name,
             upstream,
             credential,
         })
+        .collect()
+}
+
+/// What each brokered provider's route allows, by provider.
+fn route_policies(agent: &AgentConfig, store: Option<&str>) -> BTreeMap<String, RoutePolicy> {
+    provider_upstreams(agent, store)
+        .into_iter()
+        .map(|upstream| (upstream.name, upstream.policy))
+        .collect()
+}
+
+/// The providers routed both before and after whose policy is not the same.
+fn changed_routes(
+    before: &BTreeMap<String, RoutePolicy>,
+    after: &BTreeMap<String, RoutePolicy>,
+) -> Vec<String> {
+    before
+        .iter()
+        .filter(|(name, policy)| after.get(*name).is_some_and(|now| now != *policy))
+        .map(|(name, _)| name.clone())
         .collect()
 }
 
@@ -1437,14 +1463,31 @@ async fn run(
     // after a change. Without that, an edited `models` list would be in force
     // and `!model` would still list the one from before, which looks exactly
     // like the reload not working.
+    //
+    // A route's placement and capabilities are among what is fixed, so an
+    // edit to them, or to the `kind` a placement is derived from, is said
+    // rather than left to look applied.
     let after: AfterReload = {
         let live = live.clone();
         let log = log.clone();
+        let routed = route_policies(&config.agent, store.as_deref());
         Arc::new(move || {
-            let (live, store, log, catalog) =
-                (live.clone(), store.clone(), log.clone(), catalog.clone());
+            let (live, store, log, catalog, routed) = (
+                live.clone(),
+                store.clone(),
+                log.clone(),
+                catalog.clone(),
+                routed.clone(),
+            );
             Box::pin(async move {
                 let agent = live.get().agent;
+                for provider in changed_routes(&routed, &route_policies(&agent, store.as_deref())) {
+                    log.warn(
+                        "a provider's placement or capabilities changed, and its broker route \
+                         keeps the old ones until the daemon restarts",
+                        &fields([("provider", LogValue::from(provider))]),
+                    );
+                }
                 // What each provider answered is already in the log, from the
                 // reporting inside the one place the catalog is built.
                 rebuild_catalog(&agent, store.as_deref(), &log, &catalog).await;

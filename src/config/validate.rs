@@ -13,6 +13,7 @@ use super::{is_absolute, resolve};
 use crate::config::discover::Discovery;
 use crate::config::duration::parse_duration;
 use crate::config::redact::MIN_SCRUBBABLE_LENGTH;
+use crate::config::route::{Placement, RoutePolicy};
 use crate::config::schema::{
     self, AgentConfig, ChatConfig, Config, ConfigError, DelegateConfig, EgressConfig, EgressMode,
     GithubConfig, GithubTrigger, LimitsConfig, NetworkMode, OutputConfig, PluginConfig,
@@ -566,6 +567,120 @@ fn validate_provider_id(name: &str, definition: &Value, problems: &mut Problems)
     }
 }
 
+/// The keys of a provider definition that hold its brokered route back.
+const ROUTE_KEYS: [&str; 3] = ["placement", "capabilities", "strictCapabilities"];
+
+/// The route key a written one stands for by starting with the word the key
+/// turns on: `strict` for `strictCapabilities`, `place` for `placement`, and
+/// `capab` for `capabilities`, as `strictness`, `place` or `capability` do.
+///
+/// The whole word, not merely the same few letters, since an operator's own
+/// key may begin like a route key by chance, as `platform` or `capacity` do,
+/// and such a key is not a misspelling.
+fn shortened(written: &str) -> Option<&'static str> {
+    let written = written.to_ascii_lowercase();
+    [
+        ("strict", "strictCapabilities"),
+        ("place", "placement"),
+        ("capab", "capabilities"),
+    ]
+    .into_iter()
+    .find(|(stem, _)| written.starts_with(stem))
+    .map(|(_, key)| key)
+}
+
+/// Whether `written` reads as a misspelling of `key`: the same apart from
+/// case, or at most two letters added, dropped or changed.
+fn near_miss(written: &str, key: &str) -> bool {
+    let (written, key) = (written.to_ascii_lowercase(), key.to_ascii_lowercase());
+    let (a, b): (Vec<char>, Vec<char>) = (written.chars().collect(), key.chars().collect());
+    if a.len().abs_diff(b.len()) > 2 {
+        return false;
+    }
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, left) in a.iter().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, right) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (above + 1)
+                .min(row[j] + 1)
+                .min(diagonal + usize::from(left != right));
+            diagonal = above;
+        }
+    }
+    row[b.len()] <= 2
+}
+
+/// Checks what a provider's brokered route allows, and that it is set only on
+/// a provider the broker fronts.
+fn validate_route(name: &str, definition: &Value, problems: &mut Problems) {
+    // A definition may carry keys errand does not read, so an unknown one is
+    // not refused in general. One that reads as a misspelling of a key that
+    // holds a route back is, since leaving that key out quietly lets
+    // everything through.
+    if let Some(fields) = definition.as_object() {
+        for written in fields.keys() {
+            if ROUTE_KEYS.contains(&written.as_str()) {
+                continue;
+            }
+            if let Some(meant) = ROUTE_KEYS
+                .into_iter()
+                .find(|key| near_miss(written, key))
+                .or_else(|| shortened(written))
+            {
+                problems.add(format!(
+                    "agent.providers.{name}.{written} is not something errand reads; did you \
+                     mean {meant}? Left as it is, the route is not held to it"
+                ));
+            }
+        }
+    }
+    let brokered = match definition.get("broker") {
+        Some(Value::Bool(says)) => *says,
+        _ => definition.get("extension").and_then(Value::as_bool) != Some(true),
+    };
+    match RoutePolicy::of(name, definition) {
+        Err(found) => {
+            for problem in found {
+                problems.add(problem);
+            }
+        }
+        // The media tools borrow the provider's route and always send their
+        // key as a bearer token, so a route that takes it in x-api-key alone
+        // would refuse every one of their calls. A placement derived from
+        // `kind: anthropic` is not checked here, since media on such a
+        // provider is refused for its kind already.
+        Ok(policy)
+            if brokered
+                && policy.placement == Placement::ApiKey
+                && definition.get("placement").is_some() =>
+        {
+            if let Some((entry, ..)) = MEDIA_ENTRIES
+                .iter()
+                .find(|(entry, ..)| definition.get(*entry).is_some())
+            {
+                problems.add(format!(
+                    "agent.providers.{name}.{entry} borrows this provider's brokered route, \
+                     which takes its key in x-api-key, and the {entry} tool sends it as \
+                     Authorization: Bearer"
+                ));
+            }
+        }
+        Ok(_) => {}
+    }
+    if !brokered
+        && let Some(key) = ROUTE_KEYS
+            .into_iter()
+            .find(|key| definition.get(*key).is_some())
+    {
+        problems.add(format!(
+            "agent.providers.{name}.{key} applies to a brokered route, and this provider is \
+             not brokered, so its key crosses whole"
+        ));
+    }
+}
+
 /// Reads the operator's provider definitions, which are passed through as they
 /// are written.
 ///
@@ -614,6 +729,7 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
                 ));
             }
         }
+        validate_route(name, definition, problems);
         // A named variable is filled from the credential, so one without it
         // has nothing to carry, and a session started with it cannot launch.
         let filled = |key: &str| {
