@@ -769,3 +769,6 @@ fn join_resolv(root: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod live_tests;
