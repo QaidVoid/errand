@@ -1,14 +1,14 @@
 //! Tests for Discord login.
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::http::{HeaderMap, HeaderValue, header};
 use serde_json::json;
 
 use super::{
-    Discord, DiscordCall, LOGIN_TTL_MS, LoginFailure, Logins, MAX_PENDING, PENDING_TTL_MS, Visitor,
-    cookie,
+    Authorized, Discord, DiscordCall, LOGIN_TTL_MS, LoginFailure, Logins, MAX_PENDING,
+    MEMBERSHIP_TTL_MS, PENDING_TTL_MS, Visitor, cookie,
 };
 use crate::config::live::LiveConfig;
 use crate::config::schema::WebLoginConfig;
@@ -20,8 +20,9 @@ const BLOCKED: &str = "200000000000000003";
 
 /// Discord as a table: who each code belongs to, and who is in the guild.
 struct FakeDiscord {
-    members: Vec<&'static str>,
+    members: Mutex<Vec<&'static str>>,
     asked: Mutex<Vec<String>>,
+    down: AtomicBool,
 }
 
 impl Discord for FakeDiscord {
@@ -40,8 +41,14 @@ impl Discord for FakeDiscord {
     }
 
     fn is_member(&self, _guild_id: String, user_id: String) -> DiscordCall<bool> {
-        let member = self.members.contains(&user_id.as_str());
-        Box::pin(async move { Ok(member) })
+        let member = self.members.lock().unwrap().contains(&user_id.as_str());
+        let down = self.down.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if down {
+                return Err("Discord was down".to_owned());
+            }
+            Ok(member)
+        })
     }
 }
 
@@ -71,8 +78,9 @@ fn fixture(allowed: &[&str]) -> Fixture {
     .expect("the test configuration is accepted");
     let clock = Arc::new(AtomicI64::new(1_000));
     let discord = Arc::new(FakeDiscord {
-        members: vec![MEMBER, BLOCKED],
+        members: Mutex::new(vec![MEMBER, BLOCKED]),
         asked: Mutex::new(Vec::new()),
+        down: AtomicBool::new(false),
     });
     let now = Arc::clone(&clock);
     let logins = Logins::new(
@@ -289,4 +297,43 @@ fn logins_in_progress_are_bounded_until_they_lapse() {
 
     fixture.clock.fetch_add(PENDING_TTL_MS, Ordering::SeqCst);
     assert!(fixture.logins.begin().is_some());
+}
+
+fn may_act(authorized: &Authorized) -> bool {
+    matches!(authorized, Authorized::Signed(signed) if signed.may_act)
+}
+
+/// Somebody who leaves the server stops being able to act once the answer
+/// that let them in is old, rather than for as long as their login lasts.
+#[tokio::test]
+async fn leaving_the_server_is_noticed_when_the_answer_is_stale() {
+    let fixture = fixture(&["*"]);
+    let headers = logged_in(&fixture, MEMBER).await;
+    fixture.discord.members.lock().unwrap().clear();
+
+    let fresh = fixture.logins.authorize(&headers, Some("g")).await;
+    assert!(may_act(&fresh), "trusted while the answer is fresh");
+
+    fixture.clock.fetch_add(MEMBERSHIP_TTL_MS, Ordering::SeqCst);
+    let stale = fixture.logins.authorize(&headers, Some("g")).await;
+    assert!(!may_act(&stale));
+    assert!(!fixture.logins.signed(&headers).unwrap().may_act);
+}
+
+/// Not knowing is not the same as yes: nothing is done on their behalf until
+/// Discord can be asked, and they are told why.
+#[tokio::test]
+async fn an_unanswered_membership_check_acts_for_nobody() {
+    let fixture = fixture(&["*"]);
+    let headers = logged_in(&fixture, MEMBER).await;
+    fixture.discord.down.store(true, Ordering::SeqCst);
+    fixture.clock.fetch_add(MEMBERSHIP_TTL_MS, Ordering::SeqCst);
+
+    let answer = fixture.logins.authorize(&headers, Some("g")).await;
+    assert!(matches!(answer, Authorized::Unconfirmed(_)), "{answer:?}");
+
+    fixture.discord.down.store(false, Ordering::SeqCst);
+    assert!(may_act(
+        &fixture.logins.authorize(&headers, Some("g")).await
+    ));
 }

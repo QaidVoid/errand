@@ -37,7 +37,7 @@ use crate::session::record::transcript_path;
 use crate::session::session::IncomingMessage;
 use crate::session::transcript::Transcript;
 use crate::web::address::check_bind_address;
-use crate::web::login::{LoginFailure, Logins, STATE_COOKIE, cookie};
+use crate::web::login::{Authorized, LoginFailure, Logins, STATE_COOKIE, cookie};
 use crate::web::view::{NameLookup, WebView, wire};
 
 /// The identity a request from the interface acts under when no login is
@@ -340,7 +340,7 @@ impl WebServer {
         clippy::result_large_err,
         reason = "the refusal is a ready response, which is the point of the shape"
     )]
-    fn actor(&self, headers: &HeaderMap) -> Result<Actor, Response> {
+    async fn actor(&self, headers: &HeaderMap) -> Result<Actor, Response> {
         if self.config.observer {
             return Err(refused(
                 json!({ "error": "the interface is an observer and cannot change anything" }),
@@ -353,11 +353,24 @@ impl WebServer {
                 name: "the interface".to_owned(),
             });
         };
-        let Some(signed) = logins.signed(headers) else {
-            return Err(refused(
-                json!({ "error": "log in with Discord to do this" }),
-                StatusCode::UNAUTHORIZED,
-            ));
+        let signed = match logins.authorize(headers, self.guild_id.as_deref()).await {
+            Authorized::Signed(signed) => signed,
+            Authorized::Anonymous => {
+                return Err(refused(
+                    json!({ "error": "log in with Discord to do this" }),
+                    StatusCode::UNAUTHORIZED,
+                ));
+            }
+            Authorized::Unconfirmed(detail) => {
+                self.log.warn(
+                    "web action refused: membership could not be confirmed",
+                    &fields([("detail", LogValue::from(detail))]),
+                );
+                return Err(refused(
+                    json!({ "error": "Discord could not confirm you are still in the server; try again in a moment" }),
+                    StatusCode::SERVICE_UNAVAILABLE,
+                ));
+            }
         };
         // Phrased as the channel's own refusal is not: the visitor already
         // knows who they are, and saying which list they missed tells them
@@ -709,7 +722,7 @@ async fn start_session(
     headers: HeaderMap,
     body: Option<axum::Json<StartBody>>,
 ) -> Response {
-    let actor = match server.actor(&headers) {
+    let actor = match server.actor(&headers).await {
         Ok(actor) => actor,
         Err(refusal) => return refusal,
     };
@@ -757,7 +770,7 @@ async fn send(
     headers: HeaderMap,
     body: Option<axum::Json<SendBody>>,
 ) -> Response {
-    let actor = match server.actor(&headers) {
+    let actor = match server.actor(&headers).await {
         Ok(actor) => actor,
         Err(refusal) => return refusal,
     };

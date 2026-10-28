@@ -28,6 +28,13 @@ pub const LOGIN_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
 /// How long a browser has to come back from Discord after setting out.
 pub const PENDING_TTL_MS: i64 = 10 * 60 * 1_000;
 
+/// How long a membership answer is trusted before acting asks again.
+///
+/// Asked when somebody acts rather than on a timer, so somebody who left the
+/// server stops being able to act within this, without a request to Discord
+/// for every message.
+pub const MEMBERSHIP_TTL_MS: i64 = 10 * 60 * 1_000;
+
 /// The most logins that may be in progress at once.
 ///
 /// Starting one takes nothing but a request, so without a ceiling anybody
@@ -101,7 +108,21 @@ pub struct Signed {
 struct Active {
     visitor: Visitor,
     member: bool,
+    /// When membership was last asked, so a change can be asked again.
+    checked_at: i64,
     expires_at: i64,
+}
+
+/// What a request that would change something may do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Authorized {
+    /// It carries no login still in time.
+    Anonymous,
+    /// It does, and this is who it is and whether they may act.
+    Signed(Signed),
+    /// Discord could not be asked whether they are still in the server, so
+    /// nothing is changed on their behalf until it can.
+    Unconfirmed(String),
 }
 
 /// The clock logins are timed by.
@@ -225,6 +246,7 @@ impl Logins {
             Active {
                 visitor: visitor.clone(),
                 member,
+                checked_at: now,
                 expires_at: now + LOGIN_TTL_MS,
             },
         );
@@ -246,6 +268,43 @@ impl Logins {
             visitor: login.visitor.clone(),
             may_act: login.member && is_permitted(&chat, &login.visitor.id),
         })
+    }
+
+    /// Who a request that would change something is from, with membership
+    /// asked again when the last answer is older than [`MEMBERSHIP_TTL_MS`].
+    pub async fn authorize(&self, headers: &HeaderMap, guild_id: Option<&str>) -> Authorized {
+        let Some(token) = cookie(headers, LOGIN_COOKIE) else {
+            return Authorized::Anonymous;
+        };
+        let now = (self.now)();
+        let stale = {
+            let active = self.active.lock().expect("the active lock");
+            match active.get(&token) {
+                Some(login) if login.expires_at > now => {
+                    (now - login.checked_at >= MEMBERSHIP_TTL_MS).then(|| login.visitor.id.clone())
+                }
+                _ => None,
+            }
+        };
+        if let Some(id) = stale {
+            let answer = match guild_id {
+                Some(guild_id) => self.discord.is_member(guild_id.to_owned(), id).await,
+                None => Ok(false),
+            };
+            match answer {
+                Ok(member) => {
+                    if let Some(login) =
+                        self.active.lock().expect("the active lock").get_mut(&token)
+                    {
+                        login.member = member;
+                        login.checked_at = now;
+                    }
+                }
+                Err(detail) => return Authorized::Unconfirmed(detail),
+            }
+        }
+        self.signed(headers)
+            .map_or(Authorized::Anonymous, Authorized::Signed)
     }
 
     /// Ends the login a request carries, if it carries one.
