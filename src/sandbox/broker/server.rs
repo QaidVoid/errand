@@ -19,9 +19,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
 use super::{
-    DIAL_BUDGET, DIAL_TIMEOUT, LOOKUP_TIMEOUT, NoAddress, ProviderRoute, ProviderState,
-    ProviderUpstream, Target, carries_proxy_credential, host_allowed, parse_connect, parse_forward,
-    public_addresses,
+    DIAL_BUDGET, DIAL_TIMEOUT, JudgedResolver, LOOKUP_TIMEOUT, NoAddress, ProviderRoute,
+    ProviderState, ProviderUpstream, Target, carries_proxy_credential, host_allowed, parse_connect,
+    parse_forward, public_addresses,
 };
 use crate::config::redact::{MINTED_HEX_DIGITS, MINTED_PREFIX};
 use crate::log::Logger;
@@ -112,6 +112,23 @@ impl BrokerTemplate {
     }
 }
 
+/// The client the broker calls providers with, carrying the real key.
+///
+/// It follows no redirect. A redirect carries the key to a host nobody
+/// judged, in a header reqwest does not strip across hosts, so a provider's
+/// redirect reaches the session as it was sent. It dials only addresses its
+/// resolver judged, and never through a proxy from the daemon's environment,
+/// which would resolve the name itself. The tunnel path dials directly too.
+pub(super) fn provider_client(resolve: Option<super::Resolve>) -> std::io::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(DIAL_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .dns_resolver(Arc::new(JudgedResolver { resolve }))
+        .build()
+        .map_err(std::io::Error::other)
+}
+
 /// The `Proxy-Authorization` value a session's tools send for `secret`.
 pub(super) fn proxy_authorization(secret: &str) -> String {
     format!("Basic {}", STANDARD.encode(format!("session:{secret}")))
@@ -180,10 +197,7 @@ impl Broker {
     /// Runs on the async runtime, which owns the accept loop and the provider
     /// endpoint from here on.
     pub async fn listen(&mut self, host: &str) -> std::io::Result<u16> {
-        let client = reqwest::Client::builder()
-            .connect_timeout(DIAL_TIMEOUT)
-            .build()
-            .map_err(std::io::Error::other)?;
+        let client = provider_client(None)?;
         let provider_port = if self.routes.is_empty() {
             0
         } else {

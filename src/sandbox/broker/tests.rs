@@ -1,6 +1,8 @@
 //! Tests for the egress broker, ported from `broker_test.ts`.
 
 use std::collections::BTreeMap;
+use std::str::FromStr as _;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -988,7 +990,7 @@ async fn hostile_provider_paths_never_reach_any_upstream() {
 
     let mut state = provider_state(vec![provider_route(
         "/provider/anthropic",
-        "http://upstream.test/v1",
+        "https://upstream.test/v1",
     )]);
     state.client = reqwest::Client::builder()
         .dns_resolver(Arc::new(RecordingResolve {
@@ -1780,4 +1782,164 @@ async fn an_upstream_that_echoes_the_key_hands_the_session_none_of_it() {
     assert_eq!(answered.headers()["x-echo"], "Bearer [redacted]");
     let body = answered.text().await.expect("a body");
     assert_eq!(body, "{\"error\":\"rejected Bearer [redacted]\"}");
+}
+
+/// An upstream that records how many requests reached it, and answers with
+/// `status` and, when given, a `Location`.
+async fn counting_upstream(status: u16, location: Option<String>) -> (u16, Arc<AtomicUsize>) {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&hits);
+    let app = axum::Router::new().fallback(move || {
+        let counted = Arc::clone(&counted);
+        let location = location.clone();
+        async move {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut answer = axum::http::Response::builder().status(status);
+            if let Some(location) = location {
+                answer = answer.header("location", location);
+            }
+            answer.body(axum::body::Body::empty()).unwrap()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bound");
+    let port = listener.local_addr().expect("an address").port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serves");
+    });
+    (port, hits)
+}
+
+/// A provider's redirect reaches the session as sent, and the host it names
+/// is never dialled with the key.
+#[tokio::test]
+async fn a_redirect_is_not_followed_and_the_second_host_sees_nothing() {
+    let (second_port, second) = counting_upstream(200, None).await;
+    let (first_port, first) =
+        counting_upstream(302, Some(format!("http://127.0.0.1:{second_port}/stolen"))).await;
+    let started = template_for(first_port, silent())
+        .start("s-1")
+        .await
+        .expect("a broker");
+
+    // The session's own client is told not to follow either, so what is
+    // seen is what the broker relayed.
+    let answered = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+        .post(format!(
+            "http://127.0.0.1:{}/provider/zai/chat",
+            started.port
+        ))
+        .header("authorization", format!("Bearer {}", started.nonces["zai"]))
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(answered.status().as_u16(), 302);
+    assert_eq!(first.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(second.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+/// The client's resolver answers only addresses that pass the judgment, and
+/// never admits a name on an internal answer.
+#[tokio::test]
+async fn the_judged_resolver_answers_only_public_addresses() {
+    use reqwest::dns::Resolve as _;
+
+    let lookup = |answers: &[&str]| {
+        let resolver = super::JudgedResolver {
+            resolve: Some(resolver(answers)),
+        };
+        resolver.resolve(reqwest::dns::Name::from_str("provider.test").unwrap())
+    };
+
+    let addresses: Vec<_> = lookup(&["10.0.0.1", "9.9.9.9"])
+        .await
+        .expect("a public address")
+        .collect();
+    assert_eq!(addresses, ["9.9.9.9:0".parse().unwrap()]);
+    assert!(lookup(&["127.0.0.1"]).await.is_err());
+}
+
+/// The client the broker calls providers with judges the address it dials,
+/// so a name that answers internal when the client resolves it, whatever it
+/// answered before, finds nothing to connect to.
+#[tokio::test]
+async fn a_name_that_answers_internal_at_dial_time_is_not_dialled() {
+    let (port, hits) = counting_upstream(200, None).await;
+    let client = super::server::provider_client(Some(resolver(&["127.0.0.1"]))).unwrap();
+
+    let sent = client
+        .get(format!("http://rebind.test:{port}/"))
+        .send()
+        .await;
+
+    let error = sent.expect_err("dialled");
+    let mut chain = Some(&error as &dyn std::error::Error);
+    let mut reasons = Vec::new();
+    while let Some(link) = chain {
+        reasons.push(link.to_string());
+        chain = link.source();
+    }
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("host-internal")),
+        "{reasons:?}"
+    );
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+/// The broker dials HTTPS, or plain HTTP only to this host's own loopback,
+/// and says what is wrong with a base URL it will not dial.
+#[test]
+fn a_provider_upstream_is_https_or_loopback() {
+    for good in [
+        "https://api.example.com/v4",
+        " https://api.example.com/v4 ",
+        "http://127.0.0.1:8080/v1",
+        "http://[::1]:8080/v1",
+        "http://[::ffff:127.0.0.1]:8080/v1",
+    ] {
+        assert!(super::upstream_url(good).is_ok(), "{good}");
+    }
+    for (bad, why) in [
+        ("http://api.example.com/v4", "not HTTPS"),
+        ("http://localhost:8080/v1", "not HTTPS"),
+        ("api.example.com/v4", "no scheme"),
+        ("ftp://api.example.com/v4", "not http or https"),
+        ("https://user:pass@api.example.com/v4", "credentials"),
+        ("https://api.example.com/v4?key=1", "query"),
+    ] {
+        let refused = super::upstream_url(bad).expect_err(bad);
+        assert!(refused.contains(why), "{bad}: {refused}");
+    }
+}
+
+/// A call to a provider at a plain HTTP or schemeless base URL is refused
+/// before any lookup, with the reason in the answer.
+#[tokio::test]
+async fn a_provider_call_to_an_unusable_base_url_names_the_reason() {
+    for (upstream, why) in [
+        ("http://api.example.test/v1", "not HTTPS"),
+        ("api.example.test/v1", "no scheme"),
+    ] {
+        let mut state = provider_state(vec![provider_route("/provider/zai", upstream)]);
+        state.resolve = Some(Arc::new(|_| panic!("nothing is resolved")));
+        let request = http::Request::builder()
+            .uri("/provider/zai/chat")
+            .header("authorization", "Bearer session-nonce")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let answered = super::serve_provider_request(Arc::new(state), request).await;
+
+        assert_eq!(answered.status().as_u16(), 502);
+        let body = axum::body::to_bytes(answered.into_body(), 4096)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains(why), "{upstream}");
+    }
 }
