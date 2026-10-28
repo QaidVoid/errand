@@ -211,6 +211,10 @@ const CONTINUE_HINT: &str = "Post here to continue on a fresh sandbox.";
 /// Where the agent's recorded session id is kept in the state directory.
 const KAGE_SESSION_FILENAME: &str = "kage-session";
 
+/// The most of `kage-session` read back. An id is a few dozen bytes, and the
+/// file sits where the agent writes.
+const MAX_SESSION_ID_BYTES: u64 = 4 * 1024;
+
 /// Tool outputs kept so a delegation can name one, newest first.
 const MAX_REMEMBERED_OUTPUTS: usize = 50;
 
@@ -478,6 +482,8 @@ struct SessionSources {
     project_root: String,
     outputs: Arc<Mutex<Vec<(String, String)>>>,
     project_path: String,
+    /// The most an attachment may hold, as intake took it in.
+    max_attachment_bytes: u64,
 }
 
 impl Sources for SessionSources {
@@ -493,7 +499,7 @@ impl Sources for SessionSources {
     )]
     async fn read_file(&self, path: &str) -> std::io::Result<String> {
         let relative = path.strip_prefix(&self.project_root).unwrap_or(path);
-        paths::read_beneath(&self.project_root, relative)
+        paths::read_beneath(&self.project_root, relative, paths::MAX_READ_BYTES)
     }
 
     fn output_of(&self, call_id: &str) -> Option<String> {
@@ -512,6 +518,7 @@ impl Sources for SessionSources {
         paths::read_beneath(
             &self.project_path,
             &format!("{}/{}", attachments::ATTACHMENTS_DIR, name),
+            self.max_attachment_bytes,
         )
         .ok()
     }
@@ -1790,13 +1797,18 @@ impl Running {
             Ok(None) => return false,
             Err(error) => {
                 self.log.warn(
-                    "a withdrawal could not be written",
+                    "a withdrawal from the record could not be made",
                     &fields([("detail", LogValue::from(error.to_string()))]),
                 );
                 return false;
             }
         };
-        let _ = withdraw_from_agent_session(&self.options.state_dir, &said);
+        if let Err(error) = withdraw_from_agent_session(&self.options.state_dir, &said) {
+            self.log.warn(
+                "a withdrawal could not reach the agent's own copy of the conversation",
+                &fields([("detail", LogValue::from(error.to_string()))]),
+            );
+        }
 
         // Told, not corrected: `steer` is the one command that reaches a
         // running agent without asking it for another turn, and being
@@ -2443,6 +2455,7 @@ impl Running {
                 project_root: self.options.project.path.clone(),
                 outputs: Arc::clone(&self.outputs),
                 project_path: self.options.project.path.clone(),
+                max_attachment_bytes: self.options.config.output.max_attachment_bytes,
             }),
             delegate.deadline_ms,
             delegate.per_turn as usize,
@@ -2642,7 +2655,11 @@ impl Running {
     /// The agent's recorded session, when a previous start stored one, so a
     /// revived session reopens its history instead of starting blank.
     fn kage_session_id(&self) -> Option<String> {
-        match paths::read_beneath(&self.options.state_dir, KAGE_SESSION_FILENAME) {
+        match paths::read_beneath(
+            &self.options.state_dir,
+            KAGE_SESSION_FILENAME,
+            MAX_SESSION_ID_BYTES,
+        ) {
             Ok(id) => Some(id.trim().to_owned()).filter(|id| !id.is_empty()),
             Err(error) => {
                 if error.kind() != std::io::ErrorKind::NotFound {

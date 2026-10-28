@@ -102,7 +102,11 @@ impl Running {
     /// Opens the pull request the agent asked for, if it asked for one.
     pub(super) async fn open_requested_pull_request(&mut self) {
         let path = std::path::Path::new(&self.options.state_dir).join(REQUEST_FILENAME);
-        let Ok(contents) = paths::read_beneath(&self.options.state_dir, REQUEST_FILENAME) else {
+        let Ok(contents) = paths::read_beneath(
+            &self.options.state_dir,
+            REQUEST_FILENAME,
+            paths::MAX_READ_BYTES,
+        ) else {
             return;
         };
 

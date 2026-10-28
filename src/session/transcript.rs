@@ -43,6 +43,13 @@ pub const TRANSCRIPT_FILENAME: &str = "transcript.jsonl";
 /// reopen, and the most recent is the part worth showing.
 pub const MAX_REPLAYED: usize = 2_000;
 
+/// The most of a transcript, or of the agent's own session file, read back.
+///
+/// Both grow with a session's age, and a resume or a withdrawal reads one
+/// whole, so a bound keeps a very long-lived session from being read into
+/// memory entire.
+pub const MAX_TRANSCRIPT_BYTES: u64 = 64 * 1024 * 1024;
+
 /// How much of a transcript is read when looking for what was first asked.
 ///
 /// The opening prompt arrives within the first few lines, after a notice or
@@ -129,6 +136,84 @@ impl Transcript {
             })
     }
 
+    /// The newest [`MAX_TRANSCRIPT_BYTES`] of the file as text, and how many
+    /// lines before them were skipped, or nothing when it is missing or
+    /// unreadable.
+    ///
+    /// The newest part rather than none: a long session's history is still
+    /// its history, and only the newest entries are replayed anyway. The
+    /// skipped lines are counted as they pass, not held, and the skip is
+    /// said in the log.
+    fn read_capped(&self) -> Option<(String, usize)> {
+        let file = std::fs::File::open(&self.path).ok()?;
+        let skip = file
+            .metadata()
+            .ok()?
+            .len()
+            .saturating_sub(MAX_TRANSCRIPT_BYTES);
+        let mut skipped = 0;
+        let mut ended_a_line = true;
+        if skip > 0 {
+            let mut head = (&file).take(skip);
+            let mut chunk = vec![0; 64 * 1024];
+            loop {
+                let read = head.read(&mut chunk).ok()?;
+                if read == 0 {
+                    break;
+                }
+                #[expect(
+                    clippy::naive_bytecount,
+                    reason = "only a transcript past the cap is counted, which is rare \
+                              enough not to warrant a crate"
+                )]
+                let lines = chunk[..read].iter().filter(|byte| **byte == b'\n').count();
+                skipped += lines;
+                ended_a_line = chunk[read - 1] == b'\n';
+            }
+        }
+        let mut bytes = Vec::new();
+        (&file)
+            .take(MAX_TRANSCRIPT_BYTES)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        if skip > 0 {
+            // The newest part starts inside a line unless the skip ended one.
+            if !ended_a_line {
+                let cut = bytes.iter().position(|byte| *byte == b'\n');
+                bytes.drain(..cut.map_or(bytes.len(), |cut| cut + 1));
+                skipped += 1;
+            }
+            if let Some(log) = &self.log {
+                log.warn(
+                    "a transcript is past the read cap, so only its newest part is read",
+                    &fields([
+                        ("path", self.path.display().to_string().into()),
+                        ("limit_bytes", MAX_TRANSCRIPT_BYTES.into()),
+                        ("skipped_lines", skipped.into()),
+                    ]),
+                );
+            }
+        }
+        match String::from_utf8(bytes) {
+            Ok(text) => Some((text, skipped)),
+            // One torn byte must not cost the whole history: the lines around
+            // it are whole, and the damaged one shows what can be read of it.
+            Err(torn) => {
+                if let Some(log) = &self.log {
+                    log.warn(
+                        "a transcript holds bytes that are not UTF-8, which are read as \
+                         replacement characters",
+                        &fields([("path", self.path.display().to_string().into())]),
+                    );
+                }
+                Some((
+                    String::from_utf8_lossy(torn.as_bytes()).into_owned(),
+                    skipped,
+                ))
+            }
+        }
+    }
+
     /// Reads the most recent entries. A missing or unreadable file reads
     /// empty.
     pub fn read(&self) -> StoredTranscript {
@@ -137,7 +222,7 @@ impl Transcript {
 
     /// Reads the most recent entries back to a limit of one's own choosing.
     pub fn read_up_to(&self, limit: usize) -> StoredTranscript {
-        let Ok(text) = std::fs::read_to_string(&self.path) else {
+        let Some((text, skipped)) = self.read_capped() else {
             return StoredTranscript {
                 entries: Vec::new(),
                 dropped: 0,
@@ -148,13 +233,13 @@ impl Transcript {
         if parsed.len() <= limit {
             return StoredTranscript {
                 entries: parsed,
-                dropped: 0,
+                dropped: skipped,
             };
         }
         let dropped = parsed.len() - limit;
         StoredTranscript {
             entries: parsed.split_off(dropped),
-            dropped,
+            dropped: dropped + skipped,
         }
     }
 

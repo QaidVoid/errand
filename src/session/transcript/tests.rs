@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use super::{OPENING_SCAN_BYTES, Transcript};
+use super::{MAX_TRANSCRIPT_BYTES, OPENING_SCAN_BYTES, Transcript};
 use crate::log::{LogFields, LogLevel, Logger, Sink};
 use crate::session::event::{NoticeLevel, SessionEvent};
 
@@ -254,4 +254,75 @@ fn a_transcript_that_cannot_be_written_says_so_and_does_not_throw() {
     let logged = keep.logged();
     assert_eq!(logged.len(), 1);
     assert_eq!(logged[0].0, LogLevel::Warn);
+}
+
+/// A transcript past the cap is read from its newest part, not whole. What
+/// lies before it counts as dropped, the line the cut lands in included, and
+/// the log says so.
+#[test]
+fn a_transcript_past_the_cap_reads_its_newest_part() {
+    use std::io::{Seek, SeekFrom};
+
+    let kept = keep();
+    kept.transcript()
+        .append_at(&post("an early line"), Some(1), 1);
+    let early = std::fs::metadata(&kept.path).unwrap().len();
+    {
+        // Padding the head out past the cap with one long torn line, and the
+        // newest entry after it.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&kept.path)
+            .unwrap();
+        file.set_len(early + MAX_TRANSCRIPT_BYTES).unwrap();
+        file.seek(SeekFrom::End(0)).unwrap();
+        file.write_all(b"\n").unwrap();
+    }
+    kept.transcript()
+        .append_at(&post("the newest line"), Some(7), 2);
+
+    let read = kept.transcript().read();
+
+    assert_eq!(read.entries.len(), 1);
+    assert_eq!(read.entries[0].turn, Some(7));
+    assert_eq!(read.dropped, 2, "the early entry and the torn line");
+    assert!(
+        kept.logged()
+            .iter()
+            .any(|(level, line)| *level == LogLevel::Warn && line.contains("newest part")),
+        "{:?}",
+        kept.logged()
+    );
+}
+
+/// One byte that is not UTF-8 costs only what it tore: the entries around it
+/// are read whole, the damaged one with a replacement character, and the log
+/// says so.
+#[test]
+fn a_torn_byte_does_not_empty_the_transcript() {
+    let kept = keep();
+    let transcript = kept.transcript();
+    transcript.append_at(&post("before"), Some(1), 1);
+    transcript.append_at(&post("torn here"), Some(2), 2);
+    transcript.append_at(&post("after"), Some(3), 3);
+    let mut bytes = std::fs::read(&kept.path).unwrap();
+    let at = bytes
+        .windows(4)
+        .position(|window| window == b"torn")
+        .unwrap();
+    bytes[at] = 0xff;
+    std::fs::write(&kept.path, bytes).unwrap();
+
+    let read = kept.transcript().read();
+
+    assert_eq!(read.entries.len(), 3);
+    assert!(matches!(
+        &read.entries[1].entry,
+        SessionEvent::Post { text } if text.starts_with('\u{fffd}')
+    ));
+    assert!(
+        kept.logged()
+            .iter()
+            .any(|(level, line)| *level == LogLevel::Warn && line.contains("not UTF-8"))
+    );
 }

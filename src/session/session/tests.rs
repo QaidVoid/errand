@@ -1899,6 +1899,42 @@ async fn what_the_agent_writes_down_is_remembered_when_the_turn_settles() {
     .await;
 }
 
+/// A notes file grown past the read cap is not read into memory. It is
+/// emptied once, so the next tick has nothing to refuse, and nothing in it is
+/// remembered.
+#[tokio::test]
+async fn a_notes_file_past_the_read_cap_is_emptied_and_stores_nothing() {
+    let memory = Arc::new(MemoryStore::open(":memory:").expect("the store opens"));
+
+    with_session(
+        SessionTestCase {
+            memory: Some(Arc::clone(&memory)),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                let notes = std::path::Path::new(&harness.state_dir).join("remember.md");
+                let mut grown = "- likes short commits\n".to_owned();
+                grown.push_str(
+                    &"x".repeat(usize::try_from(crate::sandbox::paths::MAX_READ_BYTES).unwrap()),
+                );
+                std::fs::write(&notes, grown).unwrap();
+
+                harness.run_turn().await;
+
+                assert!(
+                    memory
+                        .facts_for(Scope::User, OWNER, 100)
+                        .unwrap()
+                        .is_empty()
+                );
+                assert_eq!(std::fs::read_to_string(&notes).unwrap(), "");
+            })
+        },
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn a_pull_request_the_agent_asked_for_opens_when_somebody_asked_too() {
     let opened = Arc::new(Mutex::new(Vec::new()));

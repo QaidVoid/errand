@@ -1,6 +1,9 @@
 //! Tests for path containment, ported from `paths_test.ts`.
 
-use super::{OpenOptions, host_path_under, open_beneath, read_beneath, truncate_beneath, within};
+use super::{
+    MAX_READ_BYTES, OpenOptions, host_path_under, open_beneath, read_beneath, truncate_beneath,
+    within,
+};
 
 const ROOT: &str = "/projects/demo";
 
@@ -105,15 +108,22 @@ fn a_planted_link_reads_nothing_outside_the_root() {
     let inside = root.path().display().to_string();
 
     assert_eq!(
-        read_beneath(&inside, "ordinary").expect("an ordinary file reads"),
+        read_beneath(&inside, "ordinary", MAX_READ_BYTES).expect("an ordinary file reads"),
         "the session's own"
     );
-    assert!(read_beneath(&inside, "escape").is_err(), "a link out");
-    assert!(read_beneath(&inside, "../secret").is_err(), "a climb out");
+    assert!(
+        read_beneath(&inside, "escape", MAX_READ_BYTES).is_err(),
+        "a link out"
+    );
+    assert!(
+        read_beneath(&inside, "../secret", MAX_READ_BYTES).is_err(),
+        "a climb out"
+    );
     assert!(
         read_beneath(
             &inside,
-            &outside.path().join("secret").display().to_string()
+            &outside.path().join("secret").display().to_string(),
+            MAX_READ_BYTES,
         )
         .is_err(),
         "an absolute path out"
@@ -129,8 +139,11 @@ fn even_a_link_that_points_back_inside_is_refused() {
     std::os::unix::fs::symlink("real", root.path().join("alias")).expect("linked");
     let inside = root.path().display().to_string();
 
-    assert_eq!(read_beneath(&inside, "real").expect("the file"), "inside");
-    assert!(read_beneath(&inside, "alias").is_err());
+    assert_eq!(
+        read_beneath(&inside, "real", MAX_READ_BYTES).expect("the file"),
+        "inside"
+    );
+    assert!(read_beneath(&inside, "alias", MAX_READ_BYTES).is_err());
 }
 
 /// A directory on the way is as good a place to plant a link as the file.
@@ -143,7 +156,14 @@ fn a_link_part_way_along_the_path_is_refused() {
     std::os::unix::fs::symlink(outside.path().join("elsewhere"), root.path().join("hop"))
         .expect("linked");
 
-    assert!(read_beneath(&root.path().display().to_string(), "hop/secret").is_err());
+    assert!(
+        read_beneath(
+            &root.path().display().to_string(),
+            "hop/secret",
+            MAX_READ_BYTES
+        )
+        .is_err()
+    );
 }
 
 /// The agent can make a pipe where a file should be. Opening it to read must
@@ -161,7 +181,10 @@ fn a_planted_pipe_opens_at_once_and_is_not_a_file() {
 
     let opened = open_beneath(&inside, "pipe", &OpenOptions::read()).expect("opened at once");
     assert!(!opened.metadata().expect("its metadata").is_file());
-    assert_eq!(read_beneath(&inside, "pipe").expect("nothing to read"), "");
+    assert_eq!(
+        read_beneath(&inside, "pipe", MAX_READ_BYTES).expect("nothing to read"),
+        ""
+    );
 }
 
 /// Emptying a notes file must empty that file, not whatever it points at.
@@ -187,4 +210,39 @@ fn truncating_through_a_link_leaves_the_target_alone() {
         std::fs::read_to_string(root.path().join("plain.md")).expect("read back"),
         ""
     );
+}
+
+/// A file past the limit is refused with a kind of its own, read through the
+/// bound rather than measured, and one at the limit reads whole.
+#[test]
+fn a_read_past_the_limit_is_refused_and_one_at_it_reads() {
+    let root = tempfile::tempdir().unwrap();
+    let inside = root.path().display().to_string();
+    std::fs::write(root.path().join("at"), "x".repeat(16)).unwrap();
+    std::fs::write(root.path().join("past"), "x".repeat(17)).unwrap();
+
+    assert_eq!(read_beneath(&inside, "at", 16).unwrap(), "x".repeat(16));
+    let refused = read_beneath(&inside, "past", 16).expect_err("past the limit");
+    assert_eq!(refused.kind(), std::io::ErrorKind::FileTooLarge);
+
+    // A character cut by the bound is still refused for its length.
+    std::fs::write(root.path().join("cut"), format!("{}\u{e9}", "x".repeat(16))).unwrap();
+    let cut = read_beneath(&inside, "cut", 16).expect_err("past the limit");
+    assert_eq!(cut.kind(), std::io::ErrorKind::FileTooLarge);
+
+    // Text that is not UTF-8 is a different failure, not this one.
+    std::fs::write(root.path().join("binary"), [0xff, 0xfe]).unwrap();
+    let binary = read_beneath(&inside, "binary", 16).expect_err("not text");
+    assert_eq!(binary.kind(), std::io::ErrorKind::InvalidData);
+}
+
+/// Emptying a name the agent turned into a pipe does not wait for a reader:
+/// it fails at once.
+#[test]
+fn emptying_a_planted_pipe_fails_rather_than_waits() {
+    let root = tempfile::tempdir().unwrap();
+    let pipe = root.path().join("notes");
+    nix::unistd::mkfifo(&pipe, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
+
+    assert!(truncate_beneath(&root.path().display().to_string(), "notes").is_err());
 }

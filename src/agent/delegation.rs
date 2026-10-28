@@ -174,9 +174,9 @@ pub async fn resolve_source(delegation: &Delegation, sources: &impl Sources) -> 
                     },
                     content,
                 }),
-                Err(_) => Outcome::Refused(Refused {
+                Err(error) => Outcome::Refused(Refused {
                     refused: format!(
-                        "{} could not be read",
+                        "{} could not be read: {error}",
                         match &delegation.source {
                             Source::File { path } => path.clone(),
                             _ => String::new(),
