@@ -246,6 +246,14 @@ pub struct AgentConfig {
     /// `POST /music/generations`, in the same three shapes. It needs a kage
     /// newer than 0.5.1.
     ///
+    /// On a brokered provider, `placement` (`bearer` or `x-api-key`) says
+    /// which header its key travels in, following an explicit `kind` when
+    /// left out, and `capabilities`, a list of `method` and `path` or `"*"`,
+    /// says which calls the key may make. A list only warns until
+    /// `strictCapabilities` is `true`; the sandboxing page describes both. A
+    /// key that reads as a misspelling of one of these three is refused.
+    /// Any other key errand does not read is ignored.
+    ///
     /// A provider entry may instead be marked `extension: true`, which means
     /// a kage plugin registers it. Errand writes nothing for it into the
     /// agent's configuration and does not broker it: the plugin holds the

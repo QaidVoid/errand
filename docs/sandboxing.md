@@ -151,6 +151,74 @@ the key to a host nobody judged. The redirect reaches the session as sent,
 and the session cannot follow it with the stand-in it holds, so a provider
 that answers with a redirect does not work behind the broker.
 
+A provider definition says which header its key travels in with
+`placement`, `"bearer"` for `Authorization: Bearer` or `"x-api-key"`. The
+broker then takes the session's stand-in only in that header, answering `401`
+with the header's name when it arrives in the other, and puts the real key
+only there, whatever else the session sent. Left out, it follows an explicit
+`kind`: `anthropic` is `x-api-key` and `openai` is `bearer`. A definition with
+neither, as every provider kage already knows is, keeps the older behaviour:
+the stand-in is taken in either header, and the key goes out as a bearer token
+and in `x-api-key` as well when the session sent one. The image, speech and
+music tools send their key as a bearer token, so a provider that carries one
+of them cannot take its key in `x-api-key`. A placement must name the header
+the agent's client for that provider sends, or every call is refused.
+
+`capabilities` says which calls the key may make, as a list of method and
+path, or `"*"` for every call:
+
+```json
+{
+  "agent": {
+    "providers": {
+      "anthropic": {
+        "credential": "...",
+        "placement": "x-api-key",
+        "capabilities": [
+          { "method": "POST", "path": "/v1/messages" },
+          { "method": "GET", "path": "/v1/models" }
+        ],
+        "strictCapabilities": true
+      }
+    }
+  }
+}
+```
+
+A path is matched against what follows the provider's route, which is what is
+pasted onto its base URL, so it reads as the provider's own API. It is matched
+as sent, before any decoding, and never against the query. A `*` segment
+matches one segment and `**` any number of them, none included. A method is
+written upper case, or `*` for any. A list is a warning until
+`strictCapabilities` is `true`: a call it does not name is forwarded and
+named in the log. Once strict, such a call is answered `403` with the list,
+and never reaches the provider. A provider with no `capabilities` forwards
+every call and logs each at `info`, with the entry that would name it, so a
+list can be written from a day's log. An empty list is refused, and so is
+`strictCapabilities` without a list. A key that reads as a misspelling of
+`placement`, `capabilities` or `strictCapabilities`, a letter or two off, in
+another case, or beginning with `place`, `strict` or `capab`, as `place`,
+`strictness` and `capability` do, is refused too, since a misspelt one would
+leave the route open. A key that only begins alike, as
+`platform` or `capacity`, is the operator's own and is ignored. Any other key errand does not
+read is ignored, as a definition may carry keys for the operator's own use. The image, speech and music tools ride
+the same route, so a strict list names their endpoints too, such as
+`POST /images/generations` under a base URL that ends in `/v1`.
+
+Whatever the route allows, a path that the provider, or the URL the broker
+rebuilds, could read differently from how it was matched is refused with
+`400`: one with an empty segment, a `.` or `..` segment, a segment that
+decodes once to either or to a slash or backslash, or one carrying `;`
+parameters. Headers that ask a server to run a request as another method or
+at another path, such as `X-HTTP-Method-Override` and `X-Original-URL`, are
+not forwarded. A framework that reads the method from a `_method` field in the
+body or the query is not covered, since the broker does not read either.
+Placement and capabilities are read when the daemon starts, so a change to
+them, or to the `kind` a placement is derived from, takes effect at the next
+restart, and the daemon warns when a reload makes one. A tunnel is opaque
+once it is open, so `sandbox.egress.allow` governs tunnels by host alone, and
+only a provider route can be held to a method and a path.
+
 The broker gives a lookup 5 seconds and the dial 10 seconds across every
 address a name has, so a stalled upstream is answered with `504 the name did
 not resolve in time` or `502 upstream unreachable` before a client's own

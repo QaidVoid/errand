@@ -1,5 +1,6 @@
 //! Tests for what a provider's answer is relayed as.
 
+use crate::config::route::RoutePolicy;
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
@@ -17,6 +18,7 @@ fn route(credential: &str) -> ProviderRoute {
         nonce: "session-nonce".to_owned(),
         credential: credential.to_owned(),
         credential_name: None,
+        policy: RoutePolicy::default(),
     }
 }
 

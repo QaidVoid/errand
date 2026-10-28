@@ -400,7 +400,9 @@ pub fn configuration_page(
          \n\
          Every field the daemon reads, taken from `src/config/schema.rs`. A key that\n\
          is not one of these is a refusal to start rather than a setting quietly\n\
-         ignored, so a misspelling says so.\n\
+         ignored, so a misspelling says so. Inside a provider definition, which may\n\
+         carry keys of the operator's own, only a misspelling of a route key is\n\
+         refused, and anything else is ignored.\n\
          \n\
          The file is read from `~/.config/errand/config.json`, then\n\
          `/etc/errand/config.json`, then `config.json` in the working directory.\n\
