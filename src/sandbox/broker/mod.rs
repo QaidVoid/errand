@@ -722,7 +722,7 @@ pub(crate) async fn serve_provider_request(
                     ),
                 ]),
             );
-            stream_answer(answered)
+            answer::relay(answered, route, &state.log, answer::MAX_ANSWER_BYTES)
         }
         Err(error) => {
             state.log.warn(
@@ -828,10 +828,15 @@ fn build_forwarded(
         if name == http::header::AUTHORIZATION || name.as_str() == API_KEY_HEADER {
             continue;
         }
+        // Replaced below: a compressed answer could not be scrubbed.
+        if name == http::header::ACCEPT_ENCODING {
+            continue;
+        }
         if !HOP_BY_HOP.contains(&name.as_str().to_lowercase().as_str()) {
             forwarded = forwarded.header(name.as_str(), value.to_str().unwrap_or(""));
         }
     }
+    forwarded = forwarded.header(http::header::ACCEPT_ENCODING, "identity");
     forwarded = forwarded.header(
         http::header::AUTHORIZATION,
         format!("Bearer {}", route.credential),
@@ -843,32 +848,11 @@ fn build_forwarded(
     forwarded.body(reqwest::Body::wrap_stream(body.into_data_stream()))
 }
 
-/// The provider's answer, with its hop-by-hop headers stripped.
-fn stream_answer(answered: reqwest::Response) -> axum::response::Response {
-    use axum::response::IntoResponse;
-    use futures_util::TryStreamExt;
-
-    let mut builder = axum::http::Response::builder().status(answered.status().as_u16());
-    for (name, value) in answered.headers() {
-        if !HOP_BY_HOP.contains(&name.as_str().to_lowercase().as_str())
-            && let Ok(value) = value.to_str()
-        {
-            builder = builder.header(name.as_str(), value);
-        }
-    }
-    let stream = answered
-        .bytes_stream()
-        .map_err(|error| std::io::Error::other(error.to_string()));
-    builder
-        .body(axum::body::Body::from_stream(stream))
-        .unwrap_or_else(|error| {
-            (axum::http::StatusCode::BAD_GATEWAY, error.to_string()).into_response()
-        })
-}
-
 /// Where a resolved name comes back as.
 pub(crate) type ResolveFuture = Pin<Box<dyn Future<Output = Result<Vec<String>, String>> + Send>>;
 
+/// What a provider's answer is relayed to the session as.
+mod answer;
 /// The listener that admits a session's connections and tunnels them.
 pub(crate) mod server;
 

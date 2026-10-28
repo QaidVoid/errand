@@ -236,6 +236,22 @@ somebody's repository.
 
 It does not hold the chat token, and everything a session reports is scrubbed of
 every configured secret, and of every stand-in its broker minted, before it
-reaches a channel, a browser, or the transcript on disk. The bytes of an
-uploaded file are not scrubbed. That is damage control on an unavoidable exposure rather
-than a boundary: an agent that re-encodes a key defeats it.
+reaches a channel, a browser, or the transcript on disk. That is damage
+control on an unavoidable exposure rather than a boundary: an agent that
+re-encodes a key defeats it, and the bytes of an uploaded file are not
+scrubbed.
+
+A brokered provider's answers are scrubbed on the way back, too. The broker
+puts the real credential on each request, so an upstream that quotes what it
+was sent, as a verbose error page might, would otherwise hand the session the
+key. Every occurrence of that provider's credential is replaced with
+`[redacted]` in the body, as it streams, and in every header value. To read
+the bytes at all, the broker asks the provider for an uncompressed answer. One
+that arrives compressed anyway is refused with `502`, and the log says so,
+since bytes the broker cannot scrub could carry the key out. An answer with
+no body is relayed whatever coding it names. A provider that compresses
+regardless of being asked not to fails every call this way, each with the
+warning `a provider answered compressed though asked not to`, and cannot be
+used behind the broker. An echo that re-encodes the key, as JSON escapes, URL encoding, or base64,
+is not caught either, nor one that quotes only part of it. An answer over
+64 MiB is refused when it says so up front, and cut when it streams past that.
