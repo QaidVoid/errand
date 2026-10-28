@@ -163,7 +163,7 @@ The local web interface.  Absent means no listener at all. The address it binds 
 | `host` | `string` | `"127.0.0.1"` | Address to bind to. Must be loopback, private, or a tailnet address. |
 | `port` | `number` | `8787` | Port to listen on. |
 | `observer` | `boolean` | `false` | When true the interface may watch and read but not start, prompt, or control anything. |
-| `publicUrl` | `string or undefined` | none | Where the interface is reachable from outside, such as behind a tunnel. |
+| `publicUrl` | `string or undefined` | none | Where the interface is reachable from outside, such as behind a tunnel. Set, it needs `login` or `observer`. |
 
 ## web.login
 

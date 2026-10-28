@@ -1486,7 +1486,7 @@ fn validate_web(raw: &Map<String, Value>, problems: &mut Problems) -> Option<Web
     let source = section(raw, "web");
     reject_unknown(&source, &KNOWN_WEB, "web", problems);
 
-    Some(WebConfig {
+    let web = WebConfig {
         host: optional_string(&source, "host", "web", problems)
             .unwrap_or_else(|| schema::defaults::WEB_HOST.to_owned()),
         port: positive_as(&source, "port", schema::defaults::WEB_PORT, "web", problems),
@@ -1499,7 +1499,20 @@ fn validate_web(raw: &Map<String, Value>, problems: &mut Problems) -> Option<Web
         ),
         public_url: optional_string(&source, "publicUrl", "web", problems),
         login: validate_web_login(&source, problems),
-    })
+    };
+
+    // The bind check cannot see a tunnel: what arrives through one comes from
+    // loopback like everything else. A public address is the operator saying
+    // there is one, and without a login everyone who reaches it would act as
+    // the operator.
+    if web.public_url.is_some() && !web.observer && web.login.is_none() {
+        problems.add(
+            "web.publicUrl says the interface is reachable from outside, and without web.login \
+             anyone who reaches it acts with operator authority; set web.login, or set \
+             web.observer to true",
+        );
+    }
+    Some(web)
 }
 
 /// Reads the Discord application visitors log in through, if any.

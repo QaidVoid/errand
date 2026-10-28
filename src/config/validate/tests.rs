@@ -322,6 +322,33 @@ fn an_interface_takes_its_address_port_and_role() {
     );
 }
 
+/// A public address with nobody logging in would hand the operator's
+/// authority to anyone who found it, so it has to say which it means.
+#[test]
+fn a_public_interface_must_log_people_in_or_only_watch() {
+    let open = validate_config(&valid(json!({
+        "web": { "publicUrl": "https://errand.example" },
+    })));
+    let problems = open.expect_err("refused").problems;
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("set web.login")),
+        "{problems:?}"
+    );
+
+    for safe in [
+        json!({ "publicUrl": "https://errand.example", "observer": true }),
+        json!({
+            "publicUrl": "https://errand.example",
+            "login": { "clientId": "app", "clientSecret": "a-client-secret" },
+        }),
+        json!({ "observer": false }),
+    ] {
+        assert!(validate_config(&valid(json!({ "web": safe }))).is_ok());
+    }
+}
+
 #[test]
 fn an_interface_that_says_only_that_it_exists_gets_the_defaults() {
     let web = validate_config(&valid(json!({ "web": {} })))

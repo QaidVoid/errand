@@ -574,6 +574,7 @@ pub struct WebConfig {
     /// control anything.
     pub observer: bool,
     /// Where the interface is reachable from outside, such as behind a tunnel.
+    /// Set, it needs `login` or `observer`.
     pub public_url: Option<String>,
     /// Discord login, which makes a visitor act as their own account.
     pub login: Option<WebLoginConfig>,

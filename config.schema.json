@@ -381,7 +381,7 @@
         },
         "publicUrl": {
           "type": "string",
-          "description": "Where the interface is reachable from outside, such as behind a tunnel."
+          "description": "Where the interface is reachable from outside, such as behind a tunnel. Set, it needs `login` or `observer`."
         },
         "login": {
           "type": "object",

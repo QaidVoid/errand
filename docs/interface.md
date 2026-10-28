@@ -24,7 +24,9 @@ DNS says at the moment the daemon started.
 Without a login, anyone who can reach it acts with **operator authority**: they
 can start sessions, prompt any session, and run any command a thread owner
 could. Set `"observer": true` to serve one that can watch and read but change
-nothing.
+nothing. With `publicUrl` set the daemon refuses to start unless there is a
+login or it only watches, since a tunnel arrives over loopback and the address
+check cannot tell it apart from the operator's own browser.
 
 ## Logging in with Discord
 
