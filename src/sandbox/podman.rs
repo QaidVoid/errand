@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::config::schema::EgressMode;
 use crate::config::schema::NetworkMode;
 use crate::config::schema::SandboxBackend;
 use crate::config::schema::SandboxConfig;
@@ -28,10 +29,16 @@ use crate::sandbox::backend::{
     SandboxLaunch, SandboxLaunchError, SandboxUnavailableError, WORKSPACE_PATH, agent_command,
     agent_memory_path, disk_tmp_dir, fresh_disk_tmp, sandbox_name,
 };
+use crate::sandbox::broker::{BrokerTemplate, SessionBroker};
+use crate::sandbox::egress::{
+    PROXY_VARIABLES, add_proxy_env, brokered_providers, session_env, start_session_broker,
+};
 use crate::sandbox::kage_providers::{KageProviders, LIST_ARGS, Probed};
 use crate::sandbox::spawn::spawn_agent;
+use crate::session::github::TOKEN_VARIABLE;
 
-/// Network arguments that leave the model provider reachable and the host not.
+/// Network arguments for a session that is not brokered: the internet
+/// reachable, and the host not.
 ///
 /// Measured on podman 5.8.2 with pasta 2025.12.15: podman's default maps the
 /// host at `169.254.1.2`, from which a host service bound to `0.0.0.0` is
@@ -39,15 +46,50 @@ use crate::sandbox::spawn::spawn_agent;
 /// and DNS keep working. The legacy `--no-map-gw` spelling does not close it.
 pub const RESTRICTED_NETWORK: &str = "pasta:--map-host-loopback,none,--map-guest-addr,none";
 
-/// Builds the full podman argument list for a session.
+/// Where a brokered container reaches its broker: its own loopback, which
+/// pasta forwards to the broker's port on the host's.
+pub const BROKER_ADDRESS: &str = "127.0.0.1";
+
+/// Network arguments for a brokered session: the broker's one port and
+/// nothing else.
+///
+/// Measured on podman 6.1.4 with pasta `2026_09_25`. `--splice-only` gives the
+/// container loopback and no other interface or route, and `-T` forwards its
+/// loopback port to the same port on the host's, where the broker listens. A
+/// connect to any other address is unreachable (`ENETUNREACH`): a public one,
+/// IPv6, and every address of the host itself, its bridges and VPNs included,
+/// which a container with a route out could reach whatever its source
+/// address. Nothing resolves. The broker resolves names itself.
+pub fn brokered_network(port: u16) -> String {
+    format!("pasta:--splice-only,-T,{port}")
+}
+
+/// A session's `podman run` arguments and the secrets they name.
+pub struct PodmanCommand {
+    /// The arguments. A secret appears as a bare `--env NAME`, so its value
+    /// never sits on a command line any local user can read; every other
+    /// variable is written out.
+    pub args: Vec<String>,
+    /// The value of every secret the arguments name, which podman reads from
+    /// its own environment.
+    pub env: BTreeMap<String, String>,
+}
+
+/// Builds the full podman command for a session, with `broker` when its
+/// egress is brokered.
 ///
 /// Pure, so a test can assert the exact flags without starting a container.
-pub fn podman_args(config: &SandboxConfig, launch: &SandboxLaunch) -> Vec<String> {
+pub fn podman_args(
+    config: &SandboxConfig,
+    launch: &SandboxLaunch,
+    broker: Option<&SessionBroker>,
+) -> PodmanCommand {
     let name = sandbox_name(&launch.session_id);
-    let network = if config.network == NetworkMode::None {
-        "none"
-    } else {
-        RESTRICTED_NETWORK
+    let brokered = broker.filter(|_| config.egress.mode == EgressMode::Proxy);
+    let network = match (config.network, brokered) {
+        (NetworkMode::None, _) => "none".to_owned(),
+        (_, Some(broker)) => brokered_network(broker.port),
+        (_, None) => RESTRICTED_NETWORK.to_owned(),
     };
 
     let mut args: Vec<String> = [
@@ -61,6 +103,9 @@ pub fn podman_args(config: &SandboxConfig, launch: &SandboxLaunch) -> Vec<String
         "--label",
         &format!("{SESSION_LABEL}={}", launch.session_id),
         "--userns=keep-id",
+        // The probe checked the image is here. A pull now would go through
+        // the session's own proxy settings, which podman reads too.
+        "--pull=never",
         "--read-only",
         "--volume",
         &format!("{}:{WORKSPACE_PATH}:rw,Z", launch.project_path),
@@ -109,17 +154,33 @@ pub fn podman_args(config: &SandboxConfig, launch: &SandboxLaunch) -> Vec<String
     args.push("--env".to_owned());
     args.push(format!("HOME={AGENT_HOME}"));
 
-    // Ahead of the daemon's own, so a name it sets keeps the daemon's value.
-    if let Some(env) = &config.env {
-        for (key, value) in env {
-            args.push("--env".to_owned());
-            args.push(format!("{key}={value}"));
-        }
+    // Laid down in order, so a name the daemon sets keeps the daemon's value.
+    let mut env = config.env.clone().unwrap_or_default();
+    if let Some(broker) = brokered
+        && config.network != NetworkMode::None
+    {
+        add_proxy_env(&mut env, BROKER_ADDRESS, broker);
     }
-
-    for (key, value) in &launch.env {
+    env.extend(launch.env.clone());
+    // Only a secret crosses by name: a provider key or its stand-in, the
+    // GitHub token, and a proxy URL with its credential. A bare name is
+    // resolved from podman's own environment, which is then podman's too, so
+    // anything else, a session's XDG directories above all, would move where
+    // podman keeps its own storage.
+    let secret = |name: &str| {
+        launch.credential_names.values().any(|key| key == name)
+            || name == TOKEN_VARIABLE
+            || PROXY_VARIABLES.contains(&name)
+    };
+    let mut secrets = BTreeMap::new();
+    for (name, value) in env {
         args.push("--env".to_owned());
-        args.push(format!("{key}={value}"));
+        if secret(&name) {
+            args.push(name.clone());
+            secrets.insert(name, value);
+        } else {
+            args.push(format!("{name}={value}"));
+        }
     }
 
     args.push(config.image.clone());
@@ -133,7 +194,21 @@ pub fn podman_args(config: &SandboxConfig, launch: &SandboxLaunch) -> Vec<String
             .as_ref()
             .map(|_| agent_memory_path()),
     }));
-    args
+    PodmanCommand { args, env: secrets }
+}
+
+/// The command a session's container is started with: its provider keys
+/// swapped for its broker's stand-ins, when it has one.
+pub fn session_command(
+    config: &SandboxConfig,
+    launch: &SandboxLaunch,
+    broker: Option<&SessionBroker>,
+) -> PodmanCommand {
+    let launch = SandboxLaunch {
+        env: session_env(&launch.env, broker),
+        ..launch.clone()
+    };
+    podman_args(config, &launch, broker)
 }
 
 /// Rootless podman, one container per session.
@@ -142,6 +217,7 @@ pub struct PodmanSandbox {
     log: Logger,
     run: super::Run,
     built_in: BTreeMap<String, Vec<Value>>,
+    broker: Option<BrokerTemplate>,
     kage_providers: Probed,
 }
 
@@ -175,18 +251,22 @@ impl PodmanSandbox {
     /// A backend over the installed tool.
     ///
     /// `built_in` is the host store's definitions of each defined provider's
-    /// models, for an entry naming one of them to be laid over.
+    /// models, for an entry naming one of them to be laid over. `broker` is
+    /// what each session's egress broker is built from, under
+    /// `egress.mode = proxy`.
     pub fn new(
         config: SandboxConfig,
         log: Logger,
         run: super::Run,
         built_in: BTreeMap<String, Vec<Value>>,
+        broker: Option<BrokerTemplate>,
     ) -> Self {
         Self {
             config,
             log,
             run,
             built_in,
+            broker,
             kage_providers: Probed::default(),
         }
     }
@@ -254,6 +334,10 @@ impl PodmanSandbox {
             ),
             if self.config.network == NetworkMode::None {
                 "sessions have no network, so the agent cannot reach a model provider".to_owned()
+            } else if self.brokers() {
+                "sessions reach the network only through their egress broker, and host \
+                 services are unreachable"
+                    .to_owned()
             } else {
                 "sessions reach the model provider, and host services are unreachable".to_owned()
             },
@@ -275,12 +359,30 @@ impl PodmanSandbox {
             ),
         ];
 
+        // Proxy mode promises the broker, so a backend that would run without
+        // one says so rather than pass for brokered.
+        let gaps = if self.config.egress.mode == EgressMode::Proxy && !self.brokers() {
+            vec![
+                "egress.mode is proxy but no broker is wired for this backend: provider keys \
+                 and the GitHub token cross whole into the container, and its connections go \
+                 anywhere"
+                    .to_owned(),
+            ]
+        } else {
+            Vec::new()
+        };
+
         Ok(CapabilityReport {
             backend: SandboxBackend::Podman,
-            gaps: Vec::new(),
+            gaps,
             notes,
             kage_providers,
         })
+    }
+
+    /// Whether sessions here are brokered.
+    fn brokers(&self) -> bool {
+        self.config.egress.mode == EgressMode::Proxy && self.broker.is_some()
     }
 
     /// Starts one session's sandbox.
@@ -288,14 +390,23 @@ impl PodmanSandbox {
         &self,
         launch: &SandboxLaunch,
     ) -> Result<SandboxHandle, SandboxLaunchError> {
+        // Started first and dropped on any failure below, which closes it.
+        let broker = start_session_broker(
+            self.broker.as_ref(),
+            &launch.session_id,
+            BROKER_ADDRESS,
+            &self.log,
+        )
+        .await?;
         if self.config.disk_tmp {
             fresh_disk_tmp(&launch.state_dir).await?;
         }
-        // The agent reads every provider's key from the environment, so each
-        // defined one travels there.
+        // The agent reads every provider's key from the environment, which
+        // under a broker carries the session's stand-in for it instead, and
+        // reaches each brokered provider through the broker.
         write_agent_config(
             launch,
-            &BTreeMap::new(),
+            &brokered_providers(BROKER_ADDRESS, broker.as_ref()),
             &self.built_in,
             &launch.credential_names,
             &self.log,
@@ -303,8 +414,13 @@ impl PodmanSandbox {
         )
         .await?;
         let name = sandbox_name(&launch.session_id);
-        let args = podman_args(&self.config, launch);
-        let spawned = spawn_agent("podman", &args, None, None)
+        let mut command = session_command(&self.config, launch, broker.as_ref());
+        // podman finds its network helper on its PATH, and is otherwise given
+        // only the session's secrets.
+        if let Ok(path) = std::env::var("PATH") {
+            command.env.entry("PATH".to_owned()).or_insert(path);
+        }
+        let spawned = spawn_agent("podman", &command.args, Some(&command.env), None)
             .map_err(|error| SandboxLaunchError(error.to_string()))?;
         let spawned = Arc::new(spawned);
         self.log.info(
@@ -323,6 +439,7 @@ impl PodmanSandbox {
             run: Arc::clone(&self.run),
             grace_ms: self.config.grace_period_ms,
             log: self.log.clone(),
+            broker: std::sync::Mutex::new(broker.map(|broker| broker.broker)),
             stopped: std::sync::atomic::AtomicBool::new(false),
         })))
     }

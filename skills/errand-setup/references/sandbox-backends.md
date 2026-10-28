@@ -27,7 +27,11 @@ provides. It needs:
 
 - Rootless podman. A podman that is not rootless is refused at startup.
 - The configured image present on the host before starting. A missing image
-  is reported at startup rather than at the first session.
+  is reported at startup rather than at the first session, and a session
+  never pulls one.
+- `pasta` on the host when `sandbox.egress.mode` is `proxy`, the default. A
+  brokered container is given loopback alone, and pasta forwards its one port
+  to the session's broker.
 
 Pick podman when sessions should see an assembled filesystem instead of the
 host. See `docs/sandboxing.md` for what the container flags enforce.
