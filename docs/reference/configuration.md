@@ -41,7 +41,7 @@ Chat connection and who may drive the bot.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `token` | `string` | required | Bot token. Secret. Never enters a sandbox. |
+| `token` | `string` | required | Bot token. Secret. Never enters a sandbox. At least 8 bytes, so it can be scrubbed from what is posted. |
 | `channelId` | `string` | required | The single channel the daemon serves. Everything else is ignored. |
 | `allowedUserIds` | `Vec<String` | required | Accounts permitted to drive sessions. Must not be empty. |
 | `blockedUserIds` | `Vec<String` | none | Accounts refused before anything else is considered. |
@@ -84,7 +84,7 @@ The GitHub identity a session works with, when one is configured.  A session wit
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `token` | `string` | required | Token the agent authenticates with. Secret, and reachable by the agent. |
+| `token` | `string` | required | Token the agent authenticates with. Secret, and reachable by the agent. At least 8 bytes, so it can be scrubbed from what is posted. |
 | `userName` | `string` | required | Name commits are authored with. |
 | `userEmail` | `string` | required | Email commits are authored with. |
 | `trigger` | `GithubTrigger or undefined` | none | Who may start a session from GitHub, by mentioning the bot's account on an issue or pull request or assigning one to it. Absent means GitHub is only where work is sent, never where it is asked for. |
@@ -172,7 +172,7 @@ The Discord application a visitor logs in through.
 | field | type | default | what it does |
 | --- | --- | --- | --- |
 | `clientId` | `string` | none | The application's `OAuth2` client id. |
-| `clientSecret` | `string` | none | The application's `OAuth2` client secret. Secret. |
+| `clientSecret` | `string` | none | The application's `OAuth2` client secret. Secret, and at least 8 bytes, so it can be scrubbed from what is posted. |
 
 ## shutdown
 

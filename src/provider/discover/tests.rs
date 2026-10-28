@@ -128,7 +128,7 @@ fn a_written_entry_is_laid_over_what_was_found() {
 #[tokio::test]
 async fn every_provider_that_says_to_is_asked_and_a_failure_keeps_its_own() {
     let config = validate_config(&json!({
-        "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+        "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
         "agent": {
             "provider": "gateway",
             "providers": {

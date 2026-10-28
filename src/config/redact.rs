@@ -15,7 +15,10 @@ use crate::config::schema::{Config, SECRET_PATHS};
 pub const REDACTION: &str = "[redacted]";
 
 /// Shortest secret worth scrubbing from free text, to avoid mangling prose.
-const MIN_SCRUBBABLE_LENGTH: usize = 8;
+///
+/// The chat and GitHub tokens are refused at load when shorter, so that no
+/// configured token falls under it unnoticed.
+pub const MIN_SCRUBBABLE_LENGTH: usize = 8;
 
 /// What every secret the daemon mints for a session starts with.
 ///
@@ -235,6 +238,24 @@ fn redact_minted_bytes(bytes: &[u8], ended: bool) -> Vec<u8> {
         at += 1;
     }
     out
+}
+
+/// Whether `bytes` hold a known secret, or a secret minted for a session.
+///
+/// For what cannot be scrubbed, such as an uploaded file, which goes out as
+/// bytes rather than text. The same floor applies as to [`redact_text`], and
+/// a minted secret counts from its prefix and one digit, as there. The bytes
+/// need not be text.
+pub fn contains_secret(bytes: &[u8], secrets: &[String]) -> bool {
+    let holds = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
+    secrets
+        .iter()
+        .filter(|secret| secret.len() >= MIN_SCRUBBABLE_LENGTH)
+        .any(|secret| holds(secret.as_bytes()))
+        || bytes.windows(MINTED_PREFIX.len() + 1).any(|window| {
+            window.starts_with(MINTED_PREFIX.as_bytes())
+                && window[MINTED_PREFIX.len()].is_ascii_hexdigit()
+        })
 }
 
 /// Walks a dotted path to the value it names, when every step is an object.

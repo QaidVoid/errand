@@ -10,7 +10,7 @@
       "properties": {
         "token": {
           "type": "string",
-          "description": "Bot token. Secret. Never enters a sandbox."
+          "description": "Bot token. Secret. Never enters a sandbox. At least 8 bytes, so it can be scrubbed from what is posted."
         },
         "channelId": {
           "type": "string",
@@ -131,7 +131,7 @@
       "properties": {
         "token": {
           "type": "string",
-          "description": "Token the agent authenticates with. Secret, and reachable by the agent."
+          "description": "Token the agent authenticates with. Secret, and reachable by the agent. At least 8 bytes, so it can be scrubbed from what is posted."
         },
         "userName": {
           "type": "string",
@@ -389,7 +389,7 @@
             },
             "clientSecret": {
               "type": "string",
-              "description": "The application's `OAuth2` client secret. Secret."
+              "description": "The application's `OAuth2` client secret. Secret, and at least 8 bytes, so it can be scrubbed from what is posted."
             }
           },
           "required": [

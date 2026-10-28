@@ -9,7 +9,7 @@ comments on the issue reach the same session.
 ```json
 {
   "github": {
-    "token": "...",
+    "token": "ghp_your_token_here",
     "userName": "errand-bot",
     "userEmail": "bot@example.com",
     "trigger": { "allowedUsers": ["your-login"] }

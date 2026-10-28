@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::config::redact::redact_text;
+use crate::config::redact::{contains_secret, redact_text};
 use crate::session::event::{Delegated, SessionEvent, ToolActivity, ToolResult};
 use crate::session::views::ViewFanOut;
 
@@ -138,6 +138,12 @@ impl Redacting {
     /// Wraps a fan-out with the secrets of the day.
     pub fn new(fan: Arc<ViewFanOut>, secrets: Vec<String>) -> Self {
         Self { fan, secrets }
+    }
+
+    /// Whether `bytes` hold one of the secrets this door scrubs, for what it
+    /// cannot scrub, such as an upload.
+    pub fn contains_secret(&self, bytes: &[u8]) -> bool {
+        contains_secret(bytes, &self.secrets)
     }
 
     /// Delivers an event to every attached view, with secrets scrubbed first.
