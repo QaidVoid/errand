@@ -1195,6 +1195,31 @@ async fn writing_to_a_session_that_stopped_picks_it_up_again() {
     .await;
 }
 
+/// The thread is how most people wake a session, so the same invitation
+/// holds there as from the interface.
+#[tokio::test]
+async fn a_stranger_posting_in_a_stopped_thread_does_not_wake_it() {
+    with_manager(|harness| {
+        Box::pin(async move {
+            harness.manager.start(message("demo: go", "m1")).await;
+            harness
+                .manager
+                .end_thread("thread-1", EndReason::Idle)
+                .await;
+            settle().await;
+
+            let mut stranger = message("wake up", "m2");
+            stranger.author_id = "999999999999999999".to_owned();
+            let outcome = harness.manager.resume("thread-1", stranger).await;
+
+            assert!(outcome.refused_reason().contains("has not invited you"));
+            assert!(harness.manager.sessions().is_empty());
+            assert!(harness.manager.can_resume("thread-1"));
+        })
+    })
+    .await;
+}
+
 /// Waking a session gives it a sandbox and tells its owner's thread, so only
 /// somebody who may take part in it can do that.
 #[tokio::test]

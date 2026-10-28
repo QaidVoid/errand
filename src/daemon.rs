@@ -720,8 +720,14 @@ impl Daemon {
         // history outlives the sandbox, so a restart does not end a
         // conversation.
         if self.sessions.can_resume(thread_id) {
+            let aside = is_aside(&message.content);
             let outcome = self.sessions.resume(thread_id, message.clone()).await;
-            if let StartOutcome::Refused { reason } = outcome {
+            // An aside is people talking to each other, so one that could not
+            // wake the session is left without an answer rather than
+            // interrupting them.
+            if let StartOutcome::Refused { reason } = outcome
+                && !aside
+            {
                 (self.options.reply_in_channel)(message, reason).await;
             }
             return;

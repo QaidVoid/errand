@@ -810,6 +810,15 @@ impl SessionManager {
         let Some(record) = record else {
             return self.refused("this thread is not one of mine to resume".to_owned());
         };
+        // Waking a session gives it a sandbox and a slot, and tells the thread
+        // it is back, so it is the same invitation taking part in it is. A
+        // live session asks this itself, but only once all of that is done.
+        if !self.may_wake(&record, &message.author_id) {
+            return self.refused(format!(
+                "<@{}> has not invited you to this thread; they can with `!allow`",
+                record.owner_id
+            ));
+        }
         if self
             .state
             .by_thread
@@ -1118,11 +1127,7 @@ impl SessionManager {
         else {
             return Delivery::NoSuchSession;
         };
-        let author = &message.author_id;
-        let may_wake = *author == record.owner_id
-            || record.guests.contains(author)
-            || self.shared.operator_ids.contains(author);
-        if !may_wake {
+        if !self.may_wake(&record, &message.author_id) {
             return Delivery::NotInvited;
         }
         if self.resume(&record.thread_id, message).await.is_started() {
@@ -1130,6 +1135,18 @@ impl SessionManager {
         } else {
             Delivery::NoSuchSession
         }
+    }
+
+    /// Whether an account may wake a stopped session: its owner, somebody
+    /// they invited, or an operator.
+    fn may_wake(&self, record: &ThreadRecord, author: &str) -> bool {
+        author == record.owner_id
+            || record.guests.iter().any(|guest| guest == author)
+            || self
+                .shared
+                .operator_ids
+                .iter()
+                .any(|operator| operator == author)
     }
 
     /// The secrets the configuration holds, for scrubbing what is shown.
