@@ -67,8 +67,8 @@ use crate::provider::vision::HttpPost;
 use crate::provider::vision::image_describer;
 use crate::provider::zai::fetch_quota;
 use crate::sandbox::bailey::provider_prefix;
-use crate::sandbox::broker::BrokerTemplate;
 use crate::sandbox::broker::ProviderUpstream;
+use crate::sandbox::broker::{BrokerTemplate, RECEIPTS_FILENAME, ReceiptStore};
 use crate::sandbox::broker::{LOOKUP_TIMEOUT, NoAddress, public_addresses, upstream_url};
 use crate::sandbox::paths;
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
@@ -711,7 +711,38 @@ async fn broker_template(config: &Config, log: &Logger) -> Result<Option<BrokerT
         log: log.clone(),
         providers,
         credential_names: brokering_credential_names(&config.agent),
+        receipts: open_receipts(&config.state_dir, log),
+        now: Arc::new(crate::log::now_ms),
     }))
+}
+
+/// The store each session's broker records its provider calls in.
+///
+/// A store that cannot be opened leaves calls unrecorded rather than stopping
+/// the daemon, and says so: the record is for looking back, and the calls
+/// themselves still work.
+fn open_receipts(state_dir: &str, log: &Logger) -> Option<Arc<ReceiptStore>> {
+    if let Err(error) = std::fs::create_dir_all(state_dir) {
+        log.warn(
+            "provider calls will not be recorded: the state directory could not be made",
+            &fields([("detail", LogValue::from(error.to_string()))]),
+        );
+        return None;
+    }
+    let path = std::path::Path::new(state_dir).join(RECEIPTS_FILENAME);
+    match ReceiptStore::open(&path) {
+        Ok(store) => Some(Arc::new(store)),
+        Err(error) => {
+            log.warn(
+                "provider calls will not be recorded: the receipt store could not be opened",
+                &fields([
+                    ("path", LogValue::from(path.display().to_string())),
+                    ("detail", LogValue::from(error.to_string())),
+                ]),
+            );
+            None
+        }
+    }
 }
 
 /// Everything between taking the lock and giving it back.

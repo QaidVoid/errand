@@ -267,5 +267,20 @@ fn read_path_mut<'a>(source: &'a mut Value, path: &str) -> Option<&'a mut Value>
     Some(current)
 }
 
+/// `text` with every control character written as a `\u{..}` escape, for
+/// text a session chose that is printed where a control character would act
+/// rather than show, such as an operator's terminal.
+pub fn escape_controls(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() {
+                c.escape_unicode().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests;

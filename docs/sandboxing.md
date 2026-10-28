@@ -84,11 +84,32 @@ sandbox launches, on a loopback port no other session uses, and it mints a
 proxy credential and a stand-in for every brokered provider key for that
 session alone. Each reads `errand-session-` and 64 hex digits, so an echoed
 one is plainly errand's rather than a provider key. A credential or stand-in
-read out of one session is refused by every other session's broker. Stopping the session closes its broker
-first: from then on neither is honoured, even on a connection the session
-opened earlier, and the port is released. A tunnel already open is not cut,
-and ends when the session's processes do. The broker's log lines name the
-session they belong to, tunnels included.
+read out of one session is refused by every other session's broker. Stopping
+the session closes its broker first: from then on neither is honoured, even
+on a connection the session opened earlier, and the port is released. A
+tunnel already open is not cut, and ends when the session's processes do. The
+broker's log lines name the session they belong to, tunnels included.
+
+Every provider call a session's broker handles is recorded as well, in
+`receipts.db` under the state directory. A receipt holds when the call ended,
+the session, the provider, the name of the variable its credential is
+configured under, the host the call went to, the method and path, the status,
+how long it took, how many bytes went each way, and what came of it:
+`completed`, `interrupted` when the answer failed, was cut for its size, or
+the session hung up part way, `denied` when the call did not carry the
+session's stand-in, recorded at most once a minute with the log saying how
+many were refused unrecorded since, `refused` when the broker would not forward it or refused
+its answer for the size it declared, or `upstream-unreachable`. The method is
+kept only as a standard name, the path decoded, scrubbed of stand-ins, cut at
+any query it encodes, with control characters escaped, and cut to 256 bytes, a
+query only by its length, since it can carry a key, and no header,
+body, credential or stand-in is ever kept. A call for a provider the broker
+does not serve, or one that arrives after the session stopped, leaves no
+receipt, only a log line or nothing. A tunnel carries no brokered credential
+and leaves no receipt, so its log lines are its only record.
+`errand threads show <thread>` lists the newest calls a thread's session made.
+Nothing prunes the store yet, so it grows with use. A receipt that cannot be
+written does not fail the call, and the log says so.
 
 The proxy listener requires that credential. A `CONNECT` or plain `http://`
 request without it receives `407 Proxy Authentication Required` with a
@@ -294,9 +315,9 @@ minted, before it reaches a channel, a browser, or the transcript on disk. An
 upload, a file pulled with `!file` or a picture or clip a session or a
 channel command made, is bytes rather than text and is not scrubbed. One that
 holds such a secret is refused whole, and whoever asked is told why. In a
-session the house rules text counts as well. A provider credential kept as a placeholder, such as
-`not-needed`, counts too, so a file that merely contains that word is
-refused.
+session the house rules text counts as well. A provider credential kept as a
+placeholder, such as `not-needed`, counts too, so a file that merely contains
+that word is refused.
 
 A secret shorter than 8 bytes is neither scrubbed nor checked for, since
 replacing a string that short wherever it occurs mangles ordinary prose. The

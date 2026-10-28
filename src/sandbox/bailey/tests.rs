@@ -699,6 +699,7 @@ fn session_broker(port: u16, secret: &str) -> SessionBroker {
             Vec::new(),
             false,
             String::new(),
+            None,
         ),
         port,
         proxy_secret: secret.to_owned(),
@@ -720,6 +721,8 @@ fn template() -> BrokerTemplate {
             credential: "real-key".to_owned(),
         }],
         credential_names: BTreeMap::from([("zai-coding-cn".to_owned(), "ZAI_KEY".to_owned())]),
+        receipts: None,
+        now: Arc::new(|| 0),
     }
 }
 

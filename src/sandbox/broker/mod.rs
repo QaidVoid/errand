@@ -16,7 +16,6 @@
 //! provider is a separate, terminating path, served on this module's second
 //! listener; this file is the gate.
 
-use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
@@ -24,7 +23,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+pub use receipts::{Ledger, RECEIPTS_FILENAME, ReceiptStore};
 pub use server::{Broker, BrokerTemplate, SessionBroker};
+
+use receipts::{Outcome, Receipt, ReceiptGuard};
 
 use crate::log::Logger;
 use crate::log::fields;
@@ -170,6 +172,8 @@ pub struct ProviderRoute {
     pub nonce: String,
     /// The real credential. Never leaves the daemon.
     pub credential: String,
+    /// The variable the credential is configured under, for receipts.
+    pub credential_name: Option<String>,
 }
 
 /// A provider the broker stands in front of, before any session holds a
@@ -545,6 +549,39 @@ pub(crate) struct ProviderState {
     pub client: reqwest::Client,
     /// Whether the broker has been closed, after which nothing is served.
     pub closed: Arc<AtomicBool>,
+    /// Where provider calls are recorded, when they are.
+    pub ledger: Option<Ledger>,
+    /// When a call without the session's key was last recorded, so a session
+    /// that repeats one is a record a minute rather than one an attempt.
+    pub denied: std::sync::Mutex<DeniedCalls>,
+}
+
+/// How long a recorded denial holds off recording the next.
+pub(crate) const DENIED_WINDOW_MS: i64 = 60_000;
+
+/// When a call without the session's key was last recorded, and how many
+/// have been refused since without being.
+#[derive(Debug, Default)]
+pub(crate) struct DeniedCalls {
+    last_at: Option<i64>,
+    unrecorded: u64,
+}
+
+impl DeniedCalls {
+    /// Notes a denial at `now`: the count refused unrecorded since the last
+    /// recorded one when this one is to be recorded, or nothing when it is
+    /// one more within the window.
+    fn note(&mut self, now: i64) -> Option<u64> {
+        if self
+            .last_at
+            .is_some_and(|at| now.saturating_sub(at) < DENIED_WINDOW_MS)
+        {
+            self.unrecorded += 1;
+            return None;
+        }
+        self.last_at = Some(now);
+        Some(std::mem::take(&mut self.unrecorded))
+    }
 }
 
 /// Whether a request is served by the provider endpoint, per its path.
@@ -728,17 +765,138 @@ pub(crate) async fn serve_provider_request(
         )
             .into_response();
     };
+    let rest = path[route.prefix.len()..].to_owned();
+    let mut receipt = ReceiptGuard::begin(
+        state.ledger.as_ref(),
+        &state.log,
+        Receipt {
+            at: 0,
+            session_id: String::new(),
+            provider: route.prefix.clone(),
+            credential_name: route.credential_name.clone(),
+            upstream_host: None,
+            method: recorded_method(request.method()),
+            path: recorded_path(&rest),
+            query_bytes: request.uri().query().map(|query| query.len() as u64),
+            status: None,
+            outcome: Outcome::Interrupted,
+            elapsed_ms: 0,
+            bytes_out: 0,
+            bytes_in: 0,
+        },
+    );
     // The session proves itself with the nonce this broker gave it, in
     // whichever header its provider kind sends a key in.
     if !carries_nonce(request.headers(), &route.nonce) {
-        state.log.warn(
-            "a provider call arrived without this session's key",
-            &BTreeMap::new(),
-        );
+        // A refusal is the end of a request, not of a session that keeps
+        // sending them, so it is recorded once a minute with how many went
+        // unrecorded, for the log and the store alike.
+        let now = state
+            .ledger
+            .as_ref()
+            .map_or_else(crate::log::now_ms, |ledger| (ledger.now)());
+        let noted = state.denied.lock().expect("the denied lock").note(now);
+        match noted {
+            Some(unrecorded) => {
+                state.log.warn(
+                    "a provider call arrived without this session's key",
+                    &fields([
+                        ("provider", route.prefix.as_str().into()),
+                        ("unrecorded_since_last", unrecorded.into()),
+                    ]),
+                );
+                receipt.answered(None, Some(401));
+                receipt.finish(Outcome::Denied);
+            }
+            None => receipt.discard(),
+        }
         return (axum::http::StatusCode::UNAUTHORIZED, "not this session\n").into_response();
     }
+    forward_to_provider(&state, request, route, rest, receipt).await
+}
 
-    let rest = path[route.prefix.len()..].to_owned();
+/// The longest path a receipt keeps.
+const RECORDED_PATH_BYTES: usize = 256;
+
+/// A call's method as a receipt keeps it. The session chooses it, and any
+/// token is a method, so one that is not a standard name is kept as `OTHER`.
+fn recorded_method(method: &http::Method) -> String {
+    const STANDARD: [&str; 9] = [
+        "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH",
+    ];
+    if STANDARD.contains(&method.as_str()) {
+        method.as_str().to_owned()
+    } else {
+        "OTHER".to_owned()
+    }
+}
+
+/// A call's path as a receipt keeps it: decoded and scrubbed of anything
+/// minted for a session, since the session chose it and could have encoded
+/// one to slip it past, cut at a query it encoded into the path, which is
+/// kept only by its length, with control characters written as escapes, so
+/// that printing a receipt cannot drive the terminal it is printed to, and
+/// cut to a length a record needs.
+fn recorded_path(path: &str) -> String {
+    let decoded = percent_decoded(path);
+    let path = decoded.split('?').next().unwrap_or_default();
+    let scrubbed =
+        crate::config::redact::escape_controls(&crate::config::redact::redact_text(path, &[]));
+    if scrubbed.len() <= RECORDED_PATH_BYTES {
+        return scrubbed;
+    }
+    let mut cut = RECORDED_PATH_BYTES;
+    while !scrubbed.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}...", &scrubbed[..cut])
+}
+
+/// `text` with each `%XX` turned back into the byte it stands for, lossily
+/// where the result is not UTF-8.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = |byte: u8| char::from(byte).to_digit(16);
+        if bytes[at] == b'%'
+            && let (Some(high), Some(low)) = (
+                bytes.get(at + 1).and_then(|byte| hex(*byte)),
+                bytes.get(at + 2).and_then(|byte| hex(*byte)),
+            )
+        {
+            out.push(u8::try_from(high * 16 + low).unwrap_or(b'?'));
+            at += 3;
+            continue;
+        }
+        out.push(bytes[at]);
+        at += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Writes a refused call's receipt with the status it was answered with.
+fn refused_call(
+    mut receipt: ReceiptGuard,
+    response: axum::response::Response,
+) -> axum::response::Response {
+    receipt.answered(None, Some(response.status().as_u16()));
+    receipt.finish(Outcome::Refused);
+    response
+}
+
+/// Judges where a session's call would go, forwards it with the real
+/// credential, and relays the answer, finishing its receipt on every path.
+async fn forward_to_provider(
+    state: &ProviderState,
+    request: http::Request<axum::body::Body>,
+    route: &ProviderRoute,
+    rest: String,
+    mut receipt: ReceiptGuard,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
     let target = match provider_target(route, &rest, request.uri().query()) {
         Ok(target) => target,
         Err(TargetError::Upstream(why)) => {
@@ -749,11 +907,12 @@ pub(crate) async fn serve_provider_request(
                     ("detail", why.into()),
                 ]),
             );
-            return (
+            let response = (
                 axum::http::StatusCode::BAD_GATEWAY,
                 format!("the provider is not at a reachable address: {why}\n"),
             )
                 .into_response();
+            return refused_call(receipt, response);
         }
         Err(TargetError::Malformed(why)) => {
             state.log.warn(
@@ -764,20 +923,24 @@ pub(crate) async fn serve_provider_request(
                     ("detail", why.into()),
                 ]),
             );
-            return (
+            let response = (
                 axum::http::StatusCode::BAD_REQUEST,
                 "the provider path is invalid or leaves its configured base\n",
             )
                 .into_response();
+            return refused_call(receipt, response);
         }
     };
-    if let Some(refused) = provider_refusal(&state, route, &target).await {
-        return refused;
+    if let Some(refused) = provider_refusal(state, route, &target).await {
+        return refused_call(receipt, refused);
     }
+    // Noted before the call is sent, so a session that hangs up while it is
+    // in flight still shows where the credential went.
+    receipt.answered(target.host_str().map(str::to_owned), None);
 
     let method = request.method().to_string();
     let started = std::time::Instant::now();
-    let forwarded = build_forwarded(&state, request, route, &target);
+    let forwarded = build_forwarded(state, request, route, &target, &receipt.bytes_out);
     match forwarded.send().await {
         Ok(answered) => {
             state.log.debug(
@@ -795,7 +958,17 @@ pub(crate) async fn serve_provider_request(
                     ),
                 ]),
             );
-            answer::relay(answered, route, &state.log, answer::MAX_ANSWER_BYTES)
+            receipt.answered(
+                target.host_str().map(str::to_owned),
+                Some(answered.status().as_u16()),
+            );
+            answer::relay(
+                answered,
+                route,
+                &state.log,
+                answer::MAX_ANSWER_BYTES,
+                receipt,
+            )
         }
         Err(error) => {
             state.log.warn(
@@ -805,6 +978,8 @@ pub(crate) async fn serve_provider_request(
                     ("detail", error.to_string().into()),
                 ]),
             );
+            receipt.answered(target.host_str().map(str::to_owned), Some(502));
+            receipt.finish(Outcome::UpstreamUnreachable);
             (
                 axum::http::StatusCode::BAD_GATEWAY,
                 "the provider could not be reached\n",
@@ -885,7 +1060,10 @@ fn build_forwarded(
     request: http::Request<axum::body::Body>,
     route: &ProviderRoute,
     target: &reqwest::Url,
+    sent: &Arc<std::sync::atomic::AtomicU64>,
 ) -> reqwest::RequestBuilder {
+    use futures_util::StreamExt;
+
     let mut forwarded = state.client.request(
         reqwest::Method::from_bytes(request.method().as_str().as_bytes())
             .unwrap_or(reqwest::Method::GET),
@@ -917,8 +1095,16 @@ fn build_forwarded(
     if sends_key {
         forwarded = forwarded.header(API_KEY_HEADER, route.credential.clone());
     }
-    let body = request.into_body();
-    forwarded.body(reqwest::Body::wrap_stream(body.into_data_stream()))
+    let sent = Arc::clone(sent);
+    let body = request
+        .into_body()
+        .into_data_stream()
+        .inspect(move |chunk| {
+            if let Ok(chunk) = chunk {
+                sent.fetch_add(chunk.len() as u64, Ordering::SeqCst);
+            }
+        });
+    forwarded.body(reqwest::Body::wrap_stream(body))
 }
 
 /// Where a resolved name comes back as.
@@ -926,6 +1112,8 @@ pub(crate) type ResolveFuture = Pin<Box<dyn Future<Output = Result<Vec<String>, 
 
 /// What a provider's answer is relayed to the session as.
 mod answer;
+/// What a brokered credential was used for, kept after the fact.
+pub mod receipts;
 /// The listener that admits a session's connections and tunnels them.
 pub(crate) mod server;
 

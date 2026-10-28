@@ -12,6 +12,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use crate::sandbox::broker::receipts::{Outcome, Receipt};
 use crate::session::registry::{ThreadRecord, ThreadRegistry};
 
 /// Where the project a session worked in is read from the policy it kept.
@@ -33,6 +34,12 @@ type Remove =
 type ProjectOf =
     Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Option<Project>> + Send>> + Send + Sync>;
 
+/// The newest provider calls a session's broker recorded, newest first.
+type ReceiptsOf = Arc<dyn Fn(String) -> Result<Vec<Receipt>, String> + Send + Sync>;
+
+/// How many recorded provider calls `show` lists.
+pub const RECEIPTS_SHOWN: u32 = 20;
+
 /// What the commands need, injected so a test needs no disk and no clock.
 pub struct Deps {
     /// The threads this host remembers.
@@ -49,13 +56,16 @@ pub struct Deps {
     pub write: Arc<dyn Fn(&str) + Send + Sync>,
     /// The clock, injected so output is stable in a test.
     pub now: Arc<dyn Fn() -> i64 + Send + Sync>,
+    /// What a session spent provider credentials on, by session id.
+    pub receipts_of: ReceiptsOf,
 }
 
 const USAGE: &str = "\
 usage: errand threads <command>
 
   list                 every remembered thread, most recent first
-  show <thread>        one thread in full, with what it holds on disk
+  show <thread>        one thread in full, with what it holds on disk and the
+                       provider calls its broker recorded
   forget <thread>      stop resuming it, and keep its data
   remove <thread>      forget it and delete its data, needs --yes
   prune                forget threads whose data is already gone
@@ -218,7 +228,66 @@ async fn show(deps: &Deps, wanted: Option<&str>) -> i32 {
         "used      {} ago",
         ago(record.updated_at, (deps.now)())
     ));
-    0
+    i32::from(!show_receipts(deps, &record.session_id))
+}
+
+/// The provider calls a session's broker recorded: how each newest one came
+/// out, then one line each. Says whether they could be read.
+fn show_receipts(deps: &Deps, session_id: &str) -> bool {
+    let receipts = match (deps.receipts_of)(session_id.to_owned()) {
+        Ok(receipts) => receipts,
+        Err(error) => {
+            (deps.write)(&format!("calls     could not be read: {error}"));
+            return false;
+        }
+    };
+    if receipts.is_empty() {
+        (deps.write)("calls     none recorded");
+        return true;
+    }
+    let mut counts: Vec<(Outcome, usize)> = Vec::new();
+    for receipt in &receipts {
+        match counts
+            .iter_mut()
+            .find(|(outcome, _)| *outcome == receipt.outcome)
+        {
+            Some((_, count)) => *count += 1,
+            None => counts.push((receipt.outcome, 1)),
+        }
+    }
+    let summary: Vec<String> = counts
+        .iter()
+        .map(|(outcome, count)| format!("{count} {}", outcome.as_str()))
+        .collect();
+    (deps.write)(&format!(
+        "calls     the newest {}: {}",
+        receipts.len(),
+        summary.join(", ")
+    ));
+    let now = (deps.now)();
+    for receipt in &receipts {
+        (deps.write)(&format!(
+            "  {} ago  {} {} {}  {}  {}  {} ms  {} B out  {} B in",
+            ago(receipt.at, now),
+            receipt.provider,
+            receipt.method,
+            if receipt.path.is_empty() {
+                "/".to_owned()
+            } else {
+                // Escaped again on the way out, for a store an older daemon
+                // wrote.
+                crate::config::redact::escape_controls(&receipt.path)
+            },
+            receipt
+                .status
+                .map_or_else(|| "-".to_owned(), |status| status.to_string()),
+            receipt.outcome.as_str(),
+            receipt.elapsed_ms,
+            receipt.bytes_out,
+            receipt.bytes_in,
+        ));
+    }
+    true
 }
 
 fn not_found(deps: &Deps, wanted: &str, ambiguous: Option<&[ThreadRecord]>) -> i32 {

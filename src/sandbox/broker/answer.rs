@@ -10,6 +10,7 @@
 
 use futures_util::StreamExt;
 
+use super::receipts::{Outcome, ReceiptGuard};
 use super::{HOP_BY_HOP, ProviderRoute};
 use crate::config::redact::REDACTION;
 use crate::log::{Logger, fields};
@@ -87,11 +88,15 @@ fn replace_all<'a>(haystack: &'a [u8], needle: &[u8]) -> (Vec<u8>, &'a [u8]) {
 /// The provider's answer as the session receives it: the same status, its
 /// headers scrubbed of the route's credential and stripped of hop-by-hop and
 /// stale framing, and its body scrubbed as it streams and cut at `limit`.
+///
+/// The call's receipt is finished when the body ends, fails or is cut, and
+/// by its own `Drop` when the session hangs up first.
 pub(super) fn relay(
     answered: reqwest::Response,
     route: &ProviderRoute,
     log: &Logger,
     limit: u64,
+    receipt: ReceiptGuard,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
@@ -106,6 +111,9 @@ pub(super) fn relay(
             "a provider answer was refused for its declared size",
             &fields([("provider", provider.into()), ("limit_bytes", limit.into())]),
         );
+        let mut receipt = receipt;
+        receipt.answered_instead(502);
+        receipt.finish(Outcome::Refused);
         return (
             axum::http::StatusCode::BAD_GATEWAY,
             "the provider's answer is larger than the broker relays\n",
@@ -131,14 +139,17 @@ pub(super) fn relay(
             })
         });
     // An answer with no body has nothing to scrub, and may carry the coding
-    // of the representation it stands for, as a 304 does.
-    let bodiless = matches!(answered.status().as_u16(), 204 | 304);
-    if encoded && !bodiless {
+    // of the representation it stands for, as a 304 or an answer to HEAD
+    // does.
+    if encoded && !receipt.bodiless(answered.status().as_u16()) {
         log.warn(
             "a provider answered compressed though asked not to, so the answer was refused \
              rather than relayed unscrubbed",
             &fields([("provider", provider.into())]),
         );
+        let mut receipt = receipt;
+        receipt.answered_instead(502);
+        receipt.finish(Outcome::Refused);
         return (
             axum::http::StatusCode::BAD_GATEWAY,
             "the provider answered compressed, which the broker cannot scrub\n",
@@ -160,8 +171,26 @@ pub(super) fn relay(
         builder = builder.header(name, relayed);
     }
 
+    // A body that will never be read cannot end, so the call is complete as
+    // soon as it is answered.
+    let status = answered.status().as_u16();
+    if receipt.bodiless(status) {
+        receipt.finish(Outcome::Completed);
+        return builder
+            .body(axum::body::Body::empty())
+            .unwrap_or_else(|error| {
+                (axum::http::StatusCode::BAD_GATEWAY, error.to_string()).into_response()
+            });
+    }
     let scrubber = Scrubber::new(&route.credential);
-    let body = scrubbed_body(answered, scrubber, limit, log.clone(), provider.to_owned());
+    let body = scrubbed_body(
+        answered,
+        scrubber,
+        limit,
+        log.clone(),
+        provider.to_owned(),
+        receipt,
+    );
     builder
         .body(axum::body::Body::from_stream(body))
         .unwrap_or_else(|error| {
@@ -179,14 +208,15 @@ fn scrubbed_body(
     limit: u64,
     log: Logger,
     provider: String,
+    receipt: ReceiptGuard,
 ) -> impl futures_util::Stream<Item = std::io::Result<Vec<u8>>> {
     futures_util::stream::unfold(
-        Some((answered.bytes_stream(), scrubber, 0_u64)),
+        Some((answered.bytes_stream(), scrubber, 0_u64, receipt)),
         move |state| {
             let log = log.clone();
             let provider = provider.clone();
             async move {
-                let (mut upstream, mut scrubber, seen) = state?;
+                let (mut upstream, mut scrubber, seen, mut receipt) = state?;
                 match upstream.next().await {
                     Some(Ok(chunk)) => {
                         let out = scrubber.push(&chunk);
@@ -202,9 +232,11 @@ fn scrubbed_body(
                             let cut = std::io::Error::other(
                                 "the provider's answer is larger than the broker relays",
                             );
+                            receipt.finish(Outcome::Interrupted);
                             return Some((Err(cut), None));
                         }
-                        Some((Ok(out), Some((upstream, scrubber, seen))))
+                        receipt.relayed(out.len());
+                        Some((Ok(out), Some((upstream, scrubber, seen, receipt))))
                     }
                     Some(Err(error)) => {
                         log.warn(
@@ -214,10 +246,13 @@ fn scrubbed_body(
                                 ("detail", error.to_string().into()),
                             ]),
                         );
+                        receipt.finish(Outcome::Interrupted);
                         Some((Err(std::io::Error::other(error.to_string())), None))
                     }
                     None => {
                         let tail = scrubber.finish();
+                        receipt.relayed(tail.len());
+                        receipt.finish(Outcome::Completed);
                         (!tail.is_empty()).then_some((Ok(tail), None))
                     }
                 }

@@ -170,6 +170,8 @@ async fn threads(args: &[String], env: &Vars, level: LogLevel) -> Result<i32, Co
         log,
     )));
     registry.lock().expect("the registry lock").load();
+    let receipts =
+        std::path::Path::new(&config.state_dir).join(crate::sandbox::broker::RECEIPTS_FILENAME);
 
     Ok(run_threads(
         args,
@@ -198,6 +200,14 @@ async fn threads(args: &[String], env: &Vars, level: LogLevel) -> Result<i32, Co
             },
             write: Arc::new(|line| println!("{line}")),
             now: Arc::new(now_ms),
+            receipts_of: Arc::new(move |session_id: String| {
+                crate::sandbox::broker::receipts::receipts_for(
+                    &receipts,
+                    &session_id,
+                    crate::cli::threads::RECEIPTS_SHOWN,
+                )
+                .map_err(|error| error.to_string())
+            }),
         },
     )
     .await)
