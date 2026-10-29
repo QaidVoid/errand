@@ -146,6 +146,76 @@ pub fn open_beneath(root: &str, relative: &str, options: &OpenOptions) -> std::i
     }
 }
 
+/// Copies the directory at `relative` beneath `root` to `destination`,
+/// following no link to reach it or anything in it.
+///
+/// For a tree the session can change while it is read. Every entry is opened
+/// through the descriptor of the directory holding it, with links refused by
+/// the kernel, and what it is is asked of the open descriptor, so nothing can
+/// be swapped in between a look and an open. A link, a pipe, a socket or a
+/// device is left out rather than followed or read, which can only leave the
+/// copy short of something, never holding what was elsewhere, and so is an
+/// entry that goes while the copy is made. A tree nested deeper than `depth`,
+/// or holding more than `max_bytes`, is refused: the session can grow it as
+/// fast as it is read, and sparse files cost it nothing.
+pub fn copy_tree_beneath(
+    root: &str,
+    relative: &str,
+    destination: &Path,
+    depth: usize,
+    max_bytes: u64,
+) -> std::io::Result<()> {
+    let top = open_beneath(root, relative, &OpenOptions::directory())?;
+    let mut budget = max_bytes;
+    copy_directory(&top, destination, depth, &mut budget)
+}
+
+fn copy_directory(
+    directory: &File,
+    destination: &Path,
+    depth: usize,
+    budget: &mut u64,
+) -> std::io::Result<()> {
+    std::fs::create_dir(destination)?;
+    for entry in std::fs::read_dir(pinned_path(directory))? {
+        let name = entry?.file_name();
+        let how = OpenHow::new()
+            .flags(OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC)
+            .resolve(ResolveFlag::RESOLVE_BENEATH | ResolveFlag::RESOLVE_NO_SYMLINKS);
+        let opened = match openat2(directory, name.as_os_str(), how) {
+            Ok(opened) => File::from(opened),
+            // A link, a socket, and an entry that went since it was listed.
+            Err(
+                nix::errno::Errno::ELOOP | nix::errno::Errno::ENXIO | nix::errno::Errno::ENOENT,
+            ) => {
+                continue;
+            }
+            Err(errno) => return Err(std::io::Error::from_raw_os_error(errno as i32)),
+        };
+        let kind = opened.metadata()?.file_type();
+        let target = destination.join(&name);
+        if kind.is_dir() {
+            if depth == 0 {
+                return Err(std::io::Error::other(
+                    "the tree nests deeper than a copy is made of",
+                ));
+            }
+            copy_directory(&opened, &target, depth - 1, budget)?;
+        } else if kind.is_file() {
+            let mut copy = File::create_new(&target)?;
+            let copied = std::io::copy(&mut (&opened).take(budget.saturating_add(1)), &mut copy)?;
+            if copied > *budget {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::FileTooLarge,
+                    "the tree holds more than a copy is made of",
+                ));
+            }
+            *budget -= copied;
+        }
+    }
+    Ok(())
+}
+
 /// Whether this host's kernel enforces containment during path resolution.
 ///
 /// `openat2` arrived in Linux 5.6. Without it every read the daemon makes on a
@@ -191,6 +261,14 @@ impl OpenOptions {
     pub fn read() -> Self {
         Self {
             flags: (OFlag::O_RDONLY | OFlag::O_NONBLOCK).bits(),
+            mode: None,
+        }
+    }
+
+    /// Opens an existing directory, to read what it holds.
+    pub fn directory() -> Self {
+        Self {
+            flags: (OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC).bits(),
             mode: None,
         }
     }

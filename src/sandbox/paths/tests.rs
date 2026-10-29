@@ -1,8 +1,8 @@
 //! Tests for path containment, ported from `paths_test.ts`.
 
 use super::{
-    MAX_READ_BYTES, OpenOptions, host_path_under, open_beneath, read_beneath, truncate_beneath,
-    within,
+    MAX_READ_BYTES, OpenOptions, copy_tree_beneath, host_path_under, open_beneath, read_beneath,
+    truncate_beneath, within,
 };
 
 const ROOT: &str = "/projects/demo";
@@ -245,4 +245,48 @@ fn emptying_a_planted_pipe_fails_rather_than_waits() {
     nix::unistd::mkfifo(&pipe, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
 
     assert!(truncate_beneath(&root.path().display().to_string(), "notes").is_err());
+}
+
+/// A copy of a tree the session can change takes its files and directories
+/// and leaves out what would have to be followed or read as something else:
+/// a link, wherever it is, and a pipe. A link in place of the tree itself is
+/// refused, and so is a tree nested past the depth.
+#[test]
+fn a_copy_takes_files_and_leaves_links_and_pipes_out() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret"), "secret").unwrap();
+    let tree = root.path().join("tree");
+    std::fs::create_dir_all(tree.join("nested/deeper")).unwrap();
+    std::fs::write(tree.join("nested/deeper/file"), "kept").unwrap();
+    std::os::unix::fs::symlink(outside.path(), tree.join("nested/linked")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("secret"), tree.join("file-link")).unwrap();
+    nix::unistd::mkfifo(
+        &tree.join("pipe"),
+        nix::sys::stat::Mode::from_bits_truncate(0o600),
+    )
+    .unwrap();
+    let inside = root.path().display().to_string();
+    let copy = tempfile::tempdir().unwrap();
+
+    copy_tree_beneath(&inside, "tree", &copy.path().join("out"), 8, 1024).expect("copied");
+
+    let out = copy.path().join("out");
+    assert_eq!(
+        std::fs::read_to_string(out.join("nested/deeper/file")).unwrap(),
+        "kept"
+    );
+    for left_out in ["nested/linked", "file-link", "pipe", "socket"] {
+        assert!(
+            std::fs::symlink_metadata(out.join(left_out)).is_err(),
+            "{left_out}"
+        );
+    }
+
+    std::os::unix::fs::symlink(&tree, root.path().join("alias")).unwrap();
+    assert!(copy_tree_beneath(&inside, "alias", &copy.path().join("aliased"), 8, 1024).is_err());
+    assert!(copy_tree_beneath(&inside, "tree", &copy.path().join("shallow"), 1, 1024).is_err());
+    let over = copy_tree_beneath(&inside, "tree", &copy.path().join("small"), 8, 3)
+        .expect_err("past the budget");
+    assert_eq!(over.kind(), std::io::ErrorKind::FileTooLarge);
 }
