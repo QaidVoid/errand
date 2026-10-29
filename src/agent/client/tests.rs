@@ -145,12 +145,14 @@ fn silent() -> Logger {
     Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
-/// Lets the stream reader drain what a test just pushed.
+/// Waits until everything the test set going has run.
+///
+/// These tests run on a paused clock, which moves only once no task has
+/// anything left to do, blocking work included. So this sleep ends when the
+/// work has finished, however slow the host, rather than after a guess at how
+/// long that takes.
 async fn settle() {
-    for _ in 0..20 {
-        tokio::task::yield_now().await;
-        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-    }
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 }
 
 impl TestSetup {
@@ -232,7 +234,7 @@ fn last_written(controls: &FakeControls, method: &str) -> Value {
         .unwrap_or_else(|| panic!("a {method} frame"))
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn readiness_is_the_handshake_answering_and_it_opens_the_session() {
     let setup = client(AgentHandlers::default(), 300_000);
     handshake(&setup).await;
@@ -247,7 +249,7 @@ async fn readiness_is_the_handshake_answering_and_it_opens_the_session() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_handshake_the_agent_refuses_is_not_readiness() {
     let setup = client(AgentHandlers::default(), 300_000);
     let asking = setup.agent.clone();
@@ -275,7 +277,7 @@ async fn a_handshake_the_agent_refuses_is_not_readiness() {
 /// Only a fresh `session/new` must name the session it opened. A resume
 /// keeps the id it was asked to reopen; a fresh open naming none opened
 /// nothing, and readiness must not be claimed over it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_fresh_session_without_an_id_is_no_session() {
     let setup = client(AgentHandlers::default(), 300_000);
     let asking = setup.agent.clone();
@@ -299,7 +301,7 @@ async fn a_fresh_session_without_an_id_is_no_session() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_revived_session_reopens_the_recording_and_falls_back_to_fresh() {
     let setup = client(AgentHandlers::default(), 300_000);
     let asking = setup.agent.clone();
@@ -353,7 +355,7 @@ async fn a_revived_session_reopens_the_recording_and_falls_back_to_fresh() {
 /// The agent opens and closes an iteration per step of one prompt, so an
 /// iteration end is not the end of the turn. The prompt's answer is, and it
 /// is what settles.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_turn_settles_when_the_prompt_is_answered_not_when_an_iteration_ends() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let start_seen = Arc::clone(&seen);
@@ -416,7 +418,7 @@ async fn a_turn_settles_when_the_prompt_is_answered_not_when_an_iteration_ends()
 
 /// The caller has to release what it was holding for a turn that will never
 /// settle, so it is told whether one was running.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_exit_during_a_turn_says_so_and_an_idle_exit_does_not() {
     let during: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -452,7 +454,7 @@ async fn an_exit_during_a_turn_says_so_and_an_idle_exit_does_not() {
     assert_eq!(*during.lock().unwrap(), vec![true, false]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_exit_is_reported_once_with_the_code() {
     let codes: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(Vec::new()));
     let exit_codes = Arc::clone(&codes);
@@ -472,7 +474,7 @@ async fn the_exit_is_reported_once_with_the_code() {
     assert_eq!(*codes.lock().unwrap(), vec![3]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn commands_are_dropped_once_the_agent_has_ended() {
     let setup = client(AgentHandlers::default(), 300_000);
     setup.controls.close(0);
@@ -485,7 +487,7 @@ async fn commands_are_dropped_once_the_agent_has_ended() {
 /// A handshake that fails because the process is already gone reports the
 /// exit, not a refusal to listen. The two read the same to whoever is
 /// starting a session, and only one of them says what happened.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_handshake_after_an_exit_reports_the_exit_rather_than_a_refusal() {
     let setup = client(AgentHandlers::default(), 300_000);
     settle().await;
@@ -519,7 +521,7 @@ fn an_exit_report_carries_the_last_thing_the_agent_printed() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn prompts_before_readiness_are_dropped_for_want_of_a_session() {
     let setup = client(AgentHandlers::default(), 300_000);
 
@@ -529,7 +531,7 @@ async fn prompts_before_readiness_are_dropped_for_want_of_a_session() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn steering_sends_the_prompt_with_delivery_steer() {
     let setup = client(AgentHandlers::default(), 300_000);
     handshake(&setup).await;
@@ -543,7 +545,7 @@ async fn steering_sends_the_prompt_with_delivery_steer() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn abort_sends_cancel_and_is_true_with_nothing_to_stop() {
     let setup = client(AgentHandlers::default(), 300_000);
     assert!(setup.agent.abort());
@@ -557,7 +559,7 @@ async fn abort_sends_cancel_and_is_true_with_nothing_to_stop() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn switching_models_sends_the_qualified_id_and_refusals_fail() {
     let setup = client(AgentHandlers::default(), 300_000);
     handshake(&setup).await;
@@ -587,7 +589,7 @@ async fn switching_models_sends_the_qualified_id_and_refusals_fail() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn compacting_reports_the_counts_from_the_compaction_update() {
     let setup = client(AgentHandlers::default(), 300_000);
     handshake(&setup).await;
@@ -610,7 +612,7 @@ async fn compacting_reports_the_counts_from_the_compaction_update() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn text_fragments_are_reported_as_one_message_when_the_span_ends() {
     let said: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let text_seen = Arc::clone(&said);
@@ -639,7 +641,7 @@ async fn text_fragments_are_reported_as_one_message_when_the_span_ends() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn thinking_is_reported_once_a_turn_and_each_span_of_thought_as_it_ends() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let thinking_seen = Arc::clone(&seen);
@@ -679,7 +681,7 @@ async fn thinking_is_reported_once_a_turn_and_each_span_of_thought_as_it_ends() 
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn interleaved_thought_and_text_are_reported_in_the_order_said() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let thought_seen = Arc::clone(&seen);
@@ -726,7 +728,7 @@ async fn interleaved_thought_and_text_are_reported_in_the_order_said() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn tool_calls_report_their_target_and_whether_they_failed() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let start_seen = Arc::clone(&seen);
@@ -787,7 +789,7 @@ async fn tool_calls_report_their_target_and_whether_they_failed() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn media_reaches_the_tool_end_and_agent_media_handlers() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let (end_seen, reply_seen) = (Arc::clone(&seen), Arc::clone(&seen));
@@ -854,7 +856,7 @@ fn a_long_inline_image_is_replaced_by_its_size() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn usage_is_reported_from_the_update_and_sizes_the_window() {
     let seen: Arc<Mutex<Vec<Usage>>> = Arc::new(Mutex::new(Vec::new()));
     let usage_seen = Arc::clone(&seen);
@@ -903,7 +905,7 @@ fn allow_deny() -> Value {
     ])
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_select_dialog_is_answered_by_number_or_by_name() {
     let setup = client(AgentHandlers::default(), 300_000);
     setup.controls.send(&permission_ask(41, &allow_deny()));
@@ -937,7 +939,7 @@ async fn a_select_dialog_is_answered_by_number_or_by_name() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_reply_that_answers_nothing_leaves_the_dialog_standing() {
     let setup = client(AgentHandlers::default(), 300_000);
     setup.controls.send(&permission_ask(41, &allow_deny()));
@@ -965,7 +967,7 @@ async fn a_reply_that_answers_nothing_leaves_the_dialog_standing() {
 
 /// A chat thread cannot serve a plan review, so it is cancelled rather than
 /// hung on.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_plan_review_is_cancelled_immediately() {
     let unsupported: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let unsupported_seen = Arc::clone(&unsupported);
@@ -1003,7 +1005,7 @@ async fn a_plan_review_is_cancelled_immediately() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_dialog_nobody_answers_is_cancelled_and_the_caller_told() {
     let timed_out: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let timeout_seen = Arc::clone(&timed_out);
@@ -1031,7 +1033,7 @@ async fn a_dialog_nobody_answers_is_cancelled_and_the_caller_told() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_ask_the_agent_withdraws_releases_the_caller() {
     let timed_out: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let timeout_seen = Arc::clone(&timed_out);
@@ -1061,7 +1063,7 @@ async fn an_ask_the_agent_withdraws_releases_the_caller() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_unknown_method_is_refused_so_the_agent_never_waits() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let dialog_seen = Arc::clone(&seen);
@@ -1099,7 +1101,7 @@ async fn an_unknown_method_is_refused_so_the_agent_never_waits() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_prompt_the_agent_refuses_is_reported() {
     let rejected: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let rejected_seen = Arc::clone(&rejected);
@@ -1133,7 +1135,7 @@ async fn a_prompt_the_agent_refuses_is_reported() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_request_resolves_on_its_answer_and_rejects_on_its_deadline() {
     let setup = client(AgentHandlers::default(), 300_000);
 
@@ -1171,7 +1173,7 @@ async fn a_request_resolves_on_its_answer_and_rejects_on_its_deadline() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_request_outstanding_when_the_agent_dies_is_failed_not_left_hanging() {
     let setup = client(AgentHandlers::default(), 300_000);
     let pending_ask = setup.agent.clone();
@@ -1215,7 +1217,7 @@ fn settled_failures() -> (AgentHandlers, Arc<Mutex<Vec<Option<String>>>>) {
 }
 
 /// The provider's own words reach whoever is told the turn failed.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_refused_turn_carries_the_refusal() {
     let (handlers, seen) = settled_failures();
     let setup = client(handlers, 300_000);
@@ -1241,7 +1243,7 @@ async fn a_refused_turn_carries_the_refusal() {
 
 /// A failure the agent will not retry past ends the run, so the turn fails
 /// with it and still backs the admission off.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_retryable_prompt_failure_backs_off_and_fails_the_turn() {
     let (mut handlers, seen) = settled_failures();
     let retries: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1275,7 +1277,7 @@ async fn a_retryable_prompt_failure_backs_off_and_fails_the_turn() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_notice_from_the_agent_is_reported_as_an_error() {
     let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let error_seen = Arc::clone(&errors);
@@ -1303,7 +1305,7 @@ async fn a_notice_from_the_agent_is_reported_as_an_error() {
     setup.finish().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn probe_a_real_kage_ask() {
     let ask = |id: u64| {
         json!({
