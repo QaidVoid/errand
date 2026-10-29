@@ -94,6 +94,11 @@ pub struct IncomingMessage {
     pub from_interface: bool,
 }
 
+/// A length of time in whole milliseconds, as the thread is told it.
+fn millis(duration: std::time::Duration) -> i64 {
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+}
+
 /// Which of the session's own timers fired.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionTimer {
@@ -806,14 +811,15 @@ struct Running {
     pending_withdrawals: Vec<String>,
     current_message_id: Option<String>,
     current_author_id: Option<String>,
-    /// When the prompt that opened this turn was sent, in milliseconds.
-    turn_started_at: Option<i64>,
+    /// When the prompt that opened this turn was sent, on the monotonic
+    /// clock, since only the time since is ever asked for.
+    turn_started_at: Option<tokio::time::Instant>,
     /// When this turn first produced anything, thinking included.
     ///
     /// Held apart from the start so the wait before the first token can be
     /// reported on its own: it is the part a person in a thread feels, and it
     /// is not the same number as how long the whole turn took.
-    turn_first_output_at: Option<i64>,
+    turn_first_output_at: Option<tokio::time::Instant>,
     /// Output tokens the session had produced when this turn opened, so the
     /// turn's own share can be told apart from the running total.
     turn_output_from: u64,
@@ -1779,7 +1785,7 @@ impl Running {
         self.ticket = ticket;
         self.current_message_id = Some(message.id.clone());
         self.current_author_id = Some(message.author_id.clone());
-        self.turn_started_at = Some(now_ms());
+        self.turn_started_at = Some(tokio::time::Instant::now());
         self.turn_first_output_at = None;
         self.turn_output_from = self.usage.output;
         self.turn_media = 0;
@@ -2075,7 +2081,7 @@ impl Running {
             output_rate: self.turn_started_at.and_then(|started| {
                 crate::chat::render::output_rate(
                     self.usage.output.saturating_sub(self.turn_output_from),
-                    now_ms() - started,
+                    millis(started.elapsed()),
                 )
             }),
         })
@@ -2123,8 +2129,9 @@ impl Running {
         // giving up is as much worth knowing as how long a good turn took.
         let timing = self.turn_started_at.map_or_else(String::new, |started| {
             crate::chat::render::turn_timing(
-                self.turn_first_output_at.map(|first| first - started),
-                now_ms() - started,
+                self.turn_first_output_at
+                    .map(|first| millis(first.duration_since(started))),
+                millis(started.elapsed()),
             )
         });
         // What the agent said answered the turn, rather than what the session
@@ -2559,7 +2566,7 @@ impl Running {
     /// Marks the moment this turn first produced something, once.
     fn note_first_output(&mut self) {
         if self.turn_started_at.is_some() && self.turn_first_output_at.is_none() {
-            self.turn_first_output_at = Some(now_ms());
+            self.turn_first_output_at = Some(tokio::time::Instant::now());
         }
     }
 

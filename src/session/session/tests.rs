@@ -39,6 +39,16 @@ fn silent() -> Logger {
     Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
+/// Waits until everything the test set going has run.
+///
+/// These tests run on a paused clock, which moves only once no task has
+/// anything left to do, blocking work included. So this sleep ends when the
+/// work has finished, however slow the host, rather than after a guess at how
+/// long that takes.
+///
+/// A duration the code under test measures is therefore the sum of the
+/// test's own settles, in steps of 20 ms, not the work it did: assert its
+/// form, never its length.
 async fn settle() {
     tokio::time::sleep(Duration::from_millis(20)).await;
 }
@@ -964,7 +974,7 @@ async fn with_session(
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_starts_says_so_and_sends_its_first_prompt() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -984,7 +994,7 @@ async fn a_session_starts_says_so_and_sends_its_first_prompt() {
 
 /// A revived session reopens its recorded agent session, and the new
 /// recording is stored for the next revival.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_revived_session_reopens_the_agents_recorded_session() {
     let case = SessionTestCase {
         resume_kage_session: Some("s-old".to_owned()),
@@ -1021,7 +1031,7 @@ async fn a_revived_session_reopens_the_agents_recorded_session() {
 }
 
 /// The credential is the whole reason the agent can reach a model at all.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_sandbox_is_launched_with_the_project_state_and_credential() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1050,7 +1060,7 @@ async fn the_sandbox_is_launched_with_the_project_state_and_credential() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_sandbox_that_will_not_start_ends_the_session_saying_why() {
     with_session(
         SessionTestCase {
@@ -1078,7 +1088,7 @@ async fn a_sandbox_that_will_not_start_ends_the_session_saying_why() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_turn_is_reported_priced_and_closed_by_pinging_whoever_asked() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1112,7 +1122,7 @@ async fn a_turn_is_reported_priced_and_closed_by_pinging_whoever_asked() {
 /// every step of it. The agent opens and closes an iteration per step, so
 /// treating each of those as the end reported the turn as finished while the
 /// tools were still running.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_turn_that_runs_tools_is_pinged_once_when_it_is_over() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1167,7 +1177,7 @@ async fn a_turn_that_runs_tools_is_pinged_once_when_it_is_over() {
 
 /// A turn that spoke and then lost its provider still says why it stopped,
 /// in the provider's own words, rather than reading as done.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_turn_that_failed_after_speaking_says_why() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1209,7 +1219,7 @@ async fn a_turn_that_failed_after_speaking_says_why() {
 }
 
 /// Saying something to a working agent redirects it: same turn, no new slot.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_message_during_a_running_turn_steers_it_rather_than_queueing() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1232,7 +1242,7 @@ async fn a_message_during_a_running_turn_steers_it_rather_than_queueing() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_aside_is_kept_for_the_thread_and_never_reaches_the_agent() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1263,7 +1273,7 @@ async fn an_aside_is_kept_for_the_thread_and_never_reaches_the_agent() {
 
 /// From the interface the bot posts an aside for whoever sent it, so a
 /// stranger cannot use one to speak in a thread they were never invited to.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_aside_from_the_interface_takes_an_invitation() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1286,7 +1296,7 @@ async fn an_aside_from_the_interface_takes_an_invitation() {
 }
 
 /// Deciding this later would make the marker unreliable, which defeats it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_aside_that_reads_like_a_command_still_runs_nothing() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1303,7 +1313,7 @@ async fn an_aside_that_reads_like_a_command_still_runs_nothing() {
 }
 
 /// Another bot's command is not this one's to answer, or to pay a model for.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_unknown_command_is_left_alone_entirely() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1327,7 +1337,7 @@ async fn an_unknown_command_is_left_alone_entirely() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_stranger_is_refused_once_but_answered_every_time() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1362,7 +1372,7 @@ async fn a_stranger_is_refused_once_but_answered_every_time() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_guest_may_prompt_and_only_the_owner_may_end_the_session() {
     with_session(
         SessionTestCase {
@@ -1400,7 +1410,7 @@ async fn a_guest_may_prompt_and_only_the_owner_may_end_the_session() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_owner_can_invite_somebody_and_withdraw_them_again() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1428,7 +1438,7 @@ async fn the_owner_can_invite_somebody_and_withdraw_them_again() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn inviting_somebody_who_is_not_named_is_refused_not_guessed_at() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1444,7 +1454,7 @@ async fn inviting_somebody_who_is_not_named_is_refused_not_guessed_at() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_commands_answer_is_marked_as_that_commands_reply() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1472,7 +1482,7 @@ async fn a_commands_answer_is_marked_as_that_commands_reply() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_project_can_be_listed_and_read_without_asking_the_agent() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1508,7 +1518,7 @@ async fn the_project_can_be_listed_and_read_without_asking_the_agent() {
 }
 
 /// The same containment the sandbox applies, so nothing else can be read.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_path_outside_the_project_is_refused() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1528,7 +1538,7 @@ async fn a_path_outside_the_project_is_refused() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_file_can_be_uploaded_from_the_project_on_request() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1553,7 +1563,7 @@ async fn a_file_can_be_uploaded_from_the_project_on_request() {
 /// A project file holding a configured secret is not posted: its bytes are
 /// not scrubbed as text is, so the whole file is held back and the thread is
 /// told why.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_file_holding_a_secret_is_refused_rather_than_uploaded() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1586,7 +1596,7 @@ async fn a_file_holding_a_secret_is_refused_rather_than_uploaded() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn stopping_ends_the_session_once_and_tears_the_sandbox_down() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1608,7 +1618,7 @@ async fn stopping_ends_the_session_once_and_tears_the_sandbox_down() {
 /// An ended session lets go of its agent. Its task held a sender to its own
 /// channel, so it waited forever and kept the agent's pipes and buffers, one
 /// set for every session the daemon ever ran.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_ended_session_lets_go_of_its_agent() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1631,7 +1641,7 @@ async fn an_ended_session_lets_go_of_its_agent() {
 /// much its children are doing. The idle deadline must not end the session
 /// under it: that kills the sandbox and every child with it, and the thread
 /// is told nothing because an idle ending is quiet.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_tool_call_in_flight_keeps_the_session_past_its_idle_deadline() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1659,7 +1669,7 @@ async fn a_tool_call_in_flight_keeps_the_session_past_its_idle_deadline() {
 
 /// A batch of children reports far faster than a thread should be edited:
 /// the first line goes up, the ones behind it inside the window do not.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_running_call_shows_where_it_is_but_not_faster_than_a_reader_follows() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1701,7 +1711,7 @@ async fn a_running_call_shows_where_it_is_but_not_faster_than_a_reader_follows()
 /// A turn that settles cannot have left a call open: whatever it started has
 /// returned by then. Keeping one open would hold the idle deadline off for
 /// the rest of the session's life.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_settled_turn_leaves_no_tool_call_open() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1718,7 +1728,7 @@ async fn a_settled_turn_leaves_no_tool_call_open() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_that_hears_nothing_for_long_enough_ends_itself() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1733,7 +1743,7 @@ async fn a_session_that_hears_nothing_for_long_enough_ends_itself() {
 }
 
 /// 137 is how a container killed for passing a limit ends.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_agent_killed_for_a_resource_limit_names_the_limit() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1747,7 +1757,7 @@ async fn an_agent_killed_for_a_resource_limit_names_the_limit() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_agent_that_dies_unexpectedly_ends_the_session_as_a_crash() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -1764,7 +1774,7 @@ async fn an_agent_that_dies_unexpectedly_ends_the_session_as_a_crash() {
 /// A prompt can wait in the queue for as long as the queue allows, and the
 /// window can be spent in that time. A slot held by a turn that never ran
 /// shrinks the concurrency cap for good.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_spent_provider_window_refuses_a_prompt_before_it_takes_a_slot() {
     with_session(
         SessionTestCase {
@@ -1793,7 +1803,7 @@ async fn a_spent_provider_window_refuses_a_prompt_before_it_takes_a_slot() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn what_is_remembered_is_written_into_the_agents_own_prompt() {
     let memory = Arc::new(MemoryStore::open(":memory:").expect("the store opens"));
     memory.remember_user(OWNER, "amelia", 0).unwrap();
@@ -1849,7 +1859,7 @@ async fn what_is_remembered_is_written_into_the_agents_own_prompt() {
 }
 
 /// Facts are about the person talking, not about whoever opened the thread.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn what_the_agent_writes_down_is_remembered_when_the_turn_settles() {
     let memory = Arc::new(MemoryStore::open(":memory:").expect("the store opens"));
 
@@ -1904,7 +1914,7 @@ async fn what_the_agent_writes_down_is_remembered_when_the_turn_settles() {
 /// A notes file grown past the read cap is not read into memory. It is
 /// emptied once, so the next tick has nothing to refuse, and nothing in it is
 /// remembered.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_notes_file_past_the_read_cap_is_emptied_and_stores_nothing() {
     let memory = Arc::new(MemoryStore::open(":memory:").expect("the store opens"));
 
@@ -1937,7 +1947,7 @@ async fn a_notes_file_past_the_read_cap_is_emptied_and_stores_nothing() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_pull_request_the_agent_asked_for_opens_when_somebody_asked_too() {
     let opened = Arc::new(Mutex::new(Vec::new()));
     with_session(
@@ -2003,7 +2013,7 @@ async fn a_pull_request_the_agent_asked_for_opens_when_somebody_asked_too() {
 /// A pull request is opened after the agent's turn ends, so it has not seen
 /// the outcome. It is told at the start of its next turn, once, which is what
 /// makes "try again" something it can act on.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_agent_is_told_what_came_of_its_pull_request_next_turn() {
     let asked_for = Arc::new(Mutex::new(Vec::new()));
     with_session(
@@ -2084,7 +2094,7 @@ async fn the_agent_is_told_what_came_of_its_pull_request_next_turn() {
 }
 
 /// Somebody opening one by hand can name the clone the agent made.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_pull_request_command_can_name_the_repository() {
     let asked_for = Arc::new(Mutex::new(Vec::new()));
     with_session(
@@ -2134,7 +2144,7 @@ async fn a_pull_request_command_can_name_the_repository() {
 }
 
 /// An unasked-for pull request spends somebody else's review time.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_pull_request_nobody_asked_for_is_refused_and_cleared() {
     let opened = Arc::new(Mutex::new(0));
     with_session(
@@ -2178,7 +2188,7 @@ async fn a_pull_request_nobody_asked_for_is_refused_and_cleared() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_with_no_github_identity_says_so_rather_than_failing() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2202,7 +2212,7 @@ async fn a_session_with_no_github_identity_says_so_rather_than_failing() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_git_identity_and_the_gh_wrapper_are_in_place_before_the_launch() {
     with_session(
         SessionTestCase {
@@ -2241,7 +2251,7 @@ async fn the_git_identity_and_the_gh_wrapper_are_in_place_before_the_launch() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn what_a_tool_did_is_reported_and_its_output_truncated() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2284,7 +2294,7 @@ async fn what_a_tool_did_is_reported_and_its_output_truncated() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_edit_is_shown_as_a_diff_of_what_actually_changed() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2327,7 +2337,7 @@ async fn an_edit_is_shown_as_a_diff_of_what_actually_changed() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_question_from_the_agent_is_asked_in_the_thread_and_answered_back() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2362,7 +2372,7 @@ async fn a_question_from_the_agent_is_asked_in_the_thread_and_answered_back() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn interrupting_with_nothing_running_says_so_and_changes_nothing() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2384,7 +2394,7 @@ async fn interrupting_with_nothing_running_says_so_and_changes_nothing() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn compacting_is_refused_while_a_turn_is_running() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2403,7 +2413,7 @@ async fn compacting_is_refused_while_a_turn_is_running() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_status_says_what_the_session_and_the_queue_are_doing() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2426,7 +2436,7 @@ async fn the_status_says_what_the_session_and_the_queue_are_doing() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn help_is_listed_without_troubling_the_agent() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2456,7 +2466,7 @@ async fn help_is_listed_without_troubling_the_agent() {
 /// ENOSPC in a sandbox is usually the session's own scratch, not the host
 /// disk, so the message quotes what failed and names the scratch mounts with
 /// their sizes and knobs, rather than giving a code or blaming the host.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_agent_that_died_for_want_of_disk_says_so_not_just_a_code() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2494,7 +2504,7 @@ async fn an_agent_that_died_for_want_of_disk_says_so_not_just_a_code() {
 
 /// With `/tmp` already on disk, raising the tmpfs or moving `/tmp` to disk
 /// would change nothing, so neither is offered.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn running_out_of_disk_with_disk_tmp_on_does_not_offer_disk_tmp() {
     with_session(
         SessionTestCase {
@@ -2520,7 +2530,7 @@ async fn running_out_of_disk_with_disk_tmp_on_does_not_offer_disk_tmp() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_agent_that_died_for_want_of_memory_says_that_instead() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2541,7 +2551,7 @@ async fn an_agent_that_died_for_want_of_memory_says_that_instead() {
 /// one is what turns a number into something a reader can act on. The agent
 /// can be killed from inside the sandbox by a command it ran, which is what
 /// `pkill -f` does when its pattern matches the agent's own command line.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_agent_killed_by_a_signal_names_the_signal() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2561,7 +2571,7 @@ async fn an_agent_killed_by_a_signal_names_the_signal() {
 
 /// An agent that was between turns is reported as idle rather than as
 /// having been interrupted mid-work.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_agent_killed_while_idle_says_so() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2591,7 +2601,7 @@ fn a_shell_exit_code_above_128_names_the_signal_that_killed_it() {
 }
 
 /// A number on its own is not something a reader can act on.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_unexplained_crash_still_carries_the_agents_last_words() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2612,7 +2622,7 @@ async fn an_unexplained_crash_still_carries_the_agents_last_words() {
 
 /// A thread archived when its session ends drops out of the sidebar, and the
 /// people who were in it then have to go hunting for it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_that_ends_leaves_its_thread_where_people_can_find_it() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2627,7 +2637,7 @@ async fn a_session_that_ends_leaves_its_thread_where_people_can_find_it() {
 }
 
 /// An explicit stop is somebody saying they are finished with the thread.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn stopping_says_so_so_the_thread_can_be_archived() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2647,7 +2657,7 @@ fn png_fetch() -> FetchAttachment {
     Arc::new(|_url: String| Box::pin(async { Ok(PNG.to_vec()) }) as FetchBox)
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_attached_file_is_saved_and_the_agent_is_told_where_it_went() {
     with_session(
         SessionTestCase {
@@ -2676,7 +2686,7 @@ async fn an_attached_file_is_saved_and_the_agent_is_told_where_it_went() {
 }
 
 /// A message carrying only a file still says something: that a file arrived.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_message_with_no_text_but_a_file_still_starts_a_turn() {
     with_session(
         SessionTestCase {
@@ -2699,7 +2709,7 @@ async fn a_message_with_no_text_but_a_file_still_starts_a_turn() {
 
 /// A model chosen for code is often text only. Handing it an image would fail
 /// the turn, so one that can see is asked to describe it instead.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_image_is_described_for_a_model_that_cannot_see_it() {
     with_session(
         SessionTestCase {
@@ -2728,7 +2738,7 @@ async fn an_image_is_described_for_a_model_that_cannot_see_it() {
 }
 
 /// Losing the description must not lose the message it came with.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_description_that_fails_leaves_the_path_and_says_what_went_wrong() {
     with_session(
         SessionTestCase {
@@ -2759,7 +2769,7 @@ async fn a_description_that_fails_leaves_the_path_and_says_what_went_wrong() {
 }
 
 /// With no describer the images go over as they are, which is the normal case.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_model_that_can_see_is_handed_the_image_itself() {
     with_session(
         SessionTestCase {
@@ -2784,7 +2794,7 @@ async fn a_model_that_can_see_is_handed_the_image_itself() {
 
 /// The next message picks the session up and the resumed session says so,
 /// which leaves nothing for a notice to add except a line in every thread.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_that_idles_out_says_nothing_about_it() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2801,7 +2811,7 @@ async fn a_session_that_idles_out_says_nothing_about_it() {
 }
 
 /// Somebody asked for this one, so it is answered.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_that_was_stopped_says_so() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2818,7 +2828,7 @@ async fn a_session_that_was_stopped_says_so() {
 }
 
 /// It stopped part way through something, which is worth knowing.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_crash_says_what_happened() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2835,7 +2845,7 @@ async fn a_crash_says_what_happened() {
 
 /// Posting into a thread opens it again, which is the opposite of what
 /// whoever archived it asked for.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_thread_archived_from_outside_is_not_posted_into() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -2850,7 +2860,7 @@ async fn a_thread_archived_from_outside_is_not_posted_into() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn facts_reads_back_what_the_agent_was_told_about_somebody() {
     let memory = Arc::new(MemoryStore::open(":memory:").expect("the store opens"));
     memory.remember_user(OWNER, "amelia", 0).unwrap();
@@ -2911,7 +2921,7 @@ async fn facts_reads_back_what_the_agent_was_told_about_somebody() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn forget_drops_what_is_remembered_and_says_how_much_went() {
     let memory = Arc::new(MemoryStore::open(":memory:").expect("the store opens"));
     memory.remember_user(OWNER, "amelia", 0).unwrap();
@@ -2948,7 +2958,7 @@ async fn forget_drops_what_is_remembered_and_says_how_much_went() {
 }
 
 /// Forgetting is the owner's: it outlives this thread.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_guest_may_read_facts_but_may_not_forget_them() {
     let memory = Arc::new(MemoryStore::open(":memory:").expect("the store opens"));
     memory
@@ -2991,7 +3001,7 @@ async fn a_guest_may_read_facts_but_may_not_forget_them() {
 
 /// Hurrying an interruption along used to end the session: each ask started
 /// its own wait, and the first to run out force stopped it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn asking_to_interrupt_again_does_not_start_a_second_wait() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3036,7 +3046,7 @@ async fn asking_to_interrupt_again_does_not_start_a_second_wait() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_interruption_the_agent_confirms_does_not_force_stop() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3092,7 +3102,7 @@ fn seed_withdrawn_record(harness: &Harness, said: &str) {
 const TRANSCRIPT_NAME: &str = "transcript.jsonl";
 
 /// A live session is told, in words that are not a new instruction.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_live_session_is_told_of_a_withdrawal() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3129,7 +3139,7 @@ async fn a_live_session_is_told_of_a_withdrawal() {
 }
 
 /// A turn in progress holds the reconciliation until it settles.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_turn_in_progress_survives_a_withdrawal() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3167,7 +3177,7 @@ async fn a_turn_in_progress_survives_a_withdrawal() {
 
 /// The run continues when one copy cannot be reached, and the reconciliation
 /// does not end the session.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_unreachable_copy_does_not_cost_the_session() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3195,7 +3205,7 @@ async fn an_unreachable_copy_does_not_cost_the_session() {
 /// planted inside it must not be a way to reach the host's own files. The
 /// spelling check alone cannot see a link, and between the check and the open
 /// a plain file can become one.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_link_planted_in_the_project_reads_nothing_through_cat() {
     let outside = tempfile::tempdir().expect("a temporary directory");
     let secret = outside.path().join("id_ed25519");
@@ -3236,7 +3246,7 @@ async fn a_link_planted_in_the_project_reads_nothing_through_cat() {
 /// The same link, met by `!file`. Uploading went by name alone, so a link
 /// planted in the project would have had the daemon read whatever it pointed
 /// at and post it to the channel as an attachment.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_link_planted_in_the_project_uploads_nothing_through_file() {
     let outside = tempfile::tempdir().expect("a temporary directory");
     let secret = outside.path().join("id_ed25519");
@@ -3347,7 +3357,7 @@ fn captions(harness: &Harness) -> Vec<String> {
     })
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_image_the_agent_generated_is_posted_with_its_caption() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3394,7 +3404,7 @@ async fn an_image_the_agent_generated_is_posted_with_its_caption() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_image_the_model_drew_is_posted() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3413,7 +3423,7 @@ async fn an_image_the_model_drew_is_posted() {
 
 /// An image the agent made is held back when its bytes carry a secret, a
 /// stand-in its broker minted included, as a file pulled with `!file` is.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_image_carrying_a_secret_is_not_posted() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3444,7 +3454,7 @@ async fn an_image_carrying_a_secret_is_not_posted() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_generated_image_over_the_upload_limit_is_named_rather_than_posted() {
     let case = SessionTestCase {
         config: Some(config_with(&json!({ "output": { "maxUploadBytes": 10 } }))),
@@ -3471,7 +3481,7 @@ async fn a_generated_image_over_the_upload_limit_is_named_rather_than_posted() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_turn_posts_up_to_the_image_cap_and_is_then_interrupted() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3524,7 +3534,7 @@ async fn a_turn_posts_up_to_the_image_cap_and_is_then_interrupted() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn generated_images_are_not_posted_when_turned_off() {
     let case = SessionTestCase {
         config: Some(config_with(&json!({ "output": { "postImages": false } }))),
@@ -3545,7 +3555,7 @@ async fn generated_images_are_not_posted_when_turned_off() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_clip_the_agent_generated_is_posted_with_its_caption() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3610,7 +3620,7 @@ fn with_music_provider() -> Arc<Config> {
     } }))
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_song_the_agent_could_only_link_is_fetched_and_posted() {
     let fetched = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&fetched);
@@ -3639,7 +3649,7 @@ async fn a_song_the_agent_could_only_link_is_fetched_and_posted() {
     assert_eq!(*fetched.lock().unwrap(), ["https://music.example/f/a.mp3"]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_song_linked_off_the_music_host_is_not_fetched() {
     let fetched = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&fetched);
@@ -3671,7 +3681,7 @@ async fn a_song_linked_off_the_music_host_is_not_fetched() {
     assert!(fetched.lock().unwrap().is_empty());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_clip_that_is_not_audio_is_refused_rather_than_posted() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3692,7 +3702,7 @@ async fn a_clip_that_is_not_audio_is_refused_rather_than_posted() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_clip_over_the_upload_limit_is_refused_rather_than_posted() {
     let case = SessionTestCase {
         config: Some(config_with(&json!({ "output": { "maxUploadBytes": 10 } }))),
@@ -3719,7 +3729,7 @@ async fn a_clip_over_the_upload_limit_is_refused_rather_than_posted() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn clips_are_not_posted_when_postaudio_is_off_but_still_counted() {
     for post_audio in [true, false] {
         with_session(
@@ -3773,7 +3783,7 @@ async fn clips_are_not_posted_when_postaudio_is_off_but_still_counted() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn images_and_clips_share_one_generation_cap() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -3857,7 +3867,7 @@ fn from_stranger_with_a_file(content: &str, id: &str) -> IncomingMessage {
 /// Answering a question the agent is blocked on decides what it does next,
 /// and fetching an attachment writes bytes into the project. Both are taking
 /// part in somebody else's session.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_stranger_answers_no_dialog_and_leaves_no_file_behind() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -4108,7 +4118,7 @@ fn a_model_thinks_at_its_own_default_until_somebody_says_otherwise() {
 /// exactly the id it lists, and answers `Model not found` for anything else.
 /// So a switch sends the bare id and says the level separately, while the
 /// thread and a later resume still see the name with the level on it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
     let case = SessionTestCase {
         config: Some(config_with(&json!({
@@ -4197,7 +4207,7 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
 
 /// A switch the agent refused is reported as refused, with its reason, and
 /// the session is still taken to be on the model it was on.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_refused_switch_is_not_reported_as_made() {
     let case = SessionTestCase {
         available_models: vec![AvailableModel {
@@ -4286,7 +4296,7 @@ fn drawing() -> Drawing {
 /// `!gen-image` draws one picture and posts it, without touching the
 /// session's model: a picture is one call to the images endpoint, and the
 /// conversation stays where it was.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_image_generation_draws_and_posts_it() {
     let (asked, draw) = drawing();
     let case = SessionTestCase {
@@ -4353,7 +4363,7 @@ async fn an_image_generation_draws_and_posts_it() {
 
 /// An effort asked for on the command reaches the request as part of the
 /// model id, which is how the images endpoint reads it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_image_generation_passes_the_effort_it_was_asked_for() {
     let (asked, draw) = drawing();
     let case = SessionTestCase {
@@ -4401,7 +4411,7 @@ async fn an_image_generation_passes_the_effort_it_was_asked_for() {
 
 /// The level may ride on the model name instead, as `!model` writes it, and
 /// lands the same way.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_image_generation_reads_a_level_on_the_model_name() {
     let (asked, draw) = drawing();
     let case = SessionTestCase {
@@ -4450,7 +4460,7 @@ async fn an_image_generation_reads_a_level_on_the_model_name() {
 
 /// An effort nothing would understand is refused here, where it costs
 /// nothing, rather than drawn at whatever the default is.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_unknown_effort_is_refused_before_anything_is_drawn() {
     let (asked, draw) = drawing();
     let case = SessionTestCase {
@@ -4502,7 +4512,7 @@ async fn an_unknown_effort_is_refused_before_anything_is_drawn() {
 }
 
 /// A short name stands for the same model here as it does at a start.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_image_generation_reads_a_short_name() {
     let (asked, draw) = drawing();
     let case = SessionTestCase {
@@ -4546,7 +4556,7 @@ async fn an_image_generation_reads_a_short_name() {
 
 /// Nothing is configured to draw with, and the command says so rather than
 /// sending the prompt to whatever model the session happens to run on.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_image_generation_without_a_configured_model_is_refused() {
     let (asked, draw) = drawing();
     let case = SessionTestCase {
@@ -4589,7 +4599,7 @@ async fn an_image_generation_without_a_configured_model_is_refused() {
 
 /// A provider with nowhere to send the call is refused before anything is
 /// attempted against an empty URL.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_image_generation_on_a_provider_without_an_endpoint_is_refused() {
     let (asked, draw) = drawing();
     let case = SessionTestCase {
@@ -4634,7 +4644,7 @@ async fn an_image_generation_on_a_provider_without_an_endpoint_is_refused() {
 
 /// A server that refuses is reported in the thread in its own words, so a
 /// picture that was not drawn is never mistaken for one that was.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_refusal_to_draw_is_said_in_the_thread() {
     let case = SessionTestCase {
         config: Some(config_with(&json!({
@@ -4717,7 +4727,7 @@ fn speaking() -> Speaking {
 /// `!gen-speech` reads one text and posts it, without touching the session's
 /// model: a clip is one call to the speech endpoint, and the conversation
 /// stays where it was.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_speech_generation_reads_and_posts_it() {
     let (asked, speak) = speaking();
     let case = SessionTestCase {
@@ -4795,7 +4805,7 @@ async fn a_speech_generation_reads_and_posts_it() {
 
 /// Nothing is configured to read with, and the command says so rather than
 /// sending the text to whatever model the session happens to run on.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_speech_generation_without_a_configured_model_is_refused() {
     let (asked, speak) = speaking();
     let case = SessionTestCase {
@@ -4841,7 +4851,7 @@ async fn a_speech_generation_without_a_configured_model_is_refused() {
 
 /// A server that refuses is reported in the thread in its own words, so a
 /// clip that was not read is never mistaken for one that was.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_refusal_to_read_is_said_in_the_thread() {
     let case = SessionTestCase {
         config: Some(config_with(&json!({
@@ -4894,7 +4904,7 @@ async fn a_refusal_to_read_is_said_in_the_thread() {
 /// The configured model may name its provider, and that is where the session
 /// starts: on that provider's credential, with the model named bare. Reading
 /// the standing `provider` instead sends the wrong key to the wrong host.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_configured_model_naming_a_provider_starts_the_session_there() {
     let case = SessionTestCase {
         config: Some(config_with(&json!({
@@ -4928,7 +4938,7 @@ async fn a_configured_model_naming_a_provider_starts_the_session_there() {
 /// A provider that names no variable still gets one, and its key still
 /// crosses in it. Kage registers no provider whose variable is unset, so a
 /// session on such a provider would not start at all.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_provider_naming_no_variable_is_still_reached_with_its_key() {
     let case = SessionTestCase {
         config: Some(config_with(&json!({
@@ -4969,7 +4979,7 @@ async fn a_provider_naming_no_variable_is_still_reached_with_its_key() {
 /// Which model answered is worth saying where somebody is already reading:
 /// once when the session opens, and on every turn that ends. A thread that
 /// never names one leaves `!model` as the only way to find out.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_thread_is_told_which_model_it_is_talking_to() {
     let case = SessionTestCase {
         config: Some(config_with(&json!({
@@ -5028,7 +5038,7 @@ async fn the_thread_is_told_which_model_it_is_talking_to() {
 /// The agent reports the session's running totals after every request. Adding
 /// them up counted each earlier request again, and the counts it splits out
 /// were never read, so the done line said 0% cached.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_done_line_shows_the_latest_totals_and_what_was_cached() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -5061,6 +5071,9 @@ async fn the_done_line_shows_the_latest_totals_and_what_was_cached() {
             assert!(done.contains("1.0k tokens, 88% cached"), "got {done}");
             assert!(done.contains("$0.0200"), "got {done}");
             assert!(done.contains("tok/s"), "got {done}");
+            // The session hands the done line how long the turn took, on the
+            // clock the paused one moves.
+            assert!(done.contains("to first word"), "got {done}");
         })
     })
     .await;
@@ -5116,7 +5129,7 @@ fn a_fetch_error_is_reported_with_its_whole_cause_chain() {
 /// it was launched with, so a name read from there was refused for a model the
 /// file plainly defines: the operator typed a name the configuration carried
 /// and was told no such model existed.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_short_name_added_after_the_launch_is_known_to_a_running_session() {
     let model = AvailableModel {
         provider: "ajamxhacker".to_owned(),
@@ -5180,7 +5193,7 @@ async fn a_short_name_added_after_the_launch_is_known_to_a_running_session() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_link_planted_at_kage_session_is_not_followed() {
     with_session(
         SessionTestCase {
@@ -5217,7 +5230,7 @@ async fn a_link_planted_at_kage_session_is_not_followed() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn generated_image_captions_make_notes_and_paths_inert() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -5237,7 +5250,7 @@ async fn generated_image_captions_make_notes_and_paths_inert() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_file_caption_is_inert_but_the_original_filename_is_opened() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -5255,7 +5268,7 @@ async fn a_file_caption_is_inert_but_the_original_filename_is_opened() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn image_limits_interrupt_once_even_when_posting_is_disabled() {
     for post_images in [true, false] {
         with_session(
@@ -5316,7 +5329,7 @@ async fn image_limits_interrupt_once_even_when_posting_is_disabled() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_next_prompt_says_the_image_cap_stopped_the_last_turn() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -5360,7 +5373,7 @@ async fn the_next_prompt_says_the_image_cap_stopped_the_last_turn() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_turn_that_ends_under_the_cap_carries_no_note() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -5385,7 +5398,7 @@ async fn a_turn_that_ends_under_the_cap_carries_no_note() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn crossing_the_image_cap_does_not_restart_an_existing_interrupt_wait() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -5439,7 +5452,7 @@ async fn crossing_the_image_cap_does_not_restart_an_existing_interrupt_wait() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn images_with_no_turn_open_do_not_request_interruption() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -5470,7 +5483,7 @@ async fn images_with_no_turn_open_do_not_request_interruption() {
 
 /// A `read` of a picture returns an image too, but costs no generation:
 /// past the cap it is not posted, and the turn runs on.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn images_another_tool_returns_do_not_stop_the_turn() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -5503,7 +5516,7 @@ async fn images_another_tool_returns_do_not_stop_the_turn() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn failed_image_tools_do_not_count_returned_images() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
@@ -5530,7 +5543,7 @@ async fn failed_image_tools_do_not_count_returned_images() {
 /// revokes it, and the grant is written to the file in the record directory
 /// that a resume opens. A guest may not grant, and a host the allowlist already admits needs
 /// no grant.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_owner_grants_and_revokes_a_host_and_a_guest_cannot() {
     with_session(
         SessionTestCase {
@@ -5590,7 +5603,7 @@ async fn the_owner_grants_and_revokes_a_host_and_a_guest_cannot() {
 /// The store the broker is launched with is the thread's own: a host the
 /// broker refuses reaches the thread as how to grant it, and a grant made in
 /// the thread is what the broker then admits.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_brokers_refusal_reaches_the_thread_and_its_grant_reaches_the_broker() {
     with_session(
         SessionTestCase {
@@ -5665,7 +5678,7 @@ fn minting(status: u16, token: &'static str) -> crate::session::pr::Api {
 /// With an App, the session holds a minted token and never the daemon's:
 /// nothing in its environment is the daemon's token, the wrapper reads the
 /// minted one from the state directory, and the thread never shows it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn with_an_app_a_session_holds_a_minted_token_and_never_the_daemons() {
     let keys = tempfile::tempdir().unwrap();
     let key = keys.path().join("app.pem");
@@ -5712,7 +5725,7 @@ async fn with_an_app_a_session_holds_a_minted_token_and_never_the_daemons() {
 
 /// A mint that fails ends the start, saying why, and the session is never
 /// launched on the daemon's token instead.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_failed_mint_ends_the_start_and_never_falls_back_to_the_daemons_token() {
     let keys = tempfile::tempdir().unwrap();
     let key = keys.path().join("app.pem");
@@ -5742,7 +5755,7 @@ async fn a_failed_mint_ends_the_start_and_never_falls_back_to_the_daemons_token(
 
 /// A token is minted again ahead of its expiry, the wrapper's file then
 /// holds the new one, and both are kept out of the thread.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_token_is_renewed_before_it_expires_and_every_one_is_scrubbed() {
     let keys = tempfile::tempdir().unwrap();
     let key = keys.path().join("app.pem");
@@ -5793,7 +5806,7 @@ async fn a_token_is_renewed_before_it_expires_and_every_one_is_scrubbed() {
 /// A renewal that keeps failing is said in the thread once and tried again
 /// each minute, `!status` says it is failing, and the token file goes when
 /// the session ends.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_failing_renewal_is_said_once_and_the_token_goes_with_the_session() {
     let keys = tempfile::tempdir().unwrap();
     let key = keys.path().join("app.pem");
@@ -5872,7 +5885,7 @@ async fn a_failing_renewal_is_said_once_and_the_token_goes_with_the_session() {
 /// Every token a session held that has not expired is revoked when it ends,
 /// not only the newest: one read before a renewal would otherwise work until
 /// its own expiry.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn every_token_still_good_is_revoked_when_the_session_ends() {
     let keys = tempfile::tempdir().unwrap();
     let key = keys.path().join("app.pem");
