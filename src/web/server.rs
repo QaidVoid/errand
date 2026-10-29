@@ -994,7 +994,7 @@ async fn file(
         Err(refusal) => return refusal,
     };
 
-    let secrets = server.sessions.secrets();
+    let secrets = server.sessions.secrets_for(&id);
     // Every way of not finding one is answered the same, so the reason is
     // not kept: it is the error text that would describe the host.
     let read = blocking(move || {
@@ -1049,7 +1049,7 @@ async fn download(
 
     let name = download_name(&located.relative);
     // Scrubbed as it goes, for the same reason the file view is.
-    let scrubber = ByteScrubber::new(&server.sessions.secrets());
+    let scrubber = ByteScrubber::new(&server.sessions.secrets_for(&id));
     let chunks = futures_util::stream::try_unfold(
         (Some(file), scrubber),
         |(file, mut scrubber)| async move {

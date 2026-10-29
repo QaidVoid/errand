@@ -87,7 +87,7 @@ The GitHub identity a session works with, when one is configured.  A session wit
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `token` | `string` | required | Token the agent authenticates with. Secret, and reachable by the agent. At least 8 bytes, so it can be scrubbed from what is posted. |
+| `token` | `string` | required | The daemon's token, a classic one, which it reads notifications, composes pull requests and pushes with. A session holds it too unless `app` is set. Secret, and at least 8 bytes, so it can be scrubbed from what is posted. |
 | `userName` | `string` | required | Name commits are authored with. |
 | `userEmail` | `string` | required | Email commits are authored with. |
 | `trigger` | `GithubTrigger or undefined` | none | Who may start a session from GitHub, by mentioning the bot's account on an issue or pull request or assigning one to it. Absent means GitHub is only where work is sent, never where it is asked for. |
@@ -95,6 +95,18 @@ The GitHub identity a session works with, when one is configured.  A session wit
 | `repositories` | `Vec<String` | none | The repositories listened to, as `owner/repo`, or `owner/*` for every one an account or organisation holds. Absent means wherever the bot is mentioned or assigned. |
 | `onMention` | `boolean` | none | Whether a mention of the bot starts a session. On unless `on` leaves `mention` out. |
 | `onAssign` | `boolean` | none | Whether assigning an issue or pull request to the bot starts one. On unless `on` leaves `assign` out. |
+
+## github.app
+
+The GitHub App a session's credential is minted from.
+
+| field | type | default | what it does |
+| --- | --- | --- | --- |
+| `appId` | `number` | none | The App's id. |
+| `installationId` | `number` | none | The installation tokens are minted for. |
+| `privateKeyPath` | `string` | none | The absolute path of the App's private key, as GitHub gave it. |
+| `permissions` | `BTreeMap<String, String` | `{}` | What each token may do, by permission, as `read` or `write`. Empty asks for everything the installation was granted. |
+| `repositories` | `Vec<String` | `[]` | The repositories each token covers, by name without their owner. Empty covers every repository of the installation. |
 
 ## sandbox
 

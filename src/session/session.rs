@@ -55,6 +55,7 @@ use crate::session::event::{
     Delegated, EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage, ToolActivity,
     ToolResult,
 };
+use crate::session::github::app::SessionToken;
 use crate::session::github::{
     GH_SHIM_FILENAME, GITCONFIG_FILENAME, TOKEN_VARIABLE, gh_shim_contents, git_config_contents,
     git_identity_env,
@@ -106,6 +107,8 @@ pub enum SessionTimer {
     Delegating,
     /// The recall exchange directory is due a look.
     Recalling,
+    /// The session's GitHub App token is due to be renewed.
+    GithubToken,
 }
 
 /// Sets the session's timers, so a test fires deadlines by decision.
@@ -438,6 +441,9 @@ pub struct SessionOptions {
     pub start_turn: Option<u32>,
     /// Opens a pull request, or none when GitHub is not configured.
     pub open_pull_request: Option<OpenPullRequest>,
+    /// Reaches the GitHub API, which a session's App token is minted
+    /// through. None where nothing should reach it.
+    pub github_api: Option<crate::session::pr::Api>,
     /// The thread this session runs in, for linking back to the conversation.
     pub thread_id: Option<String>,
     /// The guild the thread is in, which a thread link needs.
@@ -786,6 +792,16 @@ struct Running {
     client: Option<AgentClient>,
     /// What the owner granted this session's broker, once it has started.
     grants: Option<Arc<GrantStore>>,
+    /// The GitHub App token the session holds, when it holds one.
+    github_token: Option<SessionToken>,
+    /// Whether the last renewal of that token failed, so a failing streak
+    /// is said in the thread once.
+    github_renewal_failing: bool,
+    /// The renewal set for that token.
+    github_timer: Option<u64>,
+    /// Every token the session has held and when it expires, so one is
+    /// scrubbed until it is worthless and no longer.
+    github_scrubbed: Vec<(String, i64)>,
     ticket: Option<Ticket>,
     pending_withdrawals: Vec<String>,
     current_message_id: Option<String>,
@@ -913,6 +929,10 @@ impl Running {
             abort_timer: None,
             sandbox: None,
             grants: None,
+            github_token: None,
+            github_renewal_failing: false,
+            github_timer: None,
+            github_scrubbed: Vec::new(),
             client: None,
             ticket: None,
             pending_withdrawals: Vec::new(),
@@ -1200,6 +1220,7 @@ impl Running {
                 }
                 self.schedule_delegating();
             }
+            SessionTimer::GithubToken => self.renew_github_token().await,
             SessionTimer::Recalling => {
                 if let Some(recaller) = &self.recaller {
                     recaller.sweep();
@@ -1296,6 +1317,10 @@ impl Running {
 
         let (env, credential_names) = self.launch_env(github.as_ref());
         self.open_grants().await;
+        if !self.mint_github_token().await {
+            self.finish(EndReason::StartupFailed).await;
+            return false;
+        }
 
         let launch = SandboxLaunch {
             session_id: self.options.id.clone(),
@@ -2426,7 +2451,9 @@ impl Running {
                     &format!("home/bin/{GH_SHIM_FILENAME}"),
                     &executable,
                 )?;
-                file.write_all(gh_shim_contents().as_bytes())?;
+                file.write_all(
+                    gh_shim_contents(github.is_some_and(|github| github.app.is_some())).as_bytes(),
+                )?;
             }
             if self.options.memory.is_some() {
                 let mut file = paths::open_beneath(
@@ -2690,11 +2717,14 @@ impl Running {
             env.insert(name.clone(), credential.to_owned());
         }
         if let Some(github) = github {
-            // The GitHub token crosses too. Reading issues and leaving
+            // A GitHub credential crosses too. Reading issues and leaving
             // comments is most of working on somebody's repository, and none
             // of it is possible without one. Pull requests are still composed
-            // by the daemon.
-            env.insert(TOKEN_VARIABLE.to_owned(), github.token.clone());
+            // by the daemon. With an App the credential is a minted token the
+            // wrapper reads from a file, so the daemon's own never crosses.
+            if github.app.is_none() {
+                env.insert(TOKEN_VARIABLE.to_owned(), github.token.clone());
+            }
             for (name, value) in git_identity_env(github) {
                 env.insert(name, value);
             }
@@ -2915,12 +2945,14 @@ impl Running {
             self.delegating_timer.take(),
             self.recalling_timer.take(),
             self.abort_timer.take(),
+            self.github_timer.take(),
         ]
         .into_iter()
         .flatten()
         {
             self.timers.clear_timeout(timer);
         }
+        self.drop_github_token().await;
 
         if let Some(client) = self.client.as_ref() {
             client.cancel_dialogs();
@@ -3075,6 +3107,7 @@ fn chained(error: &dyn std::error::Error) -> String {
 }
 
 mod answering;
+mod credential;
 mod files;
 mod granting;
 mod memory;

@@ -2085,3 +2085,44 @@ async fn a_bare_model_from_another_provider_launches_under_that_provider() {
     )
     .await;
 }
+
+/// What a live session came to hold is scrubbed from what the web shows of
+/// its files, and once it ends the configured secrets still are.
+#[tokio::test]
+async fn a_surface_showing_a_sessions_files_scrubs_what_the_session_holds() {
+    with_manager(|harness| {
+        Box::pin(async move {
+            let outcome = harness.manager.start(message("demo: go", "m1")).await;
+            let id = started(&outcome).id().to_owned();
+            harness
+                .manager
+                .state
+                .scrubbers
+                .lock()
+                .unwrap()
+                .get(&id)
+                .expect("the session's door")
+                .add_secret("ghs_minted_for_the_session".to_owned());
+
+            assert!(
+                harness
+                    .manager
+                    .secrets_for(&id)
+                    .contains(&"ghs_minted_for_the_session".to_owned())
+            );
+
+            harness
+                .manager
+                .end_thread("thread-1", EndReason::Idle)
+                .await;
+            settle().await;
+            assert!(
+                !harness
+                    .manager
+                    .secrets_for(&id)
+                    .contains(&"ghs_minted_for_the_session".to_owned())
+            );
+        })
+    })
+    .await;
+}

@@ -131,7 +131,7 @@
       "properties": {
         "token": {
           "type": "string",
-          "description": "Token the agent authenticates with. Secret, and reachable by the agent. At least 8 bytes, so it can be scrubbed from what is posted."
+          "description": "The daemon's token, a classic one, which it reads notifications, composes pull requests and pushes with. A session holds it too unless `app` is set. Secret, and at least 8 bytes, so it can be scrubbed from what is posted."
         },
         "userName": {
           "type": "string",
@@ -143,6 +143,36 @@
         },
         "trigger": {
           "description": "Who may start a session from GitHub, by mentioning the bot's account on an issue or pull request or assigning one to it. Absent means GitHub is only where work is sent, never where it is asked for."
+        },
+        "app": {
+          "type": "object",
+          "description": "A GitHub App each session's credential is minted from, so a session holds a short-lived installation token in place of `token`. `appId` and `installationId` name the App and its installation, `privateKeyPath` is the absolute path of the App's private key as GitHub gave it, read again at every mint, `permissions` maps a permission to `read` or `write` for each token to ask for, and `repositories` names the repositories each token covers. Left out, either of the last two asks for everything the installation was granted. Absent means a session holds `token` itself.",
+          "additionalProperties": false,
+          "properties": {
+            "appId": {
+              "type": "number",
+              "description": "The App's id."
+            },
+            "installationId": {
+              "type": "number",
+              "description": "The installation tokens are minted for."
+            },
+            "privateKeyPath": {
+              "type": "string",
+              "description": "The absolute path of the App's private key, as GitHub gave it."
+            },
+            "permissions": {
+              "description": "What each token may do, by permission, as `read` or `write`. Empty asks for everything the installation was granted."
+            },
+            "repositories": {
+              "description": "The repositories each token covers, by name without their owner. Empty covers every repository of the installation."
+            }
+          },
+          "required": [
+            "appId",
+            "installationId",
+            "privateKeyPath"
+          ]
         },
         "allowedUsers": {
           "description": "The GitHub logins whose mentions and assignments start a session, and whose comments continue one. Nobody else is heard: on a public repository anyone can comment, and every session runs code."

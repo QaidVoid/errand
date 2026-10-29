@@ -112,6 +112,93 @@ large history costs a moment and the disk space of one copy while it runs. A
 git directory holding more than 2 GiB is not copied, and its pull request is
 refused.
 
+## What a session holds
+
+Without `app`, a session holds the daemon's own token, in `GH_TOKEN`, and
+`gh` and git use it. That token must be a classic one, since only a classic
+token can read notifications, so a session holds read and write on every
+repository the account can reach for as long as the token lives. The daemon
+warns about this at startup.
+
+With a GitHub App, each session holds an installation token minted for it
+instead, and the daemon's token never enters the sandbox:
+
+```json
+{
+  "github": {
+    "token": "ghp_your_token_here",
+    "userName": "errand-bot",
+    "userEmail": "bot@example.com",
+    "app": {
+      "appId": 123456,
+      "installationId": 7654321,
+      "privateKeyPath": "/etc/errand/app.private-key.pem",
+      "permissions": { "contents": "read", "issues": "write", "pull_requests": "read" },
+      "repositories": ["errand"]
+    }
+  }
+}
+```
+
+The token covers only the repositories the App was installed on, narrowed
+further by `repositories` when they are named, carries only `permissions`
+when they are named and everything the installation was granted when they
+are not, and expires within the hour. The daemon mints it before the sandbox
+starts, renews it ten minutes before it expires, and keeps it in the
+session's state directory, where the `gh` wrapper reads it before every call,
+so `gh` and git through it always present the current one. A `gh` called by
+its full path skips the wrapper and is handed no token, though the session
+can still read the file. A session whose token cannot be minted does not
+start, and is never started on the daemon's token instead. A renewal that
+fails is said in the thread and tried again every minute. The private key is
+read at every mint, so a rotated key takes effect without a restart.
+`!status` names the token's repositories, permissions, and how long it has
+left.
+
+### Making the App
+
+The App is made once, on GitHub, by the account or organisation that owns
+the repositories:
+
+1. In **Settings, Developer settings, GitHub Apps**, choose **New GitHub
+   App**. Give it a name and any homepage URL, and untick **Active** under
+   **Webhook**: errand reads notifications with `token` and needs no
+   webhook.
+2. Under **Repository permissions**, grant what a session works with:
+   **Contents** read, to clone and fetch, **Issues** read and write, to
+   comment, **Pull requests** read, and **Actions** or **Checks** read to look
+   at builds. **Metadata** read is always on. Contents write is not needed,
+   since the daemon pushes with `token`.
+3. On the App's page, note its **App ID**, then **Generate a private key**,
+   which downloads a `.pem` file. Keep it where only the daemon's account can
+   read it, outside `projectRoot` and `stateDir`, which a session can read and
+   the configuration refuses, and name it in `privateKeyPath`.
+4. **Install App** on the account or organisation, choosing the repositories
+   sessions may reach. The number the installation's settings page ends in,
+   as `/settings/installations/7654321`, is its `installationId`.
+
+`permissions` in the configuration can ask a token for less than the App was
+granted, never more. A session's first `!status` shows what it was given.
+
+Notifications, pull requests and pushes keep using `token`. An installation
+token cannot write outside its installation, so forks, and pull requests on a
+repository the App is not installed on, are opened by the daemon with
+`token`, through the pull request request file, as always.
+
+Whichever credential a session holds, its `gh` refuses `gh pr create`,
+`gh repo fork`, `gh repo delete`, `transfer` and `archive`, `gh release
+delete`, `gh workflow disable`, setting or deleting secrets and variables,
+defining an alias, printing the token with `gh auth token` or
+`--show-token`, and `gh api` with `DELETE`, `PATCH` or `PUT`, on a transfer
+or fork route, or for another host than github.com, each with what to do
+instead. It does not read GraphQL mutations. That catches the habit, not a
+determined session, which can read its credential and reach the API without
+`gh`, or edit `gh`'s own configuration in its state directory. The wall is
+the credential: an App token holds only the permissions it was granted, and
+GitHub refuses everything else. When the session ends every token it held
+that has not expired is revoked, and its file removed. `privateKeyPath` must lie outside `projectRoot` and
+`stateDir`, since a session that could read the key would hold the App.
+
 ## Trying it
 
 1. Add `trigger` with your own login and restart the daemon. The log says
