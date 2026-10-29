@@ -184,9 +184,32 @@ impl Running {
         user_scope: bool,
         subject: &str,
     ) -> usize {
-        let Ok(contents) = paths::read_beneath(&self.options.state_dir, filename) else {
-            return 0;
-        };
+        let contents =
+            match paths::read_beneath(&self.options.state_dir, filename, paths::MAX_READ_BYTES) {
+                Ok(contents) => contents,
+                // Left in place, a notes file past the cap would be refused
+                // again every turn, so it is emptied once and said once.
+                Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+                    match paths::truncate_beneath(&self.options.state_dir, filename) {
+                        Ok(()) => self.log.warn(
+                            "a notes file was past the read cap, so it was emptied unread",
+                            &fields([
+                                ("file", LogValue::from(filename)),
+                                ("limit_bytes", LogValue::from(paths::MAX_READ_BYTES)),
+                            ]),
+                        ),
+                        Err(error) => self.log.warn(
+                            "a notes file was past the read cap and could not be emptied",
+                            &fields([
+                                ("file", LogValue::from(filename)),
+                                ("detail", LogValue::from(error.to_string())),
+                            ]),
+                        ),
+                    }
+                    return 0;
+                }
+                Err(_) => return 0,
+            };
 
         let mut stored = 0;
         for fact in parse_notes(&contents) {

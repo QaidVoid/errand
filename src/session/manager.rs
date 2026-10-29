@@ -1089,10 +1089,16 @@ impl SessionManager {
             .get(thread_id)
             .cloned();
         let Some(record) = record else { return false };
-        withdraw_from_record(&record.state_dir, message_id)
-            .ok()
-            .flatten()
-            .is_some()
+        match withdraw_from_record(&record.state_dir, message_id) {
+            Ok(said) => said.is_some(),
+            Err(error) => {
+                self.options.log.warn(
+                    "a withdrawal from an ended session's record could not be made",
+                    &fields([("detail", LogValue::from(error.to_string()))]),
+                );
+                false
+            }
+        }
     }
 
     /// Delivers a message to the session bound to its thread.

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::sandbox::paths;
-use crate::session::transcript::TRANSCRIPT_FILENAME;
+use crate::session::transcript::{MAX_TRANSCRIPT_BYTES, TRANSCRIPT_FILENAME};
 
 /// The directory holding a session's record, given its state directory.
 pub fn record_dir(state_dir: &str) -> String {
@@ -93,8 +93,11 @@ pub fn withdraw_from_record(state_dir: &str, message_id: &str) -> io::Result<Opt
     } else {
         (placed, TRANSCRIPT_FILENAME.to_owned())
     };
-    let Ok(text) = paths::read_beneath(&directory, &name) else {
-        return Ok(None);
+    // Past the cap is a failed withdrawal, not "nothing matched".
+    let text = match paths::read_beneath(&directory, &name, MAX_TRANSCRIPT_BYTES) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::FileTooLarge => return Err(error),
+        Err(_) => return Ok(None),
     };
 
     let mut said: Option<String> = None;
@@ -175,6 +178,7 @@ pub fn withdraw_from_agent_session(state_dir: &str, said: &str) -> io::Result<bo
     let root = directory.to_string_lossy().into_owned();
 
     let mut withdrew = false;
+    let mut too_large = None;
     for entry in entries.flatten() {
         // Reported by the kernel without following, so a link planted at a
         // session file is skipped rather than read through.
@@ -188,8 +192,16 @@ pub fn withdraw_from_agent_session(state_dir: &str, said: &str) -> io::Result<bo
         {
             continue;
         }
-        let Ok(text) = paths::read_beneath(&root, &name) else {
-            continue;
+        // A file past the cap cannot be read, so the words may still be in
+        // it. The rest are withdrawn from all the same, and the withdrawal
+        // then fails, rather than pass for a complete one.
+        let text = match paths::read_beneath(&root, &name, MAX_TRANSCRIPT_BYTES) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::FileTooLarge => {
+                too_large = Some(error);
+                continue;
+            }
+            Err(_) => continue,
         };
 
         let mut found = false;
@@ -219,7 +231,10 @@ pub fn withdraw_from_agent_session(state_dir: &str, said: &str) -> io::Result<bo
         write_over(&root, &name, &lines.join("\n"))?;
         withdrew = true;
     }
-    Ok(withdrew)
+    match too_large {
+        Some(error) => Err(error),
+        None => Ok(withdrew),
+    }
 }
 
 /// Writes a corrected file and renames it over the one it corrects, so a

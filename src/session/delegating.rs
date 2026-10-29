@@ -119,11 +119,13 @@ impl Delegating {
         let id = name.strip_suffix(".request").unwrap_or(name).to_owned();
         let path = self.directory.join(name);
 
-        let raw = paths::read_beneath(&self.directory.to_string_lossy(), name)
-            .map_err(|error| error.to_string())
-            .and_then(|text| {
-                serde_json::from_str::<Value>(&text).map_err(|error| error.to_string())
-            });
+        let raw = paths::read_beneath(
+            &self.directory.to_string_lossy(),
+            name,
+            paths::MAX_READ_BYTES,
+        )
+        .map_err(|error| error.to_string())
+        .and_then(|text| serde_json::from_str::<Value>(&text).map_err(|error| error.to_string()));
         let raw = match raw {
             Ok(raw) => raw,
             Err(error) => {

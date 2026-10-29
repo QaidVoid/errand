@@ -196,11 +196,14 @@ impl OpenOptions {
     }
 
     /// Opens for writing, creating when absent and emptying what is there.
+    ///
+    /// Without waiting, as [`read`] does: a pipe the agent planted at the name
+    /// fails to open at once when nothing reads it, rather than holding the
+    /// daemon until something does.
+    ///
+    /// [`read`]: OpenOptions::read
     pub fn truncate() -> Self {
-        Self {
-            flags: (OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC).bits(),
-            mode: Some(Mode::from_bits_truncate(0o600)),
-        }
+        Self::truncate_mode(0o600)
     }
 
     /// Opens for writing as [`truncate`] does, with the given permissions.
@@ -208,7 +211,7 @@ impl OpenOptions {
     /// [`truncate`]: OpenOptions::truncate
     pub fn truncate_mode(mode: u32) -> Self {
         Self {
-            flags: (OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC).bits(),
+            flags: (OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC | OFlag::O_NONBLOCK).bits(),
             mode: Some(Mode::from_bits_truncate(mode)),
         }
     }
@@ -225,12 +228,34 @@ impl OpenOptions {
     }
 }
 
-/// Reads a file beneath `root` as text, following no symlink to get there.
-pub fn read_beneath(root: &str, relative: &str) -> std::io::Result<String> {
-    let mut file = open_beneath(root, relative, &OpenOptions::read())?;
-    let mut text = String::new();
-    file.read_to_string(&mut text)?;
-    Ok(text)
+/// The most a daemon read of a session-written file takes in, for the
+/// readers with no tighter bound of their own.
+///
+/// Notes, requests and the policy are a few kilobytes. The agent can grow any
+/// of them, so a read with no bound is one way to make the daemon hold a file
+/// the size of the disk.
+pub const MAX_READ_BYTES: u64 = 1024 * 1024;
+
+/// Reads a file beneath `root` as text, following no symlink to get there,
+/// and refuses one longer than `limit` bytes with `FileTooLarge`, a kind
+/// of its own so a caller can tell it from text that is not UTF-8.
+///
+/// Read through the bound rather than measured first, since the file can grow
+/// between a measurement and the read.
+pub fn read_beneath(root: &str, relative: &str, limit: u64) -> std::io::Result<String> {
+    let file = open_beneath(root, relative, &OpenOptions::read())?;
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+    // Measured before the text is checked, so a file cut by the bound in the
+    // middle of a character is still refused for its length.
+    if bytes.len() as u64 > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            format!("{relative} is longer than the {limit} byte read limit"),
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// Empties a file beneath `root`, following no symlink to get there.

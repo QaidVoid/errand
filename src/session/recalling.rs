@@ -92,10 +92,14 @@ impl Recalling {
         let id = name.strip_suffix(".request").unwrap_or(name).to_owned();
         let path = self.directory.join(name);
 
-        let query = paths::read_beneath(&self.directory.to_string_lossy(), name)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .and_then(|raw| raw.get("query").and_then(Value::as_str).map(str::to_owned));
+        let query = paths::read_beneath(
+            &self.directory.to_string_lossy(),
+            name,
+            paths::MAX_READ_BYTES,
+        )
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|raw| raw.get("query").and_then(Value::as_str).map(str::to_owned));
         // Removed before it is answered, so a request is never answered twice
         // if a later sweep overlaps this one.
         let _ = std::fs::remove_file(&path);

@@ -137,7 +137,12 @@ fn workspace_grant(policy: &str) -> Option<String> {
 /// blocking, so a planted link or pipe cannot point the read at a host file
 /// or hang the command.
 fn project_of(state_dir: &str, root: &str) -> Option<Project> {
-    let policy = crate::sandbox::paths::read_beneath(state_dir, POLICY_FILENAME).ok()?;
+    let policy = crate::sandbox::paths::read_beneath(
+        state_dir,
+        POLICY_FILENAME,
+        crate::sandbox::paths::MAX_READ_BYTES,
+    )
+    .ok()?;
     let path = workspace_grant(&policy)?;
     let name = std::path::Path::new(&path)
         .file_name()?

@@ -4,7 +4,7 @@ use super::{
     prepare_record_dir, record_dir, transcript_path, withdraw_from_agent_session,
     withdraw_from_record,
 };
-use crate::session::transcript::TRANSCRIPT_FILENAME;
+use crate::session::transcript::{MAX_TRANSCRIPT_BYTES, TRANSCRIPT_FILENAME};
 
 /// The state directory is handed to the session as `/state`, writable. What
 /// the daemon records about a session must therefore not be inside it.
@@ -241,4 +241,37 @@ fn a_link_at_a_legacy_transcript_is_not_followed() {
         std::fs::read_to_string(&target).expect("read back"),
         "untouched"
     );
+}
+
+/// A transcript past the read cap fails the withdrawal rather than reading
+/// as one that holds nothing to withdraw.
+#[test]
+fn a_transcript_past_the_cap_fails_the_withdrawal() {
+    let session = with_session();
+    std::fs::File::create(session.record.join(TRANSCRIPT_FILENAME))
+        .unwrap()
+        .set_len(MAX_TRANSCRIPT_BYTES + 1)
+        .unwrap();
+
+    let refused =
+        withdraw_from_record(session.state.to_str().unwrap(), "m-2").expect_err("past the cap");
+    assert_eq!(refused.kind(), std::io::ErrorKind::FileTooLarge);
+}
+
+/// An agent session file past the cap fails the withdrawal, since the words
+/// may still be in it, but the files beside it are withdrawn from first.
+#[test]
+fn an_agent_session_file_past_the_cap_fails_the_withdrawal_after_the_rest() {
+    let session = with_session();
+    std::fs::File::create(session.state.join("sessions").join("big.jsonl"))
+        .unwrap()
+        .set_len(MAX_TRANSCRIPT_BYTES + 1)
+        .unwrap();
+
+    let refused = withdraw_from_agent_session(session.state.to_str().unwrap(), &session.said)
+        .expect_err("past the cap");
+    assert_eq!(refused.kind(), std::io::ErrorKind::FileTooLarge);
+    let stored =
+        std::fs::read_to_string(session.state.join("sessions").join("s.jsonl")).expect("it reads");
+    assert!(!stored.contains("ghp_TOPSECRET123"));
 }

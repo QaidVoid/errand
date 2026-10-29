@@ -29,7 +29,7 @@ impl Running {
     /// have become a link to somewhere else since it was last looked at.
     fn read_contained(&self, agent_path: &str) -> std::io::Result<String> {
         let display = self.display_path(agent_path);
-        paths::read_beneath(&self.options.project.path, &display)
+        paths::read_beneath(&self.options.project.path, &display, MAX_DIFFABLE_BYTES)
     }
 
     pub(super) fn snapshot(&mut self, agent_path: &str) {
@@ -205,7 +205,7 @@ impl Running {
                 shown
             }
         };
-        let mut file = match paths::open_beneath(&root, &display, &paths::OpenOptions::read()) {
+        let file = match paths::open_beneath(&root, &display, &paths::OpenOptions::read()) {
             Ok(file) => file,
             Err(error) => {
                 self.say(&format!("could not read `{wanted}`: {error}"))
@@ -241,14 +241,26 @@ impl Running {
             .await;
             return;
         }
+        // Read through the limit, not trusting the measurement above: the
+        // agent can grow the file between the two.
         let mut bytes = Vec::new();
-        if let Err(error) = file.read_to_end(&mut bytes) {
+        if let Err(error) = (&file)
+            .take(limit.saturating_add(1))
+            .read_to_end(&mut bytes)
+        {
             self.say(&format!("could not read `{wanted}`: {error}"))
                 .await;
             return;
         }
+        if bytes.len() as u64 > limit {
+            self.say(&format!(
+                "`{wanted}` grew past the {limit} byte upload limit while it was read"
+            ))
+            .await;
+            return;
+        }
         let name = host.rsplit('/').next().unwrap_or("file").to_owned();
-        let caption = format!("`{}` {} bytes", inert(&display), meta.len());
+        let caption = format!("`{}` {} bytes", inert(&display), bytes.len());
         self.post_upload(name, bytes, caption).await;
     }
 
