@@ -205,7 +205,7 @@ pub fn session_command(
     broker: Option<&SessionBroker>,
 ) -> PodmanCommand {
     let launch = SandboxLaunch {
-        env: session_env(&launch.env, broker),
+        env: session_env(launch, broker),
         ..launch.clone()
     };
     podman_args(config, &launch, broker)

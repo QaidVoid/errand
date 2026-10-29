@@ -25,6 +25,19 @@ pub const POLICY_FILENAME: &str = "policy.toml";
 /// Filename of the resolver a session is given, in the daemon's state root.
 pub const RESOLV_FILENAME: &str = "resolv.conf";
 
+/// Variables the session's environment names that are the target's alone.
+///
+/// The agent keeps its configuration and caches under these, in its state
+/// directory. The tool reads its own configuration and trust store from the
+/// same names before any confinement, so they are set for the target in the
+/// policy, as HOME is, and never handed to the tool itself.
+pub const TARGET_ONLY_VARIABLES: [&str; 4] = [
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+];
+
 /// What a session may read outside its own directories.
 ///
 /// Named rather than inherited, so what a session can reach is bounded by this
@@ -159,6 +172,47 @@ pub struct PolicyOptions<'a> {
     pub path_extra: Option<&'a [String]>,
 }
 
+/// What the target's environment is built from: the names passed through
+/// from the tool's environment, and the values the policy sets itself.
+///
+/// The environment is built rather than inherited, so a variable not named
+/// here does not cross. The provider credential is named and nothing else
+/// is: the daemon's own environment holds the chat token, and this is the
+/// boundary that keeps it out of a session.
+fn target_env(
+    launch: &SandboxLaunch,
+    path: &[String],
+    operator_env: &BTreeMap<String, String>,
+) -> (Vec<String>, Vec<String>) {
+    let mut names: Vec<String> = launch
+        .env
+        .keys()
+        .filter(|name| !TARGET_ONLY_VARIABLES.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    names.sort();
+    let pass = names.iter().map(|name| quoted(name)).collect();
+    // HOME is set here rather than on the sandbox process. The tool derives
+    // its own world from the caller's HOME, so pointing that at a placed path
+    // makes it try to create the path on the host, which fails. Set in the
+    // policy, it reaches the target after the pivot, where the path exists.
+    let mut set = vec![format!("PATH = {}", quoted(&path.join(":")))];
+    set.push(format!("HOME = {}", quoted(AGENT_HOME)));
+    set.extend(
+        TARGET_ONLY_VARIABLES
+            .iter()
+            .filter_map(|name| Some((name, launch.env.get(*name)?)))
+            .map(|(name, value)| format!("{name} = {}", quoted(value))),
+    );
+    set.extend(
+        operator_env
+            .iter()
+            .filter(|(name, _)| !launch.env.contains_key(*name))
+            .map(|(name, value)| format!("{name} = {}", quoted(value))),
+    );
+    (pass, set)
+}
+
 /// Builds the per-session policy.
 ///
 /// It is written into the session's state directory, never into the project.
@@ -237,27 +291,7 @@ pub fn policy_contents(options: &PolicyOptions) -> String {
         .collect();
     execute.push(placed(&launch.project_path, WORKSPACE_PATH));
 
-    // The environment is built rather than inherited, so a variable not named
-    // here does not cross. The provider credential is named and nothing else
-    // is: the daemon's own environment holds the chat token, and this is the
-    // boundary that keeps it out of a session.
-    let pass: Vec<String> = {
-        let mut names: Vec<String> = launch.env.keys().cloned().collect();
-        names.sort();
-        names.iter().map(|name| quoted(name)).collect()
-    };
-    // HOME is set here rather than on the sandbox process. The tool derives
-    // its own world from the caller's HOME, so pointing that at a placed path
-    // makes it try to create the path on the host, which fails. Set in the
-    // policy, it reaches the target after the pivot, where the path exists.
-    let mut set = vec![format!("PATH = {}", quoted(&path.join(":")))];
-    set.push(format!("HOME = {}", quoted(AGENT_HOME)));
-    set.extend(
-        operator_env
-            .iter()
-            .filter(|(name, _)| !launch.env.contains_key(*name))
-            .map(|(name, value)| format!("{name} = {}", quoted(value))),
-    );
+    let (pass, set) = target_env(launch, &path, operator_env);
 
     let write: Vec<String> = [
         placed(&launch.project_path, WORKSPACE_PATH),

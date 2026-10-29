@@ -1277,7 +1277,9 @@ fn build_forwarded(
             continue;
         }
         if !HOP_BY_HOP.contains(&name.as_str().to_lowercase().as_str()) {
-            forwarded = forwarded.header(name.as_str(), value.to_str().unwrap_or(""));
+            // As sent, bytes and all: a value that is not text is still the
+            // session's, and blanking it would forward a different request.
+            forwarded = forwarded.header(name.clone(), value.clone());
         }
     }
     forwarded = forwarded.header(http::header::ACCEPT_ENCODING, "identity");

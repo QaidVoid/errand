@@ -31,7 +31,7 @@ use crate::sandbox::kage_providers::{KageProviders, LIST_ARGS, Probed};
 use crate::sandbox::paths;
 use crate::sandbox::policy::{
     AGENT_PROFILE, OFFLINE_PROFILE, POLICY_FILENAME, PolicyOptions, RESOLV_CONF, RESOLV_FILENAME,
-    policy_contents, policy_path,
+    TARGET_ONLY_VARIABLES, policy_contents, policy_path,
 };
 use crate::sandbox::runtime::which;
 use crate::sandbox::runtime::{AgentRuntime, Lookup, agent_runtime};
@@ -133,6 +133,9 @@ pub fn session_environment(
         env.insert("XDG_DATA_HOME".to_owned(), dir);
     }
     for (name, value) in launch_env {
+        if TARGET_ONLY_VARIABLES.contains(&name.as_str()) {
+            continue;
+        }
         env.insert(name.clone(), value.clone());
     }
     env
@@ -513,7 +516,7 @@ impl BaileySandbox {
         )
         .await?;
         let launch = SandboxLaunch {
-            env: session_env(&launch.env, broker.as_ref()),
+            env: session_env(launch, broker.as_ref()),
             ..launch.clone()
         };
         let resolv = self.write_resolv_conf().await;

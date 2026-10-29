@@ -648,10 +648,7 @@ fn validate_route(name: &str, definition: &Value, problems: &mut Problems) {
             }
         }
     }
-    let brokered = match definition.get("broker") {
-        Some(Value::Bool(says)) => *says,
-        _ => definition.get("extension").and_then(Value::as_bool) != Some(true),
-    };
+    let brokered = schema::definition_is_brokered(Some(definition));
     match RoutePolicy::of(name, definition) {
         Err(found) => {
             for problem in found {

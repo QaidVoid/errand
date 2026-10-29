@@ -311,14 +311,7 @@ impl AgentConfig {
     /// back on the broker for a plugin that reads the nonce and does not
     /// sign. Everything else is brokered when the broker can route it.
     pub fn is_brokered(&self, provider: &str) -> bool {
-        match self
-            .providers
-            .get(provider)
-            .and_then(|definition| definition.get("broker"))
-        {
-            Some(serde_json::Value::Bool(says)) => *says,
-            _ => !self.is_extension_provider(provider),
-        }
+        definition_is_brokered(self.providers.get(provider))
     }
 
     /// What one provider is reached with, or nothing when it is not defined.
@@ -415,6 +408,20 @@ fn credential_var_stem(provider: &str) -> String {
     }
     stem.push_str("_API_KEY");
     stem
+}
+
+/// Whether a provider with this definition is brokered, as
+/// [`AgentConfig::is_brokered`] describes. A provider with no definition is.
+pub fn definition_is_brokered(definition: Option<&serde_json::Value>) -> bool {
+    match definition.and_then(|definition| definition.get("broker")) {
+        Some(serde_json::Value::Bool(says)) => *says,
+        _ => {
+            definition
+                .and_then(|definition| definition.get("extension"))
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+        }
+    }
 }
 
 /// The GitHub identity a session works with, when one is configured.

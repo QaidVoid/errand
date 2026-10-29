@@ -15,7 +15,7 @@ use crate::log::{LogFields, Logger};
 use crate::sandbox::Run;
 use crate::sandbox::backend::{Denials, SandboxLaunch};
 use crate::sandbox::broker::{Broker, BrokerTemplate, ProviderUpstream, SessionBroker};
-use crate::sandbox::egress::{brokered_env, egress_proxy_url};
+use crate::sandbox::egress::{brokered_env, egress_proxy_url, session_env};
 use crate::sandbox::kage_providers::INSTALLED_JSON;
 use tempfile::TempDir;
 
@@ -327,6 +327,19 @@ fn the_environment_is_rebuilt_from_a_named_list_not_inherited() {
     assert_eq!(env.get("LANG").map(String::as_str), Some("en_GB.UTF-8"));
     assert_eq!(env.get("CHAT_TOKEN"), None);
     assert_eq!(env.get("HOME").map(String::as_str), Some("/state/s-1/home"));
+
+    // The session's own, which the agent writes, do not replace them for
+    // the tool. The policy sets them for the target alone.
+    let launch_env = BTreeMap::from([
+        ("XDG_CONFIG_HOME".to_owned(), "/state/kage".to_owned()),
+        ("XDG_CACHE_HOME".to_owned(), "/state/kage".to_owned()),
+    ]);
+    let env = session_environment(&launch_env, &source, "/state/s-1/home");
+    assert_eq!(
+        env.get("XDG_CONFIG_HOME").map(String::as_str),
+        Some("/home/operator/.config")
+    );
+    assert_eq!(env.get("XDG_CACHE_HOME"), None);
 }
 
 /// Per-session limits are applied only when the tool has a cgroup it may
@@ -842,4 +855,36 @@ async fn stopping_a_session_closes_its_broker() {
         stops_listening(port).await,
         "the broker outlived its session"
     );
+}
+
+/// A brokered provider the configuration gained after the broker was built
+/// has no route, so its key is taken out rather than crossing whole. One
+/// whose key is meant to cross keeps it.
+#[test]
+fn a_provider_added_since_startup_does_not_cross_with_its_key() {
+    let mut broker = session_broker(4100, "secret");
+    broker.credential_names = BTreeMap::from([("zai".to_owned(), "ZAI_KEY".to_owned())]);
+    broker.nonces = BTreeMap::from([("zai".to_owned(), "n-zai".to_owned())]);
+    let mut launch = launch();
+    launch.env = BTreeMap::from([
+        ("ZAI_KEY".to_owned(), "real-zai".to_owned()),
+        ("ADDED_KEY".to_owned(), "real-added".to_owned()),
+        ("WHOLE_KEY".to_owned(), "real-whole".to_owned()),
+    ]);
+    launch.credential_names = BTreeMap::from([
+        ("zai".to_owned(), "ZAI_KEY".to_owned()),
+        ("added".to_owned(), "ADDED_KEY".to_owned()),
+        ("whole".to_owned(), "WHOLE_KEY".to_owned()),
+    ]);
+    launch.providers = serde_json::from_value(serde_json::json!({
+        "added": { "baseUrl": "https://added.example/v1" },
+        "whole": { "broker": false },
+    }))
+    .unwrap();
+
+    let env = session_env(&launch, Some(&broker));
+
+    assert_eq!(env.get("ZAI_KEY").map(String::as_str), Some("n-zai"));
+    assert_eq!(env.get("ADDED_KEY"), None);
+    assert_eq!(env.get("WHOLE_KEY").map(String::as_str), Some("real-whole"));
 }

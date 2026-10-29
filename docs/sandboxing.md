@@ -91,7 +91,10 @@ read out of one session is refused by every other session's broker. Stopping
 the session closes its broker first: from then on neither is honoured, even
 on a connection the session opened earlier, and the port is released. A
 tunnel already open is not cut, and ends when the session's processes do. The
-broker's log lines name the session they belong to, tunnels included.
+broker's log lines name the session they belong to, tunnels included. A
+provider added to the configuration after the daemon started has no route on
+any broker until a restart, so a session holds neither its key nor a stand-in
+for it until then.
 
 Every provider call a session's broker handles is recorded as well, in
 `receipts.db` under the state directory. A receipt holds when the call ended,
