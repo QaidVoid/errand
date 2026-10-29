@@ -573,6 +573,87 @@ enum TargetError {
     Upstream(&'static str),
 }
 
+/// A provider's base URL as the broker dials it, or why it will not.
+///
+/// The one reading of an upstream, for the broker and for the startup check
+/// alike. The real key travels on every request, so the scheme must be
+/// HTTPS, except to this host's own loopback, where a local gateway may speak
+/// plain HTTP.
+pub fn upstream_url(upstream: &str) -> Result<reqwest::Url, &'static str> {
+    let upstream = upstream.trim();
+    if !upstream.contains("://") {
+        return Err("the base URL has no scheme, such as https://, in front");
+    }
+    let base = reqwest::Url::parse(upstream).map_err(|_| "the base URL is not a URL")?;
+    match base.scheme() {
+        "https" => {}
+        "http" if is_loopback(&base) => {}
+        "http" => return Err("the base URL is not HTTPS, so the key would cross in the clear"),
+        _ => return Err("the scheme is not http or https"),
+    }
+    if !base.username().is_empty() || base.password().is_some() {
+        return Err("the upstream carries credentials");
+    }
+    if base.query().is_some() || base.fragment().is_some() {
+        return Err("the upstream carries a query or fragment");
+    }
+    Ok(base)
+}
+
+/// Whether a URL names this host's own loopback, as a literal address.
+///
+/// A name such as `localhost` is not counted: the broker never admits a name
+/// on an internal answer, so such a provider could not be reached anyway.
+fn is_loopback(url: &reqwest::Url) -> bool {
+    url.host_str()
+        .map(|host| host.trim_matches(['[', ']']))
+        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+        .is_some_and(|address| address.to_canonical().is_loopback())
+}
+
+/// The provider client's resolver: it answers only addresses that pass the
+/// rule a provider's name is judged by, at the moment the client dials.
+///
+/// The judgment before a call resolves the name once; without this the
+/// client would resolve it again to dial, and a name that answered public to
+/// the one could answer internal to the other.
+///
+/// Only names reach it, since an address literal is dialled without a
+/// lookup, and a name is never admitted on an internal answer, so
+/// `allowInternal` plays no part here. The client's connect timeout bounds
+/// the lookup.
+pub(crate) struct JudgedResolver {
+    /// The resolver, injected by tests.
+    pub resolve: Option<Resolve>,
+}
+
+impl reqwest::dns::Resolve for JudgedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_owned();
+        let resolve = self.resolve.clone();
+        Box::pin(async move {
+            let judged = public_addresses(&host, false, resolve.as_ref())
+                .await
+                .map_err(|refused| match refused {
+                    NoAddress::Internal => std::io::Error::other(
+                        "the provider's name resolves only to host-internal addresses",
+                    ),
+                    NoAddress::Unresolved(why) => std::io::Error::other(why),
+                })?;
+            let addresses = judged
+                .iter()
+                .map(|address| {
+                    address
+                        .parse::<std::net::IpAddr>()
+                        .map(|ip| std::net::SocketAddr::new(ip, 0))
+                        .map_err(|_| std::io::Error::other(format!("{address} is not an address")))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 /// Builds a provider URL without allowing the session to change its origin.
 fn provider_target(
     route: &ProviderRoute,
@@ -590,19 +671,7 @@ fn provider_target(
             "the path carries an authority-shaped or encoded piece",
         ));
     }
-    let base = reqwest::Url::parse(&route.upstream)
-        .map_err(|_| TargetError::Upstream("the upstream is not a URL"))?;
-    if !matches!(base.scheme(), "http" | "https") {
-        return Err(TargetError::Upstream("the scheme is not http or https"));
-    }
-    if !base.username().is_empty() || base.password().is_some() {
-        return Err(TargetError::Upstream("the upstream carries credentials"));
-    }
-    if base.query().is_some() || base.fragment().is_some() {
-        return Err(TargetError::Upstream(
-            "the upstream carries a query or fragment",
-        ));
-    }
+    let base = upstream_url(&route.upstream).map_err(TargetError::Upstream)?;
     let prefix = base.path().trim_end_matches('/');
     let mut target = base.clone();
     target.set_path(&format!("{prefix}{rest}"));
@@ -678,7 +747,7 @@ pub(crate) async fn serve_provider_request(
             );
             return (
                 axum::http::StatusCode::BAD_GATEWAY,
-                "the provider is not at a reachable address\n",
+                format!("the provider is not at a reachable address: {why}\n"),
             )
                 .into_response();
         }

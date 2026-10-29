@@ -73,6 +73,24 @@ operator's to decide. A name that does not resolve at all is answered with
 is this host's resolver to fix, `/etc/resolv.conf` first, and the daemon warns
 at startup when it cannot resolve a brokered provider.
 
+A brokered provider is held to the same rule when the broker calls it with
+the real key. The address it connects to is judged as it dials, not only
+before, so a name cannot answer public to the check and internal to the
+connection. The broker always dials a provider directly, and the proxy
+variables in the daemon's own environment play no part in it.
+
+Its base URL must be `https://`, since the key travels on every request.
+Plain `http://` is accepted only to a loopback address written as a literal,
+such as `http://127.0.0.1:8080`, and that also needs
+`sandbox.egress.allowInternal`. The daemon warns at startup about a provider
+it will not call, and the broker refuses its calls with `502` and the
+reason.
+
+The broker follows no redirect from a provider, since a redirect would carry
+the key to a host nobody judged. The redirect reaches the session as sent,
+and the session cannot follow it with the stand-in it holds, so a provider
+that answers with a redirect does not work behind the broker.
+
 The broker gives a lookup 5 seconds and the dial 10 seconds across every
 address a name has, so a stalled upstream is answered with `504 the name did
 not resolve in time` or `502 upstream unreachable` before a client's own

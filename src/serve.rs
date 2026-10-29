@@ -69,7 +69,7 @@ use crate::provider::zai::fetch_quota;
 use crate::sandbox::bailey::provider_prefix;
 use crate::sandbox::broker::BrokerTemplate;
 use crate::sandbox::broker::ProviderUpstream;
-use crate::sandbox::broker::{LOOKUP_TIMEOUT, NoAddress, public_addresses};
+use crate::sandbox::broker::{LOOKUP_TIMEOUT, NoAddress, public_addresses, upstream_url};
 use crate::sandbox::paths;
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
 use crate::session::model::{configured_model, split_level};
@@ -453,14 +453,40 @@ fn brokering_credential_names(agent: &AgentConfig) -> BTreeMap<String, String> {
 /// failed turn. Startup goes on: the resolver may come up after the daemon.
 async fn check_provider_names(providers: &[ProviderUpstream], allow_internal: bool, log: &Logger) {
     for provider in providers {
-        let Some(host) = host_of(&provider.upstream) else {
+        let url = match upstream_url(&provider.upstream) {
+            Ok(url) => url,
+            Err(why) => {
+                log.warn(
+                    "a provider's base URL is one the broker will not dial, so its calls \
+                     will fail",
+                    &fields([
+                        ("provider", LogValue::from(provider.prefix.as_str())),
+                        ("detail", LogValue::from(why)),
+                    ]),
+                );
+                continue;
+            }
+        };
+        let Some(host) = url_host(&url) else {
             continue;
         };
         let lookup = public_addresses(&host, allow_internal, None);
         let why = match tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await {
             Ok(Err(NoAddress::Unresolved(why))) => why,
             Err(_) => "the lookup did not finish in time".to_owned(),
-            Ok(_) => continue,
+            Ok(Err(NoAddress::Internal)) => {
+                log.warn(
+                    "a provider is at a host-internal address, so the broker refuses its \
+                     calls; set sandbox.egress.allowInternal for an address written as a \
+                     literal",
+                    &fields([
+                        ("provider", LogValue::from(provider.prefix.as_str())),
+                        ("host", LogValue::from(host)),
+                    ]),
+                );
+                continue;
+            }
+            Ok(Ok(_)) => continue,
         };
         log.warn(
             "this host cannot resolve a provider, and the broker resolves names with this \
@@ -475,15 +501,16 @@ async fn check_provider_names(providers: &[ProviderUpstream], allow_internal: bo
 }
 
 /// The lower-cased host of a base URL, for the egress allowlist.
+///
+/// Read with the same URL parser the broker dials with, whatever the scheme:
+/// a provider the session reaches directly is allowlisted by host alone.
 fn host_of(base_url: &str) -> Option<String> {
-    let rest = base_url
-        .strip_prefix("https://")
-        .or_else(|| base_url.strip_prefix("http://"))?;
-    let host: String = rest
-        .split(['/', ':', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .to_lowercase();
+    url_host(&reqwest::Url::parse(base_url.trim()).ok()?)
+}
+
+/// A URL's host, lower-cased and without the brackets of an IPv6 literal.
+fn url_host(url: &reqwest::Url) -> Option<String> {
+    let host = url.host_str()?.trim_matches(['[', ']']).to_lowercase();
     (!host.is_empty()).then_some(host)
 }
 

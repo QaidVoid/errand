@@ -10,7 +10,7 @@ use serenity::model::id::ChannelId;
 
 use super::{
     BoxedGateRead, addressed, answer_in, brokerable_providers, brokering_credential_names,
-    read_usage, rebuild_catalog, refusal, reply_to, usage_sources,
+    check_provider_names, host_of, read_usage, rebuild_catalog, refusal, reply_to, usage_sources,
 };
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
@@ -456,4 +456,61 @@ fn a_picture_replies_to_the_message_that_asked_for_it() {
     assert_eq!(reply_to(&message), None);
     message.id = "0".to_owned();
     assert_eq!(reply_to(&message), None);
+}
+
+/// A base URL's host is read by the same parser the broker dials with, so a
+/// port spelled before an `@` names the host after it, as a dial would.
+#[test]
+fn a_base_urls_host_is_read_as_a_dial_reads_it() {
+    for (url, host) in [
+        ("https://API.example.com:443/x", Some("api.example.com")),
+        (
+            "https://api.anthropic.com:443@evil.example/x",
+            Some("evil.example"),
+        ),
+        ("http://[::1]:8080/v1", Some("::1")),
+        ("  https://api.example.com/v1  ", Some("api.example.com")),
+        ("api.example.com/v1", None),
+    ] {
+        assert_eq!(host_of(url).as_deref(), host, "{url}");
+    }
+}
+
+/// A provider whose base URL the broker will not dial is named at startup,
+/// rather than first seen as a failed turn.
+#[tokio::test]
+async fn an_undialable_provider_base_url_is_warned_about_at_startup() {
+    let lines = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let kept = Arc::clone(&lines);
+    let log = Logger::new(
+        LogFields::new(),
+        Arc::new(move |_level, line| kept.lock().unwrap().push(line.to_owned())),
+    );
+    let providers = [
+        ("/provider/plain", "http://api.example.test/v1", "not HTTPS"),
+        ("/provider/bare", "api.example.test/v1", "no scheme"),
+    ]
+    .map(
+        |(prefix, upstream, _)| crate::sandbox::broker::ProviderUpstream {
+            name: prefix.trim_start_matches("/provider/").to_owned(),
+            prefix: prefix.to_owned(),
+            upstream: upstream.to_owned(),
+            credential: "key".to_owned(),
+        },
+    );
+
+    check_provider_names(&providers, false, &log).await;
+
+    let lines = lines.lock().unwrap();
+    for (prefix, why) in [
+        ("/provider/plain", "not HTTPS"),
+        ("/provider/bare", "no scheme"),
+    ] {
+        assert!(
+            lines.iter().any(|line| line.contains("will not dial")
+                && line.contains(prefix)
+                && line.contains(why)),
+            "{prefix}: {lines:?}"
+        );
+    }
 }
