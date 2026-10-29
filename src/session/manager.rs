@@ -211,6 +211,24 @@ struct ManagerState {
     by_thread: Mutex<HashMap<String, SessionHandle>>,
     ended_threads: Mutex<HashSet<String>>,
     views: Mutex<HashMap<String, Arc<ViewFanOut>>>,
+    claimed: Mutex<HashSet<String>>,
+}
+
+/// A thread held by whoever is reopening or collecting it, released when
+/// dropped.
+pub struct ThreadClaim {
+    state: Arc<ManagerState>,
+    thread_id: String,
+}
+
+impl Drop for ThreadClaim {
+    fn drop(&mut self) {
+        self.state
+            .claimed
+            .lock()
+            .expect("the claimed set lock")
+            .remove(&self.thread_id);
+    }
 }
 
 /// What naming a model came to.
@@ -284,8 +302,27 @@ impl SessionManager {
                 by_thread: Mutex::new(HashMap::new()),
                 ended_threads: Mutex::new(HashSet::new()),
                 views: Mutex::new(HashMap::new()),
+                claimed: Mutex::new(HashSet::new()),
             }),
         }
+    }
+
+    /// Holds a thread so nothing else reopens or collects it until the claim
+    /// is dropped, or `None` when something already holds it.
+    ///
+    /// A resume reads the thread's index entry and then waits on chat before
+    /// it is live, so liveness alone cannot keep a sweep from deleting the
+    /// state it is about to read. Both take this claim first.
+    pub fn claim_thread(&self, thread_id: &str) -> Option<ThreadClaim> {
+        self.state
+            .claimed
+            .lock()
+            .expect("the claimed set lock")
+            .insert(thread_id.to_owned())
+            .then(|| ThreadClaim {
+                state: Arc::clone(&self.state),
+                thread_id: thread_id.to_owned(),
+            })
     }
 
     /// Records the guild, once the gateway has resolved it.
@@ -800,6 +837,9 @@ impl SessionManager {
         reason = "the resume is one linear sequence; splitting it would hide the order"
     )]
     pub async fn resume(&self, thread_id: &str, message: IncomingMessage) -> StartOutcome {
+        let Some(_claim) = self.claim_thread(thread_id) else {
+            return self.refused("this thread is already being reopened or cleaned up".to_owned());
+        };
         let record = self
             .options
             .registry

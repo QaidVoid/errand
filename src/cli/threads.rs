@@ -12,7 +12,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use crate::config::duration::parse_duration;
 use crate::sandbox::broker::receipts::{Outcome, Receipt};
+use crate::session::collect::{Sweep, cold_sessions, collect, owns_project};
 use crate::session::registry::{ThreadRecord, ThreadRegistry};
 
 /// Where the project a session worked in is read from the policy it kept.
@@ -36,6 +38,13 @@ type ProjectOf =
 
 /// The newest provider calls a session's broker recorded, newest first.
 type ReceiptsOf = Arc<dyn Fn(String) -> Result<Vec<Receipt>, String> + Send + Sync>;
+/// Deletes an unnamed session's project, by its session id.
+type RemoveProject = Arc<dyn Fn(String) -> Result<(), String> + Send + Sync>;
+/// Takes the daemon's lock, returning what releases it, or says why it could
+/// not.
+type HoldLock = Arc<dyn Fn() -> Result<Box<dyn FnOnce() + Send>, String> + Send + Sync>;
+/// Deletes the provider-call receipts of the sessions named.
+type ForgetReceipts = Arc<dyn Fn(Vec<String>) -> Result<usize, String> + Send + Sync>;
 
 /// How many recorded provider calls `show` lists.
 pub const RECEIPTS_SHOWN: u32 = 20;
@@ -58,6 +67,16 @@ pub struct Deps {
     pub now: Arc<dyn Fn() -> i64 + Send + Sync>,
     /// What a session spent provider credentials on, by session id.
     pub receipts_of: ReceiptsOf,
+    /// Where session projects live, which `gc` collects unnamed ones from.
+    pub project_root: String,
+    /// Deletes an unnamed session's project.
+    pub remove_project: RemoveProject,
+    /// How long a session goes unused before `gc` collects it, unless told.
+    pub older_than_ms: i64,
+    /// Takes the daemon's lock, which a sweep that deletes holds throughout.
+    pub hold_lock: HoldLock,
+    /// Deletes the receipts of collected sessions.
+    pub forget_receipts: ForgetReceipts,
 }
 
 const USAGE: &str = "\
@@ -69,6 +88,9 @@ usage: errand threads <command>
   forget <thread>      stop resuming it, and keep its data
   remove <thread>      forget it and delete its data, needs --yes
   prune                forget threads whose data is already gone
+  gc [--older-than D]  collect sessions unused for D (30d by default, or as
+     [--dry-run]       configured), needs the daemon stopped unless --dry-run;
+     [--unindexed]     --unindexed also takes state the index no longer names
   revive <session>     put a forgotten thread back, needs --thread and --owner";
 
 fn human_size(bytes: u64) -> String {
@@ -341,6 +363,15 @@ async fn remove(deps: &Deps, wanted: Option<&str>, confirmed: bool) -> i32 {
         Some(Found::One(record)) => record,
     };
 
+    // An unnamed session's project is named after it and is the session's
+    // own. A named one is the operator's, and outlives every session in it.
+    let records = deps.registry.lock().expect("the registry lock").all();
+    let unnamed = owns_project(&deps.project_root, &record, &records);
+    let own_project = std::path::Path::new(&deps.project_root)
+        .join(&record.session_id)
+        .display()
+        .to_string();
+
     // Asked for rather than assumed: this deletes the agent's history, and
     // nothing else keeps a copy of it.
     if !confirmed {
@@ -350,12 +381,54 @@ async fn remove(deps: &Deps, wanted: Option<&str>, confirmed: bool) -> i32 {
             record.state_dir,
             bytes.map_or_else(String::new, |size| format!(" and its {}", human_size(size)))
         ));
+        (deps.write)(&if unnamed {
+            format!("and the session's own project at {own_project}")
+        } else {
+            format!(
+                "and keeps the project {} at {}",
+                record.project_name, record.project_path
+            )
+        });
         (deps.write)("run it again with --yes to go ahead");
         return 1;
     }
 
-    if let Err(error) = (deps.remove)(record.state_dir.clone()).await {
-        (deps.write)(&format!("could not delete {}: {}", record.state_dir, error));
+    // The daemon may be running the session, so nothing of it is deleted
+    // while the daemon holds its lock, and the index is read again under it
+    // so what the daemon last wrote is what is judged.
+    let release = match (deps.hold_lock)() {
+        Ok(release) => release,
+        Err(why) => {
+            (deps.write)(&format!("{why}; stop the daemon first"));
+            return 1;
+        }
+    };
+    let code = remove_held(deps, &record).await;
+    release();
+    code
+}
+
+/// The part of `remove` that runs under the daemon's lock.
+async fn remove_held(deps: &Deps, asked: &ThreadRecord) -> i32 {
+    let records = {
+        let mut registry = deps.registry.lock().expect("the registry lock");
+        registry.load();
+        registry.all()
+    };
+    let Some(record) = records
+        .iter()
+        .find(|record| record.thread_id == asked.thread_id)
+        .cloned()
+    else {
+        (deps.write)(&format!("{} is no longer remembered", asked.thread_id));
+        return 1;
+    };
+    let unnamed = owns_project(&deps.project_root, &record, &records);
+    let own_project = std::path::Path::new(&deps.project_root)
+        .join(&record.session_id)
+        .display()
+        .to_string();
+    if !remove_session(deps, &record, unnamed, &own_project).await {
         return 1;
     }
     deps.registry
@@ -363,10 +436,152 @@ async fn remove(deps: &Deps, wanted: Option<&str>, confirmed: bool) -> i32 {
         .expect("the registry lock")
         .forget(&record.thread_id);
     (deps.write)(&format!(
-        "removed {} and deleted {}",
-        record.thread_id, record.state_dir
+        "removed {} and deleted {}{}",
+        record.thread_id,
+        record.state_dir,
+        if unnamed {
+            format!(" and {own_project}")
+        } else {
+            String::new()
+        }
     ));
+    if let Err(why) = (deps.forget_receipts)(vec![record.session_id.clone()]) {
+        (deps.write)(&format!("its receipts stay: {why}"));
+        return 1;
+    }
     0
+}
+
+/// Deletes one session's state, and its own project when it has one, saying
+/// what could not be deleted.
+async fn remove_session(deps: &Deps, record: &ThreadRecord, unnamed: bool, project: &str) -> bool {
+    if let Err(error) = (deps.remove)(record.state_dir.clone()).await {
+        (deps.write)(&format!("could not delete {}: {}", record.state_dir, error));
+        return false;
+    }
+    if unnamed && let Err(error) = (deps.remove_project)(record.session_id.clone()) {
+        (deps.write)(&format!(
+            "could not delete the project at {project}: {error}"
+        ));
+        return false;
+    }
+    true
+}
+
+/// Collects every session unused for long enough: its unnamed project, its
+/// state, its record, its index entry and its receipts, together.
+///
+/// The index is the daemon's while it runs, and it cannot tell this command
+/// which sessions are live, so a sweep that deletes holds the daemon's lock
+/// throughout and refuses while the daemon has it. `--dry-run` only reads.
+fn gc(deps: &Deps, args: &[String]) -> i32 {
+    let mut rest = args.iter().skip(1);
+    let mut older_than = None;
+    let (mut dry_run, mut unindexed) = (false, false);
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--dry-run" => dry_run = true,
+            "--unindexed" => unindexed = true,
+            "--older-than" => older_than = Some(rest.next().cloned().unwrap_or_default()),
+            other => {
+                (deps.write)(&format!("gc does not take {other}"));
+                (deps.write)(USAGE);
+                return 2;
+            }
+        }
+    }
+    let older_than_ms = match older_than {
+        None => deps.older_than_ms,
+        Some(written) => {
+            let Some(length) = parse_duration(&written) else {
+                (deps.write)(&format!(
+                    "{written:?} is not a length of time such as 30d, 2w or 7d 12h"
+                ));
+                return 2;
+            };
+            length
+        }
+    };
+    let release = if dry_run {
+        None
+    } else {
+        match (deps.hold_lock)() {
+            Ok(release) => Some(release),
+            Err(why) => {
+                (deps.write)(&format!(
+                    "{why}; stop the daemon first, which collects on its own, or look with \
+                     --dry-run"
+                ));
+                return 1;
+            }
+        }
+    };
+    let code = sweep_once(deps, older_than_ms, dry_run, unindexed);
+    if let Some(release) = release {
+        release();
+    }
+    code
+}
+
+/// One sweep, with the daemon stopped unless it only looks. The index is read
+/// again under the lock, so what the daemon last wrote is what is judged.
+fn sweep_once(deps: &Deps, older_than_ms: i64, dry_run: bool, unindexed: bool) -> i32 {
+    if !dry_run {
+        deps.registry.lock().expect("the registry lock").load();
+    }
+    let records = deps.registry.lock().expect("the registry lock").all();
+    let is_live = |_: &str| false;
+    let sweep = Sweep {
+        state_root: &deps.state_root,
+        project_root: &deps.project_root,
+        now_ms: (deps.now)(),
+        older_than_ms,
+        is_live: &is_live,
+    };
+    let cold = cold_sessions(&sweep, &records, unindexed);
+    let mut collected = Vec::new();
+    let mut failed = 0;
+    for session in &cold {
+        let named = session.thread_id.as_deref().unwrap_or(&session.session_id);
+        let paths = session
+            .paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let size = human_size(session.bytes);
+        if dry_run {
+            (deps.write)(&format!("would collect {named}: {paths} ({size})"));
+            continue;
+        }
+        match collect(&sweep, session) {
+            Ok(()) => {
+                if let Some(thread_id) = &session.thread_id {
+                    deps.registry
+                        .lock()
+                        .expect("the registry lock")
+                        .forget(thread_id);
+                }
+                (deps.write)(&format!("collected {named}: {paths} ({size})"));
+                collected.push(session.session_id.clone());
+            }
+            Err(why) => {
+                (deps.write)(&format!("kept {named}: {why}"));
+                failed += 1;
+            }
+        }
+    }
+    if let Err(why) = (deps.forget_receipts)(collected.clone()) {
+        (deps.write)(&format!("the receipts of what was collected stay: {why}"));
+        failed += 1;
+    }
+    let bytes: u64 = cold.iter().map(|session| session.bytes).sum();
+    (deps.write)(&if dry_run {
+        format!("{} cold, {} would be freed", cold.len(), human_size(bytes))
+    } else {
+        format!("collected {}, {failed} kept", collected.len())
+    });
+    i32::from(failed > 0)
 }
 
 async fn prune(deps: &Deps) -> i32 {
@@ -503,6 +718,7 @@ pub async fn run_threads(args: &[String], deps: &Deps) -> i32 {
         Some("forget") => forget(deps, target),
         Some("remove") => remove(deps, target, confirmed).await,
         Some("prune") => prune(deps).await,
+        Some("gc") => gc(deps, args),
         Some("revive") => revive(deps, target, args).await,
         Some("help" | "--help") => {
             (deps.write)(USAGE);

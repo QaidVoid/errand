@@ -13,10 +13,12 @@ use std::sync::{Arc, Mutex};
 use crate::admission::scheduler::{Scheduler, SystemClock};
 use crate::chat::inbound::{InboundDecision, RawMessage};
 use crate::chat::render::listed_models;
+use crate::config::duration::parse_duration;
 use crate::config::live::LiveConfig;
 use crate::config::redact::redact_config;
 use crate::config::schema::defaults::IMAGE;
 use crate::config::schema::{ALLOW_EVERY_USER, ChatConfig, Config, ConfigError, SandboxBackend};
+use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::{MemoryStore, Scope};
 use crate::provider::discover::Catalog;
@@ -28,9 +30,12 @@ use crate::sandbox::bailey::BaileyOptions;
 use crate::sandbox::bailey::BaileySandbox;
 use crate::sandbox::bailey::run_bailey_arc;
 use crate::sandbox::broker::BrokerTemplate;
+use crate::sandbox::broker::RECEIPTS_FILENAME;
+use crate::sandbox::broker::receipts::forget_sessions;
 use crate::sandbox::podman::PodmanSandbox;
 use crate::sandbox::podman::run_podman_arc;
 use crate::session::attachments::RawAttachment;
+use crate::session::collect::{Sweep, cold_sessions, collect};
 use crate::session::commands::image_args;
 use crate::session::commands::{
     answer_without_session, argument_of, first_word, is_addressed_to_bot, is_aside, parse_user_id,
@@ -412,6 +417,97 @@ impl Daemon {
         self.sessions.sweep_orphans().await;
         self.accepting.store(true, Ordering::SeqCst);
         Ok(report)
+    }
+
+    /// Collects every cold session once, as `retention` says, and returns how
+    /// many were collected. Does nothing while `retention.enabled` is false.
+    ///
+    /// Each thread is claimed first, as a resume claims it, so a thread that
+    /// comes back during the sweep is either reopened before the sweep reaches
+    /// it or waits until its session is gone. Under the claim the entry is
+    /// read again, and a session that is live, was used since the sweep began,
+    /// or whose project another live session works in is left whole. The
+    /// entry is forgotten only once everything else is deleted, so a sweep
+    /// that fails or is cut short leaves it naming what remains, for the next
+    /// one. Each collection is logged with what it freed.
+    pub fn collect_cold(&self) -> usize {
+        let config = self.options.config.get();
+        if !config.retention.enabled {
+            return 0;
+        }
+        let Some(older_than_ms) = parse_duration(&config.retention.older_than) else {
+            return 0;
+        };
+        let records = self.registry.lock().expect("the registry lock").all();
+        let sessions = Arc::clone(&self.sessions);
+        let is_live = move |session_id: &str| sessions.for_session(session_id).is_some();
+        let sweep = Sweep {
+            state_root: &config.state_dir,
+            project_root: &config.project_root,
+            now_ms: now_ms(),
+            older_than_ms,
+            is_live: &is_live,
+        };
+        let mut collected = Vec::new();
+        for cold in cold_sessions(&sweep, &records, false) {
+            let Some(thread_id) = cold.thread_id.as_deref() else {
+                continue;
+            };
+            let Some(_claim) = self.sessions.claim_thread(thread_id) else {
+                continue;
+            };
+            let then = records.iter().find(|record| record.thread_id == thread_id);
+            let now = self
+                .registry
+                .lock()
+                .expect("the registry lock")
+                .get(thread_id)
+                .cloned();
+            let own_project = std::path::Path::new(&config.project_root).join(&cold.session_id);
+            let project_busy = cold.unnamed
+                && self
+                    .sessions
+                    .sessions()
+                    .iter()
+                    .any(|live| std::path::Path::new(&live.project().path) == own_project);
+            if now.as_ref() != then || is_live(&cold.session_id) || project_busy {
+                continue;
+            }
+            match collect(&sweep, &cold) {
+                Ok(()) => {
+                    self.registry
+                        .lock()
+                        .expect("the registry lock")
+                        .forget(thread_id);
+                    self.options.log.info(
+                        "collected a cold session",
+                        &fields([
+                            ("thread", LogValue::from(thread_id)),
+                            ("session", LogValue::from(cold.session_id.as_str())),
+                            ("bytes", LogValue::from(cold.bytes)),
+                        ]),
+                    );
+                    collected.push(cold.session_id.clone());
+                }
+                Err(why) => {
+                    self.options.log.warn(
+                        "a cold session could not be collected, and is kept for the next sweep",
+                        &fields([
+                            ("thread", LogValue::from(thread_id)),
+                            ("detail", LogValue::from(why)),
+                        ]),
+                    );
+                }
+            }
+        }
+        let receipts = std::path::Path::new(&config.state_dir).join(RECEIPTS_FILENAME);
+        if let Err(error) = forget_sessions(&receipts, &collected) {
+            self.options.log.warn(
+                "the receipts of collected sessions could not be deleted",
+                &fields([("detail", LogValue::from(error.to_string()))]),
+            );
+        }
+        collected.len()
     }
 
     /// Whether this account is an operator under the configuration in force.

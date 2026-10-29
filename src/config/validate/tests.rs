@@ -1853,3 +1853,28 @@ fn a_token_too_short_to_scrub_is_refused() {
     );
     assert!(login("eight-ch").is_ok());
 }
+
+/// Collection is on by default at thirty days, and a window that is not a
+/// length of time is refused.
+#[test]
+fn retention_defaults_on_and_checks_its_lengths() {
+    let config = validate_config(&valid(json!({}))).expect("resolves");
+    assert!(config.retention.enabled);
+    assert_eq!(config.retention.older_than, "30d");
+    assert_eq!(config.retention.every, "1d");
+
+    let set = validate_config(&valid(json!({
+        "retention": { "enabled": false, "olderThan": "2w", "every": "6h" }
+    })))
+    .expect("resolves");
+    assert!(!set.retention.enabled);
+    assert_eq!(set.retention.older_than, "2w");
+
+    let refused = validate_config(&valid(json!({ "retention": { "olderThan": "-3d" } })))
+        .expect_err("refused")
+        .to_string();
+    assert!(
+        refused.contains("retention.olderThan must be a length of time"),
+        "{refused}"
+    );
+}

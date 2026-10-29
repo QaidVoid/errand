@@ -114,6 +114,11 @@ Confirm it serves: post in the served channel. The first message opens a
 thread and starts a session. Replies in that thread are prompts to the
 agent. `errand threads` lists what past sessions left on disk.
 
+What a session leaves is deleted once it has gone unused for 30 days: its
+state, its transcript and its own project. Set `retention.olderThan` to keep
+them longer, or `retention.enabled` to `false` to keep them until removed by
+hand. `errand threads gc --dry-run` shows what the next sweep would delete.
+
 ## 5. When it will not start
 
 The exit code names the kind of problem, so read it rather than retrying

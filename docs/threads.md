@@ -105,3 +105,49 @@ An idle timeout, or a daemon restart, is not announced at all. The next message
 picks the session up and the resumed session says so, which leaves a notice
 nothing to add. A failure is announced, because it stopped part way through
 something and you should know why.
+
+## What is kept, and for how long
+
+A session leaves its state directory and its record on disk, and an unnamed
+session its own project, named after the session. Once a session has gone
+unused for `retention.olderThan`, 30 days by default, the daemon collects all
+of it together: the state directory, the record, the unnamed project, its
+entry in the thread index, and the receipts of its provider calls. Unused is
+judged by its last activity, the later of when it last started and when its
+transcript was last written, which every turn does. A named project is never
+collected, since it is the operator's and outlives every session in it, and
+neither is an unnamed one that a later session took as its named project. A
+running session is never collected, however old its entry. A thread that
+comes back while a sweep runs is either reopened before the sweep reaches it,
+and then kept, or waits until the sweep is done with it, and then finds
+nothing to resume. The index entry goes last, so a sweep that fails part way
+leaves it naming what remains for the next one.
+
+The daemon looks when it starts and every `retention.every`, a day by
+default, and logs each session it collects with what it freed. A change to
+any retention setting is read at the next look, with no restart: `enabled`
+set to `false` stops it, and a new `every` sets the wait after that look.
+
+```json
+{
+  "retention": { "enabled": true, "olderThan": "30d", "every": "1d" }
+}
+```
+
+A length is written as a number and a unit, `s`, `m`, `h`, `d`, `w`, `mo` or
+`y`, alone or together, as `7d 12h`. A month is 30 days and a year 365.
+
+The daemon only collects what its thread index names. A thread ended with
+`!stop` leaves the index at once, and so does one evicted or reset, and the
+daemon leaves what such a session kept alone, since an index that went
+missing would otherwise make every session look abandoned.
+`errand threads gc --unindexed` collects those too, by their own age, with
+the project of an unnamed one when no remembered thread works in it.
+
+To see what would go without deleting anything, run
+`errand threads gc --dry-run`, with `--older-than` to try another window. To
+collect by hand, stop the daemon and run `errand threads gc`: the daemon owns
+the thread index while it runs and alone knows which sessions are live, so the
+command refuses while it holds its lock, as `errand threads remove` does.
+`errand threads remove <thread>` deletes one session at once, its own project
+included when it is unnamed.
