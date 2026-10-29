@@ -690,8 +690,9 @@ pub struct TimeoutsConfig {
 ///
 /// A session that has not been used for `olderThan` loses its state
 /// directory, its record, its index entry and the receipts of its provider
-/// calls, and an unnamed session its project too. A named project is never
-/// collected. A live session is never collected, however old.
+/// calls, and its own project too. A project named by hand in an older
+/// errand is never collected. A live session is never collected, however
+/// old.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RetentionConfig {

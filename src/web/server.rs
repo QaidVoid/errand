@@ -183,8 +183,6 @@ struct PathQuery {
 struct StartBody {
     #[serde(default)]
     prompt: Option<String>,
-    #[serde(default)]
-    project: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -734,7 +732,6 @@ async fn start_session(
         );
     };
     let prompt = body.prompt.unwrap_or_default().trim().to_owned();
-    let project = body.project.unwrap_or_default().trim().to_owned();
     if prompt.is_empty() {
         return refused(
             json!({ "error": "a prompt is required" }),
@@ -748,7 +745,6 @@ async fn start_session(
     let outcome = server
         .sessions
         .start_detached(DetachedRequest {
-            project,
             prompt,
             owner_id: actor.id,
             owner_name: Some(actor.name),

@@ -481,7 +481,7 @@ async fn started_session(harness: &Harness, _client: &reqwest::Client) {
             author_id: OWNER.to_owned(),
             channel_id: String::new(),
             author_name: Some("amelia".to_owned()),
-            content: "demo: go".to_owned(),
+            content: "go".to_owned(),
             attachments: Vec::new(),
             from_interface: false,
         })
@@ -525,8 +525,8 @@ async fn a_session_that_is_running_is_listed_with_what_it_was_asked() {
                 .unwrap();
 
             assert_eq!(listed.as_array().map(Vec::len), Some(1));
-            assert_eq!(listed[0]["id"], "demo-s1");
-            assert_eq!(listed[0]["project"], "demo");
+            assert_eq!(listed[0]["id"], "s1");
+            assert_eq!(listed[0]["project"], "s1");
             assert_eq!(listed[0]["live"], true);
             assert_eq!(listed[0]["opening"], "go");
             assert_eq!(listed[0]["threadId"], "thread-1");
@@ -555,7 +555,7 @@ async fn a_session_whose_sandbox_has_gone_is_still_listed() {
 
             assert_eq!(listed.as_array().map(Vec::len), Some(1));
             assert_eq!(listed[0]["live"], false);
-            assert_eq!(listed[0]["id"], "demo-s1");
+            assert_eq!(listed[0]["id"], "s1");
         })
     })
     .await;
@@ -570,12 +570,12 @@ async fn a_session_can_be_started_from_the_interface() {
                 &client,
                 &harness.base,
                 "/api/sessions",
-                &json!({ "project": "demo", "prompt": "fix the parser" }),
+                &json!({ "prompt": "fix the parser" }),
             )
             .await;
 
             assert_eq!(answer.status(), 200);
-            assert_eq!(answer.json::<Value>().await.unwrap()["id"], "demo-s1");
+            assert_eq!(answer.json::<Value>().await.unwrap()["id"], "s1");
             assert_eq!(harness.manager.sessions().len(), 1);
         })
     })
@@ -591,7 +591,7 @@ async fn a_session_with_nothing_asked_of_it_is_refused() {
                 &client,
                 &harness.base,
                 "/api/sessions",
-                &json!({ "project": "demo", "prompt": "  " }),
+                &json!({ "prompt": "  " }),
             )
             .await;
 
@@ -617,7 +617,7 @@ async fn a_message_reaches_the_session_it_names() {
             let answer = post(
                 &client,
                 &harness.base,
-                "/api/sessions/demo-s1/send",
+                "/api/sessions/s1/send",
                 &json!({ "text": "carry on" }),
             )
             .await;
@@ -661,13 +661,13 @@ async fn an_observing_interface_changes_nothing_and_says_why() {
                 &client,
                 &harness.base,
                 "/api/sessions",
-                &json!({ "project": "demo", "prompt": "go" }),
+                &json!({ "prompt": "go" }),
             )
             .await;
             let sent = post(
                 &client,
                 &harness.base,
-                "/api/sessions/demo-s1/send",
+                "/api/sessions/s1/send",
                 &json!({ "text": "hello" }),
             )
             .await;
@@ -692,7 +692,7 @@ async fn a_live_session_is_streamed_starting_with_a_reset() {
             started_session(harness, &reqwest::Client::new()).await;
             let client = reqwest::Client::new();
 
-            let mut answer = message(&client, &harness.base, "/api/sessions/demo-s1/stream").await;
+            let mut answer = message(&client, &harness.base, "/api/sessions/s1/stream").await;
             assert_eq!(
                 answer.headers().get("content-type").unwrap(),
                 "text/event-stream"
@@ -730,7 +730,7 @@ async fn a_stopped_sessions_transcript_is_read_from_where_it_was_written() {
                 .await;
             let client = reqwest::Client::new();
 
-            let answer = message(&client, &harness.base, "/api/sessions/demo-s1/transcript")
+            let answer = message(&client, &harness.base, "/api/sessions/s1/transcript")
                 .await
                 .json::<Value>()
                 .await
@@ -774,14 +774,14 @@ async fn a_sessions_project_can_be_listed_and_read() {
                     .root
                     .path()
                     .join("projects")
-                    .join("demo")
+                    .join("s1")
                     .join("readme.md"),
                 "hello\n",
             )
             .expect("the file");
             let client = reqwest::Client::new();
 
-            let tree = message(&client, &harness.base, "/api/sessions/demo-s1/tree")
+            let tree = message(&client, &harness.base, "/api/sessions/s1/tree")
                 .await
                 .json::<Value>()
                 .await
@@ -789,7 +789,7 @@ async fn a_sessions_project_can_be_listed_and_read() {
             let file = message(
                 &client,
                 &harness.base,
-                "/api/sessions/demo-s1/file?path=readme.md",
+                "/api/sessions/s1/file?path=readme.md",
             )
             .await
             .json::<Value>()
@@ -820,7 +820,7 @@ async fn a_path_outside_the_project_is_refused() {
             let answer = message(
                 &client,
                 &harness.base,
-                "/api/sessions/demo-s1/file?path=../../etc/passwd",
+                "/api/sessions/s1/file?path=../../etc/passwd",
             )
             .await;
 
@@ -846,7 +846,7 @@ async fn a_file_can_be_downloaded_as_itself() {
                     .root
                     .path()
                     .join("projects")
-                    .join("demo")
+                    .join("s1")
                     .join("notes.txt"),
                 "some notes\n",
             )
@@ -856,7 +856,7 @@ async fn a_file_can_be_downloaded_as_itself() {
             let answer = message(
                 &client,
                 &harness.base,
-                "/api/sessions/demo-s1/download?path=notes.txt",
+                "/api/sessions/s1/download?path=notes.txt",
             )
             .await;
 
@@ -1089,7 +1089,7 @@ async fn with_a_login_nothing_changes_for_a_visitor_who_has_not_logged_in() {
                 &client,
                 &harness.base,
                 "/api/sessions",
-                &json!({ "project": "demo", "prompt": "go" }),
+                &json!({ "prompt": "go" }),
             )
             .await;
             assert_eq!(started.status(), 401);
@@ -1120,7 +1120,7 @@ async fn a_logged_in_visitor_starts_a_session_as_their_own_account() {
             let started = client
                 .post(format!("{}/api/sessions", harness.base))
                 .header(reqwest::header::COOKIE, &cookie)
-                .json(&json!({ "project": "demo", "prompt": "go" }))
+                .json(&json!({ "prompt": "go" }))
                 .send()
                 .await
                 .unwrap();
@@ -1147,7 +1147,7 @@ async fn a_logged_in_visitor_off_the_allowlist_is_refused_and_told() {
             let started = client
                 .post(format!("{}/api/sessions", harness.base))
                 .header(reqwest::header::COOKIE, &cookie)
-                .json(&json!({ "project": "demo", "prompt": "go" }))
+                .json(&json!({ "prompt": "go" }))
                 .send()
                 .await
                 .unwrap();
@@ -1262,26 +1262,22 @@ async fn a_secret_in_a_project_file_is_scrubbed_when_read_or_downloaded() {
     with_server_where(false, true, |harness| {
         Box::pin(async move {
             started_session(harness, &reqwest::Client::new()).await;
-            let project = harness.root.path().join("projects").join("demo");
+            let project = harness.root.path().join("projects").join("s1");
             std::fs::write(project.join("env.txt"), "TOKEN=a.token.value\n").unwrap();
             std::fs::write(project.join("odd\"na\nme"), "TOKEN=a.token.value\n").unwrap();
             let client = reqwest::Client::new();
 
-            let file = message(
-                &client,
-                &harness.base,
-                "/api/sessions/demo-s1/file?path=env.txt",
-            )
-            .await
-            .json::<Value>()
-            .await
-            .unwrap();
+            let file = message(&client, &harness.base, "/api/sessions/s1/file?path=env.txt")
+                .await
+                .json::<Value>()
+                .await
+                .unwrap();
             assert_eq!(file["text"], "TOKEN=[redacted]\n");
 
             let download = message(
                 &client,
                 &harness.base,
-                "/api/sessions/demo-s1/download?path=odd%22na%0Ame",
+                "/api/sessions/s1/download?path=odd%22na%0Ame",
             )
             .await;
             assert_eq!(download.status(), 200);
@@ -1302,7 +1298,7 @@ async fn a_planted_link_says_nothing_about_where_it_points() {
     with_server_where(false, true, |harness| {
         Box::pin(async move {
             started_session(harness, &reqwest::Client::new()).await;
-            let project = harness.root.path().join("projects").join("demo");
+            let project = harness.root.path().join("projects").join("s1");
             std::os::unix::fs::symlink("/etc", project.join("there")).unwrap();
             std::os::unix::fs::symlink("/nowhere-at-all", project.join("nowhere")).unwrap();
             let client = reqwest::Client::new();
@@ -1313,7 +1309,7 @@ async fn a_planted_link_says_nothing_about_where_it_points() {
                     let answer = message(
                         &client,
                         &harness.base,
-                        &format!("/api/sessions/demo-s1/{route}?path={path}"),
+                        &format!("/api/sessions/s1/{route}?path={path}"),
                     )
                     .await;
                     answers.push((answer.status(), answer.text().await.unwrap()));
@@ -1340,7 +1336,7 @@ async fn a_message_longer_than_discord_would_take_is_refused() {
             let sent = post(
                 &client,
                 &harness.base,
-                "/api/sessions/demo-s1/send",
+                "/api/sessions/s1/send",
                 &json!({ "text": long }),
             )
             .await;
@@ -1348,7 +1344,7 @@ async fn a_message_longer_than_discord_would_take_is_refused() {
                 &client,
                 &harness.base,
                 "/api/sessions",
-                &json!({ "project": "demo", "prompt": long }),
+                &json!({ "prompt": long }),
             )
             .await;
 

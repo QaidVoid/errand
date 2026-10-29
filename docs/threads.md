@@ -1,13 +1,17 @@
 # In a thread
 
-A message in the served channel opens a thread and starts a session. Everything
-after that happens in the thread.
+A message in the served channel opens a thread and starts a session, which
+works in a project directory of its own under `projectRoot`, named after the
+session. Everything after that happens in the thread. A message that opens
+with a word and a colon, as `demo: fix the test`, no longer picks a project
+by that name, as errand once did: it is sent to the agent whole, as the
+prompt.
 
 If the channel is also somewhere people talk, set `chat.startOnMention` and only
 a message that names the bot starts anything:
 
 ```
-@errand demo: fix the failing test
+@errand fix the failing test
 ```
 
 The mention summons it and is not part of what you asked, so it is taken out
@@ -108,16 +112,15 @@ something and you should know why.
 
 ## What is kept, and for how long
 
-A session leaves its state directory and its record on disk, and an unnamed
-session its own project, named after the session. Once a session has gone
-unused for `retention.olderThan`, 30 days by default, the daemon collects all
-of it together: the state directory, the record, the unnamed project, its
-entry in the thread index, and the receipts of its provider calls. Unused is
+A session leaves its state directory, its record and its own project on disk.
+Once a session has gone unused for `retention.olderThan`, 30 days by default,
+the daemon collects all of it together: the state directory, the record, the
+project, its entry in the thread index, and the receipts of its provider
+calls. Unused is
 judged by its last activity, the later of when it last started and when its
-transcript was last written, which every turn does. A named project is never
-collected, since it is the operator's and outlives every session in it, and
-neither is an unnamed one that a later session took as its named project. A
-running session is never collected, however old its entry. A thread that
+transcript was last written, which every turn does. A project named by hand,
+as errand once allowed with a `name:` prefix, is never collected, and neither
+is a session's own one that such a project took over. A running session is never collected, however old its entry. A thread that
 comes back while a sweep runs is either reopened before the sweep reaches it,
 and then kept, or waits until the sweep is done with it, and then finds
 nothing to resume. The index entry goes last, so a sweep that fails part way
@@ -142,7 +145,7 @@ The daemon only collects what its thread index names. A thread ended with
 daemon leaves what such a session kept alone, since an index that went
 missing would otherwise make every session look abandoned.
 `errand threads gc --unindexed` collects those too, by their own age, with
-the project of an unnamed one when no remembered thread works in it.
+the session's own project when no remembered thread works in it.
 
 To see what would go without deleting anything, run
 `errand threads gc --dry-run`, with `--older-than` to try another window. To
@@ -150,4 +153,4 @@ collect by hand, stop the daemon and run `errand threads gc`: the daemon owns
 the thread index while it runs and alone knows which sessions are live, so the
 command refuses while it holds its lock, as `errand threads remove` does.
 `errand threads remove <thread>` deletes one session at once, its own project
-included when it is unnamed.
+included.
