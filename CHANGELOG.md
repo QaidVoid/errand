@@ -1,6 +1,74 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.4.0] - 2026-10-29
+
+
+### Features
+- (broker) Refuse an unlisted host and let the owner grant it ([#107](https://github.com/QaidVoid/errand/pull/107)) ([79b6aaa](https://github.com/QaidVoid/errand/commit/79b6aaaaa28b4acc3aba955ee2a4c59a87074718))
+- (broker) Hold a provider key to its header and declared calls ([#106](https://github.com/QaidVoid/errand/pull/106)) ([0458261](https://github.com/QaidVoid/errand/commit/0458261650c8dfec32bf42680f0f1a6fe66c11ed))
+- (broker) Keep a receipt of every brokered provider call ([#101](https://github.com/QaidVoid/errand/pull/101)) ([31efaa5](https://github.com/QaidVoid/errand/commit/31efaa53aa13c5903e6cf95d13efbbf5c7420011))
+- (chat) List models as provider/model in !model ([d8c1248](https://github.com/QaidVoid/errand/commit/d8c1248298bf0c6304ff11aa9ad40721fd51ca88))
+- (commands) Add !gen-speech to read a text aloud ([35c8320](https://github.com/QaidVoid/errand/commit/35c8320a2b897727f5c21535c1a1e87dfc8491cf))
+- (config) Give sessions kage's edit and music tools ([38774bd](https://github.com/QaidVoid/errand/commit/38774bd79e0903b7579a001f3433e612b9afaa28))
+- (config) Give sessions kage's speech tool ([bbb9afb](https://github.com/QaidVoid/errand/commit/bbb9afbfc75e6a68c871dd7b17cadaf2b46e05c2))
+- (github) Mint each session an App token in place of the PAT ([#108](https://github.com/QaidVoid/errand/pull/108)) ([7aa20df](https://github.com/QaidVoid/errand/commit/7aa20dfb2fd4fa168becdc1970a5fad407f4e975))
+- (session) [breaking] Give every session a project of its own ([#110](https://github.com/QaidVoid/errand/pull/110)) ([9e95a04](https://github.com/QaidVoid/errand/commit/9e95a04b8662008e96d884153503a75b42d214c6))
+- (session) Collect what a cold session left on disk ([#105](https://github.com/QaidVoid/errand/pull/105)) ([d9a4224](https://github.com/QaidVoid/errand/commit/d9a422427ac341073826d06252ca619765a68079))
+- (session) Post the clips the agent makes ([773a886](https://github.com/QaidVoid/errand/commit/773a8865351b04809360cd03e03773ba22a3f3fe))
+- (session) Show what a running tool call is doing ([9e1be92](https://github.com/QaidVoid/errand/commit/9e1be92b807c97f17098086a8fce32d8ea93e83b))
+- (threads) Post what was said on the web in the thread ([ec52f98](https://github.com/QaidVoid/errand/commit/ec52f981a6c6a59f398dd4e5c8007fde22bbfc39))
+- (web) Start from a home composer with model and command pickers ([45f0af6](https://github.com/QaidVoid/errand/commit/45f0af67b1b5ade29beff69d6f183154ec24d6d1))
+- (web) Pick a session's model and complete commands ([3c467d1](https://github.com/QaidVoid/errand/commit/3c467d14c32a0b51cc04b94b36a8e90aaa32616e))
+- (web) Log in with Discord to act as your own account ([56540fc](https://github.com/QaidVoid/errand/commit/56540fc40b6a25ed080fd6be813444a8b70ac825))
+- Address a channel picture to whoever asked for it ([715e9b0](https://github.com/QaidVoid/errand/commit/715e9b0b777a54d3f8e7dc7a9e358945c6798dc3))
+- Let !gen-image name an effort ([38323ab](https://github.com/QaidVoid/errand/commit/38323ab48c38d2c2f4c92d6c3c82032e2f3a0067))
+- Add !gen-image to run one prompt on the image model ([b87e048](https://github.com/QaidVoid/errand/commit/b87e048b748a354911231a1a7036a917f3d89c75))
+- Generate images and post them to the thread ([#35](https://github.com/QaidVoid/errand/pull/35)) ([4a8011c](https://github.com/QaidVoid/errand/commit/4a8011cd3668b94a72aea9dbffbd2d3ab16d4f18))
+
+### Fixes
+- (broker) Judge the dial, follow no redirect, require HTTPS ([#70](https://github.com/QaidVoid/errand/pull/70)) ([e876928](https://github.com/QaidVoid/errand/commit/e87692814c54f6f5c9ba970b62a01c1afbcbf5f6))
+- (broker) Scrub the credential from what a provider answers ([#69](https://github.com/QaidVoid/errand/pull/69)) ([f108fd5](https://github.com/QaidVoid/errand/commit/f108fd5cdf48c9a05caf47c23edcab560cdb155c))
+- (broker) Mint legible session secrets and scrub them by shape ([#68](https://github.com/QaidVoid/errand/pull/68)) ([c963f29](https://github.com/QaidVoid/errand/commit/c963f29c438b015f0278663aeb9e28a742275ccc))
+- (broker) Give each session a broker and nonces of its own ([#67](https://github.com/QaidVoid/errand/pull/67)) ([9820a7e](https://github.com/QaidVoid/errand/commit/9820a7eae871a6877bca42de88242f55206ce38d))
+- (broker) Close refusals explicitly so git retries a 407 ([e9737af](https://github.com/QaidVoid/errand/commit/e9737af6983da49cbe6096c0b23091a81675f0e3))
+- (broker) Require a proxy credential on CONNECT and forwards ([#66](https://github.com/QaidVoid/errand/pull/66)) ([ea629b7](https://github.com/QaidVoid/errand/commit/ea629b73060dc55f3897a0a9d5ce697abf21e118))
+- (broker) Confine provider requests to configured origins ([#58](https://github.com/QaidVoid/errand/pull/58)) ([3ae5050](https://github.com/QaidVoid/errand/commit/3ae50503b8cda8d880be7a2a1253467139ed3a31))
+- (chat) Make free-text upload captions inert ([#60](https://github.com/QaidVoid/errand/pull/60)) ([c73fe66](https://github.com/QaidVoid/errand/commit/c73fe664252a800f5cd9f0b68b6a44563cd7bcef))
+- (commands) Narrow the help column to leave room under 2000 ([18308eb](https://github.com/QaidVoid/errand/commit/18308eb55c599d454e8f231ea54fcdf71eaa3e9d))
+- (config) Refuse a public interface that logs nobody in ([57b26d0](https://github.com/QaidVoid/errand/commit/57b26d015ef58b37665739da95ddd97f7e0cfe3f))
+- (config) Reject unreachable image configurations ([#62](https://github.com/QaidVoid/errand/pull/62)) ([afdd54e](https://github.com/QaidVoid/errand/commit/afdd54e88f962dab5892a8dddb7651fbc22da136))
+- (provider) Stop reading an image answer at its cap ([ebc31ba](https://github.com/QaidVoid/errand/commit/ebc31bab8e297ecfbf25c26136c5f9215d3af82d))
+- (sandbox) Broker podman sessions and keep secrets off the argv ([#103](https://github.com/QaidVoid/errand/pull/103)) ([40252d6](https://github.com/QaidVoid/errand/commit/40252d68d8b94058ab48ad60c12f10c8a099932a))
+- (sandbox) Say what egress allows and refuse the Azure fabric ([#98](https://github.com/QaidVoid/errand/pull/98)) ([10ed2b2](https://github.com/QaidVoid/errand/commit/10ed2b21868d80a1b96659547b0896a365477daf))
+- (sandbox) Ask kage which provider ids it knows ([#64](https://github.com/QaidVoid/errand/pull/64)) ([5bcfee1](https://github.com/QaidVoid/errand/commit/5bcfee1aa455d550b84e90147b3e9fdca2a6a75a))
+- (sandbox) Use the google built-in provider id ([#61](https://github.com/QaidVoid/errand/pull/61)) ([d3d67c6](https://github.com/QaidVoid/errand/commit/d3d67c6dc3f979b9cfbdbd78305e5e4407ecd508))
+- (session) Report a failed prompt as a failed turn ([88d666d](https://github.com/QaidVoid/errand/commit/88d666d431a1d3d4b5da1507bde32aa435bfa8c6))
+- (session) Push from a daemon-owned copy that borrows nothing ([#102](https://github.com/QaidVoid/errand/pull/102)) ([1df9f51](https://github.com/QaidVoid/errand/commit/1df9f51f5d58bd42093992f401cedb6f5efeedbe))
+- (session) Bound every read of a file the agent can grow ([#100](https://github.com/QaidVoid/errand/pull/100)) ([2e6eda5](https://github.com/QaidVoid/errand/commit/2e6eda5dbd643f6fcbecc764606c46cd8616cb38))
+- (session) Refuse uploads that hold a secret, floor short tokens ([#99](https://github.com/QaidVoid/errand/pull/99)) ([a061819](https://github.com/QaidVoid/errand/commit/a0618199b7e3a651f5aa1bbbb9e507232de59c1a))
+- (session) Wake a stopped thread only for who may take part ([1ccb1b3](https://github.com/QaidVoid/errand/commit/1ccb1b3ab736bdd836c2f58d217ba67b63b3d368))
+- (session) Fetch a song the agent could only link to ([da7cb43](https://github.com/QaidVoid/errand/commit/da7cb431b1776166dbc1c48d4dfa30c7c35f6fa3))
+- (session) Tell the agent the image cap stopped its turn ([#65](https://github.com/QaidVoid/errand/pull/65)) ([746a943](https://github.com/QaidVoid/errand/commit/746a943be639a1c6c173486d737ab9a3e9d63287))
+- (session) Interrupt turns that exceed the image cap ([#63](https://github.com/QaidVoid/errand/pull/63)) ([997f1ca](https://github.com/QaidVoid/errand/commit/997f1ca76727ba623982918524d8c75fb7c56c73))
+- (session) Refuse symlinks when reading the agent session id ([#59](https://github.com/QaidVoid/errand/pull/59)) ([1ace712](https://github.com/QaidVoid/errand/commit/1ace712f4e70b7020bce307412a1f161a3fecce4))
+- (session) Keep a session alive while a tool call runs ([65adcde](https://github.com/QaidVoid/errand/commit/65adcde9168ded3f4a01855248d0dbe7c250750e))
+- (session) Name the providers a shared model id is served by ([0f48104](https://github.com/QaidVoid/errand/commit/0f481049f8e4864363236c0975784df8c6fe4fd3))
+- (session) Quote the failing line when a sandbox runs out of disk ([206fc5a](https://github.com/QaidVoid/errand/commit/206fc5ae53f53e645731f706dae327251c9247cf))
+- (web) Name login cookies so sibling hosts cannot set them ([ddd20b0](https://github.com/QaidVoid/errand/commit/ddd20b08953c29222ef20b10a6be609d7e34a957))
+- (web) Read projects and transcripts off the async workers ([979fee3](https://github.com/QaidVoid/errand/commit/979fee3a6bb0c4d0782acf47ba2ac7392282ceec))
+- (web) Ask again whether a visitor is still in the server ([d34a4ba](https://github.com/QaidVoid/errand/commit/d34a4ba876c24495fb817dead33d973dba5d2468))
+- (web) Harden the interface against strangers ([012538b](https://github.com/QaidVoid/errand/commit/012538be07d2d3afb14daf767802613feece9d2a))
+- (web) Show when each thing happened, not when it was replayed ([bf7b611](https://github.com/QaidVoid/errand/commit/bf7b61172515641971781c42cfc908e43c8b94ef))
+- Harden transcript links, bailey XDG and late provider keys ([#109](https://github.com/QaidVoid/errand/pull/109)) ([9935da9](https://github.com/QaidVoid/errand/commit/9935da9203c5a99b1c30b0252f95b864f7d5ff9e))
+- Stop the agent memory reaching argv and name kills ([759f05a](https://github.com/QaidVoid/errand/commit/759f05ad360094b8b176a6ece0bd8963b2ff854d))
+- Resolve an image model to the provider that lists it ([ad61174](https://github.com/QaidVoid/errand/commit/ad611748f1297eedc1e1df0489df54245df216e5))
+- Draw with the images endpoint, not a chat model ([29d046c](https://github.com/QaidVoid/errand/commit/29d046c3280d4a304c0752326ab58196ff154d27))
+
+### Tests
+- (sandbox) Check a brokered bailey session on the real tool ([#104](https://github.com/QaidVoid/errand/pull/104)) ([cef95ee](https://github.com/QaidVoid/errand/commit/cef95eee15e59c6b0c9892e69eb0e5914b6e7e69))
+- Wait for the session to go idle instead of sleeping ([#111](https://github.com/QaidVoid/errand/pull/111)) ([60525a6](https://github.com/QaidVoid/errand/commit/60525a67989f49070af88e93a07a799038c35321))
+
 ## [0.3.1] - 2026-10-18
 
 
