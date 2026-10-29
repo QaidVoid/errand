@@ -46,6 +46,13 @@ const TEXT_OPTION: &[(&str, &str, &str, bool)] = &[
     ("!pr", "title", "title for the pull request", true),
     ("!gen-image", "prompt", "what to generate", true),
     ("!gen-speech", "text", "what to read aloud", true),
+    (
+        "!grant",
+        "host",
+        "a host and how long, as 10m or always, or nothing to list the grants",
+        false,
+    ),
+    ("!revoke", "host", "the host to stop granting", true),
 ];
 
 /// Commands with optional string options beside the required one.
@@ -78,7 +85,7 @@ const USER_OPTION: &[(&str, &str)] = &[
 ];
 
 /// The names of the options whose values are read back in `translate`.
-const OPTION_NAMES: [&str; 5] = ["path", "instruction", "title", "prompt", "text"];
+const OPTION_NAMES: [&str; 6] = ["path", "instruction", "title", "prompt", "text", "host"];
 
 /// Raised when the service will not accept the commands, with what to do.
 #[derive(Debug, thiserror::Error)]

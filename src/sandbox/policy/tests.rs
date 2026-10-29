@@ -29,6 +29,7 @@ fn launch() -> SandboxLaunch {
         plugins: Vec::new(),
         denied: Denials::default(),
         resume: false,
+        grants: None,
     }
 }
 

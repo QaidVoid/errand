@@ -20,7 +20,9 @@ aside: everyone in the thread sees it and the agent is never told.
 | `!compact` | the owner and operators | summarise the conversation to free context |
 | `!model [name]` | the owner and operators | show the models, or switch to one |
 | `!gen-image <prompt>` | the owner and whoever they invited | draw with the image model |
-| `!gen-speech <text>` | the owner and whoever they invited | read a text aloud with the speech model |
+| `!gen-speech <text>` | the owner and whoever they invited | read aloud with the speech model |
+| `!grant [host] [time]` | the owner and operators | grant a host, or list them |
+| `!revoke <host>` | the owner and operators | ungrant a host |
 
 ## Who takes part
 

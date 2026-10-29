@@ -984,6 +984,7 @@ fn provider_state(routes: Vec<ProviderRoute>) -> super::ProviderState {
         closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         ledger: None,
         denied: std::sync::Mutex::default(),
+        grants: None,
     }
 }
 
@@ -1606,8 +1607,8 @@ async fn sessions_share_no_listener_and_no_nonce() {
     let upstream_port = start_upstream(Arc::clone(&seen), "one").await;
     let template = template_for(upstream_port, silent());
 
-    let a = template.start("s-a").await.expect("a broker for a");
-    let b = template.start("s-b").await.expect("a broker for b");
+    let a = template.start("s-a", None).await.expect("a broker for a");
+    let b = template.start("s-b", None).await.expect("a broker for b");
 
     assert_ne!(a.port, b.port);
     assert_ne!(a.proxy_secret, b.proxy_secret);
@@ -1624,7 +1625,7 @@ async fn sessions_share_no_listener_and_no_nonce() {
 #[tokio::test]
 async fn a_dropped_session_broker_stops_listening() {
     let template = template_for(9, silent());
-    let started = template.start("s-1").await.expect("a broker");
+    let started = template.start("s-1", None).await.expect("a broker");
     let port = started.port;
     assert!(TcpStream::connect(("127.0.0.1", port)).await.is_ok());
 
@@ -1647,7 +1648,7 @@ async fn what_a_session_broker_logs_names_the_session() {
         Arc::new(move |_level, line| recorded.lock().unwrap().push(line.to_owned())),
     );
     let template = template_for(9, log);
-    let started = template.start("s-7").await.expect("a broker");
+    let started = template.start("s-7", None).await.expect("a broker");
 
     let mut conn = TcpStream::connect(("127.0.0.1", started.port))
         .await
@@ -1790,7 +1791,7 @@ async fn a_session_stopped_during_a_dial_gets_no_tunnel() {
 #[tokio::test]
 async fn what_a_session_is_handed_is_prefixed_and_scrubbed() {
     let started = template_for(9, silent())
-        .start("s-1")
+        .start("s-1", None)
         .await
         .expect("a broker");
     for secret in [&started.proxy_secret, &started.nonces["zai"]] {
@@ -1831,7 +1832,7 @@ async fn an_upstream_that_echoes_the_key_hands_the_session_none_of_it() {
         axum::serve(listener, app).await.expect("serves");
     });
     let started = template_for(upstream_port, silent())
-        .start("s-1")
+        .start("s-1", None)
         .await
         .expect("a broker");
 
@@ -1887,7 +1888,7 @@ async fn a_redirect_is_not_followed_and_the_second_host_sees_nothing() {
     let (first_port, first) =
         counting_upstream(302, Some(format!("http://127.0.0.1:{second_port}/stolen"))).await;
     let started = template_for(first_port, silent())
-        .start("s-1")
+        .start("s-1", None)
         .await
         .expect("a broker");
 
@@ -2038,7 +2039,7 @@ async fn each_provider_call_leaves_one_receipt() {
     let seen: Arc<Mutex<BTreeMap<String, String>>> = Arc::new(Mutex::new(BTreeMap::new()));
     let upstream_port = start_upstream(Arc::clone(&seen), "one").await;
     let started = recorded_template(upstream_port, root.path())
-        .start("s-1")
+        .start("s-1", None)
         .await
         .expect("a broker");
     let nonce = started.nonces["zai"].clone();
@@ -2104,7 +2105,7 @@ async fn refused_and_unreachable_calls_are_recorded_and_tunnels_are_not() {
         credential: "key".to_owned(),
         policy: RoutePolicy::default(),
     });
-    let started = template.start("s-2").await.expect("a broker");
+    let started = template.start("s-2", None).await.expect("a broker");
 
     assert_eq!(
         call_provider(started.port, &started.nonces["zai"]).await,
@@ -2540,6 +2541,169 @@ fn a_method_override_header_is_not_forwarded() {
     ] {
         assert!(headers.get(name).is_none(), "{name}");
     }
+}
+
+/// A CONNECT as a session's tools send it, answered whole.
+async fn connect_whole(port: u16, authority: &str) -> String {
+    let mut conn = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("the broker");
+    conn.write_all(
+        format!("CONNECT {authority} HTTP/1.1\r\nProxy-Authorization: {PROXY_CREDENTIAL}\r\n\r\n")
+            .as_bytes(),
+    )
+    .await
+    .expect("written");
+    let mut buf = vec![0_u8; 1024];
+    let read = tokio::time::timeout(std::time::Duration::from_secs(5), conn.read(&mut buf))
+        .await
+        .map_or(0, |read| read.unwrap_or(0));
+    String::from_utf8_lossy(&buf[..read]).into_owned()
+}
+
+/// A host the allowlist does not name is refused at once, with what to ask
+/// for, and the thread is asked once. A grant lets the next connection
+/// through and a grant for once no more. A grant never opens a port the
+/// broker does not admit, and is not asked about there.
+#[tokio::test]
+async fn an_unlisted_host_is_refused_with_how_to_grant_it_until_it_is_granted() {
+    use super::grants::{GrantStore, Lasting};
+
+    let listening = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let open_port = listening.local_addr().unwrap().port();
+    tokio::spawn(async move { while let Ok((_stream, _)) = listening.accept().await {} });
+    let root = tempfile::tempdir().unwrap();
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let (grants, _) = GrantStore::open(
+        root.path().join("grants.json"),
+        Arc::new(|| 1_000),
+        {
+            let asked = Arc::clone(&asked);
+            Arc::new(move |host: &str| asked.lock().unwrap().push(host.to_owned()))
+        },
+        silent(),
+    );
+    let grants = Arc::new(grants);
+    let mut broker = Broker::new(
+        vec!["github.com".to_owned()],
+        vec![open_port],
+        silent(),
+        Vec::new(),
+        true,
+        PROXY_CREDENTIAL.to_owned(),
+        None,
+    );
+    broker.grants = Some(Arc::clone(&grants));
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+    let target = format!("127.0.0.1:{open_port}");
+
+    for _ in 0..3 {
+        let refused = connect_whole(port, &target).await;
+        assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+        assert!(refused.contains("!grant 127.0.0.1 10m"), "{refused}");
+    }
+    assert_eq!(*asked.lock().unwrap(), ["127.0.0.1"]);
+
+    grants.grant("127.0.0.1", Lasting::Once, "u-1");
+    let admitted = connect_whole(port, &target).await;
+    assert!(admitted.starts_with("HTTP/1.1 200"), "{admitted}");
+    assert!(
+        connect_whole(port, &target)
+            .await
+            .starts_with("HTTP/1.1 403")
+    );
+
+    grants.grant("127.0.0.1", Lasting::Always, "u-1");
+    let other_port = connect_whole(port, "127.0.0.1:9").await;
+    assert!(other_port.starts_with("HTTP/1.1 403"), "{other_port}");
+    assert!(!other_port.contains("!grant"), "{other_port}");
+    assert_eq!(asked.lock().unwrap().len(), 1);
+    broker.close();
+}
+
+/// A grant never opens the host's own network: a name granted for once that
+/// points there is still refused for its address, and the grant is kept for
+/// a connection that can use it.
+#[tokio::test]
+async fn a_grant_is_not_spent_on_a_host_refused_for_its_address() {
+    use super::grants::{GrantStore, Lasting};
+
+    let root = tempfile::tempdir().unwrap();
+    let (grants, _) = GrantStore::open(
+        root.path().join("grants.json"),
+        Arc::new(|| 1_000),
+        Arc::new(|_: &str| {}),
+        silent(),
+    );
+    let grants = Arc::new(grants);
+    grants.grant("127.0.0.1", Lasting::Once, "u-1");
+    let mut broker = Broker::new(
+        Vec::new(),
+        vec![443],
+        silent(),
+        Vec::new(),
+        false,
+        PROXY_CREDENTIAL.to_owned(),
+        None,
+    );
+    broker.grants = Some(Arc::clone(&grants));
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+
+    let refused = connect_whole(port, "127.0.0.1:443").await;
+
+    assert!(
+        refused.starts_with("HTTP/1.1 403 not a public host"),
+        "{refused}"
+    );
+    assert_eq!(grants.list().len(), 1);
+    broker.close();
+}
+
+/// A grant for once is not spent on a tunnel the session was stopped during.
+#[tokio::test]
+async fn a_grant_is_not_spent_on_a_session_stopped_during_its_dial() {
+    use super::grants::{GrantStore, Lasting};
+
+    let root = tempfile::tempdir().unwrap();
+    let (grants, _) = GrantStore::open(
+        root.path().join("grants.json"),
+        Arc::new(|| 1_000),
+        Arc::new(|_: &str| {}),
+        silent(),
+    );
+    let grants = Arc::new(grants);
+    grants.grant("127.0.0.1", Lasting::Once, "u-1");
+    let mut state = provider_state(Vec::new());
+    state.allow_internal = true;
+    state.grants = Some(Arc::clone(&grants));
+    let closed = Arc::clone(&state.closed);
+    let (mut client, stream) = tokio::io::duplex(4096);
+    let (upstream, _far) = tokio::io::duplex(64);
+    let handle = super::server::handle(stream, Arc::new(state), move |_, _, _| {
+        closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        async move { Ok(upstream) }
+    });
+    let session = async {
+        client
+            .write_all(
+                format!(
+                    "CONNECT 127.0.0.1:443 HTTP/1.1\r\nProxy-Authorization: {PROXY_CREDENTIAL}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut answer = String::new();
+        client.read_to_string(&mut answer).await.unwrap();
+        answer
+    };
+
+    let (answer, ()) = tokio::join!(session, handle);
+
+    assert!(answer.starts_with("HTTP/1.1 503"), "{answer}");
+    assert_eq!(grants.list().len(), 1);
 }
 
 /// A path cannot drive the terminal a receipt is printed in, or carry a

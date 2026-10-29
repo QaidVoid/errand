@@ -150,8 +150,29 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Guest,
             group: Session,
-            summary: "read a text aloud with the speech model",
+            summary: "read aloud with the speech model",
             argument: Some("<text>"),
+        },
+    ),
+    // Where the session may reach beyond the allowlist. The owner's, and an
+    // operator's, as stopping it is, since a grant widens where the session
+    // can send its data.
+    (
+        "!grant",
+        CommandMeta {
+            access: Owner,
+            group: Session,
+            summary: "grant a host, or list them",
+            argument: Some("[host] [time]"),
+        },
+    ),
+    (
+        "!revoke",
+        CommandMeta {
+            access: Owner,
+            group: Session,
+            summary: "ungrant a host",
+            argument: Some("<host>"),
         },
     ),
     // Who may take part. The owner's alone, for the same reason.

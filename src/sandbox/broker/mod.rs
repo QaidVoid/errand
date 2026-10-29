@@ -691,6 +691,9 @@ pub(crate) struct ProviderState {
     /// When a call without the session's key was last recorded, so a session
     /// that repeats one is a record a minute rather than one an attempt.
     pub denied: std::sync::Mutex<DeniedCalls>,
+    /// What the session's owner granted beyond the allowlist, when the
+    /// session has a thread to ask in.
+    pub grants: Option<Arc<grants::GrantStore>>,
 }
 
 /// How long a recorded denial holds off recording the next.
@@ -1305,6 +1308,8 @@ pub(crate) type ResolveFuture = Pin<Box<dyn Future<Output = Result<Vec<String>, 
 
 /// What a provider's answer is relayed to the session as.
 mod answer;
+/// What a session's owner lets its broker admit beyond the allowlist.
+pub mod grants;
 /// What a brokered credential was used for, kept after the fact.
 pub mod receipts;
 /// The listener that admits a session's connections and tunnels them.
