@@ -1226,6 +1226,34 @@ fn provider_forwarding_preserves_authority_path_query_and_replaces_credentials()
     assert!(!forwarded.headers().contains_key("host"));
 }
 
+/// The upstream is asked for an answer it has not compressed, whatever the
+/// session asked for, so the broker can scrub what comes back.
+#[test]
+fn the_sessions_accept_encoding_is_replaced_with_identity() {
+    let state = provider_state(vec![provider_route(
+        "/provider/zai",
+        "https://api.example.com/v4",
+    )]);
+    let request = http::Request::builder()
+        .uri("/provider/zai/chat")
+        .header("authorization", "Bearer session-nonce")
+        .header("accept-encoding", "gzip, br")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let route = super::route_for(&state, request.uri().path()).unwrap();
+    let target = super::provider_target(route, "/chat", None).unwrap();
+    let forwarded = super::build_forwarded(&state, request, route, &target)
+        .build()
+        .unwrap();
+
+    let encodings: Vec<_> = forwarded
+        .headers()
+        .get_all("accept-encoding")
+        .iter()
+        .collect();
+    assert_eq!(encodings, ["identity"]);
+}
+
 const PROXY_CREDENTIAL: &str = "Basic c2Vzc2lvbjpzZWNyZXQ=";
 
 struct ProxyExchange {
@@ -1706,4 +1734,50 @@ async fn what_a_session_is_handed_is_prefixed_and_scrubbed() {
             crate::config::redact::REDACTION
         );
     }
+}
+
+/// A provider that quotes the key it was sent, as an error page might, hands
+/// the session none of it: the answer is scrubbed on the way back through
+/// the broker.
+#[tokio::test]
+async fn an_upstream_that_echoes_the_key_hands_the_session_none_of_it() {
+    let app = axum::Router::new().fallback(|headers: axum::http::HeaderMap| async move {
+        let sent = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_owned();
+        (
+            axum::http::StatusCode::BAD_REQUEST,
+            [("x-echo", sent.clone())],
+            format!("{{\"error\":\"rejected {sent}\"}}"),
+        )
+    });
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bound");
+    let upstream_port = listener.local_addr().expect("an address").port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serves");
+    });
+    let started = template_for(upstream_port, silent())
+        .start("s-1")
+        .await
+        .expect("a broker");
+
+    let answered = reqwest::Client::new()
+        .post(format!(
+            "http://127.0.0.1:{}/provider/zai/chat",
+            started.port
+        ))
+        .header("authorization", format!("Bearer {}", started.nonces["zai"]))
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+
+    assert_eq!(answered.status().as_u16(), 400);
+    assert_eq!(answered.headers()["x-echo"], "Bearer [redacted]");
+    let body = answered.text().await.expect("a body");
+    assert_eq!(body, "{\"error\":\"rejected Bearer [redacted]\"}");
 }
