@@ -18,6 +18,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
+use super::receipts::{Clock, Ledger, ReceiptStore};
 use super::{
     DIAL_BUDGET, DIAL_TIMEOUT, JudgedResolver, LOOKUP_TIMEOUT, NoAddress, ProviderRoute,
     ProviderState, ProviderUpstream, Target, carries_proxy_credential, host_allowed, parse_connect,
@@ -49,6 +50,10 @@ pub struct BrokerTemplate {
     /// The variable the agent reads each provider's key from, by provider
     /// name, for every brokered provider that names one.
     pub credential_names: BTreeMap<String, String>,
+    /// Where every session's provider calls are recorded, when they are.
+    pub receipts: Option<Arc<ReceiptStore>>,
+    /// The clock receipts are stamped with.
+    pub now: Clock,
 }
 
 /// How long the accept loop waits before trying again after a failed accept,
@@ -87,6 +92,7 @@ impl BrokerTemplate {
                     upstream: provider.upstream.clone(),
                     nonce,
                     credential: provider.credential.clone(),
+                    credential_name: self.credential_names.get(&provider.name).cloned(),
                 }
             })
             .collect();
@@ -98,6 +104,11 @@ impl BrokerTemplate {
             routes,
             self.allow_internal,
             proxy_authorization(&proxy_secret),
+            self.receipts.as_ref().map(|store| Ledger {
+                store: Arc::clone(store),
+                now: Arc::clone(&self.now),
+                session_id: session_id.to_owned(),
+            }),
         );
         // The listener sits on loopback; the address a sandbox dials is only
         // mapped back to this host from inside it.
@@ -161,6 +172,7 @@ pub struct Broker {
     routes: Vec<ProviderRoute>,
     allow_internal: bool,
     proxy_authorization: String,
+    ledger: Option<Ledger>,
     accept_shutdown: Option<oneshot::Sender<()>>,
     provider_shutdown: Option<oneshot::Sender<()>>,
     closed: Arc<AtomicBool>,
@@ -170,6 +182,7 @@ impl Broker {
     /// A broker over `allow` and `ports`, optionally answering as the
     /// providers in `routes`. Proxy requests must carry `proxy_authorization`,
     /// supplied as a complete `Basic <base64(session:secret)>` header value.
+    /// Provider calls are recorded in `ledger` when one is given.
     pub fn new(
         allow: Vec<String>,
         ports: Vec<u16>,
@@ -177,6 +190,7 @@ impl Broker {
         routes: Vec<ProviderRoute>,
         allow_internal: bool,
         proxy_authorization: String,
+        ledger: Option<Ledger>,
     ) -> Self {
         Self {
             allow,
@@ -185,6 +199,7 @@ impl Broker {
             routes,
             allow_internal,
             proxy_authorization,
+            ledger,
             accept_shutdown: None,
             provider_shutdown: None,
             closed: Arc::new(AtomicBool::new(false)),
@@ -216,6 +231,8 @@ impl Broker {
             provider_port,
             client,
             closed: Arc::clone(&self.closed),
+            ledger: self.ledger.clone(),
+            denied: std::sync::Mutex::default(),
         });
         let (shutdown_sender, mut shutdown_receiver) = oneshot::channel::<()>();
         tokio::spawn(async move {
@@ -277,6 +294,8 @@ impl Broker {
             provider_port: 0,
             client,
             closed: Arc::clone(&self.closed),
+            ledger: self.ledger.clone(),
+            denied: std::sync::Mutex::default(),
         });
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();

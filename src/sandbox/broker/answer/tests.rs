@@ -16,6 +16,31 @@ fn route(credential: &str) -> ProviderRoute {
         upstream: "https://api.example.com/v4".to_owned(),
         nonce: "session-nonce".to_owned(),
         credential: credential.to_owned(),
+        credential_name: None,
+    }
+}
+
+/// A receipt for a call nothing records.
+fn unrecorded() -> super::super::receipts::ReceiptGuard {
+    super::super::receipts::ReceiptGuard::begin(None, &recording().0, blank_receipt())
+}
+
+/// A receipt with nothing filled in yet.
+fn blank_receipt() -> super::super::receipts::Receipt {
+    super::super::receipts::Receipt {
+        at: 0,
+        session_id: String::new(),
+        provider: "/provider/zai".to_owned(),
+        credential_name: None,
+        upstream_host: None,
+        method: "POST".to_owned(),
+        path: "/chat".to_owned(),
+        query_bytes: None,
+        status: None,
+        outcome: super::super::receipts::Outcome::Interrupted,
+        elapsed_ms: 0,
+        bytes_out: 0,
+        bytes_in: 0,
     }
 }
 
@@ -145,7 +170,14 @@ async fn an_upstream_that_echoes_the_key_is_scrubbed() {
         ],
     );
 
-    let (status, headers, body) = read(relay(upstream, &route(KEY), &recording().0, 1 << 20)).await;
+    let (status, headers, body) = read(relay(
+        upstream,
+        &route(KEY),
+        &recording().0,
+        1 << 20,
+        unrecorded(),
+    ))
+    .await;
 
     assert_eq!(status, 401);
     assert_eq!(
@@ -173,7 +205,14 @@ async fn a_non_utf8_header_is_relayed_and_scrubbed() {
     value.extend_from_slice(KEY.as_bytes());
     let upstream = answer(200, &[("x-odd", &value)], Vec::new());
 
-    let (_, headers, _) = read(relay(upstream, &route(KEY), &recording().0, 1 << 20)).await;
+    let (_, headers, _) = read(relay(
+        upstream,
+        &route(KEY),
+        &recording().0,
+        1 << 20,
+        unrecorded(),
+    ))
+    .await;
 
     assert_eq!(headers["x-odd"].as_bytes(), b"caf\xe9 [redacted]");
 }
@@ -184,7 +223,7 @@ async fn an_answer_declared_over_the_limit_is_refused() {
     let (log, lines) = recording();
     let upstream = answer(200, &[("content-length", b"2048")], vec![vec![b'x'; 2048]]);
 
-    let (status, _, body) = read(relay(upstream, &route(KEY), &log, 1024)).await;
+    let (status, _, body) = read(relay(upstream, &route(KEY), &log, 1024, unrecorded())).await;
 
     assert_eq!(status, 502);
     assert!(!String::from_utf8(body.unwrap()).unwrap().contains('x'));
@@ -204,7 +243,7 @@ async fn an_answer_streamed_over_the_limit_is_cut() {
     let (log, lines) = recording();
     let upstream = answer(200, &[], vec![vec![b'x'; 600], vec![b'x'; 600]]);
 
-    let (status, _, body) = read(relay(upstream, &route(KEY), &log, 1024)).await;
+    let (status, _, body) = read(relay(upstream, &route(KEY), &log, 1024, unrecorded())).await;
 
     assert_eq!(status, 200);
     assert!(body.is_err(), "the body ended cleanly past the limit");
@@ -226,7 +265,7 @@ async fn a_compressed_answer_is_refused_not_relayed_unscrubbed() {
     bytes.extend_from_slice(KEY.as_bytes());
     let upstream = answer(200, &[("content-encoding", b"gzip")], vec![bytes]);
 
-    let (status, _, body) = read(relay(upstream, &route(KEY), &log, 1 << 20)).await;
+    let (status, _, body) = read(relay(upstream, &route(KEY), &log, 1 << 20, unrecorded())).await;
 
     assert_eq!(status, 502);
     let body = body.unwrap();
@@ -249,7 +288,14 @@ async fn a_compressed_answer_is_refused_not_relayed_unscrubbed() {
 async fn an_empty_answer_passes_through_empty() {
     let upstream = answer(204, &[], Vec::new());
 
-    let (status, _, body) = read(relay(upstream, &route(KEY), &recording().0, 1 << 20)).await;
+    let (status, _, body) = read(relay(
+        upstream,
+        &route(KEY),
+        &recording().0,
+        1 << 20,
+        unrecorded(),
+    ))
+    .await;
 
     assert_eq!(status, 204);
     assert!(body.unwrap().is_empty());
@@ -265,7 +311,14 @@ async fn an_identity_or_empty_coding_is_still_scrubbed() {
             &[("content-encoding", coding)],
             vec![KEY.as_bytes().to_vec()],
         );
-        let (_, _, body) = read(relay(upstream, &route(KEY), &recording().0, 1 << 20)).await;
+        let (_, _, body) = read(relay(
+            upstream,
+            &route(KEY),
+            &recording().0,
+            1 << 20,
+            unrecorded(),
+        ))
+        .await;
         assert_eq!(body.unwrap(), b"[redacted]", "{coding:?}");
     }
 }
@@ -287,7 +340,7 @@ async fn a_streamed_answer_arrives_before_the_upstream_finishes() {
             .body(reqwest::Body::wrap_stream(chunks))
             .unwrap(),
     );
-    let mut body = relay(upstream, &route(KEY), &recording().0, 1 << 20)
+    let mut body = relay(upstream, &route(KEY), &recording().0, 1 << 20, unrecorded())
         .into_body()
         .into_data_stream();
 
@@ -308,13 +361,145 @@ async fn a_streamed_answer_arrives_before_the_upstream_finishes() {
     assert_eq!(rest, b"data: two\n\n");
 }
 
+/// A streamed answer's receipt is written when the stream ends, not when it
+/// starts, and one the session hangs up on part way is recorded as
+/// interrupted with what was relayed so far.
+#[tokio::test]
+async fn a_receipt_waits_for_the_end_of_the_answer() {
+    use super::super::receipts::{Ledger, Outcome, ReceiptGuard, ReceiptStore, receipts_for};
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("receipts.db");
+    let ledger = Ledger {
+        store: Arc::new(ReceiptStore::open(&path).unwrap()),
+        now: Arc::new(|| 0),
+        session_id: "s-1".to_owned(),
+    };
+    let streamed = || {
+        let (send, receive) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let chunks = futures_util::stream::unfold(receive, |mut receive| async move {
+            receive
+                .recv()
+                .await
+                .map(|chunk| (Ok::<_, std::io::Error>(chunk), receive))
+        });
+        let upstream = reqwest::Response::from(
+            http::Response::builder()
+                .status(200)
+                .body(reqwest::Body::wrap_stream(chunks))
+                .unwrap(),
+        );
+        (send, upstream)
+    };
+    let guard = || ReceiptGuard::begin(Some(&ledger), &recording().0, blank_receipt());
+
+    let (send, upstream) = streamed();
+    let mut body = relay(upstream, &route(KEY), &recording().0, 1 << 20, guard())
+        .into_body()
+        .into_data_stream();
+    send.send(b"data: one\n\n".to_vec()).unwrap();
+    body.next().await.unwrap().unwrap();
+    assert!(receipts_for(&path, "s-1", 20).unwrap().is_empty());
+    drop(send);
+    while body.next().await.is_some() {}
+    let read = receipts_for(&path, "s-1", 20).unwrap();
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].outcome, Outcome::Completed);
+    assert_eq!(read[0].bytes_in, 11);
+
+    let (send, upstream) = streamed();
+    let mut body = relay(upstream, &route(KEY), &recording().0, 1 << 20, guard())
+        .into_body()
+        .into_data_stream();
+    send.send(b"data: one\n\n".to_vec()).unwrap();
+    body.next().await.unwrap().unwrap();
+    drop(body);
+    let read = receipts_for(&path, "s-1", 20).unwrap();
+    assert_eq!(read.len(), 2);
+    assert_eq!(read[0].outcome, Outcome::Interrupted);
+    assert_eq!(read[0].bytes_in, 11);
+}
+
+/// An answer that carries no body is complete as soon as it is relayed: the
+/// body is never read, so it could never be seen to end.
+#[tokio::test]
+async fn a_bodiless_answer_is_recorded_as_completed() {
+    use super::super::receipts::{Ledger, Outcome, ReceiptGuard, ReceiptStore, receipts_for};
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("receipts.db");
+    let ledger = Ledger {
+        store: Arc::new(ReceiptStore::open(&path).unwrap()),
+        now: Arc::new(|| 0),
+        session_id: "s-1".to_owned(),
+    };
+    let guard = ReceiptGuard::begin(Some(&ledger), &recording().0, blank_receipt());
+
+    let relayed = relay(
+        answer(204, &[], Vec::new()),
+        &route(KEY),
+        &recording().0,
+        1 << 20,
+        guard,
+    );
+
+    assert_eq!(relayed.status().as_u16(), 204);
+    let read = receipts_for(&path, "s-1", 20).unwrap();
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].outcome, Outcome::Completed);
+}
+
+/// What a receipt says of an answer refused for its size, and of one whose
+/// last bytes were held back as a possible start of the key: the refusal is
+/// recorded as one, and the held bytes count once they are relayed.
+#[tokio::test]
+async fn a_size_refusal_and_a_held_tail_are_recorded() {
+    use super::super::receipts::{Ledger, Outcome, ReceiptGuard, ReceiptStore, receipts_for};
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("receipts.db");
+    let ledger = Ledger {
+        store: Arc::new(ReceiptStore::open(&path).unwrap()),
+        now: Arc::new(|| 0),
+        session_id: "s-1".to_owned(),
+    };
+    let guard = || ReceiptGuard::begin(Some(&ledger), &recording().0, blank_receipt());
+
+    let declared = answer(200, &[("content-length", b"2048")], vec![vec![b'x'; 2048]]);
+    let _ = read(relay(declared, &route(KEY), &recording().0, 1024, guard())).await;
+    let ends_held = answer(200, &[], vec![b"done sk-the".to_vec()]);
+    let (_, _, body) = read(relay(
+        ends_held,
+        &route(KEY),
+        &recording().0,
+        1 << 20,
+        guard(),
+    ))
+    .await;
+    assert_eq!(body.unwrap(), b"done sk-the");
+
+    let read = receipts_for(&path, "s-1", 20).unwrap();
+    assert_eq!(read.len(), 2);
+    assert_eq!(read[1].outcome, Outcome::Refused);
+    assert_eq!(read[1].status, Some(502));
+    assert_eq!(read[0].outcome, Outcome::Completed);
+    assert_eq!(read[0].bytes_in, 11);
+}
+
 /// An answer with no body names a coding for the representation it stands
 /// for, and has nothing to scrub, so it is relayed rather than refused.
 #[tokio::test]
 async fn a_compressed_answer_with_no_body_is_relayed() {
     let upstream = answer(304, &[("content-encoding", b"gzip")], Vec::new());
 
-    let (status, _, body) = read(relay(upstream, &route(KEY), &recording().0, 1 << 20)).await;
+    let (status, _, body) = read(relay(
+        upstream,
+        &route(KEY),
+        &recording().0,
+        1 << 20,
+        unrecorded(),
+    ))
+    .await;
 
     assert_eq!(status, 304);
     assert!(body.unwrap().is_empty());

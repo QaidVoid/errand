@@ -96,6 +96,7 @@ fn harness(records: Vec<ThreadRecord>) -> Harness {
             Arc::new(move |line: &str| written.lock().unwrap().push(line.to_owned()))
         },
         now: Arc::new(|| NOW),
+        receipts_of: Arc::new(|_| Ok(Vec::new())),
     };
     Harness {
         deps,
@@ -215,6 +216,85 @@ async fn showing_a_thread_prints_what_it_is_and_where_it_lives() {
     assert!(harness.out().contains("session   s-1"));
     assert!(harness.out().contains("/projects/demo"));
     assert!(harness.out().contains("guests    none"));
+}
+
+/// What a thread's session spent its provider credentials on is shown under
+/// the rest: how the newest calls came out, then one line each.
+#[tokio::test]
+async fn showing_a_thread_lists_the_provider_calls_it_made() {
+    use crate::sandbox::broker::receipts::{Outcome, Receipt};
+
+    let call = |path: &str, outcome: Outcome, status: Option<u16>| Receipt {
+        at: NOW - 60_000,
+        session_id: "s-1".to_owned(),
+        provider: "/provider/zai".to_owned(),
+        credential_name: Some("ZAI_KEY".to_owned()),
+        upstream_host: Some("api.example.com".to_owned()),
+        method: "POST".to_owned(),
+        path: path.to_owned(),
+        query_bytes: None,
+        status,
+        outcome,
+        elapsed_ms: 42,
+        bytes_out: 100,
+        bytes_in: 2_000,
+    };
+    let mut harness = harness(vec![record()]);
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let noted = Arc::clone(&asked);
+    harness.deps.receipts_of = Arc::new(move |session: String| {
+        noted.lock().unwrap().push(session);
+        Ok(vec![
+            call("/chat", Outcome::Completed, Some(200)),
+            call("/chat", Outcome::Denied, Some(401)),
+            call("/models", Outcome::Completed, Some(200)),
+        ])
+    });
+
+    assert_eq!(
+        run_threads(&["show".to_owned(), "thread-aa".to_owned()], &harness.deps).await,
+        0
+    );
+
+    assert_eq!(*asked.lock().unwrap(), ["s-1"]);
+    let out = harness.out();
+    assert!(
+        out.contains("calls     the newest 3: 2 completed, 1 denied"),
+        "{out}"
+    );
+    assert!(
+        out.contains("/provider/zai POST /chat  401  denied  42 ms  100 B out  2000 B in"),
+        "{out}"
+    );
+}
+
+/// Calls that cannot be read are said, and the command fails, so a script
+/// reading it does not take a broken store for an empty one.
+#[tokio::test]
+async fn unreadable_provider_calls_fail_the_command() {
+    let mut harness = harness(vec![record()]);
+    harness.deps.receipts_of = Arc::new(|_| Err("database disk image is malformed".to_owned()));
+
+    assert_eq!(
+        run_threads(&["show".to_owned(), "thread-aa".to_owned()], &harness.deps).await,
+        1
+    );
+    assert!(
+        harness
+            .out()
+            .contains("calls     could not be read: database disk image")
+    );
+}
+
+/// A session that made no provider call says so rather than printing an
+/// empty list.
+#[tokio::test]
+async fn a_thread_with_no_provider_calls_says_none() {
+    let harness = harness(vec![record()]);
+
+    run_threads(&["show".to_owned(), "thread-aa".to_owned()], &harness.deps).await;
+
+    assert!(harness.out().contains("calls     none recorded"));
 }
 
 #[tokio::test]
@@ -552,6 +632,7 @@ async fn reviving_reads_the_project_from_what_the_session_left_on_disk() {
             Arc::new(move |line: &str| written.lock().unwrap().push(line.to_owned()))
         },
         now: Arc::new(|| NOW),
+        receipts_of: Arc::new(|_| Ok(Vec::new())),
     };
 
     let session_dir = root.path().join("s-9");

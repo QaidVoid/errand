@@ -189,6 +189,7 @@ async fn the_broker_refuses_what_is_not_allowed_by_name_port_and_address() {
         Vec::new(),
         false,
         PROXY_CREDENTIAL.to_owned(),
+        None,
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
     // Allowed by name, but an internal address, so refused all the same.
@@ -213,6 +214,7 @@ async fn the_broker_refuses_a_non_connect_opener() {
         Vec::new(),
         false,
         PROXY_CREDENTIAL.to_owned(),
+        None,
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -295,9 +297,11 @@ async fn the_credential_is_put_on_at_the_broker_never_given_to_the_session() {
             upstream: format!("http://127.0.0.1:{upstream_port}/v4"),
             nonce: "the-session-nonce".to_owned(),
             credential: "the-real-key".to_owned(),
+            credential_name: None,
         }],
         true,
         PROXY_CREDENTIAL.to_owned(),
+        None,
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -373,9 +377,11 @@ async fn a_session_key_in_x_api_key_is_accepted_and_translated() {
             upstream: format!("http://127.0.0.1:{upstream_port}/v1"),
             nonce: "the-session-nonce".to_owned(),
             credential: "the-real-key".to_owned(),
+            credential_name: None,
         }],
         true,
         PROXY_CREDENTIAL.to_owned(),
+        None,
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -431,16 +437,19 @@ async fn each_provider_has_its_own_route_and_its_own_nonce() {
                 upstream: format!("http://127.0.0.1:{one_port}/v4"),
                 nonce: "nonce-zai".to_owned(),
                 credential: "key-zai".to_owned(),
+                credential_name: None,
             },
             ProviderRoute {
                 prefix: "/provider/meta".to_owned(),
                 upstream: format!("http://127.0.0.1:{two_port}/v1"),
                 nonce: "nonce-meta".to_owned(),
                 credential: "key-meta".to_owned(),
+                credential_name: None,
             },
         ],
         true,
         PROXY_CREDENTIAL.to_owned(),
+        None,
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -608,6 +617,7 @@ async fn a_tunnel_to_loopback_is_refused_even_under_a_lone_star() {
         Vec::new(),
         false,
         PROXY_CREDENTIAL.to_owned(),
+        None,
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
     let reply = try_connect(port, "127.0.0.1:443").await;
@@ -654,6 +664,7 @@ async fn an_allowlisted_internal_address_is_dialled_only_when_allowed_on_purpose
         Vec::new(),
         false,
         PROXY_CREDENTIAL.to_owned(),
+        None,
     );
     let off_port = off.listen("127.0.0.1").await.expect("bound");
     assert!(try_connect(off_port, "127.0.0.1:443").await.contains("403"));
@@ -666,6 +677,7 @@ async fn an_allowlisted_internal_address_is_dialled_only_when_allowed_on_purpose
         Vec::new(),
         true,
         PROXY_CREDENTIAL.to_owned(),
+        None,
     );
     let on_port = on.listen("127.0.0.1").await.expect("bound");
     // Admitted now, so it gets as far as dialling: nothing listens on 443, so
@@ -691,9 +703,11 @@ async fn a_provider_at_an_internal_address_is_refused_unless_allowed_on_purpose(
             upstream: format!("http://127.0.0.1:{upstream_port}/v1"),
             nonce: "n".to_owned(),
             credential: "k".to_owned(),
+            credential_name: None,
         }],
         false,
         PROXY_CREDENTIAL.to_owned(),
+        None,
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -770,6 +784,7 @@ async fn closing_the_broker_stops_it_accepting() {
         Vec::new(),
         false,
         PROXY_CREDENTIAL.to_owned(),
+        None,
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
     assert!(TcpStream::connect(("127.0.0.1", port)).await.is_ok());
@@ -864,6 +879,7 @@ async fn a_plain_http_request_is_forwarded_only_on_an_allowed_port() {
         Vec::new(),
         true,
         PROXY_CREDENTIAL.to_owned(),
+        None,
     );
     let port = broker.listen("127.0.0.1").await.expect("bound");
 
@@ -915,6 +931,7 @@ fn provider_route(prefix: &str, upstream: &str) -> ProviderRoute {
         upstream: upstream.to_owned(),
         nonce: "session-nonce".to_owned(),
         credential: "operator-key".to_owned(),
+        credential_name: None,
     }
 }
 
@@ -930,6 +947,8 @@ fn provider_state(routes: Vec<ProviderRoute>) -> super::ProviderState {
         provider_port: 0,
         client: reqwest::Client::builder().no_proxy().build().unwrap(),
         closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        ledger: None,
+        denied: std::sync::Mutex::default(),
     }
 }
 
@@ -1140,6 +1159,7 @@ fn provider_targets_keep_the_configured_origin_and_base_path() {
                 http::Request::new(axum::body::Body::empty()),
                 &route,
                 &target,
+                &Arc::default(),
             )
             .build()
             .unwrap();
@@ -1223,7 +1243,7 @@ fn provider_forwarding_preserves_authority_path_query_and_replaces_credentials()
     let route = super::route_for(&state, request.uri().path()).unwrap();
     let rest = request.uri().path().strip_prefix(&route.prefix).unwrap();
     let target = super::provider_target(route, rest, request.uri().query()).unwrap();
-    let forwarded = super::build_forwarded(&state, request, route, &target)
+    let forwarded = super::build_forwarded(&state, request, route, &target, &Arc::default())
         .build()
         .unwrap();
 
@@ -1254,7 +1274,7 @@ fn the_sessions_accept_encoding_is_replaced_with_identity() {
         .unwrap();
     let route = super::route_for(&state, request.uri().path()).unwrap();
     let target = super::provider_target(route, "/chat", None).unwrap();
-    let forwarded = super::build_forwarded(&state, request, route, &target)
+    let forwarded = super::build_forwarded(&state, request, route, &target, &Arc::default())
         .build()
         .unwrap();
 
@@ -1511,6 +1531,8 @@ fn template_for(upstream_port: u16, log: Logger) -> BrokerTemplate {
             credential: "the-real-key".to_owned(),
         }],
         credential_names: BTreeMap::new(),
+        receipts: None,
+        now: Arc::new(|| 0),
     }
 }
 
@@ -1952,4 +1974,253 @@ async fn a_provider_call_to_an_unusable_base_url_names_the_reason() {
             .unwrap();
         assert!(String::from_utf8_lossy(&body).contains(why), "{upstream}");
     }
+}
+
+/// A session broker over `template_for`, with a receipt store in `root`.
+fn recorded_template(upstream_port: u16, root: &std::path::Path) -> BrokerTemplate {
+    let clock = Arc::new(std::sync::atomic::AtomicI64::new(1_000));
+    let mut template = template_for(upstream_port, silent());
+    template.receipts = Some(Arc::new(
+        super::ReceiptStore::open(root.join(super::RECEIPTS_FILENAME)).unwrap(),
+    ));
+    template.now = Arc::new(move || clock.fetch_add(10, std::sync::atomic::Ordering::SeqCst));
+    template.credential_names = BTreeMap::from([("zai".to_owned(), "ZAI_KEY".to_owned())]);
+    template
+}
+
+/// The receipts a session's broker wrote, newest first.
+fn receipts_of(root: &std::path::Path, session: &str) -> Vec<super::receipts::Receipt> {
+    super::receipts::receipts_for(&root.join(super::RECEIPTS_FILENAME), session, 20).unwrap()
+}
+
+/// Every provider call a session's broker handles leaves one receipt naming
+/// the session, the provider and the credential's name, and what came of it,
+/// but never the credential, the stand-in, or the query.
+#[tokio::test]
+async fn each_provider_call_leaves_one_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    let seen: Arc<Mutex<BTreeMap<String, String>>> = Arc::new(Mutex::new(BTreeMap::new()));
+    let upstream_port = start_upstream(Arc::clone(&seen), "one").await;
+    let started = recorded_template(upstream_port, root.path())
+        .start("s-1")
+        .await
+        .expect("a broker");
+    let nonce = started.nonces["zai"].clone();
+
+    let answered = reqwest::Client::new()
+        .post(format!(
+            "http://127.0.0.1:{}/provider/zai/chat?key=SECRET",
+            started.port
+        ))
+        .header("authorization", format!("Bearer {nonce}"))
+        .body("{\"q\":1}")
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(answered.status().as_u16(), 200);
+    assert_eq!(answered.text().await.unwrap(), "{}");
+    assert_eq!(call_provider(started.port, "not-the-nonce").await, 401);
+
+    // The receipt is written once the answer has been relayed, so give the
+    // stream's end a moment on the runtime.
+    let mut receipts = Vec::new();
+    for _ in 0..100 {
+        receipts = receipts_of(root.path(), "s-1");
+        if receipts.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(receipts.len(), 2, "{receipts:?}");
+    let denied = &receipts[0];
+    assert_eq!(denied.outcome, super::receipts::Outcome::Denied);
+    assert_eq!(denied.status, Some(401));
+    let completed = &receipts[1];
+    assert_eq!(completed.outcome, super::receipts::Outcome::Completed);
+    assert_eq!(completed.provider, "/provider/zai");
+    assert_eq!(completed.credential_name.as_deref(), Some("ZAI_KEY"));
+    assert_eq!(completed.upstream_host.as_deref(), Some("127.0.0.1"));
+    assert_eq!(completed.method, "POST");
+    assert_eq!(completed.path, "/chat");
+    assert_eq!(completed.query_bytes, Some(10));
+    assert_eq!(completed.status, Some(200));
+    assert_eq!(completed.bytes_out, 7);
+    assert_eq!(completed.bytes_in, 2);
+    assert!(completed.elapsed_ms > 0);
+
+    let everything = format!("{receipts:?}");
+    for secret in ["SECRET", "the-real-key", nonce.as_str()] {
+        assert!(!everything.contains(secret), "{secret} was recorded");
+    }
+}
+
+/// A call the broker would not forward, and one whose provider could not be
+/// reached, are recorded too. A tunnel carries no brokered credential and is
+/// not.
+#[tokio::test]
+async fn refused_and_unreachable_calls_are_recorded_and_tunnels_are_not() {
+    let root = tempfile::tempdir().unwrap();
+    let mut template = recorded_template(9, root.path());
+    template.providers.push(ProviderUpstream {
+        name: "plain".to_owned(),
+        prefix: "/provider/plain".to_owned(),
+        upstream: "http://api.example.test/v1".to_owned(),
+        credential: "key".to_owned(),
+    });
+    let started = template.start("s-2").await.expect("a broker");
+
+    assert_eq!(
+        call_provider(started.port, &started.nonces["zai"]).await,
+        502
+    );
+    let refused = reqwest::Client::new()
+        .post(format!(
+            "http://127.0.0.1:{}/provider/plain/chat",
+            started.port
+        ))
+        .header(
+            "authorization",
+            format!("Bearer {}", started.nonces["plain"]),
+        )
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(refused.status().as_u16(), 502);
+    let mut tunnel = TcpStream::connect(("127.0.0.1", started.port))
+        .await
+        .unwrap();
+    tunnel
+        .write_all(
+            format!(
+                "CONNECT elsewhere.example:443 HTTP/1.1\r\nProxy-Authorization: {}\r\n\r\n",
+                proxy_authorization(&started.proxy_secret)
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut answer = String::new();
+    let _ = tunnel.read_to_string(&mut answer).await;
+    assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
+
+    let outcomes: Vec<_> = receipts_of(root.path(), "s-2")
+        .into_iter()
+        .map(|receipt| (receipt.provider, receipt.outcome, receipt.status))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            (
+                "/provider/plain".to_owned(),
+                super::receipts::Outcome::Refused,
+                Some(502)
+            ),
+            (
+                "/provider/zai".to_owned(),
+                super::receipts::Outcome::UpstreamUnreachable,
+                Some(502)
+            ),
+        ]
+    );
+}
+
+/// A receipt keeps the path a session chose without any stand-in in it, and
+/// no longer than a record needs.
+#[test]
+fn a_recorded_path_is_scrubbed_and_cut() {
+    let minted = format!("{}{}", crate::config::redact::MINTED_PREFIX, "a".repeat(64));
+    assert_eq!(
+        super::recorded_path(&format!("/chat/{minted}")),
+        "/chat/[redacted]"
+    );
+    let long = format!("/{}", "x".repeat(1000));
+    let kept = super::recorded_path(&long);
+    assert_eq!(kept.len(), 256 + 3);
+    assert!(kept.ends_with("..."));
+}
+
+/// A method is kept only as a standard name, and a path is decoded before it
+/// is scrubbed, so neither can carry a stand-in into a receipt.
+#[test]
+fn a_recorded_method_and_encoded_path_carry_no_stand_in() {
+    let minted = format!("{}{}", crate::config::redact::MINTED_PREFIX, "a".repeat(64));
+    assert_eq!(super::recorded_method(&http::Method::POST), "POST");
+    let odd = http::Method::from_bytes(minted.as_bytes()).unwrap();
+    assert_eq!(super::recorded_method(&odd), "OTHER");
+    let encoded = format!("/chat/{}", minted.replacen('-', "%2D", 1));
+    assert_eq!(super::recorded_path(&encoded), "/chat/[redacted]");
+}
+
+/// A path cannot drive the terminal a receipt is printed in, or carry a
+/// query encoded into it past the rule that a query is kept by length.
+#[test]
+fn a_recorded_path_holds_no_control_character_or_smuggled_query() {
+    let painted = super::recorded_path("/chat/%1b%5b2J%0aforged line");
+    assert!(!painted.chars().any(char::is_control), "{painted:?}");
+    assert_eq!(painted, "/chat/\\u{1b}[2J\\u{a}forged line");
+    assert_eq!(super::recorded_path("/chat%3Fkey=hunter2"), "/chat");
+}
+
+/// A session that keeps calling without its key is one denied receipt a
+/// minute, not one an attempt, and the next one recorded says how many went
+/// unrecorded in between.
+#[tokio::test]
+async fn repeated_calls_without_the_key_are_recorded_once_a_minute() {
+    use super::receipts::{Ledger, ReceiptStore, receipts_for};
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("receipts.db");
+    let clock = Arc::new(std::sync::atomic::AtomicI64::new(1_000));
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let mut state = provider_state(vec![provider_route(
+        "/provider",
+        "https://upstream.test/v1",
+    )]);
+    state.ledger = Some(Ledger {
+        store: Arc::new(ReceiptStore::open(&path).unwrap()),
+        now: {
+            let clock = Arc::clone(&clock);
+            Arc::new(move || clock.load(std::sync::atomic::Ordering::SeqCst))
+        },
+        session_id: "s-1".to_owned(),
+    });
+    state.log = {
+        let lines = Arc::clone(&lines);
+        Logger::new(
+            LogFields::new(),
+            Arc::new(move |_level, line| lines.lock().unwrap().push(line.to_owned())),
+        )
+    };
+    let state = Arc::new(state);
+    let denied = || {
+        http::Request::builder()
+            .uri("/provider/v1/messages")
+            .header("authorization", "Bearer not-the-nonce")
+            .body(axum::body::Body::empty())
+            .unwrap()
+    };
+
+    for _ in 0..5 {
+        let answer = super::serve_provider_request(Arc::clone(&state), denied()).await;
+        assert_eq!(answer.status().as_u16(), 401);
+    }
+    assert_eq!(receipts_for(&path, "s-1", 20).unwrap().len(), 1);
+
+    clock.fetch_add(super::DENIED_WINDOW_MS, std::sync::atomic::Ordering::SeqCst);
+    super::serve_provider_request(Arc::clone(&state), denied()).await;
+
+    assert_eq!(receipts_for(&path, "s-1", 20).unwrap().len(), 2);
+    let warned: Vec<_> = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.contains("without this session's key"))
+        .cloned()
+        .collect();
+    assert_eq!(warned.len(), 2, "{warned:?}");
+    assert!(
+        warned[1].contains("unrecorded_since_last=4"),
+        "{}",
+        warned[1]
+    );
 }
