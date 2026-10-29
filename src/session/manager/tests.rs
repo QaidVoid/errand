@@ -41,6 +41,12 @@ fn silent() -> Logger {
     Logger::new(LogFields::new(), Arc::new(|_level, _line| {}))
 }
 
+/// Waits until everything the test set going has run.
+///
+/// These tests run on a paused clock, which moves only once no task has
+/// anything left to do, blocking work included. So this sleep ends when the
+/// work has finished, however slow the host, rather than after a guess at how
+/// long that takes.
 async fn settle() {
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 }
@@ -605,7 +611,7 @@ fn refused_reason(outcome: &StartOutcome) -> String {
     outcome.refused_reason().to_owned()
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn starting_a_session_creates_its_thread_project_and_state() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -641,7 +647,7 @@ async fn starting_a_session_creates_its_thread_project_and_state() {
 /// A leading word and colon is part of what was asked, not a project name:
 /// the agent is sent the whole message, and the session still works in a
 /// directory of its own.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_leading_name_and_colon_stays_in_the_prompt() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -659,7 +665,7 @@ async fn a_leading_name_and_colon_stays_in_the_prompt() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn two_sessions_run_side_by_side_each_in_its_own_project() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -674,7 +680,7 @@ async fn two_sessions_run_side_by_side_each_in_its_own_project() {
 }
 
 /// A thread nobody can see would leave an agent running that nobody can stop.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn no_thread_means_no_sandbox_and_the_slot_is_given_back() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -700,7 +706,7 @@ async fn no_thread_means_no_sandbox_and_the_slot_is_given_back() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_spent_window_refuses_before_a_thread_or_a_sandbox_exists() {
     with_manager_options(
         &json!({}),
@@ -722,7 +728,7 @@ async fn a_spent_window_refuses_before_a_thread_or_a_sandbox_exists() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn more_sessions_than_the_host_allows_are_refused_with_a_reason() {
     with_manager_options(
         &json!({ "limits": { "maxLiveSessions": 1 } }),
@@ -741,7 +747,7 @@ async fn more_sessions_than_the_host_allows_are_refused_with_a_reason() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_message_reaches_the_session_bound_to_its_thread_and_no_other() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -764,7 +770,7 @@ async fn a_message_reaches_the_session_bound_to_its_thread_and_no_other() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_that_ends_lets_go_of_its_thread_and_can_be_resumed() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -801,7 +807,7 @@ async fn a_session_that_ends_lets_go_of_its_thread_and_can_be_resumed() {
 }
 
 /// Stopping is how somebody says they are finished with a thread.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_that_was_stopped_is_not_offered_for_resuming() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -821,7 +827,7 @@ async fn a_session_that_was_stopped_is_not_offered_for_resuming() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn resuming_picks_the_thread_up_where_it_stopped() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -857,7 +863,7 @@ async fn resuming_picks_the_thread_up_where_it_stopped() {
 }
 
 /// A new exchange labelled with a number already used reads as the same one.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_resumed_session_carries_on_the_turn_numbering() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -891,7 +897,7 @@ async fn a_resumed_session_carries_on_the_turn_numbering() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_thread_this_daemon_never_saw_is_not_resumed() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -909,7 +915,7 @@ async fn a_thread_this_daemon_never_saw_is_not_resumed() {
 
 /// A thread a sweep holds is not reopened under it, and is again once the
 /// sweep lets it go.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_thread_held_by_a_sweep_is_not_resumed_until_it_is_let_go() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -939,7 +945,7 @@ async fn a_thread_held_by_a_sweep_is_not_resumed_until_it_is_let_go() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_thread_that_already_has_a_session_is_not_resumed_on_top_of_it() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -958,7 +964,7 @@ async fn a_thread_that_already_has_a_session_is_not_resumed_on_top_of_it() {
 }
 
 /// Somebody invited before a restart must not be silently withdrawn.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn who_was_invited_survives_the_session_ending_and_coming_back() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1011,7 +1017,7 @@ async fn who_was_invited_survives_the_session_ending_and_coming_back() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_view_can_be_attached_to_a_live_session_and_detached_again() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1035,7 +1041,7 @@ async fn a_view_can_be_attached_to_a_live_session_and_detached_again() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_thread_a_session_belongs_to_is_known_live_or_remembered() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1062,7 +1068,7 @@ async fn the_thread_a_session_belongs_to_is_known_live_or_remembered() {
 }
 
 /// A crashed daemon must not leave containers running against a project.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sandboxes_left_by_a_previous_run_are_swept_before_anything_starts() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1079,7 +1085,7 @@ async fn sandboxes_left_by_a_previous_run_are_swept_before_anything_starts() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn shutting_down_ends_every_live_session() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1100,7 +1106,7 @@ async fn shutting_down_ends_every_live_session() {
 }
 
 /// A session begun at a keyboard is still announced where a phone will see it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_started_with_no_message_still_gets_a_thread() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1129,7 +1135,7 @@ async fn a_session_started_with_no_message_still_gets_a_thread() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_started_at_a_keyboard_gets_a_project_of_its_own() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1154,7 +1160,7 @@ async fn a_session_started_at_a_keyboard_gets_a_project_of_its_own() {
 }
 
 /// The browser knows sessions, not threads: a thread is one of the surfaces.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_can_be_written_to_by_its_own_identifier() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1180,7 +1186,7 @@ async fn a_session_can_be_written_to_by_its_own_identifier() {
 }
 
 /// Sending to a stopped session is asking for it back.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn writing_to_a_session_that_stopped_picks_it_up_again() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1206,7 +1212,7 @@ async fn writing_to_a_session_that_stopped_picks_it_up_again() {
 
 /// The thread is how most people wake a session, so the same invitation
 /// holds there as from the interface.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_stranger_posting_in_a_stopped_thread_does_not_wake_it() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1231,7 +1237,7 @@ async fn a_stranger_posting_in_a_stopped_thread_does_not_wake_it() {
 
 /// Waking a session gives it a sandbox and tells its owner's thread, so only
 /// somebody who may take part in it can do that.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_stranger_cannot_wake_somebody_elses_stopped_session() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1256,7 +1262,7 @@ async fn a_stranger_cannot_wake_somebody_elses_stopped_session() {
 
 /// A name no provider here serves is refused, so a typo costs a message rather
 /// than a sandbox and a turn that fails at the provider.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_model_nothing_serves_is_refused_rather_than_turned_away_later() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1287,7 +1293,7 @@ async fn a_model_nothing_serves_is_refused_rather_than_turned_away_later() {
 
 /// A host that lists no models cannot confirm one, so a name is refused rather
 /// than taken on trust. An empty list is not permission for anything.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_host_that_lists_no_models_refuses_a_named_one() {
     with_models(&json!({}), None, false, Vec::new(), |harness| {
         Box::pin(async move {
@@ -1306,7 +1312,7 @@ async fn a_host_that_lists_no_models_refuses_a_named_one() {
 /// A name several providers serve is a name that exists, so refusing it must
 /// not say it does not. The refusal names the providers, which is what turns
 /// a dead end into a one word edit.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_model_several_providers_serve_is_refused_by_name_not_by_absence() {
     with_models(
         &json!({
@@ -1362,7 +1368,7 @@ async fn a_model_several_providers_serve_is_refused_by_name_not_by_absence() {
 
 /// By the time there is a thread to type `!model` in, the session has already
 /// started on whichever model the configuration named.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_opening_message_can_choose_the_model_the_session_starts_on() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1380,7 +1386,7 @@ async fn the_opening_message_can_choose_the_model_the_session_starts_on() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_known_provider_in_front_of_the_model_switches_provider_too() {
     with_manager_options(
         &json!({
@@ -1417,7 +1423,7 @@ async fn a_known_provider_in_front_of_the_model_switches_provider_too() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_flag_is_taken_off_the_prompt_the_agent_is_given() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1438,7 +1444,7 @@ async fn the_flag_is_taken_off_the_prompt_the_agent_is_given() {
 
 /// Coming back on a different model is a change nobody asked for, and a quiet
 /// one: the answers simply start reading differently.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_resumed_thread_comes_back_on_the_model_it_was_started_with() {
     with_manager_options(
         &json!({
@@ -1484,7 +1490,7 @@ async fn a_resumed_thread_comes_back_on_the_model_it_was_started_with() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_thread_started_on_the_configured_model_still_resumes_on_it() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1512,7 +1518,7 @@ async fn a_thread_started_on_the_configured_model_still_resumes_on_it() {
 }
 
 /// Typing the whole name every time is what a short one is for.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_short_name_starts_the_session_on_the_model_it_stands_for() {
     with_manager_options(
         &json!({
@@ -1547,7 +1553,7 @@ async fn a_short_name_starts_the_session_on_the_model_it_stands_for() {
 
 /// A turn that would not let go is not somebody saying they are done with the
 /// thread, so what was being worked on is still there to pick up.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_thread_force_stopped_for_not_answering_can_still_be_resumed() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1571,7 +1577,7 @@ async fn a_thread_force_stopped_for_not_answering_can_still_be_resumed() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_deliberate_stop_still_ends_the_thread_for_good() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1597,7 +1603,7 @@ async fn a_deliberate_stop_still_ends_the_thread_for_good() {
 /// A thread that has been resumed can still be moved to another model, and
 /// that has to be kept the same way a first run's is, or the move lasts only
 /// until the next restart.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_model_switch_inside_a_resumed_thread_is_remembered_too() {
     with_manager_options(
         &json!({
@@ -1676,7 +1682,7 @@ async fn a_model_switch_inside_a_resumed_thread_is_remembered_too() {
 /// Hitting the limit on the configured provider must not take the others with
 /// it. The window that matters is the one the prompt would actually be
 /// charged to, which the opening message may name with `-m`.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_spent_default_provider_does_not_refuse_another_provider() {
     with_manager_options(
         &json!({
@@ -1727,7 +1733,7 @@ impl SessionView for Noticed {
 /// A spent window starts the session on the first fallback with room rather
 /// than turning the work away, and the thread is told why; with every
 /// fallback spent too, it is turned away as before.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_spent_window_falls_back_to_the_first_model_with_room() {
     let overrides = |fallback: serde_json::Value| {
         json!({
@@ -1793,7 +1799,7 @@ async fn a_spent_window_falls_back_to_the_first_model_with_room() {
 /// A fallback naming a model more than one provider serves names no model, so
 /// it is passed over like one nothing serves rather than guessed at, and the
 /// next fallback is the one the session starts on.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_fallback_naming_a_shared_id_is_passed_over() {
     with_models(
         &json!({
@@ -1833,7 +1839,7 @@ async fn a_fallback_naming_a_shared_id_is_passed_over() {
 }
 
 /// And the configured one is still refused when it is the one being used.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_spent_provider_still_refuses_a_prompt_that_would_use_it() {
     with_manager_options(
         &json!({
@@ -1865,7 +1871,7 @@ async fn a_spent_provider_still_refuses_a_prompt_that_would_use_it() {
 /// A thread that ran on a provider since renamed or removed comes back on the
 /// configured model rather than dying on every resume, and forgets the old
 /// one, so the next resume does not try it again.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_thread_whose_provider_is_gone_resumes_on_the_configured_model() {
     with_manager_options(
         &json!({
@@ -1920,7 +1926,7 @@ async fn a_thread_whose_provider_is_gone_resumes_on_the_configured_model() {
 
 /// A message deleted after its session ended is reconciled where it lies, and
 /// no session is started for it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_ended_session_is_not_restarted_for_a_withdrawal() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1965,7 +1971,7 @@ async fn an_ended_session_is_not_restarted_for_a_withdrawal() {
 }
 
 /// A message nobody here sent withdraws nothing anywhere.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_withdrawal_nobody_holds_reports_nothing() {
     with_manager(|harness| {
         Box::pin(async move {
@@ -1985,7 +1991,7 @@ async fn a_withdrawal_nobody_holds_reports_nothing() {
 /// The notes files already exist on a resume, and treating that as a failure
 /// loses the whole system prompt with it: the house rules, the memory block,
 /// the attribution instructions and the delegate instructions all vanish.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_resumed_session_is_still_given_its_system_prompt() {
     with_remembering_manager(|harness| {
         Box::pin(async move {
@@ -2021,7 +2027,7 @@ async fn a_resumed_session_is_still_given_its_system_prompt() {
 /// A model named without a provider in the opening message is launched under
 /// the provider that serves it, not the default one, so it does not reach the
 /// wrong endpoint.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_bare_model_from_another_provider_launches_under_that_provider() {
     let models = vec![AvailableModel {
         provider: "other".to_owned(),
@@ -2062,7 +2068,7 @@ async fn a_bare_model_from_another_provider_launches_under_that_provider() {
 
 /// What a live session came to hold is scrubbed from what the web shows of
 /// its files, and once it ends the configured secrets still are.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_surface_showing_a_sessions_files_scrubs_what_the_session_holds() {
     with_manager(|harness| {
         Box::pin(async move {
