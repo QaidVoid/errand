@@ -77,7 +77,8 @@ pub struct EgressConfig {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatConfig {
-    /// Bot token. Secret. Never enters a sandbox.
+    /// Bot token. Secret. Never enters a sandbox. At least 8 bytes, so it can
+    /// be scrubbed from what is posted.
     pub token: String,
     /// The single channel the daemon serves. Everything else is ignored.
     pub channel_id: String,
@@ -415,6 +416,7 @@ fn credential_var_stem(provider: &str) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct GithubConfig {
     /// Token the agent authenticates with. Secret, and reachable by the agent.
+    /// At least 8 bytes, so it can be scrubbed from what is posted.
     pub token: String,
     /// Name commits are authored with.
     pub user_name: String,
@@ -592,7 +594,8 @@ pub struct WebConfig {
 pub struct WebLoginConfig {
     /// The application's `OAuth2` client id.
     pub client_id: String,
-    /// The application's `OAuth2` client secret. Secret.
+    /// The application's `OAuth2` client secret. Secret, and at least 8
+    /// bytes, so it can be scrubbed from what is posted.
     pub client_secret: String,
 }
 

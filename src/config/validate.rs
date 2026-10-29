@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 
 use super::{is_absolute, resolve};
 use crate::config::discover::Discovery;
+use crate::config::redact::MIN_SCRUBBABLE_LENGTH;
 use crate::config::schema::{
     self, AgentConfig, ChatConfig, Config, ConfigError, DelegateConfig, EgressConfig, EgressMode,
     GithubConfig, GithubTrigger, LimitsConfig, NetworkMode, OutputConfig, PluginConfig,
@@ -147,6 +148,31 @@ fn reject_unknown(
             ));
         }
     }
+}
+
+/// A required token, which must also be long enough to be scrubbed from what
+/// is posted: a shorter one would pass through every redaction unnoticed.
+fn required_token(source: &Map<String, Value>, place: &str, problems: &mut Problems) -> String {
+    required_secret(source, "token", place, problems)
+}
+
+/// A secret that must be present and long enough to be scrubbed: every
+/// scrubber skips a value under [`MIN_SCRUBBABLE_LENGTH`] bytes, which would
+/// otherwise be posted as it is.
+fn required_secret(
+    source: &Map<String, Value>,
+    key: &str,
+    place: &str,
+    problems: &mut Problems,
+) -> String {
+    let secret = required_string(source, key, place, problems);
+    if !secret.is_empty() && secret.len() < MIN_SCRUBBABLE_LENGTH {
+        problems.add(format!(
+            "{place}.{key} is shorter than {MIN_SCRUBBABLE_LENGTH} bytes, too short to be \
+             scrubbed from what is posted, so use the real one"
+        ));
+    }
+    secret
 }
 
 fn required_string(
@@ -503,7 +529,7 @@ fn validate_chat(raw: &Map<String, Value>, problems: &mut Problems) -> ChatConfi
     }
 
     ChatConfig {
-        token: required_string(&source, "token", "chat", problems),
+        token: required_token(&source, "chat", problems),
         channel_id: required_string(&source, "channelId", "chat", problems),
         allowed_user_ids: allowed,
         blocked_user_ids: id_list(&source, "blockedUserIds", "chat", problems),
@@ -996,7 +1022,7 @@ fn validate_github(raw: &Map<String, Value>, problems: &mut Problems) -> Option<
     reject_unknown(&source, &KNOWN_GITHUB, "github", problems);
 
     Some(GithubConfig {
-        token: required_string(&source, "token", "github", problems),
+        token: required_token(&source, "github", problems),
         user_name: required_string(&source, "userName", "github", problems),
         user_email: required_string(&source, "userEmail", "github", problems),
         trigger: validate_github_trigger(&source, problems),
@@ -1526,7 +1552,7 @@ fn validate_web_login(
 
     Some(WebLoginConfig {
         client_id: required_string(&section, "clientId", "web.login", problems),
-        client_secret: required_string(&section, "clientSecret", "web.login", problems),
+        client_secret: required_secret(&section, "clientSecret", "web.login", problems),
     })
 }
 

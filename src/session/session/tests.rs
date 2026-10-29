@@ -15,6 +15,7 @@ use super::{
 };
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
+use crate::config::redact::secret_values;
 use crate::config::schema::Config;
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
@@ -877,7 +878,7 @@ async fn with_session(
         .clone()
         .attach(thread.clone() as Arc<dyn SessionView>)
         .await;
-    let views = Arc::new(Redacting::new(fanout, Vec::new()));
+    let views = Arc::new(Redacting::new(fanout, secret_values(&config)));
 
     let session = SessionHandle::spawn(SessionOptions {
         id: "s1".to_owned(),
@@ -1547,6 +1548,42 @@ async fn a_file_can_be_uploaded_from_the_project_on_request() {
     .await;
 }
 
+/// A project file holding a configured secret is not posted: its bytes are
+/// not scrubbed as text is, so the whole file is held back and the thread is
+/// told why.
+#[tokio::test]
+async fn a_file_holding_a_secret_is_refused_rather_than_uploaded() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            std::fs::write(
+                harness.root.path().join("project").join("leak.txt"),
+                "TOKEN=a.token.value\n",
+            )
+            .unwrap();
+
+            harness
+                .session
+                .handle(message_from("!file leak.txt", OWNER, "m2"))
+                .await;
+
+            assert!(harness.thread.uploads().is_empty());
+            let said: Vec<String> = harness
+                .thread
+                .replies()
+                .into_iter()
+                .map(|(text, _)| text)
+                .chain(harness.thread.posts())
+                .collect();
+            assert!(
+                said.iter().any(|text| text.contains("leak.txt")
+                    && text.contains("secret that is not to be posted")),
+                "{said:?}"
+            );
+        })
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn stopping_ends_the_session_once_and_tears_the_sandbox_down() {
     with_session(SessionTestCase::default(), |harness| {
@@ -1868,7 +1905,7 @@ async fn a_pull_request_the_agent_asked_for_opens_when_somebody_asked_too() {
     with_session(
         SessionTestCase {
             config: Some(config_with(&json!({
-                "github": { "token": "ghp", "userName": "errand-bot", "userEmail": "bot@example.com" },
+                "github": { "token": "ghp-test-token", "userName": "errand-bot", "userEmail": "bot@example.com" },
             }))),
             open_pull_request: {
                 let opened = Arc::clone(&opened);
@@ -1934,7 +1971,7 @@ async fn the_agent_is_told_what_came_of_its_pull_request_next_turn() {
     with_session(
         SessionTestCase {
             config: Some(config_with(&json!({
-                "github": { "token": "ghp", "userName": "errand-bot", "userEmail": "bot@example.com" },
+                "github": { "token": "ghp-test-token", "userName": "errand-bot", "userEmail": "bot@example.com" },
             }))),
             open_pull_request: {
                 let asked_for = Arc::clone(&asked_for);
@@ -2015,7 +2052,7 @@ async fn a_pull_request_command_can_name_the_repository() {
     with_session(
         SessionTestCase {
             config: Some(config_with(&json!({
-                "github": { "token": "ghp", "userName": "errand-bot", "userEmail": "bot@example.com" },
+                "github": { "token": "ghp-test-token", "userName": "errand-bot", "userEmail": "bot@example.com" },
             }))),
             open_pull_request: {
                 let asked_for = Arc::clone(&asked_for);
@@ -2065,7 +2102,7 @@ async fn a_pull_request_nobody_asked_for_is_refused_and_cleared() {
     with_session(
         SessionTestCase {
             config: Some(config_with(&json!({
-                "github": { "token": "ghp", "userName": "errand-bot", "userEmail": "bot@example.com" },
+                "github": { "token": "ghp-test-token", "userName": "errand-bot", "userEmail": "bot@example.com" },
             }))),
             open_pull_request: {
                 let opened = Arc::clone(&opened);
@@ -2132,7 +2169,7 @@ async fn the_git_identity_and_the_gh_wrapper_are_in_place_before_the_launch() {
     with_session(
         SessionTestCase {
             config: Some(config_with(&json!({
-                "github": { "token": "ghp", "userName": "errand-bot", "userEmail": "bot@example.com" },
+                "github": { "token": "ghp-test-token", "userName": "errand-bot", "userEmail": "bot@example.com" },
             }))),
             ..Default::default()
         },
@@ -2159,7 +2196,7 @@ async fn the_git_identity_and_the_gh_wrapper_are_in_place_before_the_launch() {
                     launched[0].env.get("GIT_AUTHOR_NAME"),
                     Some(&"errand-bot".to_owned())
                 );
-                assert_eq!(launched[0].env.get("GH_TOKEN"), Some(&"ghp".to_owned()));
+                assert_eq!(launched[0].env.get("GH_TOKEN"), Some(&"ghp-test-token".to_owned()));
             })
         },
     )
@@ -3331,6 +3368,39 @@ async fn an_image_the_model_drew_is_posted() {
                 vec![("image.png".to_owned(), GENERATED_PNG.len())]
             );
             assert_eq!(captions(harness), ["generated an image, 16 B"]);
+        })
+    })
+    .await;
+}
+
+/// An image the agent made is held back when its bytes carry a secret, a
+/// stand-in its broker minted included, as a file pulled with `!file` is.
+#[tokio::test]
+async fn an_image_carrying_a_secret_is_not_posted() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            let mut leaky = GENERATED_PNG.to_vec();
+            leaky.extend_from_slice(
+                format!(
+                    "{}{}",
+                    crate::config::redact::MINTED_PREFIX,
+                    "ab".repeat(32)
+                )
+                .as_bytes(),
+            );
+            harness.controls().send(&drawn_image(&leaky));
+            settle().await;
+
+            assert!(harness.thread.uploads().is_empty());
+            assert!(
+                harness
+                    .thread
+                    .posts()
+                    .iter()
+                    .any(|post| post.contains("secret that is not to be posted")),
+                "{:?}",
+                harness.thread.posts()
+            );
         })
     })
     .await;

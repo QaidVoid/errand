@@ -16,7 +16,7 @@ fn environment(entries: &[(&str, &str)]) -> Environment {
 
 fn valid_text() -> String {
     json!({
-        "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+        "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
         "agent": {
             "provider": "anthropic",
             "providers": {
@@ -144,7 +144,7 @@ fn a_file_that_is_not_json_is_not_reported_as_a_field_problem() {
 fn comments_and_trailing_commas_are_read_so_a_config_can_be_annotated() {
     let jsonc = r#"{
         // who drives the bot
-        "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+        "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
         "agent": {
             "provider": "anthropic",
             "providers": { "anthropic": { "credentialName": "K", "credential": "k" } },

@@ -484,6 +484,7 @@ async fn with_daemon(
                     let files = Arc::clone(&files);
                     Box::pin(async move {
                         files.lock().unwrap().push((name, bytes, caption));
+                        true
                     })
                 },
             )
@@ -1653,7 +1654,7 @@ fn a_backend_with_nothing_missing_says_so_plainly() {
 fn an_open_allowlist_is_reported_as_the_decision_it_is() {
     let config = config_with(&json!({
         "chat": {
-            "token": "t",
+            "token": "chat-token",
             "channelId": "c",
             "allowedUserIds": ["*"],
             "blockedUserIds": ["9"],
@@ -2227,7 +2228,7 @@ async fn only_an_operator_may_ask_the_providers_for_their_models_again() {
     });
     let as_operator = json!({
         "chat": {
-            "token": "t",
+            "token": "chat-token",
             "channelId": "chan",
             "allowedUserIds": [OWNER],
             "operatorUserIds": [OWNER],
@@ -2278,7 +2279,7 @@ async fn a_change_to_the_file_reaches_a_decision_the_daemon_already_made() {
         DaemonCase {
             settings: Some(json!({
                 "chat": {
-                    "token": "t",
+                    "token": "chat-token",
                     "channelId": "chan",
                     "allowedUserIds": [OWNER, stranger],
                 },
@@ -2372,7 +2373,7 @@ async fn an_operator_may_forget_from_the_channel_and_is_told_what_went() {
             memory: Some(Arc::clone(&memory)),
             settings: Some(json!({
                 "chat": {
-                    "token": "t",
+                    "token": "chat-token",
                     "channelId": "chan",
                     "allowedUserIds": [OWNER],
                     "operatorUserIds": [OWNER],

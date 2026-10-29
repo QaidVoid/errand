@@ -248,13 +248,8 @@ impl Running {
             return;
         }
         let name = host.rsplit('/').next().unwrap_or("file").to_owned();
-        self.views
-            .send(SessionEvent::Upload {
-                name,
-                bytes,
-                caption: format!("`{}` {} bytes", inert(&display), meta.len()),
-            })
-            .await;
+        let caption = format!("`{}` {} bytes", inert(&display), meta.len());
+        self.post_upload(name, bytes, caption).await;
     }
 
     /// Draws a picture with the image model the configuration names.
@@ -358,13 +353,12 @@ impl Running {
                 ("bytes", LogValue::from(picture.bytes.len())),
             ]),
         );
-        self.views
-            .send(SessionEvent::Upload {
-                name: picture.name,
-                bytes: picture.bytes,
-                caption: picture.caption,
-            })
-            .await;
+        if !self
+            .post_upload(picture.name, picture.bytes, picture.caption)
+            .await
+        {
+            self.react(&message.id, ReactionOutcome::Failed).await;
+        }
     }
 
     /// Reads a text aloud with the speech model the configuration names.
@@ -464,13 +458,9 @@ impl Running {
                 ("bytes", LogValue::from(clip.bytes.len())),
             ]),
         );
-        self.views
-            .send(SessionEvent::Upload {
-                name: clip.name,
-                bytes: clip.bytes,
-                caption: clip.caption,
-            })
-            .await;
+        if !self.post_upload(clip.name, clip.bytes, clip.caption).await {
+            self.react(&message.id, ReactionOutcome::Failed).await;
+        }
     }
 
     /// Counts a returned image or clip, posts it while the turn is under the
@@ -632,17 +622,43 @@ impl Running {
                 || format!("{noun}.{}", extension.unwrap_or_default()),
                 str::to_owned,
             );
-        self.log.info(
-            &format!("posting {made} the agent made"),
-            &fields([("name", LogValue::from(name.as_str()))]),
-        );
         let caption = media_caption(saved.as_deref(), widen(size), media.note.as_deref(), made);
+        let named = name.clone();
+        if self.post_upload(name, media.bytes.clone(), caption).await {
+            self.log.info(
+                &format!("posted {made} the agent made"),
+                &fields([("name", LogValue::from(named.as_str()))]),
+            );
+        }
+    }
+
+    /// Posts a file, unless its bytes hold a secret, and says whether it did.
+    ///
+    /// An upload goes out as bytes, which the reporting door cannot scrub as
+    /// it scrubs text, so one holding a configured or minted secret is
+    /// refused whole and the thread is told why.
+    async fn post_upload(&self, name: String, bytes: Vec<u8>, caption: String) -> bool {
+        if self.views.contains_secret(&bytes) {
+            // The size, not the name, since a name can carry the secret too
+            // and the log is not scrubbed.
+            self.log.warn(
+                "an upload held a secret and was not posted",
+                &fields([("bytes", LogValue::from(bytes.len()))]),
+            );
+            self.say(&format!(
+                "`{}` was not posted, because it holds a secret that is not to be posted",
+                inert(&name)
+            ))
+            .await;
+            return false;
+        }
         self.views
             .send(SessionEvent::Upload {
                 name,
-                bytes: media.bytes.clone(),
+                bytes,
                 caption,
             })
             .await;
+        true
     }
 }

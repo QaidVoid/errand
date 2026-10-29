@@ -106,6 +106,16 @@ pub fn create_sandbox(
     }
 }
 
+/// What a slash command that posts a file to the channel answers, once it
+/// knows whether the file went out.
+fn posted_reply(posted: bool, done: &str, file: &str) -> String {
+    if posted {
+        format!("{done}, and the {file} is in the channel")
+    } else {
+        format!("{done}, but the {file} was not posted")
+    }
+}
+
 /// Settings the chosen backend will not read.
 ///
 /// A setting that does nothing should say so rather than sit there looking
@@ -215,7 +225,7 @@ pub type ReplyInChannel =
 
 /// Posts a file back to the channel, outside any thread, with its caption.
 pub type ReplyWithFile = Arc<
-    dyn Fn(IncomingMessage, String, Vec<u8>, String) -> Pin<Box<dyn Future<Output = ()> + Send>>
+    dyn Fn(IncomingMessage, String, Vec<u8>, String) -> Pin<Box<dyn Future<Output = bool> + Send>>
         + Send
         + Sync,
 >;
@@ -980,14 +990,9 @@ impl Daemon {
                 .await;
             return match drawing {
                 Ok(drawn) => {
-                    (self.options.reply_with_file)(
-                        where_to,
-                        drawn.name,
-                        drawn.bytes,
-                        drawn.caption,
-                    )
-                    .await;
-                    "drew it; the picture is in the channel".to_owned()
+                    let reply = &self.options.reply_with_file;
+                    let posted = reply(where_to, drawn.name, drawn.bytes, drawn.caption).await;
+                    posted_reply(posted, "drew it", "picture")
                 }
                 Err(reason) => reason,
             };
@@ -1005,9 +1010,9 @@ impl Daemon {
                 .await;
             return match reading {
                 Ok(clip) => {
-                    (self.options.reply_with_file)(where_to, clip.name, clip.bytes, clip.caption)
-                        .await;
-                    "read it; the clip is in the channel".to_owned()
+                    let reply = &self.options.reply_with_file;
+                    let posted = reply(where_to, clip.name, clip.bytes, clip.caption).await;
+                    posted_reply(posted, "read it", "clip")
                 }
                 Err(reason) => reason,
             };

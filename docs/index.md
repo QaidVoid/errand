@@ -20,8 +20,11 @@ session, several sessions at once.
   this host, the daemon says which guarantee it cannot keep and refuses to start
   rather than pretending.
 - **The chat token never enters a sandbox.** The provider credential does,
-  because the agent needs it, and everything a session reports is scrubbed of
-  both before it reaches a channel, a browser, or the transcript on disk.
+  unless the broker stands in for it, because the agent needs it. The text a
+  session reports is scrubbed of every configured secret of 8 bytes or more
+  before it reaches a channel, a browser, or the transcript on disk, and an
+  upload that holds one is refused. That is damage control, not a boundary:
+  an agent that re-encodes a key defeats it.
 - **A project has one agent.** Two sessions never write the same working tree.
 - **Nothing is opened on your behalf.** A pull request is composed by the daemon
   and only when somebody in the thread asked for one.

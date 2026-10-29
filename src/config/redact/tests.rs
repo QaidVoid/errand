@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use super::{MINTED_PREFIX, REDACTION, redact_config, redact_text, secret_values};
+use super::{MINTED_PREFIX, REDACTION, contains_secret, redact_config, redact_text, secret_values};
 use crate::config::load::{Environment, load_config};
 use crate::config::schema::{Config, SECRET_PATHS};
 use crate::config::validate::validate_config;
@@ -249,6 +249,30 @@ fn bytes_with_no_secret_pass_through_unchanged() {
     out.extend(scrubber.finish());
 
     assert_eq!(out, b"\x00\xffbinary data");
+}
+
+/// What cannot be scrubbed is checked for a secret instead, as bytes, under
+/// the same floor and with minted secrets known by their shape.
+#[test]
+fn bytes_are_checked_for_a_secret_under_the_same_floor() {
+    let secrets = ["eight-ch".to_owned(), "seven-c".to_owned(), String::new()];
+    assert!(contains_secret(b"xx eight-ch xx", &secrets));
+    assert!(!contains_secret(b"xx seven-c xx", &secrets));
+    assert!(!contains_secret(b"eight", &secrets));
+    assert!(!contains_secret(b"", &secrets));
+
+    let mut binary = vec![0xff, 0x00, 0xfe];
+    binary.extend_from_slice(b"eight-ch");
+    assert!(contains_secret(&binary, &secrets));
+
+    assert!(contains_secret(
+        format!("k={MINTED_PREFIX}a").as_bytes(),
+        &[]
+    ));
+    assert!(!contains_secret(
+        format!("the {MINTED_PREFIX}<hex> shape").as_bytes(),
+        &[]
+    ));
 }
 
 /// A minted value is scrubbed from bytes by its shape, as it is from text,

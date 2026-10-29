@@ -56,7 +56,7 @@ fn a_built_in_provider_is_brokered_from_the_store() {
     )
     .expect("written");
     let config = validate_config(&json!({
-        "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+        "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
         "agent": {
             "provider": "gateway",
             "providers": {
@@ -102,7 +102,7 @@ fn a_built_in_provider_is_brokered_from_the_store() {
 #[test]
 fn an_extension_providers_credential_is_not_the_brokers_to_manage() {
     let config = validate_config(&json!({
-        "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+        "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
         "agent": {
             "provider": "gateway",
             "providers": {
@@ -165,7 +165,7 @@ fn a_plugin_provider_is_routed_only_when_it_opts_in() {
     .expect("written");
     let base = |broker: serde_json::Value| {
         json!({
-            "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+            "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
             "agent": {
                 "provider": "gateway",
                 "providers": {
@@ -217,7 +217,7 @@ fn a_plugin_provider_is_routed_only_when_it_opts_in() {
 #[test]
 fn every_metered_provider_is_asked_the_default_first() {
     let config = validate_config(&json!({
-        "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+        "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
         "agent": {
             "provider": "gateway",
             "providers": {
@@ -374,7 +374,7 @@ async fn a_spent_window_refuses_only_where_the_provider_says_it_does() {
 async fn an_edited_models_list_reaches_the_catalog() {
     let named = |id: &str| {
         validate_config(&json!({
-            "chat": { "token": "t", "channelId": "c", "allowedUserIds": ["u"] },
+            "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
             "agent": {
                 "provider": "zai",
                 "providers": { "zai": { "credential": "z-key", "models": [{ "id": id }] } },

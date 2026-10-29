@@ -27,7 +27,7 @@ use crate::chat::threads::ChatThreadFactory;
 use crate::chat::threads::plain;
 use crate::config::live::LiveConfig;
 use crate::config::load::Environment;
-use crate::config::redact::{redact_text, secret_values};
+use crate::config::redact::{contains_secret, redact_text, secret_values};
 use crate::config::schema::{AgentConfig, Config, EgressMode, GithubConfig, GithubTrigger};
 use crate::config::usage::UsageShape;
 use crate::config::watch::{AfterReload, POLL, watch};
@@ -1173,7 +1173,7 @@ async fn run(
                                 caption: &caption,
                             },
                         )
-                        .await;
+                        .await
                     })
                 },
             )
@@ -1646,31 +1646,49 @@ async fn send_file_in_channel(
     served: ChannelId,
     message: &IncomingMessage,
     file: PostedFile<'_>,
-) {
+) -> bool {
     let PostedFile {
         name,
         bytes,
         caption,
     } = file;
     let channel_id = answer_in(&message.channel_id, served);
-    let caption = addressed(&message.author_id, &redact_text(caption, secrets));
+    // The bytes cannot be scrubbed as the caption is, so a file holding a
+    // secret is held back whole and the person who asked is told.
+    let refused = contains_secret(&bytes, secrets);
+    let caption = if refused {
+        log.warn(
+            "a file held a secret and was not posted",
+            &fields([("bytes", LogValue::from(bytes.len()))]),
+        );
+        addressed(
+            &message.author_id,
+            "the file was not posted, because it holds a secret that is not to be posted",
+        )
+    } else {
+        addressed(&message.author_id, &redact_text(caption, secrets))
+    };
     let starter = match reply_to(message) {
         Some(id) => channel_id.message(http, id).await.ok(),
         None => None,
     };
-    let mut posted = plain(&caption).files(vec![serenity::builder::CreateAttachment::bytes(
-        bytes, name,
-    )]);
+    let mut posted = plain(&caption);
+    if !refused {
+        posted = posted.files(vec![serenity::builder::CreateAttachment::bytes(
+            bytes, name,
+        )]);
+    }
     if let Some(starter) = starter {
         posted = posted.reference_message(&starter);
     }
     let sent = channel_id.send_message(http, posted).await;
-    if let Err(error) = sent {
+    if let Err(error) = &sent {
         log.warn(
             "the file could not be sent",
             &fields([("detail", LogValue::from(error.to_string()))]),
         );
     }
+    !refused && sent.is_ok()
 }
 
 /// Waits for the signals that stop the daemon.

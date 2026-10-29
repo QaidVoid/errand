@@ -288,12 +288,25 @@ The provider credential, because it needs it, and a GitHub token when one is
 configured, because reading issues and checking builds is most of working on
 somebody's repository.
 
-It does not hold the chat token, and everything a session reports is scrubbed of
-every configured secret, and of every stand-in its broker minted, before it
-reaches a channel, a browser, or the transcript on disk. That is damage
-control on an unavoidable exposure rather than a boundary: an agent that
-re-encodes a key defeats it, and the bytes of an uploaded file are not
-scrubbed.
+It does not hold the chat token. The text a session reports is scrubbed of
+every configured secret of 8 bytes or more, and of every stand-in its broker
+minted, before it reaches a channel, a browser, or the transcript on disk. An
+upload, a file pulled with `!file` or a picture or clip a session or a
+channel command made, is bytes rather than text and is not scrubbed. One that
+holds such a secret is refused whole, and whoever asked is told why. In a
+session the house rules text counts as well. A provider credential kept as a placeholder, such as
+`not-needed`, counts too, so a file that merely contains that word is
+refused.
+
+A secret shorter than 8 bytes is neither scrubbed nor checked for, since
+replacing a string that short wherever it occurs mangles ordinary prose. The
+chat and GitHub tokens are refused at load when they are that short. A
+provider credential is not, because a short one may be a deliberate
+placeholder for a local server, so a provider credential under 8 bytes has no
+protection here at all.
+
+That is damage control on an unavoidable exposure rather than a boundary. An
+agent that re-encodes a key, or splits it, defeats it.
 
 A brokered provider's answers are scrubbed on the way back, too. The broker
 puts the real credential on each request, so an upstream that quotes what it

@@ -91,7 +91,9 @@ fn a_misspelled_setting_is_refused_rather_than_ignored() {
 #[test]
 fn an_empty_allowlist_refuses_to_start_rather_than_admitting_everyone() {
     assert!(problems_contain(
-        &valid(json!({ "chat": { "token": "t", "channelId": "c", "allowedUserIds": [] } })),
+        &valid(
+            json!({ "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": [] } })
+        ),
         "allow-everyone"
     ));
 }
@@ -216,7 +218,7 @@ fn a_github_section_missing_a_field_is_refused_not_half_filled() {
 fn a_misspelled_github_setting_is_refused_like_any_other() {
     assert!(problems_contain(
         &valid(json!({
-            "github": { "token": "t", "userName": "n", "userEmail": "e", "userNmae": "typo" },
+            "github": { "token": "github-token", "userName": "n", "userEmail": "e", "userNmae": "typo" },
         })),
         "github.userNmae is not a setting"
     ));
@@ -1287,7 +1289,7 @@ fn asking_a_provider_needs_a_base_url_and_a_key() {
 fn a_github_trigger_names_who_may_ask_and_never_everybody() {
     let github = |trigger: Value| {
         valid(json!({ "github": {
-            "token": "ghp", "userName": "bot", "userEmail": "bot@example.com",
+            "token": "ghp-test-token", "userName": "bot", "userEmail": "bot@example.com",
             "trigger": trigger,
         } }))
     };
@@ -1811,4 +1813,43 @@ fn images_may_name_an_edit_model() {
         ),
         "{problems}"
     );
+}
+
+/// A chat or GitHub token, or the login secret, too short to be scrubbed
+/// from what is posted is refused at load rather than left to pass through every redaction.
+#[test]
+fn a_token_too_short_to_scrub_is_refused() {
+    let with = |chat: &str, github: &str| {
+        validate_config(&valid(json!({
+            "chat": { "token": chat, "channelId": "c", "allowedUserIds": ["u"] },
+            "github": { "token": github, "userName": "bot", "userEmail": "bot@example.com" },
+        })))
+    };
+    let problems = with("short", "ghp").expect_err("refused").to_string();
+    assert!(
+        problems.contains("chat.token is shorter than 8 bytes"),
+        "{problems}"
+    );
+    assert!(
+        problems.contains("github.token is shorter than 8 bytes"),
+        "{problems}"
+    );
+    assert!(with("sevench", "ghp-test").is_err());
+    assert!(with("eight-ch", "ghp-tes").is_err());
+    assert!(with("eight-ch", "ghp-test").is_ok());
+
+    let login = |secret: &str| {
+        validate_config(&valid(json!({
+            "web": {
+                "publicUrl": "https://errand.example",
+                "login": { "clientId": "app", "clientSecret": secret },
+            },
+        })))
+    };
+    let problems = login("short").expect_err("refused").to_string();
+    assert!(
+        problems.contains("web.login.clientSecret is shorter than 8 bytes"),
+        "{problems}"
+    );
+    assert!(login("eight-ch").is_ok());
 }
