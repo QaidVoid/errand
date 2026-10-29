@@ -422,6 +422,7 @@ impl Running {
             ),
             format!("prompts waiting: {}", self.options.scheduler.queue_length()),
         ];
+        lines.extend(self.github_line());
 
         if self.delegated_asked > 0 {
             lines.push(format!(

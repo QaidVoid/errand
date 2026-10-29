@@ -789,6 +789,7 @@ struct SessionTestCase {
     fetch_linked: Option<FetchLinked>,
     fetch_attachment: Option<FetchAttachment>,
     open_pull_request: Option<OpenPullRequest>,
+    github_api: Option<crate::session::pr::Api>,
     unavailable: Option<Unavailable>,
     available_models: Vec<AvailableModel>,
     /// The catalog the session reads. Given one is held by the test, which is
@@ -815,6 +816,7 @@ impl Default for SessionTestCase {
             fetch_linked: None,
             fetch_attachment: None,
             open_pull_request: None,
+            github_api: None,
             unavailable: None,
             available_models: Vec::new(),
             catalog: None,
@@ -900,6 +902,7 @@ async fn with_session(
         owner_name: Some("amelia".to_owned()),
         start_turn: None,
         open_pull_request: case.open_pull_request.clone(),
+        github_api: case.github_api.clone(),
         thread_id: None,
         guild_id: None,
         public_url: None,
@@ -2226,7 +2229,7 @@ async fn the_git_identity_and_the_gh_wrapper_are_in_place_before_the_launch() {
                 .unwrap();
 
                 assert!(config.contains("errand-bot"));
-                assert!(shim.contains("pull requests here are opened by the daemon"));
+                assert!(shim.contains("are opened by the daemon"));
                 let launched = harness.sandbox.launched.lock().unwrap();
                 assert_eq!(
                     launched[0].env.get("GIT_AUTHOR_NAME"),
@@ -5621,5 +5624,295 @@ async fn the_brokers_refusal_reaches_the_thread_and_its_grant_reaches_the_broker
             })
         },
     )
+    .await;
+}
+
+/// A GitHub App configured with `key` as its private key, minting through
+/// `api`.
+fn app_case(key: &std::path::Path, api: crate::session::pr::Api) -> SessionTestCase {
+    SessionTestCase {
+        config: Some(config_with(&json!({
+            "github": {
+                "token": "ghp-daemon-token",
+                "userName": "errand-bot",
+                "userEmail": "bot@example.com",
+                "app": { "appId": 42, "installationId": 7, "privateKeyPath": key.display().to_string() },
+            },
+        }))),
+        github_api: Some(api),
+        ..Default::default()
+    }
+}
+
+/// An `Api` that answers every mint with `token`, or with `status` alone
+/// when it is not a success.
+fn minting(status: u16, token: &'static str) -> crate::session::pr::Api {
+    Arc::new(move |_path, call| {
+        let status = if call.method == "DELETE" { 204 } else { status };
+        Box::pin(async move {
+            crate::session::pr::ApiReply {
+                status,
+                body: json!({
+                    "token": token,
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "permissions": { "contents": "write" },
+                    "message": "Bad credentials",
+                }),
+            }
+        })
+    })
+}
+
+/// With an App, the session holds a minted token and never the daemon's:
+/// nothing in its environment is the daemon's token, the wrapper reads the
+/// minted one from the state directory, and the thread never shows it.
+#[tokio::test]
+async fn with_an_app_a_session_holds_a_minted_token_and_never_the_daemons() {
+    let keys = tempfile::tempdir().unwrap();
+    let key = keys.path().join("app.pem");
+    std::fs::write(&key, include_str!("../github/app/test-key.pem")).unwrap();
+    with_session(
+        app_case(&key, minting(201, "ghs_minted_for_this_session")),
+        |harness| {
+            Box::pin(async move {
+                let launched = harness.sandbox.launched.lock().unwrap()[0].clone();
+                assert!(!launched.env.contains_key("GH_TOKEN"));
+                assert!(
+                    launched
+                        .env
+                        .values()
+                        .all(|value| !value.contains("ghp-daemon-token"))
+                );
+                let held = std::fs::read_to_string(
+                    std::path::Path::new(&harness.state_dir)
+                        .join(crate::session::github::app::TOKEN_FILENAME),
+                )
+                .unwrap();
+                assert_eq!(held, "ghs_minted_for_this_session");
+                let shim = std::fs::read_to_string(
+                    std::path::Path::new(&harness.state_dir).join("home/bin/gh"),
+                )
+                .unwrap();
+                assert!(shim.contains("read -r GH_TOKEN"));
+
+                harness
+                    .controls()
+                    .run_turn_saying("the token is ghs_minted_for_this_session");
+                settle().await;
+                assert!(
+                    !harness
+                        .thread
+                        .everything()
+                        .contains("ghs_minted_for_this_session")
+                );
+            })
+        },
+    )
+    .await;
+}
+
+/// A mint that fails ends the start, saying why, and the session is never
+/// launched on the daemon's token instead.
+#[tokio::test]
+async fn a_failed_mint_ends_the_start_and_never_falls_back_to_the_daemons_token() {
+    let keys = tempfile::tempdir().unwrap();
+    let key = keys.path().join("app.pem");
+    std::fs::write(&key, include_str!("../github/app/test-key.pem")).unwrap();
+    with_session(
+        SessionTestCase {
+            start: false,
+            ..app_case(&key, minting(401, ""))
+        },
+        |harness| {
+            Box::pin(async move {
+                assert!(!harness.session.start(message_from("go", OWNER, "m1")).await);
+
+                assert!(harness.sandbox.launched.lock().unwrap().is_empty());
+                let said = harness.thread.everything();
+                assert!(
+                    said.contains("its GitHub token could not be minted"),
+                    "{said}"
+                );
+                assert!(said.contains("Bad credentials"), "{said}");
+                assert_eq!(*harness.ended.lock().unwrap(), [EndReason::StartupFailed]);
+            })
+        },
+    )
+    .await;
+}
+
+/// A token is minted again ahead of its expiry, the wrapper's file then
+/// holds the new one, and both are kept out of the thread.
+#[tokio::test]
+async fn a_token_is_renewed_before_it_expires_and_every_one_is_scrubbed() {
+    let keys = tempfile::tempdir().unwrap();
+    let key = keys.path().join("app.pem");
+    std::fs::write(&key, include_str!("../github/app/test-key.pem")).unwrap();
+    let minted = Arc::new(Mutex::new(vec!["ghs_second_token", "ghs_first_token"]));
+    let api: crate::session::pr::Api = Arc::new(move |_path, call| {
+        if call.method == "DELETE" {
+            return Box::pin(async {
+                crate::session::pr::ApiReply {
+                    status: 204,
+                    body: json!({}),
+                }
+            });
+        }
+        let token = minted.lock().unwrap().pop().expect("a token to mint");
+        // Eleven minutes out, so the renewal is due at the earliest it is
+        // ever set, a minute from now.
+        let expires = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(660);
+        Box::pin(async move {
+            crate::session::pr::ApiReply {
+                status: 201,
+                body: json!({ "token": token, "expires_at": expires.to_string() }),
+            }
+        })
+    });
+    with_session(app_case(&key, api), |harness| {
+        Box::pin(async move {
+            let file = std::path::Path::new(&harness.state_dir)
+                .join(crate::session::github::app::TOKEN_FILENAME);
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "ghs_first_token");
+
+            harness.timers.advance(60_001);
+            settle().await;
+
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "ghs_second_token");
+            harness
+                .controls()
+                .run_turn_saying("held ghs_first_token, now ghs_second_token");
+            settle().await;
+            let said = harness.thread.everything();
+            assert!(!said.contains("ghs_first_token"), "{said}");
+            assert!(!said.contains("ghs_second_token"), "{said}");
+        })
+    })
+    .await;
+}
+
+/// A renewal that keeps failing is said in the thread once and tried again
+/// each minute, `!status` says it is failing, and the token file goes when
+/// the session ends.
+#[tokio::test]
+async fn a_failing_renewal_is_said_once_and_the_token_goes_with_the_session() {
+    let keys = tempfile::tempdir().unwrap();
+    let key = keys.path().join("app.pem");
+    std::fs::write(&key, include_str!("../github/app/test-key.pem")).unwrap();
+    let calls = Arc::new(Mutex::new(0_u32));
+    let revoked = Arc::new(Mutex::new(Vec::new()));
+    let api: crate::session::pr::Api = {
+        let calls = Arc::clone(&calls);
+        let revoked = Arc::clone(&revoked);
+        Arc::new(move |path, call| {
+            if call.method == "DELETE" {
+                revoked.lock().unwrap().push((path, call.token));
+                return Box::pin(async {
+                    crate::session::pr::ApiReply {
+                        status: 204,
+                        body: json!({}),
+                    }
+                });
+            }
+            let first = {
+                let mut calls = calls.lock().unwrap();
+                *calls += 1;
+                *calls == 1
+            };
+            let expires = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(660);
+            Box::pin(async move {
+                if first {
+                    crate::session::pr::ApiReply {
+                        status: 201,
+                        body: json!({ "token": "ghs_only_token", "expires_at": expires.to_string() }),
+                    }
+                } else {
+                    crate::session::pr::ApiReply {
+                        status: 502,
+                        body: json!({ "message": "GitHub is down" }),
+                    }
+                }
+            })
+        })
+    };
+    with_session(app_case(&key, api), |harness| {
+        Box::pin(async move {
+            harness.timers.advance(60_001);
+            settle().await;
+            harness.timers.advance(60_001);
+            settle().await;
+            harness
+                .session
+                .handle(message_from("!status", OWNER, "m2"))
+                .await;
+
+            assert_eq!(*calls.lock().unwrap(), 3);
+            let said = harness.thread.everything();
+            assert_eq!(said.matches("could not be renewed").count(), 1, "{said}");
+            assert!(said.contains("GitHub is down"), "{said}");
+            assert!(said.contains("its last renewal failed"), "{said}");
+
+            harness.session.stop(EndReason::Shutdown).await;
+            assert!(
+                !std::path::Path::new(&harness.state_dir)
+                    .join(crate::session::github::app::TOKEN_FILENAME)
+                    .exists()
+            );
+            assert_eq!(
+                *revoked.lock().unwrap(),
+                [(
+                    "/installation/token".to_owned(),
+                    "ghs_only_token".to_owned()
+                )]
+            );
+        })
+    })
+    .await;
+}
+
+/// Every token a session held that has not expired is revoked when it ends,
+/// not only the newest: one read before a renewal would otherwise work until
+/// its own expiry.
+#[tokio::test]
+async fn every_token_still_good_is_revoked_when_the_session_ends() {
+    let keys = tempfile::tempdir().unwrap();
+    let key = keys.path().join("app.pem");
+    std::fs::write(&key, include_str!("../github/app/test-key.pem")).unwrap();
+    let minted = Arc::new(Mutex::new(vec!["ghs_second_token", "ghs_first_token"]));
+    let revoked = Arc::new(Mutex::new(Vec::new()));
+    let api: crate::session::pr::Api = {
+        let revoked = Arc::clone(&revoked);
+        Arc::new(move |_path, call| {
+            if call.method == "DELETE" {
+                revoked.lock().unwrap().push(call.token);
+                return Box::pin(async {
+                    crate::session::pr::ApiReply {
+                        status: 204,
+                        body: json!({}),
+                    }
+                });
+            }
+            let token = minted.lock().unwrap().pop().expect("a token to mint");
+            let expires = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(660);
+            Box::pin(async move {
+                crate::session::pr::ApiReply {
+                    status: 201,
+                    body: json!({ "token": token, "expires_at": expires.to_string() }),
+                }
+            })
+        })
+    };
+    with_session(app_case(&key, api), |harness| {
+        Box::pin(async move {
+            harness.timers.advance(60_001);
+            settle().await;
+
+            harness.session.stop(EndReason::Shutdown).await;
+
+            let mut revoked = revoked.lock().unwrap().clone();
+            revoked.sort();
+            assert_eq!(revoked, ["ghs_first_token", "ghs_second_token"]);
+        })
+    })
     .await;
 }

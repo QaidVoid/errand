@@ -94,6 +94,16 @@ Then lock it down. It holds the bot token and the provider key.
 chmod 0600 ~/.config/errand/config.json
 ```
 
+GitHub is optional. Add a `github` block only when sessions should work on
+repositories: a classic token with `repo` and `notifications`, which the
+daemon reads notifications, opens pull requests and pushes with, and the
+name and email commits are authored as. Without more, every session holds
+that token. Add `github.app` so a session holds an installation token minted
+for it instead, narrowed to the App's repositories and expiring within the
+hour. Making the App on GitHub, and where its private key may live, is in
+`docs/github.md` under "What a session holds". The key must lie outside
+`projectRoot` and `stateDir`, which the configuration checks.
+
 Confirm: `config.schema.json` beside the example gives editors completion
 and checking. Every other field has a documented default in
 `docs/reference/configuration.md`. When unsure about a field, read that

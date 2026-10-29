@@ -131,24 +131,51 @@ pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
 /// behind the fan-out can be reached by an unscrubbed report.
 pub struct Redacting {
     fan: Arc<ViewFanOut>,
-    secrets: Vec<String>,
+    secrets: std::sync::RwLock<Vec<String>>,
 }
 
 impl Redacting {
     /// Wraps a fan-out with the secrets of the day.
     pub fn new(fan: Arc<ViewFanOut>, secrets: Vec<String>) -> Self {
-        Self { fan, secrets }
+        Self {
+            fan,
+            secrets: std::sync::RwLock::new(secrets),
+        }
+    }
+
+    /// Scrubs `secret` too from here on, for one the session came to hold
+    /// after it started, such as a minted token.
+    pub fn add_secret(&self, secret: String) {
+        let mut secrets = self.secrets.write().expect("the secrets lock");
+        if !secrets.contains(&secret) {
+            secrets.push(secret);
+        }
+    }
+
+    /// What this door scrubs now, for a surface that shows the session's
+    /// writing other than through its reports.
+    pub fn secrets(&self) -> Vec<String> {
+        self.secrets.read().expect("the secrets lock").clone()
+    }
+
+    /// Stops scrubbing `secret`, for one that is worth nothing any more.
+    pub fn remove_secret(&self, secret: &str) {
+        self.secrets
+            .write()
+            .expect("the secrets lock")
+            .retain(|held| held != secret);
     }
 
     /// Whether `bytes` hold one of the secrets this door scrubs, for what it
     /// cannot scrub, such as an upload.
     pub fn contains_secret(&self, bytes: &[u8]) -> bool {
-        contains_secret(bytes, &self.secrets)
+        contains_secret(bytes, &self.secrets.read().expect("the secrets lock"))
     }
 
     /// Delivers an event to every attached view, with secrets scrubbed first.
     pub async fn send(&self, event: SessionEvent) {
-        self.fan.send(redact_event(event, &self.secrets)).await;
+        let redacted = redact_event(event, &self.secrets.read().expect("the secrets lock"));
+        self.fan.send(redacted).await;
     }
 }
 

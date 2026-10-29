@@ -1,15 +1,16 @@
 //! The GitHub identity a session pushes with.
 //!
-//! The agent gets the token, because reading issues, leaving comments and
+//! The agent gets a credential, because reading issues, leaving comments and
 //! checking a build are most of working on somebody's repository and none of
-//! it is possible without one.
+//! it is possible without one. That is the daemon's own token, or, with a
+//! GitHub App configured, a narrower token minted for the session alone.
 //!
 //! Pull requests are the exception it is asked to route through the daemon: it
 //! writes a title into its state directory and the daemon composes the
 //! description, so what a pull request says about where the work came from is
 //! not left to a model. That is a request the agent makes, not a wall, since a
-//! credential that can comment can also open a pull request. Treat the token
-//! as known to the agent, and scope it on that basis.
+//! credential that can comment can also open a pull request. Treat the
+//! credential as known to the agent, and scope it on that basis.
 
 use std::collections::BTreeMap;
 
@@ -46,50 +47,129 @@ pub const ASKED_FILENAME: &str = "pull-request-asked";
 /// Name of the wrapper, which has to be the name of what it stands in for.
 pub const GH_SHIM_FILENAME: &str = "gh";
 
-/// A `gh` that refuses to open a pull request, and is otherwise the real
-/// thing.
+/// A `gh` that refuses what a session is not to do with it, and is otherwise
+/// the real thing.
 ///
-/// For when the instruction not to has been ignored: this makes the habitual
-/// command fail where the agent will read the reason. It is not a wall,
-/// because the token can reach the API directly and the wrapper sits in a
-/// directory the session can write. It costs one file, and it catches the
-/// failure that actually happens.
+/// It refuses opening a pull request, which the daemon does, the verbs that
+/// destroy or hand over a repository or its secrets, defining an alias, which
+/// would rename any of them, and printing the credential, each with what to
+/// do instead. `gh api` is refused a `DELETE`, `PATCH` or `PUT`, the transfer
+/// and fork routes, and any host but GitHub's own. GraphQL mutations are not
+/// read.
+///
+/// For when an instruction has been ignored: this makes the habitual command
+/// fail where the agent will read the reason. It is not a wall, because the
+/// credential can reach the API directly and the wrapper sits in a directory
+/// the session can write. The wall, where there is one, is the credential:
+/// an App token is narrowed to the installation and the permissions asked
+/// for, and GitHub refuses the rest.
+///
+/// With `reads_token`, the session holds a token the daemon renews, kept in
+/// its state directory, and the wrapper reads it before every call, so `gh`
+/// and git through it always present the current one.
 ///
 /// The real program is found by walking PATH and skipping this directory, so
 /// it does not have to be told where the host keeps it.
-pub fn gh_shim_contents() -> String {
-    [
-        "#!/bin/sh",
-        "# Generated per session by errand. Do not edit.",
-        "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then",
-        "  echo \"errand: pull requests here are opened by the daemon, not by gh.\" >&2",
-        &format!(
-            "  echo \"Write the title to {STATE_PATH}/{REQUEST_FILENAME} and it opens when your turn ends.\" >&2"
-        ),
-        "  exit 1",
-        "fi",
-        // Split by shell rather than by `tr`, so the wrapper needs nothing on
-        // PATH to find what is on PATH.
-        "IFS=:",
-        "for dir in $PATH; do",
-        &format!(
-            "  if [ \"$dir\" != \"{AGENT_BIN}\" ] && [ -x \"$dir/{GH_SHIM_FILENAME}\" ]; then"
-        ),
-        &format!("    exec \"$dir/{GH_SHIM_FILENAME}\" \"$@\""),
-        "  fi",
-        "done",
-        "echo \"errand: gh is not installed\" >&2",
-        "exit 127",
-        "",
-    ]
-    .join("\n")
+pub fn gh_shim_contents(reads_token: bool) -> String {
+    let token = if reads_token { GH_SHIM_TOKEN } else { "" };
+    GH_SHIM
+        .replace("@TOKEN@", token)
+        .replace("@STATE@", STATE_PATH)
+        .replace("@REQUEST@", REQUEST_FILENAME)
+        .replace("@TOKEN_FILE@", app::TOKEN_FILENAME)
+        .replace("@AGENT_BIN@", AGENT_BIN)
+        .replace("@GH@", GH_SHIM_FILENAME)
 }
+
+/// The wrapper's lines that read the current token, when the session holds
+/// one the daemon renews. Unset first, so a missing file fails closed.
+const GH_SHIM_TOKEN: &str = r#"unset GH_TOKEN
+if [ -r "@STATE@/@TOKEN_FILE@" ]; then
+  IFS= read -r GH_TOKEN < "@STATE@/@TOKEN_FILE@"
+  export GH_TOKEN
+fi
+"#;
+
+/// The wrapper, with its paths left as `@NAME@` for [`gh_shim_contents`].
+///
+/// A refused verb is refused wherever it follows its group, whatever stands
+/// between, so a flag and its value, before the verb or between the two, can
+/// hide neither. That refuses the rare call where the words fall that way by
+/// chance, such as a value of `delete` after `repo`, which is the side to
+/// fail on. A call naming `api`
+/// anywhere has every spelling of its method checked, and the routes that
+/// hand a repository over refused by path. PATH is split by the shell rather
+/// than by `tr`, so the wrapper needs nothing on PATH to find what is on
+/// PATH.
+const GH_SHIM: &str = r#"#!/bin/sh
+# Generated per session by errand. Do not edit.
+@TOKEN@refuse() {
+  echo "errand: $1 is not run from a session." >&2
+  echo "$2" >&2
+  exit 1
+}
+daemon="Pull requests, and forks for them, are opened by the daemon: write the title to @STATE@/@REQUEST@ and it opens when your turn ends."
+ask="Ask somebody in the thread to do it, if it needs doing."
+if [ -n "${GH_HOST:-}" ] && [ "$GH_HOST" != "github.com" ]; then
+  refuse "gh for $GH_HOST" "Only github.com is reached from a session."
+fi
+seen=" "; api=""; method=""; host=""; next=""
+for arg in "$@"; do
+  case "$next" in method) method="$arg" ;; host) host="$arg" ;; esac
+  next=""
+  case "$arg" in
+    -X|--method) next=method; continue ;;
+    --hostname) next=host; continue ;;
+    -X=*) method="${arg#-X=}"; continue ;;
+    -X*) method="${arg#-X}"; continue ;;
+    --method=*) method="${arg#--method=}"; continue ;;
+    --hostname=*) host="${arg#--hostname=}"; continue ;;
+    -[!-]*X*) method="${arg#*X}"; [ -z "$method" ] && next=method; continue ;;
+    -t*|-[!-]*t*|--show-token|--show-token=*)
+      case "$seen" in *" auth "*) refuse "gh auth status $arg" "The credential is gh's to use, not to print." ;; esac
+      continue ;;
+    -*) continue ;;
+    api) api=1 ;;
+  esac
+  if [ -n "$api" ]; then
+    route="${arg%%\?*}"; route="${route%/}"
+    case "$route" in */transfer|*/forks) refuse "gh api $arg" "$daemon" ;; esac
+  fi
+  for group in $seen; do
+    case "$group $arg" in
+      "pr create"|"pr new"|"repo fork") refuse "gh $group $arg" "$daemon" ;;
+      "repo delete"|"repo transfer"|"repo archive"|"release delete"|"workflow disable"|"secret set"|"secret delete"|"secret remove"|"variable set"|"variable delete"|"variable remove"|"alias set"|"alias import")
+        refuse "gh $group $arg" "$ask" ;;
+      "auth token") refuse "gh auth token" "The credential is gh's to use, not to print." ;;
+    esac
+  done
+  case "$arg" in
+    pr|repo|release|workflow|secret|variable|alias|auth) seen="$seen$arg " ;;
+  esac
+done
+if [ -n "$api" ]; then
+  case "$method" in
+    [Dd][Ee][Ll][Ee][Tt][Ee]|[Pp][Aa][Tt][Cc][Hh]|[Pp][Uu][Tt]) refuse "gh api -X $method" "$ask" ;;
+  esac
+  if [ -n "$host" ] && [ "$host" != "github.com" ]; then
+    refuse "gh api for $host" "Only github.com is reached from a session."
+  fi
+fi
+IFS=:
+for dir in $PATH; do
+  if [ "$dir" != "@AGENT_BIN@" ] && [ -x "$dir/@GH@" ]; then
+    exec "$dir/@GH@" "$@"
+  fi
+done
+echo "errand: gh is not installed" >&2
+exit 127
+"#;
 
 /// The git configuration a session runs with.
 ///
-/// The credential helper is `gh` itself, so the token exists in exactly one
-/// place: the environment. Writing it into a file here would leave a second
-/// copy on disk in the session's state, for no gain.
+/// The credential helper is `gh` itself, through the wrapper, so git presents
+/// whatever `gh` holds: the daemon's token in the environment, or the App
+/// token the wrapper reads from the state directory. No copy is written here.
 pub fn git_config_contents(github: &GithubConfig) -> String {
     [
         "# Generated per session by errand. Do not edit.",
@@ -197,8 +277,16 @@ pub fn review_instructions(
         "",
         "## Opening a pull request",
         "",
-        "`gh` is authenticated, so read issues, leave comments and check builds as",
-        "you would anywhere. Two things are different.",
+        if github.app.is_some() {
+            "`gh` is authenticated for the repositories listed for this session's GitHub App, \
+             or every one it was installed on when none are listed, so read issues, leave \
+             comments and check builds there as you would anywhere. GitHub refuses anything \
+             outside them, and a fork or a pull request on another repository is opened by \
+             the daemon, as below. Two things are different."
+        } else {
+            "`gh` is authenticated, so read issues, leave comments and check builds as you \
+             would anywhere. Two things are different."
+        },
         "",
         &format!(
             "Commit as `{} <{}>`, which is already set up.",
@@ -245,6 +333,9 @@ pub fn review_instructions(
     ]
     .join("\n")
 }
+
+/// A session's credential minted from a GitHub App.
+pub mod app;
 
 #[cfg(test)]
 mod tests;

@@ -443,10 +443,14 @@ and a value reaches the agent, so nothing secret belongs here.
 The provider credential, because it needs it, and a GitHub token when one is
 configured, because reading issues and checking builds is most of working on
 somebody's repository. Under `egress.mode = proxy` the provider credential is
-its broker's stand-in, on either backend. Under `open`, and for the GitHub
-token always, the real value is held. Under podman both are in the
-container's environment, named on the `podman run` command line but never
-written there.
+its broker's stand-in, on either backend. Under `open` the real value is held.
+The GitHub credential is the daemon's own token, unless `github.app` is set,
+when it is an installation token minted for the session, narrowed to the
+App's installation and renewed within the hour, as [GitHub](/github)
+describes. Under podman the provider credential, and the daemon's GitHub
+token when there is no App, are in the container's environment, named on the
+`podman run` command line but never written there. An App token is kept in the state directory instead,
+since a renewed one could not reach an environment fixed at launch.
 
 It does not hold the chat token. The text a session reports is scrubbed of
 every configured secret of 8 bytes or more, and of every stand-in its broker
