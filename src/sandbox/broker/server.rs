@@ -93,6 +93,7 @@ impl BrokerTemplate {
                     nonce,
                     credential: provider.credential.clone(),
                     credential_name: self.credential_names.get(&provider.name).cloned(),
+                    policy: provider.policy.clone(),
                 }
             })
             .collect();

@@ -1878,3 +1878,104 @@ fn retention_defaults_on_and_checks_its_lengths() {
         "{refused}"
     );
 }
+
+/// What a brokered route allows is checked at load with the rest of the
+/// definition, and is refused on a provider whose key crosses whole, where
+/// it would do nothing.
+#[test]
+fn a_routes_placement_and_capabilities_are_checked_at_load() {
+    let with = |definition: Value| {
+        valid(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": { "anthropic": definition },
+            },
+        }))
+    };
+
+    validate_config(&with(json!({
+        "credential": "secret-value",
+        "placement": "x-api-key",
+        "capabilities": [{ "method": "POST", "path": "/v1/messages" }],
+        "strictCapabilities": true,
+    })))
+    .expect("resolves");
+    assert!(problems_contain(
+        &with(json!({ "credential": "secret-value", "capabilities": [] })),
+        "agent.providers.anthropic.capabilities is empty"
+    ));
+    assert!(problems_contain(
+        &with(json!({
+            "credential": "secret-value",
+            "broker": false,
+            "capabilities": "*",
+        })),
+        "applies to a brokered route"
+    ));
+    assert!(problems_contain(
+        &with(json!({
+            "credential": "secret-value",
+            "extension": true,
+            "placement": "bearer",
+        })),
+        "this provider is not brokered"
+    ));
+    assert!(problems_contain(
+        &with(json!({
+            "credential": "secret-value",
+            "baseUrl": "https://api.example.com/v1",
+            "placement": "x-api-key",
+            "images": { "model": "draw-1" },
+        })),
+        "the images tool sends it as Authorization: Bearer"
+    ));
+}
+
+/// A misspelt route key is refused, since leaving the real one out lets every
+/// call through, while a key errand does not read and resembles none of them
+/// is left alone.
+#[test]
+fn a_misspelt_route_key_is_refused_rather_than_failing_open() {
+    let with = |definition: Value| {
+        valid(json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": { "anthropic": definition },
+            },
+        }))
+    };
+    for (written, meant) in [
+        ("strictCapabilites", "strictCapabilities"),
+        ("capabilties", "capabilities"),
+        ("placemnt", "placement"),
+        ("StrictCapabilities", "strictCapabilities"),
+        ("strict", "strictCapabilities"),
+        ("capability", "capabilities"),
+        ("strictCaps", "strictCapabilities"),
+        ("place", "placement"),
+        ("capab", "capabilities"),
+        ("placem", "placement"),
+        ("strictness", "strictCapabilities"),
+    ] {
+        assert!(
+            problems_contain(
+                &with(json!({ "credential": "secret-value", written: true })),
+                &format!("did you mean {meant}?")
+            ),
+            "{written}"
+        );
+    }
+    for unrelated in [
+        "displayName",
+        "platform",
+        "plans",
+        "strategy",
+        "capital",
+        "capacity",
+    ] {
+        validate_config(&with(
+            json!({ "credential": "secret-value", unrelated: "x" }),
+        ))
+        .unwrap_or_else(|error| panic!("{unrelated} was refused: {error}"));
+    }
+}

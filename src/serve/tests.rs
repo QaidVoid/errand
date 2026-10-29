@@ -10,7 +10,8 @@ use serenity::model::id::ChannelId;
 
 use super::{
     BoxedGateRead, addressed, answer_in, brokerable_providers, brokering_credential_names,
-    check_provider_names, host_of, read_usage, rebuild_catalog, refusal, reply_to, usage_sources,
+    changed_routes, check_provider_names, host_of, provider_upstreams, read_usage, rebuild_catalog,
+    refusal, reply_to, usage_sources,
 };
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
@@ -496,6 +497,7 @@ async fn an_undialable_provider_base_url_is_warned_about_at_startup() {
             prefix: prefix.to_owned(),
             upstream: upstream.to_owned(),
             credential: "key".to_owned(),
+            policy: crate::config::route::RoutePolicy::default(),
         },
     );
 
@@ -513,4 +515,73 @@ async fn an_undialable_provider_base_url_is_warned_about_at_startup() {
             "{prefix}: {lines:?}"
         );
     }
+}
+
+/// What a definition declares about its route reaches the route the broker is
+/// built from, and a provider that declares nothing keeps the default.
+#[test]
+fn a_definitions_route_policy_reaches_its_broker_route() {
+    use crate::config::route::{Capabilities, Placement};
+
+    let config = validate_config(&json!({
+        "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
+        "agent": {
+            "provider": "gateway",
+            "providers": {
+                "gateway": {
+                    "baseUrl": "https://gateway.example/v1",
+                    "credential": "g-key",
+                    "kind": "anthropic",
+                    "capabilities": [{ "method": "POST", "path": "/v1/messages" }],
+                    "strictCapabilities": true,
+                },
+                "plain": { "baseUrl": "https://plain.example/v1", "credential": "p-key" },
+            },
+        },
+        "projectRoot": "/tmp/p",
+        "stateDir": "/tmp/s",
+    }))
+    .expect("resolves");
+
+    let upstreams = provider_upstreams(&config.agent, None);
+    let policy_of = |name: &str| {
+        upstreams
+            .iter()
+            .find(|upstream| upstream.name == name)
+            .map(|upstream| upstream.policy.clone())
+            .expect("routed")
+    };
+
+    let gateway = policy_of("gateway");
+    assert_eq!(gateway.placement, Placement::ApiKey);
+    assert!(gateway.strict);
+    assert!(matches!(gateway.capabilities, Capabilities::Declared(ref list) if list.len() == 1));
+    assert_eq!(
+        policy_of("plain"),
+        crate::config::route::RoutePolicy::default()
+    );
+}
+
+/// A reload is said to have changed a route only for a provider routed both
+/// before and after whose policy differs.
+#[test]
+fn only_a_route_whose_policy_changed_is_named_after_a_reload() {
+    use crate::config::route::{Placement, RoutePolicy};
+
+    let strict = RoutePolicy {
+        placement: Placement::Bearer,
+        ..RoutePolicy::default()
+    };
+    let before = std::collections::BTreeMap::from([
+        ("same".to_owned(), RoutePolicy::default()),
+        ("edited".to_owned(), RoutePolicy::default()),
+        ("removed".to_owned(), RoutePolicy::default()),
+    ]);
+    let after = std::collections::BTreeMap::from([
+        ("same".to_owned(), RoutePolicy::default()),
+        ("edited".to_owned(), strict.clone()),
+        ("added".to_owned(), strict),
+    ]);
+
+    assert_eq!(changed_routes(&before, &after), ["edited"]);
 }

@@ -28,6 +28,7 @@ pub use server::{Broker, BrokerTemplate, SessionBroker};
 
 use receipts::{Outcome, Receipt, ReceiptGuard};
 
+use crate::config::route::{Capabilities, Placement, RoutePolicy};
 use crate::log::Logger;
 use crate::log::fields;
 
@@ -174,6 +175,8 @@ pub struct ProviderRoute {
     pub credential: String,
     /// The variable the credential is configured under, for receipts.
     pub credential_name: Option<String>,
+    /// Which header the key travels in and which calls it may make.
+    pub policy: RoutePolicy,
 }
 
 /// A provider the broker stands in front of, before any session holds a
@@ -188,6 +191,8 @@ pub struct ProviderUpstream {
     pub upstream: String,
     /// The real credential. Never leaves the daemon.
     pub credential: String,
+    /// Which header the key travels in and which calls it may make.
+    pub policy: RoutePolicy,
 }
 
 /// Headers that describe one hop and must not be forwarded to the next.
@@ -205,11 +210,20 @@ const HOP_BY_HOP: [&str; 9] = [
 
 /// The header an Anthropic-shaped provider reads its key from.
 ///
-/// An OpenAI-shaped provider reads `Authorization` instead. The broker
-/// accepts the session's nonce in either, since which one arrives depends on
-/// the provider kind the session was pointed at, and puts the real
-/// credential back into whichever ones the session used.
+/// An OpenAI-shaped provider reads `Authorization` instead. Which one a route
+/// uses is its placement; a route with none accepts the session's nonce in
+/// either and puts the real credential back into whichever ones it used.
 const API_KEY_HEADER: &str = "x-api-key";
+
+/// Headers some frameworks read as the request's real method or path, in
+/// place of the ones the route's capabilities were matched against.
+const REROUTING: [&str; 5] = [
+    "x-http-method-override",
+    "x-method-override",
+    "x-http-method",
+    "x-original-url",
+    "x-rewrite-url",
+];
 
 /// Compares without letting the time taken say how much of it matched.
 fn same_secret(a: &str, b: &str) -> bool {
@@ -253,13 +267,11 @@ fn carries_proxy_credential(head: &str, expected: &str) -> bool {
     scheme.eq_ignore_ascii_case("basic") && same_secret(token.trim(), expected)
 }
 
-/// Whether a request carries this session's nonce as its key.
+/// Whether a request carries this session's nonce as its key, in the header
+/// the route's placement names, or in either when it names none.
 ///
-/// A session sends its key in whichever header its provider kind uses:
-/// `Authorization` for an OpenAI-shaped provider, `x-api-key` for an
-/// Anthropic-shaped one. Either form may carry a `Bearer ` prefix, as some
-/// clients add one unasked.
-fn carries_nonce(headers: &http::header::HeaderMap, nonce: &str) -> bool {
+/// Either form may carry a `Bearer ` prefix, as some clients add one unasked.
+fn carries_nonce(headers: &http::header::HeaderMap, nonce: &str, placement: Placement) -> bool {
     let nonce_of = |name: http::header::HeaderName| {
         headers
             .get(name)
@@ -267,11 +279,136 @@ fn carries_nonce(headers: &http::header::HeaderMap, nonce: &str) -> bool {
             .map(|value| value.strip_prefix("Bearer ").unwrap_or(value))
             .unwrap_or_default()
     };
-    same_secret(nonce_of(http::header::AUTHORIZATION), nonce)
-        || same_secret(
+    let bearer = || same_secret(nonce_of(http::header::AUTHORIZATION), nonce);
+    let key = || {
+        same_secret(
             nonce_of(http::header::HeaderName::from_static(API_KEY_HEADER)),
             nonce,
         )
+    };
+    match placement {
+        Placement::Either => bearer() || key(),
+        Placement::Bearer => bearer(),
+        Placement::ApiKey => key(),
+    }
+}
+
+/// What a session is told when its key is not where the route takes it.
+fn unauthorized(placement: Placement) -> &'static str {
+    match placement {
+        Placement::Either => "not this session\n",
+        Placement::Bearer => {
+            "not this session. This provider takes its key as Authorization: Bearer.\n"
+        }
+        Placement::ApiKey => "not this session. This provider takes its key in x-api-key.\n",
+    }
+}
+
+/// Why the path after a route's prefix cannot be matched as the upstream
+/// would read it, or nothing when it can.
+///
+/// Refused rather than normalised, so the path a capability was matched
+/// against is byte for byte the one forwarded: an empty segment, a `.` or
+/// `..` segment, one that decodes once to either or to a slash or backslash,
+/// one carrying `;` parameters, which some servers strip before routing, one
+/// that still holds an escape after one decoding, which an upstream that
+/// decodes twice would read as any of those, or one that decodes to a
+/// control character, could each be resolved by the upstream, or by the URL
+/// rebuilt here, to a path the match never saw.
+fn ambiguous_path(rest: &str) -> Option<&'static str> {
+    if rest.contains("//") {
+        return Some("the path has an empty segment");
+    }
+    for segment in rest.split('/').skip(1) {
+        let decoded = percent_decoded(segment);
+        if decoded == "." || decoded == ".." {
+            return Some("the path has a . or .. segment");
+        }
+        if decoded.contains('/') || decoded.contains('\\') {
+            return Some("the path has an encoded slash");
+        }
+        if decoded.contains(';') {
+            return Some("the path has ; parameters");
+        }
+        if decoded.contains('%') {
+            return Some("the path is encoded twice");
+        }
+        if decoded.chars().any(char::is_control) {
+            return Some("the path has a control character");
+        }
+    }
+    None
+}
+
+/// How a route's capabilities answer a call: `None` to forward it, or the
+/// refusal. A call a list does not name is refused only when the route is
+/// strict, and said in the log either way, as is every call on a route that
+/// declares nothing, with the entry that would allow it.
+fn capability_refusal(
+    state: &ProviderState,
+    route: &ProviderRoute,
+    method: &http::Method,
+    rest: &str,
+) -> Option<axum::response::Response> {
+    use axum::response::IntoResponse;
+
+    let policy = &route.policy;
+    let path = recorded_path(rest);
+    let shown = recorded_method(method);
+    let call = || {
+        fields([
+            ("provider", route.prefix.as_str().into()),
+            ("method", shown.as_str().into()),
+            ("path", path.as_str().into()),
+        ])
+    };
+    if policy.capabilities == Capabilities::Unset {
+        let mut logged = call();
+        logged.insert(
+            "capability".to_owned(),
+            format!(
+                "{{ \"method\": \"{shown}\", \"path\": \"{}\" }}",
+                suggested_path(rest)
+            )
+            .into(),
+        );
+        state.log.info(
+            "a provider call is let through on a route that declares no capabilities, and the \
+             capability field is the entry that would name it",
+            &logged,
+        );
+        return None;
+    }
+    if policy.capabilities.allow(method.as_str(), rest) {
+        return None;
+    }
+    let granted = match &policy.capabilities {
+        Capabilities::Declared(granted) if policy.strict => granted,
+        _ => {
+            state.log.warn(
+                "a provider call its route's capabilities do not name is let through, since the \
+                 route is not strict",
+                &call(),
+            );
+            return None;
+        }
+    };
+    state.log.warn(
+        "a provider call its route's capabilities do not name was refused",
+        &call(),
+    );
+    let granted = granted
+        .iter()
+        .map(|capability| format!("{} {}", capability.method, capability.path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(
+        (
+            axum::http::StatusCode::FORBIDDEN,
+            format!("this provider route does not allow {method} {path}. It allows {granted}.\n"),
+        )
+            .into_response(),
+    )
 }
 
 /// Whether an IPv4 address is one the broker must not connect to.
@@ -785,9 +922,10 @@ pub(crate) async fn serve_provider_request(
             bytes_in: 0,
         },
     );
-    // The session proves itself with the nonce this broker gave it, in
-    // whichever header its provider kind sends a key in.
-    if !carries_nonce(request.headers(), &route.nonce) {
+    // The session proves itself with the nonce this broker gave it, before
+    // anything about what the route allows is said.
+    let placement = route.policy.placement;
+    if !carries_nonce(request.headers(), &route.nonce, placement) {
         // A refusal is the end of a request, not of a session that keeps
         // sending them, so it is recorded once a minute with how many went
         // unrecorded, for the log and the store alike.
@@ -810,9 +948,57 @@ pub(crate) async fn serve_provider_request(
             }
             None => receipt.discard(),
         }
-        return (axum::http::StatusCode::UNAUTHORIZED, "not this session\n").into_response();
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            unauthorized(placement),
+        )
+            .into_response();
+    }
+    if let Some(why) = ambiguous_path(&rest) {
+        state.log.warn(
+            "a provider call arrived with a path that cannot be a path",
+            &fields([
+                ("provider", route.prefix.as_str().into()),
+                ("path", recorded_path(&rest).into()),
+                ("detail", why.into()),
+            ]),
+        );
+        let response = (
+            axum::http::StatusCode::BAD_REQUEST,
+            format!("{why}, which the broker does not forward\n"),
+        )
+            .into_response();
+        return refused_call(receipt, response);
+    }
+    if let Some(refused) = capability_refusal(&state, route, request.method(), &rest) {
+        return refused_call(receipt, refused);
     }
     forward_to_provider(&state, request, route, rest, receipt).await
+}
+
+/// The path a capability would need to name a call, as the log suggests it.
+///
+/// Matched as sent, so a segment is suggested only as it arrived. One that is
+/// escaped, or holds something minted for the session, is suggested as `*`,
+/// and a path too long to show whole as everything beneath its first segment.
+fn suggested_path(rest: &str) -> String {
+    if rest.len() > RECORDED_PATH_BYTES {
+        let first = rest.split('/').nth(1).unwrap_or_default();
+        return format!("/{}/**", suggested_segment(first));
+    }
+    rest.split('/')
+        .map(suggested_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// One segment of [`suggested_path`].
+fn suggested_segment(segment: &str) -> &str {
+    if segment.contains('%') || crate::config::redact::redact_text(segment, &[]) != segment {
+        "*"
+    } else {
+        segment
+    }
 }
 
 /// The longest path a receipt keeps.
@@ -1069,8 +1255,9 @@ fn build_forwarded(
             .unwrap_or(reqwest::Method::GET),
         target.clone(),
     );
-    // Whether the session sent its key the Anthropic way, which decides
-    // whether the provider is also given it that way below.
+    // Whether the session sent its key the Anthropic way, which decides,
+    // on a route with no placement, whether the provider is also given it
+    // that way below.
     let sends_key = request.headers().contains_key(API_KEY_HEADER);
     for (name, value) in request.headers() {
         // Credentials are set on below, replacing whatever the session sent:
@@ -1083,18 +1270,24 @@ fn build_forwarded(
         if name == http::header::ACCEPT_ENCODING {
             continue;
         }
+        if REROUTING.contains(&name.as_str()) {
+            continue;
+        }
         if !HOP_BY_HOP.contains(&name.as_str().to_lowercase().as_str()) {
             forwarded = forwarded.header(name.as_str(), value.to_str().unwrap_or(""));
         }
     }
     forwarded = forwarded.header(http::header::ACCEPT_ENCODING, "identity");
-    forwarded = forwarded.header(
-        http::header::AUTHORIZATION,
-        format!("Bearer {}", route.credential),
-    );
-    if sends_key {
-        forwarded = forwarded.header(API_KEY_HEADER, route.credential.clone());
-    }
+    let bearer = format!("Bearer {}", route.credential);
+    forwarded = match route.policy.placement {
+        Placement::Either if sends_key => forwarded
+            .header(http::header::AUTHORIZATION, bearer)
+            .header(API_KEY_HEADER, route.credential.clone()),
+        Placement::Either | Placement::Bearer => {
+            forwarded.header(http::header::AUTHORIZATION, bearer)
+        }
+        Placement::ApiKey => forwarded.header(API_KEY_HEADER, route.credential.clone()),
+    };
     let sent = Arc::clone(sent);
     let body = request
         .into_body()

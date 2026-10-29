@@ -1,5 +1,6 @@
 //! Tests for the bailey backend, ported from `bailey_test.ts`.
 
+use crate::config::route::RoutePolicy;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -720,6 +721,7 @@ fn template() -> BrokerTemplate {
             prefix: "/provider/zai-coding-cn".to_owned(),
             upstream: "https://api.example.com/v4".to_owned(),
             credential: "real-key".to_owned(),
+            policy: RoutePolicy::default(),
         }],
         credential_names: BTreeMap::from([("zai-coding-cn".to_owned(), "ZAI_KEY".to_owned())]),
         receipts: None,

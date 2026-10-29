@@ -1,5 +1,6 @@
 //! Tests for the egress broker, ported from `broker_test.ts`.
 
+use crate::config::route::{Capabilities, Capability, Placement, RoutePolicy};
 use std::collections::BTreeMap;
 use std::str::FromStr as _;
 use std::sync::atomic::AtomicUsize;
@@ -298,6 +299,7 @@ async fn the_credential_is_put_on_at_the_broker_never_given_to_the_session() {
             nonce: "the-session-nonce".to_owned(),
             credential: "the-real-key".to_owned(),
             credential_name: None,
+            policy: RoutePolicy::default(),
         }],
         true,
         PROXY_CREDENTIAL.to_owned(),
@@ -350,13 +352,41 @@ fn a_nonce_in_either_key_header_is_this_session() {
         headers
     };
 
-    assert!(carries_nonce(&keyed("authorization", "Bearer n"), "n"));
-    assert!(carries_nonce(&keyed("authorization", "n"), "n"));
-    assert!(carries_nonce(&keyed("x-api-key", "n"), "n"));
-    assert!(carries_nonce(&keyed("x-api-key", "Bearer n"), "n"));
-    assert!(!carries_nonce(&keyed("authorization", "Bearer x"), "n"));
-    assert!(!carries_nonce(&keyed("x-api-key", "x"), "n"));
-    assert!(!carries_nonce(&axum::http::HeaderMap::new(), "n"));
+    assert!(carries_nonce(
+        &keyed("authorization", "Bearer n"),
+        "n",
+        Placement::Either
+    ));
+    assert!(carries_nonce(
+        &keyed("authorization", "n"),
+        "n",
+        Placement::Either
+    ));
+    assert!(carries_nonce(
+        &keyed("x-api-key", "n"),
+        "n",
+        Placement::Either
+    ));
+    assert!(carries_nonce(
+        &keyed("x-api-key", "Bearer n"),
+        "n",
+        Placement::Either
+    ));
+    assert!(!carries_nonce(
+        &keyed("authorization", "Bearer x"),
+        "n",
+        Placement::Either
+    ));
+    assert!(!carries_nonce(
+        &keyed("x-api-key", "x"),
+        "n",
+        Placement::Either
+    ));
+    assert!(!carries_nonce(
+        &axum::http::HeaderMap::new(),
+        "n",
+        Placement::Either
+    ));
 }
 
 /// A session addressing an Anthropic-shaped provider sends its key in
@@ -378,6 +408,7 @@ async fn a_session_key_in_x_api_key_is_accepted_and_translated() {
             nonce: "the-session-nonce".to_owned(),
             credential: "the-real-key".to_owned(),
             credential_name: None,
+            policy: RoutePolicy::default(),
         }],
         true,
         PROXY_CREDENTIAL.to_owned(),
@@ -438,6 +469,7 @@ async fn each_provider_has_its_own_route_and_its_own_nonce() {
                 nonce: "nonce-zai".to_owned(),
                 credential: "key-zai".to_owned(),
                 credential_name: None,
+                policy: RoutePolicy::default(),
             },
             ProviderRoute {
                 prefix: "/provider/meta".to_owned(),
@@ -445,6 +477,7 @@ async fn each_provider_has_its_own_route_and_its_own_nonce() {
                 nonce: "nonce-meta".to_owned(),
                 credential: "key-meta".to_owned(),
                 credential_name: None,
+                policy: RoutePolicy::default(),
             },
         ],
         true,
@@ -704,6 +737,7 @@ async fn a_provider_at_an_internal_address_is_refused_unless_allowed_on_purpose(
             nonce: "n".to_owned(),
             credential: "k".to_owned(),
             credential_name: None,
+            policy: RoutePolicy::default(),
         }],
         false,
         PROXY_CREDENTIAL.to_owned(),
@@ -932,6 +966,7 @@ fn provider_route(prefix: &str, upstream: &str) -> ProviderRoute {
         nonce: "session-nonce".to_owned(),
         credential: "operator-key".to_owned(),
         credential_name: None,
+        policy: RoutePolicy::default(),
     }
 }
 
@@ -1529,6 +1564,7 @@ fn template_for(upstream_port: u16, log: Logger) -> BrokerTemplate {
             prefix: "/provider/zai".to_owned(),
             upstream: format!("http://127.0.0.1:{upstream_port}/v4"),
             credential: "the-real-key".to_owned(),
+            policy: RoutePolicy::default(),
         }],
         credential_names: BTreeMap::new(),
         receipts: None,
@@ -2066,6 +2102,7 @@ async fn refused_and_unreachable_calls_are_recorded_and_tunnels_are_not() {
         prefix: "/provider/plain".to_owned(),
         upstream: "http://api.example.test/v1".to_owned(),
         credential: "key".to_owned(),
+        policy: RoutePolicy::default(),
     });
     let started = template.start("s-2").await.expect("a broker");
 
@@ -2149,6 +2186,360 @@ fn a_recorded_method_and_encoded_path_carry_no_stand_in() {
     assert_eq!(super::recorded_method(&odd), "OTHER");
     let encoded = format!("/chat/{}", minted.replacen('-', "%2D", 1));
     assert_eq!(super::recorded_path(&encoded), "/chat/[redacted]");
+}
+
+/// A broker in front of one stub upstream, with `policy` on its route, and
+/// what it logs.
+async fn policed(
+    policy: RoutePolicy,
+) -> (
+    Broker,
+    u16,
+    Arc<Mutex<BTreeMap<String, String>>>,
+    Arc<Mutex<Vec<String>>>,
+) {
+    let seen = Arc::new(Mutex::new(BTreeMap::new()));
+    let upstream_port = start_upstream(Arc::clone(&seen), "one").await;
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&lines);
+    let mut broker = Broker::new(
+        Vec::new(),
+        vec![443],
+        Logger::new(
+            LogFields::new(),
+            Arc::new(move |_level, line| kept.lock().unwrap().push(line.to_owned())),
+        ),
+        vec![ProviderRoute {
+            prefix: "/provider".to_owned(),
+            upstream: format!("http://127.0.0.1:{upstream_port}"),
+            nonce: "the-session-nonce".to_owned(),
+            credential: "the-real-key".to_owned(),
+            credential_name: None,
+            policy,
+        }],
+        true,
+        PROXY_CREDENTIAL.to_owned(),
+        None,
+    );
+    let port = broker.listen("127.0.0.1").await.expect("bound");
+    (broker, port, seen, lines)
+}
+
+/// One call to a policed broker, keyed with the nonce in `header`, as its
+/// status and body.
+async fn call(port: u16, method: &str, path: &str, header: &str) -> (u16, String) {
+    let nonce = if header == "authorization" {
+        "Bearer the-session-nonce"
+    } else {
+        "the-session-nonce"
+    };
+    let answered = reqwest::Client::new()
+        .request(
+            reqwest::Method::from_bytes(method.as_bytes()).unwrap(),
+            format!("http://127.0.0.1:{port}/provider{path}"),
+        )
+        .header(header, nonce)
+        .body("{}")
+        .send()
+        .await
+        .expect("answered");
+    let status = answered.status().as_u16();
+    (status, answered.text().await.unwrap_or_default())
+}
+
+fn messages_only(strict: bool) -> RoutePolicy {
+    RoutePolicy {
+        placement: Placement::Either,
+        capabilities: Capabilities::Declared(vec![Capability {
+            method: "POST".to_owned(),
+            path: "/v1/messages".to_owned(),
+        }]),
+        strict,
+    }
+}
+
+/// On a strict route a call the list does not name is answered 403 with the
+/// list, and never reaches the upstream. A named call, query and all, does.
+#[tokio::test]
+async fn an_undeclared_call_on_a_strict_route_is_refused_with_the_granted_list() {
+    let (mut broker, port, seen, _) = policed(messages_only(true)).await;
+
+    let (status, body) = call(port, "DELETE", "/v1/messages", "x-api-key").await;
+    assert_eq!(status, 403);
+    assert!(
+        body.contains("does not allow DELETE /v1/messages"),
+        "{body}"
+    );
+    assert!(body.contains("It allows POST /v1/messages"), "{body}");
+    assert!(seen.lock().unwrap().is_empty());
+
+    assert_eq!(
+        call(port, "POST", "/v1/messages?beta=1", "x-api-key")
+            .await
+            .0,
+        200
+    );
+    assert!(!seen.lock().unwrap().is_empty());
+    broker.close();
+}
+
+/// Without the flag, a declared list only warns: the call goes through, and
+/// the log names it.
+#[tokio::test]
+async fn a_declared_list_without_the_flag_forwards_and_warns() {
+    let (mut broker, port, seen, lines) = policed(messages_only(false)).await;
+
+    assert_eq!(call(port, "DELETE", "/v1/files", "x-api-key").await.0, 200);
+
+    assert!(!seen.lock().unwrap().is_empty());
+    let lines = lines.lock().unwrap();
+    let warned: Vec<_> = lines
+        .iter()
+        .filter(|line| line.contains("do not name is let through"))
+        .collect();
+    assert_eq!(warned.len(), 1, "{lines:?}");
+    assert!(warned[0].contains("method=DELETE") && warned[0].contains("path=/v1/files"));
+    broker.close();
+}
+
+/// A route that declares nothing forwards every call and logs the entry that
+/// would name it; `"*"` forwards every call without a word.
+#[tokio::test]
+async fn no_capabilities_logs_the_entry_and_a_wildcard_is_quiet() {
+    let (mut broker, port, _, lines) = policed(RoutePolicy::default()).await;
+    assert_eq!(
+        call(port, "GET", "/v1/models", "authorization").await.0,
+        200
+    );
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("declares no capabilities")
+                && line.contains(r#"capability={ "method": "GET", "path": "/v1/models" }"#)),
+        "{:?}",
+        lines.lock().unwrap()
+    );
+    broker.close();
+
+    let (mut broker, port, _, lines) = policed(RoutePolicy {
+        capabilities: Capabilities::Any,
+        ..RoutePolicy::default()
+    })
+    .await;
+    assert_eq!(
+        call(port, "GET", "/v1/models", "authorization").await.0,
+        200
+    );
+    assert!(
+        !lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("capabilities")),
+        "{:?}",
+        lines.lock().unwrap()
+    );
+    broker.close();
+}
+
+/// A declared placement takes the nonce only in its own header, says which
+/// when it is elsewhere, and puts the real key only there, whatever else the
+/// session sent.
+#[tokio::test]
+async fn a_declared_placement_is_the_only_header_either_way() {
+    for (placement, header, other) in [
+        (Placement::ApiKey, "x-api-key", "authorization"),
+        (Placement::Bearer, "authorization", "x-api-key"),
+    ] {
+        let (mut broker, port, seen, _) = policed(RoutePolicy {
+            placement,
+            capabilities: Capabilities::Any,
+            strict: false,
+        })
+        .await;
+
+        let (status, body) = call(port, "POST", "/v1/messages", other).await;
+        assert_eq!(status, 401, "{header}");
+        assert!(body.contains(if header == "x-api-key" {
+            "in x-api-key"
+        } else {
+            "as Authorization: Bearer"
+        }));
+        assert!(seen.lock().unwrap().is_empty());
+
+        let answered = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}/provider/v1/messages"))
+            .header(
+                header,
+                if header == "authorization" {
+                    "Bearer the-session-nonce"
+                } else {
+                    "the-session-nonce"
+                },
+            )
+            .header(other, "something-else")
+            .body("{}")
+            .send()
+            .await
+            .expect("answered");
+        assert_eq!(answered.status().as_u16(), 200);
+        let seen = seen.lock().unwrap();
+        let (bearer, key) = (seen["one"].as_str(), seen["one/x-api-key"].as_str());
+        if placement == Placement::ApiKey {
+            assert_eq!((bearer, key), ("", "the-real-key"));
+        } else {
+            assert_eq!((bearer, key), ("Bearer the-real-key", ""));
+        }
+        drop(seen);
+        broker.close();
+    }
+}
+
+/// A path the upstream, or the URL rebuilt here, could read differently from
+/// how it was matched is refused before anything is matched or forwarded,
+/// even on a route that allows everything. Sent as built, since a client
+/// would resolve the dot segments itself.
+#[tokio::test]
+async fn a_path_that_reads_two_ways_is_refused_before_matching() {
+    let mut route = provider_route("/provider", "https://upstream.test/v1");
+    route.policy.capabilities = Capabilities::Declared(vec![Capability {
+        method: "POST".to_owned(),
+        path: "/**".to_owned(),
+    }]);
+    route.policy.strict = true;
+    let mut state = provider_state(vec![route]);
+    state.resolve = Some(Arc::new(|name| {
+        panic!("{name} was looked up for a path that should have been refused")
+    }));
+    let state = Arc::new(state);
+
+    for path in [
+        "/v1//messages",
+        "/v1/./messages",
+        "/v1/x/../messages",
+        "/v1/x/%2e%2E/messages",
+        "/v1/%2e/messages",
+        "/v1/a%2fb",
+        "/v1/a%5Cb",
+        "/v1/..;/admin",
+        "/v1/x%3By",
+        "/v1/%252e%252e/admin",
+        "/v1/%252fadmin",
+        "/v1/a%00b",
+    ] {
+        let request = http::Request::builder()
+            .method("POST")
+            .uri(format!("/provider{path}"))
+            .header("authorization", "Bearer session-nonce")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = super::serve_provider_request(Arc::clone(&state), request).await;
+        assert_eq!(response.status().as_u16(), 400, "{path}");
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&body).contains("which the broker does not forward"),
+            "{path}"
+        );
+    }
+
+    let (mut broker, port, _, _) = policed(RoutePolicy::default()).await;
+    assert_eq!(
+        call(port, "POST", "/v1/messages/", "authorization").await.0,
+        200
+    );
+    broker.close();
+}
+
+/// A caller without the session's key learns nothing of what a strict route
+/// allows: it is refused for the key before the list is consulted.
+#[tokio::test]
+async fn a_strict_route_says_nothing_of_its_list_without_the_key() {
+    let (mut broker, port, seen, _) = policed(messages_only(true)).await;
+
+    let answered = reqwest::Client::new()
+        .delete(format!("http://127.0.0.1:{port}/provider/v1/messages"))
+        .header("x-api-key", "not-the-nonce")
+        .send()
+        .await
+        .expect("answered");
+
+    assert_eq!(answered.status().as_u16(), 401);
+    assert!(!answered.text().await.unwrap().contains("allows"));
+    assert!(seen.lock().unwrap().is_empty());
+    broker.close();
+}
+
+/// The entry the log suggests names the call as it would be matched: as sent,
+/// with an escaped or minted segment widened to `*` rather than shown decoded.
+#[test]
+fn the_suggested_entry_matches_the_call_it_was_made_for() {
+    use crate::config::route::Capability;
+
+    let minted = crate::config::redact::MINTED_PREFIX.to_owned() + &"a".repeat(64);
+    for (rest, suggested) in [
+        ("/v1/models", "/v1/models".to_owned()),
+        ("/v1/models/a%3Ab", "/v1/models/*".to_owned()),
+        (&format!("/v1/{minted}/x") as &str, "/v1/*/x".to_owned()),
+        (
+            &format!("/v1/{}", "x".repeat(300)) as &str,
+            "/v1/**".to_owned(),
+        ),
+    ] {
+        assert_eq!(super::suggested_path(rest), suggested, "{rest}");
+        let entry = Capability {
+            method: "GET".to_owned(),
+            path: super::suggested_path(rest),
+        };
+        assert!(entry.matches("GET", rest), "{rest}");
+    }
+}
+
+/// A header asking the upstream to run the call as another method, or at
+/// another path, is not forwarded, so what a capability was matched against
+/// is what runs.
+#[test]
+fn a_method_override_header_is_not_forwarded() {
+    let state = provider_state(Vec::new());
+    let route = provider_route("/provider", "https://upstream.test/v1");
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/provider/v1/messages")
+        .header("x-http-method-override", "DELETE")
+        .header("X-Method-Override", "DELETE")
+        .header("x-http-method", "DELETE")
+        .header("x-original-url", "/v1/files/abc")
+        .header("X-Rewrite-URL", "/v1/files/abc")
+        .header("x-kept", "yes")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let target = reqwest::Url::parse("https://upstream.test/v1/messages").unwrap();
+
+    let forwarded = super::build_forwarded(
+        &state,
+        request,
+        &route,
+        &target,
+        &Arc::new(std::sync::atomic::AtomicU64::new(0)),
+    )
+    .build()
+    .expect("a request");
+
+    let headers = forwarded.headers();
+    assert_eq!(
+        headers.get("x-kept").map(http::HeaderValue::as_bytes),
+        Some(&b"yes"[..])
+    );
+    for name in [
+        "x-http-method-override",
+        "x-method-override",
+        "x-http-method",
+    ] {
+        assert!(headers.get(name).is_none(), "{name}");
+    }
 }
 
 /// A path cannot drive the terminal a receipt is printed in, or carry a
