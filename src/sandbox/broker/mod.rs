@@ -21,9 +21,10 @@ use std::future::Future;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-pub use server::Broker;
+pub use server::{Broker, BrokerTemplate, SessionBroker};
 
 use crate::log::Logger;
 use crate::log::fields;
@@ -167,6 +168,20 @@ pub struct ProviderRoute {
     pub upstream: String,
     /// What a session sends as its key.
     pub nonce: String,
+    /// The real credential. Never leaves the daemon.
+    pub credential: String,
+}
+
+/// A provider the broker stands in front of, before any session holds a
+/// nonce for it.
+#[derive(Clone)]
+pub struct ProviderUpstream {
+    /// The provider's name, which a session's nonce for it is filed under.
+    pub name: String,
+    /// Path a session addresses the provider at, such as `/provider/zai`.
+    pub prefix: String,
+    /// The provider's real base URL, which the prefix stands in for.
+    pub upstream: String,
     /// The real credential. Never leaves the daemon.
     pub credential: String,
 }
@@ -512,7 +527,7 @@ pub(crate) struct ProviderState {
     pub allow: Vec<String>,
     /// The upstream ports the broker will open.
     pub ports: Vec<u16>,
-    /// The expected Basic proxy authorization header for this broker run.
+    /// The expected Basic proxy authorization header for this session.
     pub proxy_authorization: String,
     /// Whether a literal internal address may be dialled.
     pub allow_internal: bool,
@@ -524,6 +539,8 @@ pub(crate) struct ProviderState {
     pub provider_port: u16,
     /// The client that reaches the provider.
     pub client: reqwest::Client,
+    /// Whether the broker has been closed, after which nothing is served.
+    pub closed: Arc<AtomicBool>,
 }
 
 /// Whether a request is served by the provider endpoint, per its path.
@@ -605,6 +622,9 @@ fn provider_target(
     Ok(target)
 }
 
+/// What a stopped session's broker answers a request with.
+const STOPPED: &str = "this session has stopped\n";
+
 /// Serves the provider API, with the real credential put on here.
 ///
 /// Run on its own loopback port and reached by handing the connection over,
@@ -617,6 +637,9 @@ pub(crate) async fn serve_provider_request(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
+    if state.closed.load(Ordering::SeqCst) {
+        return (axum::http::StatusCode::SERVICE_UNAVAILABLE, STOPPED).into_response();
+    }
     let path = request.uri().path().to_owned();
     let Some(route) = route_for(&state, &path) else {
         // An unmatched route is where a probe dies: the session named a

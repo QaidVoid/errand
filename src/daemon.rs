@@ -26,8 +26,8 @@ use crate::sandbox::Backend;
 use crate::sandbox::backend::{CapabilityReport, SandboxUnavailableError};
 use crate::sandbox::bailey::BaileyOptions;
 use crate::sandbox::bailey::BaileySandbox;
-use crate::sandbox::bailey::ProviderBrokering;
 use crate::sandbox::bailey::run_bailey_arc;
+use crate::sandbox::broker::BrokerTemplate;
 use crate::sandbox::podman::PodmanSandbox;
 use crate::sandbox::podman::run_podman_arc;
 use crate::session::attachments::RawAttachment;
@@ -73,16 +73,16 @@ pub enum StartError {
 
 /// Builds the backend named in configuration. Never falls back to the other.
 ///
-/// `egress_proxy_port`, when given, is the host loopback port of the broker
-/// every session's egress is forced through under `egress.mode = proxy`. Only
-/// the bailey backend uses it; podman bounds the network by its own
-/// namespace. `built_in` is the host store's definitions of each defined
-/// provider's models, which either backend writes under an entry naming one.
+/// `broker`, when given, is what each session's egress broker is built from
+/// under `egress.mode = proxy`: a session gets a listener and nonces of its
+/// own at launch. Only the bailey backend uses it; podman bounds the network
+/// by its own namespace. `built_in` is the host store's definitions of each
+/// defined provider's models, which either backend writes under an entry
+/// naming one.
 pub fn create_sandbox(
     config: &Config,
     log: Logger,
-    egress_proxy_port: Option<u16>,
-    brokering: Option<ProviderBrokering>,
+    broker: Option<BrokerTemplate>,
     built_in: BTreeMap<String, Vec<serde_json::Value>>,
 ) -> Backend {
     match config.sandbox.backend {
@@ -98,8 +98,7 @@ pub fn create_sandbox(
             config.state_dir.clone(),
             run_bailey_arc(),
             BaileyOptions {
-                egress_proxy_port,
-                brokering,
+                broker,
                 built_in,
                 ..Default::default()
             },

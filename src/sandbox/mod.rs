@@ -73,6 +73,8 @@ pub struct BaileyStop {
     pub grace_ms: u64,
     /// The logger the warnings go to.
     pub log: Logger,
+    /// The session's own egress broker, closed when the session is stopped.
+    pub broker: std::sync::Mutex<Option<broker::Broker>>,
     /// Whether the stop already ran.
     pub stopped: std::sync::atomic::AtomicBool,
 }
@@ -159,6 +161,17 @@ impl BaileyStop {
             .swap(true, std::sync::atomic::Ordering::Relaxed)
         {
             return false;
+        }
+
+        // Closed before the agent is signalled, so no new connection is
+        // admitted, and no nonce honoured on one, once it is asked to stop.
+        let broker = self
+            .broker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(mut broker) = broker {
+            broker.close();
         }
 
         self.spawned.kill(nix::sys::signal::Signal::SIGTERM);
