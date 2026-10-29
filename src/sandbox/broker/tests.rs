@@ -1686,3 +1686,24 @@ async fn a_session_stopped_during_a_dial_gets_no_tunnel() {
     assert!(answer.starts_with("HTTP/1.1 503"), "{answer}");
     assert!(!answer.contains("200 Connection Established"), "{answer}");
 }
+
+/// What a session is handed reads as errand's, not as a provider key, and
+/// is exactly the shape every redacted surface scrubs.
+#[tokio::test]
+async fn what_a_session_is_handed_is_prefixed_and_scrubbed() {
+    let started = template_for(9, silent())
+        .start("s-1")
+        .await
+        .expect("a broker");
+    for secret in [&started.proxy_secret, &started.nonces["zai"]] {
+        let digits = secret
+            .strip_prefix(crate::config::redact::MINTED_PREFIX)
+            .expect("the prefix");
+        assert_eq!(digits.len(), 64, "{secret}");
+        assert!(digits.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(
+            crate::config::redact::redact_text(secret, &[]),
+            crate::config::redact::REDACTION
+        );
+    }
+}

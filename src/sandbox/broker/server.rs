@@ -23,6 +23,7 @@ use super::{
     ProviderUpstream, Target, carries_proxy_credential, host_allowed, parse_connect, parse_forward,
     public_addresses,
 };
+use crate::config::redact::{MINTED_HEX_DIGITS, MINTED_PREFIX};
 use crate::log::Logger;
 use crate::log::fields;
 
@@ -121,14 +122,18 @@ pub(super) fn proxy_authorization(secret: &str) -> String {
 /// Drawn from the system generator rather than anything derived from what it
 /// stands for, so holding it says nothing about the key behind it. It is
 /// honoured only by the broker it was minted for, which ends with the session.
+/// It carries [`MINTED_PREFIX`], so an echoed one reads as errand's rather
+/// than as a provider's key, and redacted text is scrubbed of it by shape.
 fn fresh_secret() -> String {
     use std::fmt::Write as _;
-    let mut bytes = [0u8; 32];
+    let mut bytes = [0u8; MINTED_HEX_DIGITS / 2];
     getrandom::fill(&mut bytes).expect("the system generator is available");
-    bytes.iter().fold(String::new(), |mut out, byte| {
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
+    bytes
+        .iter()
+        .fold(MINTED_PREFIX.to_owned(), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
 }
 
 /// A running proxy that admits only allowlisted hosts on allowed ports.

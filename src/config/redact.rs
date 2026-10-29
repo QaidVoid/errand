@@ -4,7 +4,8 @@
 //! known secret fields when the effective configuration is rendered. Value
 //! redaction scrubs the same strings out of arbitrary text, since an error
 //! thrown by a library may carry a token that never passed through the config
-//! renderer.
+//! renderer, along with any secret minted for a session, which no
+//! configuration names.
 
 use serde_json::Value;
 
@@ -15,6 +16,17 @@ pub const REDACTION: &str = "[redacted]";
 
 /// Shortest secret worth scrubbing from free text, to avoid mangling prose.
 const MIN_SCRUBBABLE_LENGTH: usize = 8;
+
+/// What every secret the daemon mints for a session starts with.
+///
+/// A session's stand-in for a provider key and its proxy credential are
+/// minted at launch, after the session's own list of secrets is fixed, so
+/// they are recognised by this shape rather than listed. The prefix also
+/// makes an echoed one read as errand's, not as a provider's key.
+pub const MINTED_PREFIX: &str = "errand-session-";
+
+/// How many hex digits follow [`MINTED_PREFIX`] in a minted secret.
+pub const MINTED_HEX_DIGITS: usize = 64;
 
 /// Renders the effective configuration with every secret field blanked, for
 /// logging at startup.
@@ -75,7 +87,8 @@ pub fn secret_values(config: &Config) -> Vec<String> {
     values
 }
 
-/// Scrubs known secret values out of arbitrary text.
+/// Scrubs known secret values out of arbitrary text, and every secret the
+/// daemon minted for a session, by its shape.
 ///
 /// A secret shorter than the minimum is left alone: replacing a short string
 /// everywhere it occurs mangles ordinary prose without hiding anything worth
@@ -88,7 +101,37 @@ pub fn redact_text(text: &str, secrets: &[String]) -> String {
         }
         scrubbed = scrubbed.replace(secret.as_str(), REDACTION);
     }
-    scrubbed
+    redact_minted(&scrubbed)
+}
+
+/// Replaces each [`MINTED_PREFIX`] followed by up to [`MINTED_HEX_DIGITS`]
+/// hex digits.
+///
+/// Fewer than all of them are scrubbed too, because output is cut to length
+/// before it is reported, and a cut can land inside a value: what is left of
+/// it is still most of the secret. A prefix with no digit after it is prose
+/// naming the shape, and is kept.
+fn redact_minted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(MINTED_PREFIX) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + MINTED_PREFIX.len()..];
+        let digits = after
+            .bytes()
+            .take(MINTED_HEX_DIGITS)
+            .take_while(u8::is_ascii_hexdigit)
+            .count();
+        if digits > 0 {
+            out.push_str(REDACTION);
+            rest = &after[digits..];
+        } else {
+            out.push_str(MINTED_PREFIX);
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Scrubs known secret values out of bytes that arrive in pieces.
@@ -110,7 +153,15 @@ impl ByteScrubber {
             .filter(|secret| secret.len() >= MIN_SCRUBBABLE_LENGTH)
             .map(|secret| secret.as_bytes().to_vec())
             .collect();
-        let keep = secrets.iter().map(Vec::len).max().unwrap_or(1) - 1;
+        // Held back far enough for a whole minted value, which is scrubbed by
+        // its shape whatever the list holds.
+        let keep = secrets
+            .iter()
+            .map(Vec::len)
+            .max()
+            .unwrap_or(1)
+            .max(MINTED_PREFIX.len() + MINTED_HEX_DIGITS)
+            - 1;
         Self {
             secrets,
             keep,
@@ -122,7 +173,7 @@ impl ByteScrubber {
     pub fn push(&mut self, piece: &[u8]) -> Vec<u8> {
         self.carry.extend_from_slice(piece);
         let held = std::mem::take(&mut self.carry);
-        let scrubbed = self.scrub(held);
+        let scrubbed = self.scrub(held, false);
         let split = scrubbed.len().saturating_sub(self.keep);
         self.carry = scrubbed[split..].to_vec();
         scrubbed[..split].to_vec()
@@ -131,10 +182,13 @@ impl ByteScrubber {
     /// Returns whatever was held back, once there are no more pieces.
     pub fn finish(&mut self) -> Vec<u8> {
         let rest = std::mem::take(&mut self.carry);
-        self.scrub(rest)
+        self.scrub(rest, true)
     }
 
-    fn scrub(&self, mut bytes: Vec<u8>) -> Vec<u8> {
+    /// Scrubs what is held. Until the stream has `ended`, a minted value
+    /// running to the end of it may go on in the next piece, and is left
+    /// whole for the next scrub rather than cut where the piece ended.
+    fn scrub(&self, mut bytes: Vec<u8>, ended: bool) -> Vec<u8> {
         for secret in &self.secrets {
             let mut out = Vec::with_capacity(bytes.len());
             let mut at = 0;
@@ -149,8 +203,38 @@ impl ByteScrubber {
             }
             bytes = out;
         }
-        bytes
+        redact_minted_bytes(&bytes, ended)
     }
+}
+
+/// [`redact_minted`] for bytes that need not be text, leaving a value that
+/// runs to the end unscrubbed unless the bytes have `ended`.
+fn redact_minted_bytes(bytes: &[u8], ended: bool) -> Vec<u8> {
+    let prefix = MINTED_PREFIX.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at..].starts_with(prefix) {
+            let digits = bytes[at + prefix.len()..]
+                .iter()
+                .take(MINTED_HEX_DIGITS)
+                .take_while(|byte| byte.is_ascii_hexdigit())
+                .count();
+            let open = at + prefix.len() + digits == bytes.len() && digits < MINTED_HEX_DIGITS;
+            if open && !ended {
+                out.extend_from_slice(&bytes[at..]);
+                break;
+            }
+            if digits > 0 {
+                out.extend_from_slice(REDACTION.as_bytes());
+                at += prefix.len() + digits;
+                continue;
+            }
+        }
+        out.push(bytes[at]);
+        at += 1;
+    }
+    out
 }
 
 /// Walks a dotted path to the value it names, when every step is an object.

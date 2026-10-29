@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use super::{REDACTION, redact_config, redact_text, secret_values};
+use super::{MINTED_PREFIX, REDACTION, redact_config, redact_text, secret_values};
 use crate::config::load::{Environment, load_config};
 use crate::config::schema::{Config, SECRET_PATHS};
 use crate::config::validate::validate_config;
@@ -185,6 +185,42 @@ fn a_defined_providers_credential_is_scrubbed_too() {
     assert!(redact_text("key=the-meta-key here", &secrets).contains(REDACTION));
 }
 
+/// A secret minted for a session is scrubbed by its shape, though no list
+/// names it: it is minted after the session's list is fixed.
+#[test]
+fn a_minted_session_secret_is_scrubbed_without_being_listed() {
+    let minted = format!("{MINTED_PREFIX}{}", "0123456789abcdef".repeat(4));
+    assert_eq!(
+        redact_text(
+            &format!("KEY={minted}\nPROXY=http://session:{minted}@h"),
+            &[]
+        ),
+        "KEY=[redacted]\nPROXY=http://session:[redacted]@h"
+    );
+    // Two in a row, and one run into more hex: each minted value goes, and
+    // what follows it stays.
+    assert_eq!(
+        redact_text(&format!("{minted}{minted}f"), &[]),
+        "[redacted][redacted]f"
+    );
+}
+
+/// Output is cut to length before it is reported, so what is left of a
+/// minted secret is scrubbed too. The prefix with no digit after it is prose
+/// naming the shape, and is left as written.
+#[test]
+fn a_cut_minted_secret_is_scrubbed_and_the_bare_prefix_is_not() {
+    let cut = format!("{MINTED_PREFIX}{}", "a".repeat(63));
+    assert_eq!(redact_text(&format!("KEY={cut}"), &[]), "KEY=[redacted]");
+    assert_eq!(redact_text(&format!("{cut}g"), &[]), "[redacted]g");
+    for text in [
+        format!("values look like {MINTED_PREFIX}<hex>"),
+        format!("ends with {MINTED_PREFIX}"),
+    ] {
+        assert_eq!(redact_text(&text, &[]), text);
+    }
+}
+
 /// A file is sent in pieces, and a token split across two of them must not
 /// slip through because neither piece held all of it.
 #[test]
@@ -213,4 +249,23 @@ fn bytes_with_no_secret_pass_through_unchanged() {
     out.extend(scrubber.finish());
 
     assert_eq!(out, b"\x00\xffbinary data");
+}
+
+/// A minted value is scrubbed from bytes by its shape, as it is from text,
+/// with no list naming it and however the bytes are cut into pieces.
+#[test]
+fn bytes_lose_a_minted_value_by_its_shape_across_any_cut() {
+    let minted = format!("{}{}", super::MINTED_PREFIX, "ab12".repeat(16));
+    let file = format!("before {minted} after").into_bytes();
+    for cut in 1..file.len() {
+        let mut scrubber = super::ByteScrubber::new(&[]);
+        let mut out = scrubber.push(&file[..cut]);
+        out.extend(scrubber.push(&file[cut..]));
+        out.extend(scrubber.finish());
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            format!("before {} after", super::REDACTION),
+            "cut at {cut}"
+        );
+    }
 }
