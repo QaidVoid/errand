@@ -424,8 +424,10 @@ fn credential_var_stem(provider: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GithubConfig {
-    /// Token the agent authenticates with. Secret, and reachable by the agent.
-    /// At least 8 bytes, so it can be scrubbed from what is posted.
+    /// The daemon's token, a classic one, which it reads notifications,
+    /// composes pull requests and pushes with. A session holds it too unless
+    /// `app` is set. Secret, and at least 8 bytes, so it can be scrubbed from
+    /// what is posted.
     pub token: String,
     /// Name commits are authored with.
     pub user_name: String,
@@ -435,6 +437,16 @@ pub struct GithubConfig {
     /// on an issue or pull request or assigning one to it. Absent means GitHub
     /// is only where work is sent, never where it is asked for.
     pub trigger: Option<GithubTrigger>,
+    /// A GitHub App each session's credential is minted from, so a session
+    /// holds a short-lived installation token in place of `token`. `appId`
+    /// and `installationId` name the App and its installation,
+    /// `privateKeyPath` is the absolute path of the App's private key as
+    /// GitHub gave it, read again at every mint, `permissions` maps a
+    /// permission to `read` or `write` for each token to ask for, and
+    /// `repositories` names the repositories each token covers. Left out,
+    /// either of the last two asks for everything the installation was
+    /// granted. Absent means a session holds `token` itself.
+    pub app: Option<GithubAppConfig>,
 }
 
 /// Who may ask for work from GitHub.
@@ -455,6 +467,25 @@ pub struct GithubTrigger {
     /// Whether assigning an issue or pull request to the bot starts one. On
     /// unless `on` leaves `assign` out.
     pub on_assign: bool,
+}
+
+/// The GitHub App a session's credential is minted from.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubAppConfig {
+    /// The App's id.
+    pub app_id: u64,
+    /// The installation tokens are minted for.
+    pub installation_id: u64,
+    /// The absolute path of the App's private key, as GitHub
+    /// gave it.
+    pub private_key_path: String,
+    /// What each token may do, by permission, as `read` or
+    /// `write`. Empty asks for everything the installation was granted.
+    pub permissions: BTreeMap<String, String>,
+    /// The repositories each token covers, by name without
+    /// their owner. Empty covers every repository of the installation.
+    pub repositories: Vec<String>,
 }
 
 /// Paths granted to a session on top of what the daemon already grants.

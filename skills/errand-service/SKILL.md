@@ -36,6 +36,17 @@ Confirm: `/usr/local/bin/errand` runs, and the config file is mode 0600
 owned by the service account. The daemon reads `~/.config/errand/config.json`
 for that account first, so this placement needs no `ERRAND_CONFIG`.
 
+With `github.app` configured, its private key goes outside the state
+directory, which the configuration refuses for it, and readable by the
+service account alone:
+
+```sh
+install -o root -g errand -m 0750 -d /etc/errand
+install -o root -g errand -m 0640 app.private-key.pem /etc/errand/app.pem
+```
+
+Name `/etc/errand/app.pem` in `github.app.privateKeyPath`.
+
 ## 2. Install the unit
 
 OpenRC:

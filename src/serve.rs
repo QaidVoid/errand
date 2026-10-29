@@ -1345,6 +1345,17 @@ async fn run(
         return Exit::Failed;
     }
     collect_cold_sessions(Arc::clone(&daemon), live.clone(), log.clone());
+    if config
+        .github
+        .as_ref()
+        .is_some_and(|github| github.app.is_none())
+    {
+        log.warn(
+            "sessions hold the daemon's own GitHub token, since github.app is not set. An App \
+             narrows what a session holds to one installation for an hour at a time",
+            &fields([]),
+        );
+    }
     if let (Some(github), Some(router)) = (config.github.as_ref(), &issue_router)
         && let Some(trigger) = &github.trigger
     {

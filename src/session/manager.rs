@@ -212,6 +212,9 @@ struct ManagerState {
     ended_threads: Mutex<HashSet<String>>,
     views: Mutex<HashMap<String, Arc<ViewFanOut>>>,
     claimed: Mutex<HashSet<String>>,
+    /// Each live session's scrubbing door, by session id, for a surface that
+    /// shows what the session wrote other than through its reports.
+    scrubbers: Mutex<HashMap<String, Arc<Redacting>>>,
 }
 
 /// A thread held by whoever is reopening or collecting it, released when
@@ -303,6 +306,7 @@ impl SessionManager {
                 ended_threads: Mutex::new(HashSet::new()),
                 views: Mutex::new(HashMap::new()),
                 claimed: Mutex::new(HashSet::new()),
+                scrubbers: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -756,10 +760,7 @@ impl SessionManager {
             project: project.clone(),
             chosen: chosen.clone(),
             state_dir: state_dir.clone(),
-            views: Arc::new(Redacting::new(
-                Arc::clone(&fan_out),
-                self.reported_secrets(),
-            )),
+            views: self.scrubber_for(&id, &fan_out),
             launcher: Arc::clone(&self.shared.launcher),
             scheduler: Arc::clone(&self.shared.scheduler),
             config: self.options.config.get(),
@@ -769,6 +770,7 @@ impl SessionManager {
             owner_name: message.author_name.clone(),
             start_turn: None,
             open_pull_request: Some(daemon_open_pull_request()),
+            github_api: Some(Arc::new(pr::call_api)),
             thread_id: Some(thread.id.clone()),
             guild_id: self.shared.guild_id.lock().expect("the guild lock").clone(),
             public_url: self.shared.public_url.clone(),
@@ -976,10 +978,7 @@ impl SessionManager {
             },
             chosen,
             state_dir: record.state_dir.clone(),
-            views: Arc::new(Redacting::new(
-                Arc::clone(&fan_out),
-                self.reported_secrets(),
-            )),
+            views: self.scrubber_for(&record.session_id, &fan_out),
             launcher: Arc::clone(&self.shared.launcher),
             scheduler: Arc::clone(&self.shared.scheduler),
             config: self.options.config.get(),
@@ -989,6 +988,7 @@ impl SessionManager {
             owner_name: None,
             start_turn: Some(fan_out.current_turn()),
             open_pull_request: Some(daemon_open_pull_request()),
+            github_api: Some(Arc::new(pr::call_api)),
             thread_id: Some(record.thread_id.clone()),
             guild_id: self.shared.guild_id.lock().expect("the guild lock").clone(),
             public_url: self.shared.public_url.clone(),
@@ -1195,9 +1195,29 @@ impl SessionManager {
                 .any(|operator| operator == author)
     }
 
-    /// The secrets the configuration holds, for scrubbing what is shown.
-    pub fn secrets(&self) -> Vec<String> {
-        secret_values(&self.options.config.get())
+    /// Everything to scrub from what `session_id` wrote, shown other than
+    /// through its reports: what its reports are scrubbed of, the tokens it
+    /// came to hold included, or for a session not running, the configured
+    /// secrets and the house rules.
+    pub fn secrets_for(&self, session_id: &str) -> Vec<String> {
+        self.state
+            .scrubbers
+            .lock()
+            .expect("the scrubbers lock")
+            .get(session_id)
+            .map_or_else(|| self.reported_secrets(), |door| door.secrets())
+    }
+
+    /// The scrubbing door a session reports through, kept for
+    /// [`Self::secrets_for`] while it runs.
+    fn scrubber_for(&self, session_id: &str, fan_out: &Arc<ViewFanOut>) -> Arc<Redacting> {
+        let door = Arc::new(Redacting::new(Arc::clone(fan_out), self.reported_secrets()));
+        self.state
+            .scrubbers
+            .lock()
+            .expect("the scrubbers lock")
+            .insert(session_id.to_owned(), Arc::clone(&door));
+        door
     }
 
     /// Ends the session bound to a thread, if any.
@@ -1342,6 +1362,11 @@ fn on_ended(
             .views
             .lock()
             .expect("the views map lock")
+            .remove(&session_id);
+        state
+            .scrubbers
+            .lock()
+            .expect("the scrubbers lock")
             .remove(&session_id);
         if reason == EndReason::Stopped {
             registry

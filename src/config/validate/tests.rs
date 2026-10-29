@@ -1931,6 +1931,64 @@ fn a_routes_placement_and_capabilities_are_checked_at_load() {
     ));
 }
 
+/// An App is read whole: its ids as numbers, its key as an absolute path,
+/// and what each token asks for checked, so a typo is said at load rather
+/// than found as a session that cannot start.
+#[test]
+fn a_github_app_is_read_whole_and_checked() {
+    let with = |app: Value| {
+        valid(json!({
+            "github": {
+                "token": "ghp-long-enough",
+                "userName": "bot",
+                "userEmail": "bot@example.com",
+                "app": app,
+            },
+        }))
+    };
+
+    let config = validate_config(&with(json!({
+        "appId": 42,
+        "installationId": "7",
+        "privateKeyPath": "/etc/errand/app.pem",
+        "permissions": { "contents": "write", "issues": "read" },
+        "repositories": ["errand"],
+    })))
+    .expect("resolves");
+    let app = config.github.unwrap().app.expect("the app");
+    assert_eq!((app.app_id, app.installation_id), (42, 7));
+    assert_eq!(app.permissions["issues"], "read");
+
+    for (app, says) in [
+        (
+            json!({ "installationId": 7, "privateKeyPath": "/k.pem" }),
+            "github.app.appId",
+        ),
+        (
+            json!({ "appId": 1, "installationId": 7, "privateKeyPath": "k.pem" }),
+            "absolute",
+        ),
+        (
+            json!({ "appId": 1, "installationId": 7, "privateKeyPath": "/k.pem", "permissions": { "contents": "admin" } }),
+            "permissions.contents",
+        ),
+        (
+            json!({ "appId": 1, "installationId": 7, "privateKeyPath": "/k.pem", "repositories": ["o/r"] }),
+            "without its owner",
+        ),
+        (
+            json!({ "appId": 1, "installationId": 7, "privateKeyPath": "/k.pem", "key": "x" }),
+            "github.app",
+        ),
+        (
+            json!({ "appId": 1, "installationId": 7, "privateKeyPath": "/tmp/errand/state/app.pem" }),
+            "outside projectRoot and stateDir",
+        ),
+    ] {
+        assert!(problems_contain(&with(app.clone()), says), "{app}");
+    }
+}
+
 /// A misspelt route key is refused, since leaving the real one out lets every
 /// call through, while a key errand does not read and resembles none of them
 /// is left alone.
@@ -1977,5 +2035,41 @@ fn a_misspelt_route_key_is_refused_rather_than_failing_open() {
             json!({ "credential": "secret-value", unrelated: "x" }),
         ))
         .unwrap_or_else(|error| panic!("{unrelated} was refused: {error}"));
+    }
+}
+
+/// An App key that a `..` or a link puts inside a root a session reads is
+/// refused as one written there directly would be.
+#[test]
+fn an_app_key_reached_through_a_link_into_the_state_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let projects = root.path().join("projects");
+    let keys = root.path().join("keys");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::create_dir_all(&projects).unwrap();
+    std::os::unix::fs::symlink(&state, &keys).unwrap();
+    std::fs::write(state.join("app.pem"), "key").unwrap();
+    let with = |key: String| {
+        valid(json!({
+            "projectRoot": projects.display().to_string(),
+            "stateDir": state.display().to_string(),
+            "github": {
+                "token": "ghp-long-enough",
+                "userName": "bot",
+                "userEmail": "bot@example.com",
+                "app": { "appId": 1, "installationId": 2, "privateKeyPath": key },
+            },
+        }))
+    };
+
+    for key in [
+        keys.join("app.pem").display().to_string(),
+        format!("{}/../state/app.pem", projects.display()),
+    ] {
+        assert!(
+            problems_contain(&with(key.clone()), "outside projectRoot and stateDir"),
+            "{key}"
+        );
     }
 }

@@ -302,6 +302,9 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
             Value::from(defaults::RETENTION_OLDER_THAN),
         ),
         ("retention/every", Value::from(defaults::RETENTION_EVERY)),
+        // Left out, a token asks for everything its installation was granted.
+        ("githubapp/permissions", serde_json::json!({})),
+        ("githubapp/repositories", serde_json::json!([])),
         (
             "sandbox/hidehostaddress",
             Value::Bool(defaults::HIDE_HOST_ADDRESS),
@@ -370,12 +373,13 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
 ///
 /// Ordered here rather than taken from the file, because what a reader needs
 /// first is not the order the types happen to be declared in.
-const KEYS: [(&str, &str); 15] = [
+const KEYS: [(&str, &str); 16] = [
     ("Root", "top level"),
     ("Chat", "chat"),
     ("Agent", "agent"),
     ("Delegate", "agent.delegate"),
     ("Github", "github"),
+    ("GithubApp", "github.app"),
     ("Sandbox", "sandbox"),
     ("Egress", "sandbox.egress"),
     ("PolicyExtra", "sandbox.policyExtra"),

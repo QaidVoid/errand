@@ -20,6 +20,7 @@ fn github() -> GithubConfig {
         user_name: "errand-bot".to_owned(),
         user_email: "bot@example.com".to_owned(),
         trigger: None,
+        app: None,
     }
 }
 

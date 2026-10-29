@@ -404,6 +404,7 @@ dependencies = [
  "jsonc-parser",
  "nix",
  "reqwest 0.13.5",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",

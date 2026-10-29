@@ -16,9 +16,9 @@ use crate::config::redact::MIN_SCRUBBABLE_LENGTH;
 use crate::config::route::{Placement, RoutePolicy};
 use crate::config::schema::{
     self, AgentConfig, ChatConfig, Config, ConfigError, DelegateConfig, EgressConfig, EgressMode,
-    GithubConfig, GithubTrigger, LimitsConfig, NetworkMode, OutputConfig, PluginConfig,
-    PolicyExtraConfig, RetentionConfig, SandboxBackend, SandboxConfig, ShutdownConfig,
-    TimeoutsConfig, WebConfig, WebLoginConfig,
+    GithubAppConfig, GithubConfig, GithubTrigger, LimitsConfig, NetworkMode, OutputConfig,
+    PluginConfig, PolicyExtraConfig, RetentionConfig, SandboxBackend, SandboxConfig,
+    ShutdownConfig, TimeoutsConfig, WebConfig, WebLoginConfig,
 };
 use crate::config::size::parse_size;
 use crate::config::usage::UsageShape;
@@ -73,7 +73,7 @@ const KNOWN_AGENT: [&str; 16] = [
     "extensions",
 ];
 const KNOWN_DELEGATE: [&str; 4] = ["model", "perTurn", "deadlineMs", "baseUrl"];
-const KNOWN_GITHUB: [&str; 4] = ["token", "userName", "userEmail", "trigger"];
+const KNOWN_GITHUB: [&str; 5] = ["token", "userName", "userEmail", "trigger", "app"];
 const KNOWN_SANDBOX: [&str; 20] = [
     "backend",
     "requireFullEnforcement",
@@ -425,6 +425,18 @@ fn one_of<T>(
 ///
 /// Compared by component, so `/srv/work` does not read as containing
 /// `/srv/workspace`. Both are already resolved and absolute here.
+/// Where a path really is: through every link when it exists, and with
+/// `.` and `..` worked out when it does not.
+fn real_path(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    std::fs::canonicalize(path).map_or_else(
+        |_| resolve(path),
+        |real| real.to_string_lossy().into_owned(),
+    )
+}
+
 fn nests(one: &str, other: &str) -> bool {
     let one = std::path::Path::new(one);
     let other = std::path::Path::new(other);
@@ -1145,6 +1157,87 @@ fn validate_github(raw: &Map<String, Value>, problems: &mut Problems) -> Option<
         user_name: required_string(&source, "userName", "github", problems),
         user_email: required_string(&source, "userEmail", "github", problems),
         trigger: validate_github_trigger(&source, problems),
+        app: validate_github_app(&source, problems),
+    })
+}
+
+/// Reads the GitHub App a session's credential is minted from, if one is
+/// named.
+fn validate_github_app(
+    source: &Map<String, Value>,
+    problems: &mut Problems,
+) -> Option<GithubAppConfig> {
+    source.get("app")?;
+    let app = section(source, "app");
+    reject_unknown(
+        &app,
+        &[
+            "appId",
+            "installationId",
+            "privateKeyPath",
+            "permissions",
+            "repositories",
+        ],
+        "github.app",
+        problems,
+    );
+    let id = |key: &str, problems: &mut Problems| {
+        let read = match app.get(key) {
+            Some(Value::Number(number)) => number.as_u64(),
+            Some(Value::String(written)) => written.trim().parse::<u64>().ok(),
+            _ => None,
+        };
+        match read {
+            Some(id) if id > 0 => id,
+            _ => {
+                problems.add(format!(
+                    "github.app.{key} must be the number GitHub shows for it"
+                ));
+                0
+            }
+        }
+    };
+    let app_id = id("appId", problems);
+    let installation_id = id("installationId", problems);
+    let private_key_path = required_string(&app, "privateKeyPath", "github.app", problems);
+    if !private_key_path.is_empty() && !is_absolute(&private_key_path) {
+        problems.add("github.app.privateKeyPath must be an absolute path");
+    }
+    let mut permissions = BTreeMap::new();
+    match app.get("permissions") {
+        None => {}
+        Some(Value::Object(written)) => {
+            for (name, level) in written {
+                match level.as_str() {
+                    Some(level @ ("read" | "write")) if !name.trim().is_empty() => {
+                        permissions.insert(name.clone(), level.to_owned());
+                    }
+                    _ => problems.add(format!(
+                        "github.app.permissions.{name} must be \"read\" or \"write\""
+                    )),
+                }
+            }
+        }
+        Some(_) => problems.add(
+            "github.app.permissions must map a permission to \"read\" or \"write\", as \
+             { \"contents\": \"write\" }",
+        ),
+    }
+    let repositories = id_list(&app, "repositories", "github.app", problems);
+    for repository in &repositories {
+        if repository.contains('/') {
+            problems.add(format!(
+                "github.app.repositories names `{repository}`, but a repository is named here \
+                 without its owner, which is the installation's"
+            ));
+        }
+    }
+    Some(GithubAppConfig {
+        app_id,
+        installation_id,
+        private_key_path,
+        permissions,
+        repositories,
     })
 }
 
@@ -1814,6 +1907,25 @@ pub fn validate_config(parsed: &Value) -> Result<Config, ConfigError> {
                 ));
             }
         }
+    }
+
+    // A session can read its project and its state, and an App key it could
+    // read is the App itself, able to mint any permission it was granted.
+    // Compared where each really is, so neither a `..` nor a link moves the
+    // key into a root without it showing.
+    if let Some(key) = github
+        .as_ref()
+        .and_then(|github| github.app.as_ref())
+        .map(|app| real_path(&app.private_key_path))
+        .filter(|key| !key.is_empty())
+        && [&project_root, &state_dir]
+            .iter()
+            .any(|root| !root.is_empty() && nests(&real_path(root), &key))
+    {
+        problems.add(
+            "github.app.privateKeyPath must lie outside projectRoot and stateDir, which a session \
+             can read",
+        );
     }
 
     if !project_root.is_empty() && !state_dir.is_empty() && nests(&project_root, &state_dir) {
