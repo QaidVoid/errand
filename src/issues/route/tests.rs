@@ -115,14 +115,14 @@ async fn an_issue_gets_a_chat_thread_that_answers_it_across_a_restart() {
     let (router, chat, posted) = routed(links.clone());
 
     let made = Arc::clone(&router)
-        .create(said("github:o/r#4"), "r-4: fix it".to_owned())
+        .create(said("github:o/r#4"), "fix it".to_owned())
         .await
         .expect("made");
     assert_eq!(made.id, "t1");
     assert_eq!(
         *chat.opened.lock().unwrap(),
         [(
-            "r-4: fix it".to_owned(),
+            "fix it".to_owned(),
             "QaidVoid asked on GitHub, on o/r#4: https://github.com/o/r/issues/4".to_owned()
         )]
     );

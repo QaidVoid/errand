@@ -152,7 +152,6 @@ fn project_of(state_dir: &str, root: &str) -> Option<Project> {
         name: name.clone(),
         path,
         prompt: String::new(),
-        was_explicit: false,
     };
     crate::session::projects::ensure_project_directory(&selection, root)
         .ok()

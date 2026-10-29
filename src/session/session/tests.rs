@@ -888,7 +888,6 @@ async fn with_session(
             name: "demo".to_owned(),
             path: project.display().to_string(),
             prompt: "do the thing".to_owned(),
-            was_explicit: true,
         },
         chosen: None,
         state_dir: state_dir.display().to_string(),

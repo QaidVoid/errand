@@ -194,24 +194,26 @@ fn flush(
     }
 }
 
-/// Derives a thread name from the first prompt and the project it runs in,
-/// truncated to the limit without splitting a character.
-pub fn thread_name(project: &str, prompt: &str) -> String {
+/// Derives a thread name from the first prompt, truncated to the limit
+/// without splitting a character.
+///
+/// The project is not named in it: every session works in a directory of
+/// its own, named after its id, which would say nothing to whoever reads the
+/// channel.
+pub fn thread_name(prompt: &str) -> String {
     let first_line = prompt
         .split('\n')
         .find(|line| !line.trim().is_empty())
         .unwrap_or("session");
     let collapsed = collapse_spaces(first_line.trim());
-    let prefix = format!("{project}: ");
-    let room = THREAD_NAME_LIMIT - length(&prefix);
-    let mut body: String = collapsed.chars().take(room).collect();
+    let mut body: String = collapsed.chars().take(THREAD_NAME_LIMIT).collect();
     while body.ends_with(|c: char| c.is_whitespace()) {
         body.pop();
     }
     if body.is_empty() {
         "session".clone_into(&mut body);
     }
-    format!("{prefix}{body}")
+    body
 }
 
 /// Any run of whitespace becomes one space.

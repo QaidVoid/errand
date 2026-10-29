@@ -561,7 +561,7 @@ async fn nothing_is_acted_on_before_startup_has_finished() {
             Box::pin(async move {
                 harness
                     .daemon
-                    .handle(raw("demo: go"), InboundDecision::Start)
+                    .handle(raw("go"), InboundDecision::Start)
                     .await;
 
                 assert!(created(&harness.threads).is_empty());
@@ -589,10 +589,10 @@ async fn a_message_in_the_channel_starts_a_session_in_a_thread() {
         Box::pin(async move {
             harness
                 .daemon
-                .handle(raw("demo: fix the parser"), InboundDecision::Start)
+                .handle(raw("fix the parser"), InboundDecision::Start)
                 .await;
 
-            assert_eq!(created(&harness.threads), ["demo: fix the parser"]);
+            assert_eq!(created(&harness.threads), ["fix the parser"]);
             assert_eq!(harness.daemon.sessions().sessions().len(), 1);
         })
     })
@@ -1164,21 +1164,11 @@ async fn a_refusal_to_start_is_said_in_the_channel_where_it_was_asked() {
         Box::pin(async move {
             harness
                 .daemon
-                .handle(raw("demo: first"), InboundDecision::Start)
-                .await;
-            harness
-                .daemon
-                .handle(
-                    raw_with("demo: second", "m2", OWNER),
-                    InboundDecision::Start,
-                )
+                .handle(raw("--model no-such-model go"), InboundDecision::Start)
                 .await;
 
-            assert!(
-                harness.replies.lock().unwrap()[0]
-                    .1
-                    .contains("already has a live session")
-            );
+            let replies = harness.replies.lock().unwrap();
+            assert!(replies[0].1.contains("no-such-model"), "{:?}", replies[0].1);
         })
     })
     .await;
@@ -1190,7 +1180,7 @@ async fn a_message_in_a_thread_reaches_its_session() {
         Box::pin(async move {
             harness
                 .daemon
-                .handle(raw("demo: go"), InboundDecision::Start)
+                .handle(raw("go"), InboundDecision::Start)
                 .await;
 
             let mut sent = raw("carry on");
@@ -1220,7 +1210,7 @@ async fn a_message_in_a_sleeping_thread_wakes_the_session() {
         Box::pin(async move {
             harness
                 .daemon
-                .handle(raw("demo: go"), InboundDecision::Start)
+                .handle(raw("go"), InboundDecision::Start)
                 .await;
             harness
                 .daemon
@@ -1251,7 +1241,7 @@ async fn a_message_in_a_thread_that_is_over_says_where_to_start_a_new_one() {
         Box::pin(async move {
             harness
                 .daemon
-                .handle(raw("demo: go"), InboundDecision::Start)
+                .handle(raw("go"), InboundDecision::Start)
                 .await;
             harness
                 .daemon
@@ -1285,7 +1275,7 @@ async fn a_thread_archived_from_outside_ends_its_session() {
         Box::pin(async move {
             harness
                 .daemon
-                .handle(raw("demo: go"), InboundDecision::Start)
+                .handle(raw("go"), InboundDecision::Start)
                 .await;
 
             harness.daemon.thread_closed("thread-1").await;
@@ -1444,7 +1434,7 @@ async fn a_slash_command_runs_the_same_command_a_message_would() {
         Box::pin(async move {
             harness
                 .daemon
-                .handle(raw("demo: go"), InboundDecision::Start)
+                .handle(raw("go"), InboundDecision::Start)
                 .await;
 
             let answer = harness
@@ -1564,7 +1554,7 @@ async fn a_slash_command_in_a_sleeping_thread_says_to_wake_it_first() {
         Box::pin(async move {
             harness
                 .daemon
-                .handle(raw("demo: go"), InboundDecision::Start)
+                .handle(raw("go"), InboundDecision::Start)
                 .await;
             harness
                 .daemon
@@ -1594,7 +1584,7 @@ async fn shutting_down_ends_every_session_and_stops_accepting() {
         Box::pin(async move {
             harness
                 .daemon
-                .handle(raw("demo: go"), InboundDecision::Start)
+                .handle(raw("go"), InboundDecision::Start)
                 .await;
 
             harness.daemon.shutdown().await;
@@ -2425,7 +2415,7 @@ async fn a_dead_thread_is_answered_in_the_thread_not_the_channel() {
         Box::pin(async move {
             harness
                 .daemon
-                .handle(raw("demo: go"), InboundDecision::Start)
+                .handle(raw("go"), InboundDecision::Start)
                 .await;
             harness
                 .daemon
@@ -2477,7 +2467,7 @@ async fn a_command_asked_in_a_thread_is_answered_there() {
             Box::pin(async move {
                 harness
                     .daemon
-                    .handle(raw("demo: go"), InboundDecision::Start)
+                    .handle(raw("go"), InboundDecision::Start)
                     .await;
 
                 let mut sent = raw_with("!usage", "m2", OWNER);

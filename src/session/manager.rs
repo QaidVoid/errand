@@ -22,12 +22,12 @@ use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
 use crate::session::event::{EndReason, NoticeLevel, SessionEvent};
-use crate::session::ids::{TOKEN_LENGTH, session_id, session_token};
+use crate::session::ids::{TOKEN_LENGTH, session_token};
 use crate::session::model::{
     ChosenModel, configured_model, expand_alias, select_model, split_level,
 };
 use crate::session::pr;
-use crate::session::projects::{ProjectSelection, ensure_project_directory, select_project};
+use crate::session::projects::{ProjectSelection, ensure_project_directory, own_project};
 use crate::session::record::{prepare_record_dir, record_dir, withdraw_from_record};
 use crate::session::redacted::Redacting;
 use crate::session::registry::{ThreadRecord, ThreadRegistry};
@@ -436,12 +436,9 @@ impl SessionManager {
         let token = self.next_id();
         let project_root = self.options.config.get().project_root;
 
-        // A named session reaches the same directory every time the name is
-        // used. An unnamed one works in a directory of its own, named after
-        // the session.
-        let project = select_project(&message.content, &project_root, &token);
-        let id = session_id(&project, &token);
-        self.launch(id, project, message, ThreadKind::Created).await
+        let project = own_project(&message.content, &project_root, &token);
+        self.launch(token, project, message, ThreadKind::Created)
+            .await
     }
 
     /// Starts a session that no message created.
@@ -451,11 +448,6 @@ impl SessionManager {
     /// announced in the channel and still notifies a phone when it finishes.
     pub async fn start_detached(&self, request: DetachedRequest) -> StartOutcome {
         let token = self.next_id();
-        let named = if request.project.trim().is_empty() {
-            String::new()
-        } else {
-            format!("{}: ", request.project.trim())
-        };
         let message = IncomingMessage {
             id: format!("web-{token}"),
             author_id: request.owner_id.clone(),
@@ -468,18 +460,13 @@ impl SessionManager {
             from_interface: true,
         };
 
-        let project = select_project(
-            &format!("{named}{}", request.prompt),
+        let project = own_project(
+            &request.prompt,
             &self.options.config.get().project_root,
             &token,
         );
-        self.launch(
-            session_id(&project, &token),
-            project,
-            message,
-            ThreadKind::Opened,
-        )
-        .await
+        self.launch(token, project, message, ThreadKind::Opened)
+            .await
     }
 
     /// A model named as `--model` names one, with the provider that serves it.
@@ -701,11 +688,11 @@ impl SessionManager {
             Ok(()) => match kind {
                 ThreadKind::Created => {
                     Arc::clone(&self.shared.threads)
-                        .create(message.clone(), thread_name(&project.name, &project.prompt))
+                        .create(message.clone(), thread_name(&project.prompt))
                         .await
                 }
                 ThreadKind::Opened => {
-                    let name = thread_name(&project.name, &project.prompt);
+                    let name = thread_name(&project.prompt);
                     Arc::clone(&self.shared.threads)
                         .open(
                             name.clone(),
@@ -974,7 +961,6 @@ impl SessionManager {
                 name: record.project_name.clone(),
                 path: record.project_path.clone(),
                 prompt: message.content.clone(),
-                was_explicit: true,
             },
             chosen,
             state_dir: record.state_dir.clone(),
@@ -1294,8 +1280,6 @@ pub enum Delivery {
 
 /// A request to start a session with no message to hang it on.
 pub struct DetachedRequest {
-    /// The project the session should work in.
-    pub project: String,
     /// What to ask it first.
     pub prompt: String,
     /// Whose session it is.

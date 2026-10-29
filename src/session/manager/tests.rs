@@ -609,21 +609,18 @@ fn refused_reason(outcome: &StartOutcome) -> String {
 async fn starting_a_session_creates_its_thread_project_and_state() {
     with_manager(|harness| {
         Box::pin(async move {
-            let outcome = harness
-                .manager
-                .start(message("demo: fix the parser", "m1"))
-                .await;
+            let outcome = harness.manager.start(message("fix the parser", "m1")).await;
 
             assert!(outcome.is_started());
-            assert_eq!(harness.threads.made(), ["demo: fix the parser"]);
-            assert!(harness.root.path().join("projects").join("demo").is_dir());
+            assert_eq!(harness.threads.made(), ["fix the parser"]);
+            assert!(harness.root.path().join("projects").join("s1").is_dir());
             assert_eq!(
                 harness.sandbox.launched.lock().unwrap()[0].project_path,
                 harness
                     .root
                     .path()
                     .join("projects")
-                    .join("demo")
+                    .join("s1")
                     .display()
                     .to_string()
             );
@@ -634,55 +631,40 @@ async fn starting_a_session_creates_its_thread_project_and_state() {
                     .unwrap()
                     .get("thread-1")
                     .map(|record| record.project_name.clone()),
-                Some("demo".to_owned())
+                Some("s1".to_owned())
             );
         })
     })
     .await;
 }
 
-/// The prefix names the project; what follows it is what was asked.
+/// A leading word and colon is part of what was asked, not a project name:
+/// the agent is sent the whole message, and the session still works in a
+/// directory of its own.
 #[tokio::test]
-async fn the_project_prefix_is_stripped_from_the_prompt_the_agent_sees() {
+async fn a_leading_name_and_colon_stays_in_the_prompt() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness
+            let outcome = harness
                 .manager
-                .start(message("demo: fix the parser", "m1"))
+                .start(message("errand: fix the parser", "m1"))
                 .await;
             settle().await;
 
-            let sent = harness.sandbox.written();
-            assert!(sent.contains("fix the parser"));
-            assert!(!sent.contains("demo: fix"));
-        })
-    })
-    .await;
-}
-
-/// Two agents in one working tree edit the same files with neither able to
-/// see the other's changes.
-#[tokio::test]
-async fn a_project_that_already_has_a_session_is_refused_a_second_one() {
-    with_manager(|harness| {
-        Box::pin(async move {
-            harness.manager.start(message("demo: first", "m1")).await;
-
-            let second = harness.manager.start(message("demo: second", "m2")).await;
-
-            assert!(!second.is_started());
-            assert!(refused_reason(&second).contains("already has a live session"));
+            assert_eq!(started(&outcome).project().name, "s1");
+            assert!(harness.sandbox.written().contains("errand: fix the parser"));
+            assert!(!harness.root.path().join("projects").join("errand").exists());
         })
     })
     .await;
 }
 
 #[tokio::test]
-async fn two_different_projects_run_side_by_side() {
+async fn two_sessions_run_side_by_side_each_in_its_own_project() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("one: work", "m1")).await;
-            let second = harness.manager.start(message("two: work", "m2")).await;
+            harness.manager.start(message("work", "m1")).await;
+            let second = harness.manager.start(message("more work", "m2")).await;
 
             assert!(second.is_started());
             assert_eq!(harness.manager.sessions().len(), 2);
@@ -698,7 +680,7 @@ async fn no_thread_means_no_sandbox_and_the_slot_is_given_back() {
         Box::pin(async move {
             harness.threads.refuse_with(Some("the channel is gone"));
 
-            let outcome = harness.manager.start(message("demo: go", "m1")).await;
+            let outcome = harness.manager.start(message("go", "m1")).await;
 
             assert!(!outcome.is_started());
             assert!(harness.sandbox.launched.lock().unwrap().is_empty());
@@ -709,7 +691,7 @@ async fn no_thread_means_no_sandbox_and_the_slot_is_given_back() {
             assert!(
                 harness
                     .manager
-                    .start(message("demo: go", "m2"))
+                    .start(message("go", "m2"))
                     .await
                     .is_started()
             );
@@ -728,7 +710,7 @@ async fn a_spent_window_refuses_before_a_thread_or_a_sandbox_exists() {
         })),
         |harness| {
             Box::pin(async move {
-                let outcome = harness.manager.start(message("demo: go", "m1")).await;
+                let outcome = harness.manager.start(message("go", "m1")).await;
 
                 assert!(!outcome.is_started());
                 assert!(refused_reason(&outcome).contains("come back at nine"));
@@ -763,7 +745,7 @@ async fn more_sessions_than_the_host_allows_are_refused_with_a_reason() {
 async fn a_message_reaches_the_session_bound_to_its_thread_and_no_other() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
 
             assert!(
                 harness
@@ -786,7 +768,7 @@ async fn a_message_reaches_the_session_bound_to_its_thread_and_no_other() {
 async fn a_session_that_ends_lets_go_of_its_thread_and_can_be_resumed() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
 
             harness
                 .manager
@@ -809,7 +791,7 @@ async fn a_session_that_ends_lets_go_of_its_thread_and_can_be_resumed() {
                     .unwrap()
                     .get("thread-1")
                     .map(|record| record.session_id.clone()),
-                Some("demo-s1".to_owned())
+                Some("s1".to_owned())
             );
             assert!(harness.manager.can_resume("thread-1"));
             assert_eq!(harness.manager.resumable().len(), 1);
@@ -823,7 +805,7 @@ async fn a_session_that_ends_lets_go_of_its_thread_and_can_be_resumed() {
 async fn a_session_that_was_stopped_is_not_offered_for_resuming() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
 
             harness
                 .manager
@@ -843,7 +825,7 @@ async fn a_session_that_was_stopped_is_not_offered_for_resuming() {
 async fn resuming_picks_the_thread_up_where_it_stopped() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             harness
                 .manager
                 .end_thread("thread-1", EndReason::Idle)
@@ -856,7 +838,7 @@ async fn resuming_picks_the_thread_up_where_it_stopped() {
                 .await;
 
             assert!(outcome.is_started());
-            assert_eq!(started(&outcome).id(), "demo-s1");
+            assert_eq!(started(&outcome).id(), "s1");
             let launched = harness.sandbox.launched.lock().unwrap();
             assert!(launched[1].resume);
             assert_eq!(
@@ -865,7 +847,7 @@ async fn resuming_picks_the_thread_up_where_it_stopped() {
                     .root
                     .path()
                     .join("state")
-                    .join("demo-s1")
+                    .join("s1")
                     .display()
                     .to_string()
             );
@@ -879,7 +861,7 @@ async fn resuming_picks_the_thread_up_where_it_stopped() {
 async fn a_resumed_session_carries_on_the_turn_numbering() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             harness
                 .manager
                 .end_thread("thread-1", EndReason::Idle)
@@ -889,7 +871,7 @@ async fn a_resumed_session_carries_on_the_turn_numbering() {
                 .root
                 .path()
                 .join("state")
-                .join("demo-s1")
+                .join("s1")
                 .display()
                 .to_string();
             let record = record_dir(state.as_str());
@@ -931,7 +913,7 @@ async fn a_thread_this_daemon_never_saw_is_not_resumed() {
 async fn a_thread_held_by_a_sweep_is_not_resumed_until_it_is_let_go() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             harness
                 .manager
                 .end_thread("thread-1", EndReason::Idle)
@@ -961,7 +943,7 @@ async fn a_thread_held_by_a_sweep_is_not_resumed_until_it_is_let_go() {
 async fn a_thread_that_already_has_a_session_is_not_resumed_on_top_of_it() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
 
             let outcome = harness
                 .manager
@@ -982,7 +964,7 @@ async fn who_was_invited_survives_the_session_ending_and_coming_back() {
         Box::pin(async move {
             let started_session = harness
                 .manager
-                .start(message("demo: go", "m1"))
+                .start(message("go", "m1"))
                 .await
                 .session()
                 .cloned();
@@ -1033,13 +1015,10 @@ async fn who_was_invited_survives_the_session_ending_and_coming_back() {
 async fn a_view_can_be_attached_to_a_live_session_and_detached_again() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             let watcher = harness.threads.view() as Arc<dyn SessionView>;
 
-            let attached = harness
-                .manager
-                .attach_view("demo-s1", watcher.clone())
-                .await;
+            let attached = harness.manager.attach_view("s1", watcher.clone()).await;
             assert!(attached.is_some());
             assert!(
                 harness
@@ -1060,9 +1039,9 @@ async fn a_view_can_be_attached_to_a_live_session_and_detached_again() {
 async fn the_thread_a_session_belongs_to_is_known_live_or_remembered() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             assert_eq!(
-                harness.manager.thread_id_for("demo-s1"),
+                harness.manager.thread_id_for("s1"),
                 Some("thread-1".to_owned())
             );
 
@@ -1073,7 +1052,7 @@ async fn the_thread_a_session_belongs_to_is_known_live_or_remembered() {
             settle().await;
 
             assert_eq!(
-                harness.manager.thread_id_for("demo-s1"),
+                harness.manager.thread_id_for("s1"),
                 Some("thread-1".to_owned())
             );
             assert_eq!(harness.manager.thread_id_for("s404"), None);
@@ -1128,7 +1107,6 @@ async fn a_session_started_with_no_message_still_gets_a_thread() {
             let outcome = harness
                 .manager
                 .start_detached(DetachedRequest {
-                    project: "demo".to_owned(),
                     prompt: "fix the parser".to_owned(),
                     owner_id: "web-interface".to_owned(),
                     owner_name: Some("the interface".to_owned()),
@@ -1136,7 +1114,7 @@ async fn a_session_started_with_no_message_still_gets_a_thread() {
                 .await;
 
             assert!(outcome.is_started());
-            assert_eq!(harness.threads.made(), ["demo: fix the parser"]);
+            assert_eq!(harness.threads.made(), ["fix the parser"]);
             assert_eq!(
                 harness
                     .registry
@@ -1152,13 +1130,12 @@ async fn a_session_started_with_no_message_still_gets_a_thread() {
 }
 
 #[tokio::test]
-async fn a_session_started_with_no_project_named_gets_one_of_its_own() {
+async fn a_session_started_at_a_keyboard_gets_a_project_of_its_own() {
     with_manager(|harness| {
         Box::pin(async move {
             let outcome = harness
                 .manager
                 .start_detached(DetachedRequest {
-                    project: String::new(),
                     prompt: "have a look at this".to_owned(),
                     owner_id: "web-interface".to_owned(),
                     owner_name: None,
@@ -1181,12 +1158,12 @@ async fn a_session_started_with_no_project_named_gets_one_of_its_own() {
 async fn a_session_can_be_written_to_by_its_own_identifier() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
 
             assert_eq!(
                 harness
                     .manager
-                    .deliver_to_session("demo-s1", message("more", "m2"))
+                    .deliver_to_session("s1", message("more", "m2"))
                     .await,
                 Delivery::Sent
             );
@@ -1207,7 +1184,7 @@ async fn a_session_can_be_written_to_by_its_own_identifier() {
 async fn writing_to_a_session_that_stopped_picks_it_up_again() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             harness
                 .manager
                 .end_thread("thread-1", EndReason::Idle)
@@ -1217,7 +1194,7 @@ async fn writing_to_a_session_that_stopped_picks_it_up_again() {
             assert_eq!(
                 harness
                     .manager
-                    .deliver_to_session("demo-s1", message("carry on", "m2"))
+                    .deliver_to_session("s1", message("carry on", "m2"))
                     .await,
                 Delivery::Sent
             );
@@ -1233,7 +1210,7 @@ async fn writing_to_a_session_that_stopped_picks_it_up_again() {
 async fn a_stranger_posting_in_a_stopped_thread_does_not_wake_it() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             harness
                 .manager
                 .end_thread("thread-1", EndReason::Idle)
@@ -1258,7 +1235,7 @@ async fn a_stranger_posting_in_a_stopped_thread_does_not_wake_it() {
 async fn a_stranger_cannot_wake_somebody_elses_stopped_session() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             harness
                 .manager
                 .end_thread("thread-1", EndReason::Idle)
@@ -1268,10 +1245,7 @@ async fn a_stranger_cannot_wake_somebody_elses_stopped_session() {
             let mut stranger = message("wake up", "m2");
             stranger.author_id = "999999999999999999".to_owned();
             assert_eq!(
-                harness
-                    .manager
-                    .deliver_to_session("demo-s1", stranger)
-                    .await,
+                harness.manager.deliver_to_session("s1", stranger).await,
                 Delivery::NotInvited
             );
             assert!(harness.manager.sessions().is_empty());
@@ -1293,7 +1267,7 @@ async fn a_model_nothing_serves_is_refused_rather_than_turned_away_later() {
             ] {
                 let outcome = harness
                     .manager
-                    .start(message(&format!("demo: --model {asked} go"), "m1"))
+                    .start(message(&format!("--model {asked} go"), "m1"))
                     .await;
 
                 let StartOutcome::Refused { reason } = outcome else {
@@ -1319,7 +1293,7 @@ async fn a_host_that_lists_no_models_refuses_a_named_one() {
         Box::pin(async move {
             let outcome = harness
                 .manager
-                .start(message("demo: --model glm-5.3-air go", "m1"))
+                .start(message("--model glm-5.3-air go", "m1"))
                 .await;
 
             assert!(matches!(outcome, StartOutcome::Refused { .. }));
@@ -1352,7 +1326,7 @@ async fn a_model_several_providers_serve_is_refused_by_name_not_by_absence() {
             Box::pin(async move {
                 let outcome = harness
                     .manager
-                    .start(message("demo: -m glm-5.3-air go", "m1"))
+                    .start(message("-m glm-5.3-air go", "m1"))
                     .await;
 
                 let StartOutcome::Refused { reason } = outcome else {
@@ -1375,7 +1349,7 @@ async fn a_model_several_providers_serve_is_refused_by_name_not_by_absence() {
                 // The qualification the refusal asks for is one that works.
                 harness
                     .manager
-                    .start(message("demo: -m anthropic/glm-5.3-air go", "m2"))
+                    .start(message("-m anthropic/glm-5.3-air go", "m2"))
                     .await;
                 let launched = harness.sandbox.launched.lock().unwrap()[0].clone();
                 assert_eq!(launched.provider, "anthropic");
@@ -1394,7 +1368,7 @@ async fn the_opening_message_can_choose_the_model_the_session_starts_on() {
         Box::pin(async move {
             harness
                 .manager
-                .start(message("demo: --model glm-5.3-air look at this", "m1"))
+                .start(message("--model glm-5.3-air look at this", "m1"))
                 .await;
 
             let launched = harness.sandbox.launched.lock().unwrap();
@@ -1424,7 +1398,7 @@ async fn a_known_provider_in_front_of_the_model_switches_provider_too() {
                 harness
                     .manager
                     .start(message(
-                        "demo: --model meta/muse-spark-1.3-contributor:max look at this",
+                        "--model meta/muse-spark-1.3-contributor:max look at this",
                         "m1",
                     ))
                     .await;
@@ -1449,7 +1423,7 @@ async fn the_flag_is_taken_off_the_prompt_the_agent_is_given() {
         Box::pin(async move {
             harness
                 .manager
-                .start(message("demo: --model glm-5.3-air look at this", "m1"))
+                .start(message("--model glm-5.3-air look at this", "m1"))
                 .await;
             // Nothing of the flag survives into the work the session was
             // asked to do.
@@ -1482,7 +1456,7 @@ async fn a_resumed_thread_comes_back_on_the_model_it_was_started_with() {
                 harness
                     .manager
                     .start(message(
-                        "demo: --model meta/muse-spark-1.3-contributor:xhigh go",
+                        "--model meta/muse-spark-1.3-contributor:xhigh go",
                         "m1",
                     ))
                     .await;
@@ -1514,7 +1488,7 @@ async fn a_resumed_thread_comes_back_on_the_model_it_was_started_with() {
 async fn a_thread_started_on_the_configured_model_still_resumes_on_it() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             harness
                 .manager
                 .end_thread("thread-1", EndReason::Idle)
@@ -1556,7 +1530,7 @@ async fn a_short_name_starts_the_session_on_the_model_it_stands_for() {
             Box::pin(async move {
                 harness
                     .manager
-                    .start(message("demo: --model muse:xhigh go", "m1"))
+                    .start(message("--model muse:xhigh go", "m1"))
                     .await;
 
                 let launched = harness.sandbox.launched.lock().unwrap();
@@ -1577,7 +1551,7 @@ async fn a_short_name_starts_the_session_on_the_model_it_stands_for() {
 async fn a_thread_force_stopped_for_not_answering_can_still_be_resumed() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
 
             harness
                 .manager
@@ -1601,7 +1575,7 @@ async fn a_thread_force_stopped_for_not_answering_can_still_be_resumed() {
 async fn a_deliberate_stop_still_ends_the_thread_for_good() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
 
             harness
                 .manager
@@ -1640,7 +1614,7 @@ async fn a_model_switch_inside_a_resumed_thread_is_remembered_too() {
             Box::pin(async move {
                 harness
                     .manager
-                    .start(message("demo: --model meta/one go", "m1"))
+                    .start(message("--model meta/one go", "m1"))
                     .await;
                 harness
                     .manager
@@ -1725,7 +1699,7 @@ async fn a_spent_default_provider_does_not_refuse_another_provider() {
                 // Only the configured provider is out of window.
                 let started_session = harness
                     .manager
-                    .start(message("demo: -m meta/muse explain yourself", "m1"))
+                    .start(message("-m meta/muse explain yourself", "m1"))
                     .await;
                 assert!(started_session.is_started());
                 assert_eq!(harness.sandbox.launched.lock().unwrap()[0].provider, "meta");
@@ -1779,7 +1753,7 @@ async fn a_spent_window_falls_back_to_the_first_model_with_room() {
         Some(Arc::clone(&spent_anthropic)),
         |harness| {
             Box::pin(async move {
-                let started = harness.manager.start(message("demo: just go", "m1")).await;
+                let started = harness.manager.start(message("just go", "m1")).await;
                 let session = started.session().expect("started on the fallback").clone();
                 let launched = harness.sandbox.launched.lock().unwrap()[0].clone();
                 assert_eq!(launched.provider, "meta");
@@ -1808,7 +1782,7 @@ async fn a_spent_window_falls_back_to_the_first_model_with_room() {
         Some(spent_anthropic),
         |harness| {
             Box::pin(async move {
-                let refused = harness.manager.start(message("demo: just go", "m1")).await;
+                let refused = harness.manager.start(message("just go", "m1")).await;
                 assert!(refused_reason(&refused).contains("usage window is spent"));
             })
         },
@@ -1843,7 +1817,7 @@ async fn a_fallback_naming_a_shared_id_is_passed_over() {
         listed(),
         |harness| {
             Box::pin(async move {
-                let outcome = harness.manager.start(message("demo: just go", "m1")).await;
+                let outcome = harness.manager.start(message("just go", "m1")).await;
                 assert!(
                     outcome.is_started(),
                     "an ambiguous fallback turned the session away: {}",
@@ -1879,7 +1853,7 @@ async fn a_spent_provider_still_refuses_a_prompt_that_would_use_it() {
         })),
         |harness| {
             Box::pin(async move {
-                let refused = harness.manager.start(message("demo: just go", "m1")).await;
+                let refused = harness.manager.start(message("just go", "m1")).await;
                 assert!(!refused.is_started());
                 assert!(refused_reason(&refused).contains("usage window is spent"));
             })
@@ -1908,7 +1882,7 @@ async fn a_thread_whose_provider_is_gone_resumes_on_the_configured_model() {
             Box::pin(async move {
                 harness
                     .manager
-                    .start(message("demo: --model meta/one go", "m1"))
+                    .start(message("--model meta/one go", "m1"))
                     .await;
                 harness
                     .manager
@@ -1950,7 +1924,7 @@ async fn a_thread_whose_provider_is_gone_resumes_on_the_configured_model() {
 async fn an_ended_session_is_not_restarted_for_a_withdrawal() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             settle().await;
             harness
                 .manager
@@ -1977,7 +1951,7 @@ async fn an_ended_session_is_not_restarted_for_a_withdrawal() {
                     .root
                     .path()
                     .join("state")
-                    .join("demo-s1")
+                    .join("s1")
                     .display()
                     .to_string(),
             );
@@ -1995,7 +1969,7 @@ async fn an_ended_session_is_not_restarted_for_a_withdrawal() {
 async fn a_withdrawal_nobody_holds_reports_nothing() {
     with_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             // Let the opening turn settle, so a withdrawal is applied at once
             // rather than held by a turn in progress.
             harness.sandbox.settle_latest();
@@ -2015,7 +1989,7 @@ async fn a_withdrawal_nobody_holds_reports_nothing() {
 async fn a_resumed_session_is_still_given_its_system_prompt() {
     with_remembering_manager(|harness| {
         Box::pin(async move {
-            harness.manager.start(message("demo: go", "m1")).await;
+            harness.manager.start(message("go", "m1")).await;
             settle().await;
             let first = harness.sandbox.launched.lock().unwrap()[0]
                 .system_prompt_path
@@ -2071,7 +2045,7 @@ async fn a_bare_model_from_another_provider_launches_under_that_provider() {
             Box::pin(async move {
                 let outcome = harness
                     .manager
-                    .start(message("demo: -m free-fast do it", "m1"))
+                    .start(message("-m free-fast do it", "m1"))
                     .await;
                 started(&outcome);
                 let launched = harness.sandbox.launched.lock().unwrap();
@@ -2092,7 +2066,7 @@ async fn a_bare_model_from_another_provider_launches_under_that_provider() {
 async fn a_surface_showing_a_sessions_files_scrubs_what_the_session_holds() {
     with_manager(|harness| {
         Box::pin(async move {
-            let outcome = harness.manager.start(message("demo: go", "m1")).await;
+            let outcome = harness.manager.start(message("go", "m1")).await;
             let id = started(&outcome).id().to_owned();
             harness
                 .manager
