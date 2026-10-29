@@ -1111,19 +1111,28 @@ impl Running {
                         .await;
                 }
                 Signal::CommandRejected { command, detail } => {
+                    // A prompt answered with an error is a run that failed,
+                    // most often at the model provider, not a refusal.
+                    let (event, line) = if command == "prompt" {
+                        ("the turn failed", format!("the turn failed: {detail}"))
+                    } else {
+                        (
+                            "the agent refused a command",
+                            format!("the agent refused the {command}: {detail}"),
+                        )
+                    };
                     self.log.warn(
-                        "the agent refused a command",
+                        event,
                         &fields([
                             ("command", LogValue::from(command.as_str())),
                             ("detail", LogValue::from(detail.as_str())),
                         ]),
                     );
-                    // The agent refused outright, so no turn follows and
-                    // nothing else will ever settle this. Reporting and
-                    // settling here is what keeps the thread from going quiet
-                    // and the admission slot from leaking.
-                    self.say(&format!("the agent refused the {command}: {detail}"))
-                        .await;
+                    // No turn follows and nothing else will ever settle
+                    // this. Reporting and settling here is what keeps the
+                    // thread from going quiet and the admission slot from
+                    // leaking.
+                    self.say(&line).await;
                     self.settle_turn(ReactionOutcome::Failed).await;
                 }
                 Signal::Retry(detail) => {

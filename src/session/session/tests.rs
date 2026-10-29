@@ -1218,6 +1218,45 @@ async fn a_turn_that_failed_after_speaking_says_why() {
     .await;
 }
 
+/// A provider failure the agent gives up on fails the turn; it is not
+/// reported as the agent refusing the prompt.
+#[tokio::test(start_paused = true)]
+async fn a_prompt_the_provider_broke_is_a_failed_turn_not_a_refusal() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            let controls = harness.controls();
+            let prompt = controls
+                .written()
+                .iter()
+                .rev()
+                .map(|line| serde_json::from_str::<Value>(line).expect("JSON"))
+                .find(|frame| frame.get("method").and_then(Value::as_str) == Some("session/prompt"))
+                .expect("the first prompt");
+            controls.send(&json!({
+                "jsonrpc": "2.0", "id": prompt["id"],
+                "error": {
+                    "code": -32000,
+                    "message": "provider error: malformed response: provider stream error \
+                                (stream_interrupted): the stream was cut off",
+                },
+            }));
+            settle().await;
+
+            let said = harness.thread.everything();
+            assert!(
+                said.contains("the turn failed: provider error: malformed response"),
+                "{said}"
+            );
+            assert!(!said.contains("refused"), "{said}");
+            assert_eq!(
+                harness.thread.final_reaction("m1"),
+                Some(ReactionOutcome::Failed)
+            );
+        })
+    })
+    .await;
+}
+
 /// Saying something to a working agent redirects it: same turn, no new slot.
 #[tokio::test(start_paused = true)]
 async fn a_message_during_a_running_turn_steers_it_rather_than_queueing() {
