@@ -159,9 +159,12 @@ session behind the broker is locked to it alone, with UDP, ICMP, and
 DNS dropped inside it, so the broker's answer and its log are the only record
 of where a request stalled.
 
-Under the bailey backend a session shares the host's network namespace, so it
-can read the host address, the MAC, and the ARP neighbours through `ip`,
-`/proc/net`, or `/sys`. To hide them, set `sandbox.hideHostAddress`:
+Under the bailey backend with `sandbox.egress.mode` set to `proxy`, the
+default, a session runs in a private network namespace whose one way out is
+its broker. With `open` and without `sandbox.hideHostAddress`, it shares the
+host's network namespace, so it can read the host address, the MAC, and the
+ARP neighbours through `ip`, `/proc/net`, or `/sys`. To hide them, set
+`sandbox.hideHostAddress`:
 
 ```json
 {
@@ -178,6 +181,25 @@ namespace gets a synthetic IPv6 address as well where the host has one to reach,
 and the ports a session may open are unchanged. The podman backend already gives
 each session its own network, so it does not need this. Under the broker that
 network reaches only the broker.
+
+## Checking it on this host
+
+The test suite checks the flags each backend is given, not what the kernel
+then does. On a host where `bailey doctor` passes, a set of live checks starts
+a bailey session the way the daemon does, with its arguments and its policy,
+and confirms that it reaches its broker, that a host service on a port the
+policy admits is still not reached directly, through the host's loopback, its
+own address, or the address the broker is mapped at, since the session's
+namespace and its firewall let out only the broker's port, that a port the
+policy does not admit is refused at once, and that the broker's own port leads
+nowhere else:
+
+```sh
+cargo test sandbox::bailey::live_tests -- --ignored --test-threads=1
+```
+
+They are left out of an ordinary run. On a host that cannot run bailey, each
+check fails saying why, rather than passing.
 
 ## What it says at startup
 
