@@ -159,3 +159,33 @@ fn mirrored_tree() -> tempfile::TempDir {
     }
     root
 }
+
+/// The egress sub-fields have defaults, so the page says what they are and
+/// the schema does not demand them, as the daemon does not.
+#[test]
+fn the_egress_defaults_show_in_the_page_and_the_schema() {
+    let generated = pages(&schema());
+    let page = &generated["docs/reference/configuration.md"];
+    let egress = page
+        .split("## sandbox.egress\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the egress section");
+    for (field, default) in [
+        ("mode", "`\"proxy\"`"),
+        ("allow", "`[]`"),
+        ("allowInternal", "`false`"),
+    ] {
+        let row = egress
+            .lines()
+            .find(|line| line.starts_with(&format!("| `{field}` |")))
+            .unwrap_or_else(|| panic!("no {field} row"));
+        assert!(row.contains(&format!("| {default} |")), "{row}");
+    }
+
+    let schema: serde_json::Value =
+        serde_json::from_str(&generated["config.schema.json"]).expect("JSON");
+    let egress = &schema["properties"]["sandbox"]["properties"]["egress"];
+    assert!(egress.is_object(), "{schema}");
+    assert!(egress.get("required").is_none(), "{egress}");
+}

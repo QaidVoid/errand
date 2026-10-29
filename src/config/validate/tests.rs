@@ -635,6 +635,20 @@ fn egress_defaults_to_a_brokered_pass_through() {
     assert_eq!(config.sandbox.egress.allow, vec!["*"]);
 }
 
+/// Only an absent block means any host. A block that leaves `allow` out has
+/// named none, and is not widened to `*` behind the operator's back, which
+/// is what the configuration page says of the field.
+#[test]
+fn an_egress_block_without_an_allowlist_allows_no_host_of_its_own() {
+    let config = validate_config(&valid(json!({
+        "sandbox": { "egress": { "mode": "proxy" } }
+    })))
+    .expect("resolves");
+    assert_eq!(config.sandbox.egress.mode, EgressMode::Proxy);
+    assert!(config.sandbox.egress.allow.is_empty());
+    assert!(!config.sandbox.egress.allow_internal);
+}
+
 #[test]
 fn proxy_mode_with_a_hostname_allowlist_is_accepted_and_lower_cased() {
     let egress = validate_config(&valid(json!({

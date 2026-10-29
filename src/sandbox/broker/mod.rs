@@ -306,6 +306,10 @@ pub fn is_private_v4(address: &str) -> bool {
         || (first == 192 && second == 88 && third == 99)
         // Benchmarking, 198.18.0.0/15.
         || (first == 198 && (18..=19).contains(&second))
+        // Azure's WireServer and platform address. It is public by number,
+        // but the fabric intercepts it inside every guest, so nothing a
+        // session legitimately dials answers there.
+        || address == Ipv4Addr::new(168, 63, 129, 16)
         // Everything above multicast is reserved, and the last of it is the
         // broadcast address.
         || first >= 240
