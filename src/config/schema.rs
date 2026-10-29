@@ -184,8 +184,8 @@ pub struct AgentConfig {
     /// kage knows needs no `kind`, since its name already says it. Endpoints reach the
     /// agent's own configuration translated, because that schema belongs to
     /// the agent; the credential never enters it, traveling in the
-    /// environment instead. Under the bailey backend with `egress.mode =
-    /// proxy`, a provider the broker routes, unless marked `broker: false`,
+    /// environment instead. Under `egress.mode = proxy`, a provider the
+    /// broker routes, unless marked `broker: false`,
     /// is given to the session as a stand-in, `errand-session-` and 64 hex
     /// digits, minted for that session alone and honoured only by its broker
     /// until the session stops. It authenticates the session to its broker,

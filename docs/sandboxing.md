@@ -26,11 +26,11 @@ Both hold a session to one project directory and one state directory. What a
 session may reach on the network depends on the backend and on
 `sandbox.egress.mode`, and out of the box it is more than the model provider.
 
-Under the bailey backend with `sandbox.egress.mode` set to `proxy`, the
-default, every connection goes through the egress broker. With no `egress`
-block written, the built-in allowlist is `["*"]`. The broker then still gates
-the port, refuses the host's own network and Azure's fabric address, and logs
-every connection, but restricts no host. To hold sessions to the hosts a
+With `sandbox.egress.mode` set to `proxy`, the default, every connection a
+session makes goes through its egress broker, under either backend. With no
+`egress` block written, the built-in allowlist is `["*"]`. The broker then still
+gates the port, refuses the host's own network and Azure's fabric address, and
+logs every connection, but restricts no host. To hold sessions to the hosts a
 project needs, name them, and no other host is reached through the broker:
 
 ```json
@@ -50,13 +50,16 @@ reached as any other host, so name its host when the list is not `["*"]`.
 With an empty list and no provider host from the store, the daemon refuses to
 start.
 
-With `sandbox.egress.mode` set to `open`, bailey runs no broker. The generated
-policy admits any host on the allowed ports, the host's own network included,
-and `sandbox.egress.allow` does nothing.
+With `sandbox.egress.mode` set to `open`, there is no broker. Under bailey
+the generated policy admits any host on the allowed ports, the host's own
+network included. Under podman the container's network is bounded by its
+namespace alone, so a session reaches any host on any port. Either way
+`sandbox.egress.allow` does nothing.
 
-Under podman there is no broker either. The container's network is bounded by
-its namespace alone, so a session reaches any host on any port, and neither
-the allowlist nor the ports below apply.
+Under podman a brokered container is given loopback and nothing else. pasta
+forwards its loopback port to its broker's port on the host, and every other
+address, public or private and the host's own included, is unreachable, so
+nothing resolves either: the broker resolves names itself.
 
 If a session needs another outbound port, name it under
 `sandbox.egressPorts`:
@@ -74,10 +77,10 @@ The default is `[443]`, which is all a provider needs. Adding 80 lets a session
 speak plaintext HTTP, for a mirror or a redirect that has not moved to TLS. With
 `sandbox.egress.mode` set to `proxy`, the broker opens only these ports
 upstream, for `CONNECT` tunnels and plain `http://` requests alike, and holds
-both to the same allowlist. Without the broker, the bailey backend enforces the
-list in the generated policy, while podman bounds the network by namespace
-rather than by port, so the list is inert there. A session with `network` set
-to `none` opens nothing, whatever ports are named.
+both to the same allowlist, under either backend. Without the broker, the
+bailey backend enforces the list in the generated policy, while podman bounds
+the network by namespace rather than by port, so the list is inert there. A
+session with `network` set to `none` opens nothing, whatever ports are named.
 
 Each session has a broker of its own. It is started when the session's
 sandbox launches, on a loopback port no other session uses, and it mints a
@@ -92,24 +95,24 @@ broker's log lines name the session they belong to, tunnels included.
 
 Every provider call a session's broker handles is recorded as well, in
 `receipts.db` under the state directory. A receipt holds when the call ended,
-the session, the provider, the name of the variable its credential is
-configured under, the host the call went to, the method and path, the status,
-how long it took, how many bytes went each way, and what came of it:
-`completed`, `interrupted` when the answer failed, was cut for its size, or
-the session hung up part way, `denied` when the call did not carry the
-session's stand-in, recorded at most once a minute with the log saying how
-many were refused unrecorded since, `refused` when the broker would not forward it or refused
-its answer for the size it declared, or `upstream-unreachable`. The method is
-kept only as a standard name, the path decoded, scrubbed of stand-ins, cut at
-any query it encodes, with control characters escaped, and cut to 256 bytes, a
-query only by its length, since it can carry a key, and no header,
-body, credential or stand-in is ever kept. A call for a provider the broker
-does not serve, or one that arrives after the session stopped, leaves no
-receipt, only a log line or nothing. A tunnel carries no brokered credential
-and leaves no receipt, so its log lines are its only record.
-`errand threads show <thread>` lists the newest calls a thread's session made.
-Nothing prunes the store yet, so it grows with use. A receipt that cannot be
-written does not fail the call, and the log says so.
+the session, the provider, the name of the variable its credential is configured
+under, the host the call went to, the method and path, the status, how long it
+took, how many bytes went each way, and what came of it: `completed`,
+`interrupted` when the answer failed, was cut for its size, or the session hung
+up part way, `denied` when the call did not carry the session's stand-in,
+recorded at most once a minute with the log saying how many were refused
+unrecorded since, `refused` when the broker would not forward it or refused its answer for the
+size it declared, or `upstream-unreachable`. The method is kept only as a
+standard name, the path decoded, scrubbed of stand-ins, cut at any query it
+encodes, with control characters escaped, and cut to 256 bytes, a query only by
+its length, since it can carry a key, and no header, body,
+credential or stand-in is ever kept. A call for a provider the broker does not
+serve, or one that arrives after the session stopped, leaves no receipt, only a
+log line or nothing. A tunnel carries no brokered credential and leaves no
+receipt, so its log lines are its only record. `errand threads show <thread>`
+lists the newest calls a thread's session made. Nothing prunes the store yet, so
+it grows with use. A receipt that cannot be written does not fail the call, and
+the log says so.
 
 The proxy listener requires that credential. A `CONNECT` or plain `http://`
 request without it receives `407 Proxy Authentication Required` with a
@@ -173,7 +176,8 @@ address and MAC rather than the host's. It needs `pasta` on the host; without
 it the session still starts, and says the host address stays visible. The
 namespace gets a synthetic IPv6 address as well where the host has one to reach,
 and the ports a session may open are unchanged. The podman backend already gives
-each session its own network, so it does not need this.
+each session its own network, so it does not need this. Under the broker that
+network reaches only the broker.
 
 ## What it says at startup
 
@@ -307,7 +311,11 @@ and a value reaches the agent, so nothing secret belongs here.
 
 The provider credential, because it needs it, and a GitHub token when one is
 configured, because reading issues and checking builds is most of working on
-somebody's repository.
+somebody's repository. Under `egress.mode = proxy` the provider credential is
+its broker's stand-in, on either backend. Under `open`, and for the GitHub
+token always, the real value is held. Under podman both are in the
+container's environment, named on the `podman run` command line but never
+written there.
 
 It does not hold the chat token. The text a session reports is scrubbed of
 every configured secret of 8 bytes or more, and of every stand-in its broker

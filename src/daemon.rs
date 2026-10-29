@@ -75,8 +75,7 @@ pub enum StartError {
 ///
 /// `broker`, when given, is what each session's egress broker is built from
 /// under `egress.mode = proxy`: a session gets a listener and nonces of its
-/// own at launch. Only the bailey backend uses it; podman bounds the network
-/// by its own namespace. `built_in` is the host store's definitions of each
+/// own at launch, under either backend. `built_in` is the host store's definitions of each
 /// defined provider's models, which either backend writes under an entry
 /// naming one.
 pub fn create_sandbox(
@@ -91,6 +90,7 @@ pub fn create_sandbox(
             log,
             run_podman_arc(),
             built_in,
+            broker,
         ))),
         SandboxBackend::Bailey => Backend::Bailey(Arc::new(BaileySandbox::new(
             config.sandbox.clone(),

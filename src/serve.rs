@@ -66,10 +66,10 @@ use crate::provider::usage::{
 use crate::provider::vision::HttpPost;
 use crate::provider::vision::image_describer;
 use crate::provider::zai::fetch_quota;
-use crate::sandbox::bailey::provider_prefix;
 use crate::sandbox::broker::ProviderUpstream;
 use crate::sandbox::broker::{BrokerTemplate, RECEIPTS_FILENAME, ReceiptStore};
 use crate::sandbox::broker::{LOOKUP_TIMEOUT, NoAddress, public_addresses, upstream_url};
+use crate::sandbox::egress::provider_prefix;
 use crate::sandbox::paths;
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
 use crate::session::model::{configured_model, split_level};

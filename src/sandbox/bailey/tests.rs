@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use super::{
-    BaileyOptions, BaileySandbox, bailey_args, brokered_env, egress_proxy_endpoint,
-    egress_proxy_url, parse_doctor, session_environment,
+    BaileyOptions, BaileySandbox, bailey_args, egress_proxy_endpoint, parse_doctor,
+    session_environment,
 };
 use crate::config::schema::NetworkMode;
 use crate::config::schema::PolicyExtraConfig;
@@ -14,6 +14,7 @@ use crate::log::{LogFields, Logger};
 use crate::sandbox::Run;
 use crate::sandbox::backend::{Denials, SandboxLaunch};
 use crate::sandbox::broker::{Broker, BrokerTemplate, ProviderUpstream, SessionBroker};
+use crate::sandbox::egress::{brokered_env, egress_proxy_url};
 use crate::sandbox::kage_providers::INSTALLED_JSON;
 use tempfile::TempDir;
 
@@ -602,7 +603,7 @@ fn the_proxy_endpoint_and_url_are_built_from_the_map_address_and_port() {
     assert_eq!(egress_proxy_endpoint(8443), "169.254.169.1:8443");
     let secret = "run-secret";
     assert_eq!(
-        egress_proxy_url(8443, secret),
+        egress_proxy_url("169.254.169.1", 8443, secret),
         "http://session:run-secret@169.254.169.1:8443"
     );
     assert!(!egress_proxy_endpoint(8443).contains(secret));

@@ -2607,8 +2607,10 @@ impl Running {
     /// provider's key travels in.
     ///
     /// Every defined provider's key crosses, so the agent can switch to any
-    /// of them. A broker swaps each for its nonce on the way in, and drops
-    /// the ones it has no route to, so no real key crosses there.
+    /// of them. Under `egress.mode = proxy` the session's broker swaps each
+    /// for its nonce on the way in, under either backend, and drops the ones
+    /// it has no route to, so no real provider key crosses there. The GitHub
+    /// token crosses whole.
     fn launch_env(
         &self,
         github: Option<&GithubConfig>,

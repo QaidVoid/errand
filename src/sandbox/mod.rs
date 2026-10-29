@@ -24,6 +24,8 @@ pub mod backend;
 pub mod bailey;
 /// The egress broker every confined session dials out through.
 pub mod broker;
+/// What a brokered session is handed to reach its broker.
+pub mod egress;
 /// The provider ids the installed kage knows.
 pub mod kage_providers;
 /// Whether a path stays inside the directory a session is confined to.
@@ -95,6 +97,8 @@ pub struct PodmanStop {
     pub grace_ms: u64,
     /// The logger the warnings go to.
     pub log: Logger,
+    /// The session's own egress broker, closed when the session is stopped.
+    pub broker: std::sync::Mutex<Option<broker::Broker>>,
     /// Whether the stop already ran.
     pub stopped: std::sync::atomic::AtomicBool,
 }
@@ -163,16 +167,7 @@ impl BaileyStop {
             return false;
         }
 
-        // Closed before the agent is signalled, so no new connection is
-        // admitted, and no nonce honoured on one, once it is asked to stop.
-        let broker = self
-            .broker
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(mut broker) = broker {
-            broker.close();
-        }
+        close_broker(&self.broker);
 
         self.spawned.kill(nix::sys::signal::Signal::SIGTERM);
         let exited = tokio::time::timeout(
@@ -204,6 +199,19 @@ impl BaileyStop {
     }
 }
 
+/// Closes a session's broker, if it has one. Done before the session's
+/// processes are signalled, so no new connection is admitted, and no nonce
+/// honoured on one, once it is asked to stop.
+fn close_broker(slot: &std::sync::Mutex<Option<broker::Broker>>) {
+    let broker = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let Some(mut broker) = broker {
+        broker.close();
+    }
+}
+
 impl PodmanStop {
     fn project_path(&self) -> String {
         self.project_path.clone()
@@ -216,6 +224,8 @@ impl PodmanStop {
         {
             return false;
         }
+
+        close_broker(&self.broker);
 
         let grace_seconds = (self.grace_ms / 1000).max(1);
         let name = self.name.clone();
