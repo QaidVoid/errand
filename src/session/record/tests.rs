@@ -275,3 +275,35 @@ fn an_agent_session_file_past_the_cap_fails_the_withdrawal_after_the_rest() {
         std::fs::read_to_string(session.state.join("sessions").join("s.jsonl")).expect("it reads");
     assert!(!stored.contains("ghp_TOPSECRET123"));
 }
+
+/// A link planted at the older transcript name is not moved into the record
+/// directory, where the daemon would then append through it.
+#[test]
+fn a_link_at_a_legacy_transcript_is_not_moved_into_the_record() {
+    let root = tempfile::tempdir().expect("a temp directory");
+    let state = root.path().join("session");
+    std::fs::create_dir_all(&state).expect("the state directory is made");
+    let outside = tempfile::tempdir().expect("another temp directory");
+    let target = outside.path().join("host-file");
+    std::fs::write(&target, "untouched").expect("a host file");
+    std::os::unix::fs::symlink(&target, state.join(TRANSCRIPT_FILENAME)).expect("planted the link");
+
+    let record = super::prepare_record_dir(state.to_str().expect("a path"));
+    crate::session::transcript::Transcript::new(
+        std::path::Path::new(&record).join(TRANSCRIPT_FILENAME),
+        None,
+    )
+    .append_at(
+        &crate::session::event::SessionEvent::Post {
+            text: "appended".to_owned(),
+        },
+        Some(1),
+        1,
+    );
+
+    assert!(
+        !std::fs::symlink_metadata(std::path::Path::new(&record).join(TRANSCRIPT_FILENAME))
+            .is_ok_and(|meta| meta.file_type().is_symlink())
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched");
+}

@@ -55,7 +55,12 @@ pub fn prepare_record_dir(state_dir: &str) -> String {
 
     let placed = Path::new(&directory).join(TRANSCRIPT_FILENAME);
     let legacy = Path::new(state_dir).join(TRANSCRIPT_FILENAME);
-    if !placed.is_file() && legacy.is_file() {
+    // Judged without following links: the legacy name sits where the session
+    // writes, and a link planted there would otherwise be moved in here and
+    // written through by the daemon.
+    let regular =
+        |path: &Path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file());
+    if !regular(&placed) && regular(&legacy) {
         // Left where it is on a failure; it is still read, and still shown.
         let _ = std::fs::rename(&legacy, &placed);
     }
@@ -204,31 +209,37 @@ pub fn withdraw_from_agent_session(state_dir: &str, said: &str) -> io::Result<bo
             Err(_) => continue,
         };
 
+        // Built as one string rather than one per line: a file of nothing
+        // but newlines would otherwise cost a heap entry for each.
         let mut found = false;
-        let lines: Vec<String> = text
-            .split('\n')
-            .map(|line| {
-                if line.trim().is_empty() {
-                    return line.to_owned();
+        let mut rewritten = String::with_capacity(text.len());
+        for (index, line) in text.split('\n').enumerate() {
+            if index > 0 {
+                rewritten.push('\n');
+            }
+            let withdrawn = (!line.trim().is_empty())
+                .then(|| serde_json::from_str::<Value>(line).ok())
+                .flatten()
+                .filter(|parsed| carries_withdrawn(parsed, said))
+                .map(|mut parsed| {
+                    if let Some(message) = parsed.get_mut("message") {
+                        message["content"] = json!([{ "type": "text", "text": WITHDRAWN_TEXT }]);
+                    }
+                    serde_json::to_string(&parsed).unwrap_or_else(|_| line.to_owned())
+                });
+            match withdrawn {
+                Some(changed) => {
+                    found = true;
+                    rewritten.push_str(&changed);
                 }
-                let Ok(mut parsed) = serde_json::from_str::<Value>(line) else {
-                    return line.to_owned();
-                };
-                if !carries_withdrawn(&parsed, said) {
-                    return line.to_owned();
-                }
-                found = true;
-                if let Some(message) = parsed.get_mut("message") {
-                    message["content"] = json!([{ "type": "text", "text": WITHDRAWN_TEXT }]);
-                }
-                serde_json::to_string(&parsed).unwrap_or_else(|_| line.to_owned())
-            })
-            .collect();
+                None => rewritten.push_str(line),
+            }
+        }
         if !found {
             continue;
         }
 
-        write_over(&root, &name, &lines.join("\n"))?;
+        write_over(&root, &name, &rewritten)?;
         withdrew = true;
     }
     match too_large {

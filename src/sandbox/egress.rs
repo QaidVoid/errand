@@ -5,9 +5,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::config::schema::definition_is_brokered;
 use crate::log::{Logger, fields};
 use crate::sandbox::agent_config::BrokeredProvider;
-use crate::sandbox::backend::SandboxLaunchError;
+use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::broker::grants::GrantStore;
 use crate::sandbox::broker::{BrokerTemplate, SessionBroker};
 
@@ -52,14 +53,27 @@ pub fn brokered_providers(
 
 /// The launch's environment, its provider keys swapped for this session's
 /// nonces when it has a broker.
+///
+/// The keys swapped are those the broker was built to route, and those of
+/// every brokered provider the launch names besides. A provider added to the
+/// configuration since the daemon started has no route, and its key would
+/// otherwise cross whole, so it is taken out instead.
 pub fn session_env(
-    env: &BTreeMap<String, String>,
+    launch: &SandboxLaunch,
     broker: Option<&SessionBroker>,
 ) -> BTreeMap<String, String> {
-    match broker {
-        Some(broker) => brokered_env(env, &broker.credential_names, &broker.nonces),
-        None => env.clone(),
+    let Some(broker) = broker else {
+        return launch.env.clone();
+    };
+    let mut names = broker.credential_names.clone();
+    for (provider, name) in &launch.credential_names {
+        if definition_is_brokered(launch.providers.get(provider)) {
+            names
+                .entry(provider.clone())
+                .or_insert_with(|| name.clone());
+        }
     }
+    brokered_env(&launch.env, &names, &broker.nonces)
 }
 
 /// Adds the proxy variables that point a brokered session's tools at its
