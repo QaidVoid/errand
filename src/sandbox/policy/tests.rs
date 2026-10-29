@@ -501,3 +501,25 @@ fn the_rendered_policy_matches_the_typescript_byte_for_byte() {
     let written = policy_bytes(&overrides());
     assert_eq!(written, golden);
 }
+
+/// The agent's XDG directories reach the target through the policy's own
+/// settings, never by name from the tool's environment, which points them at
+/// the operator's.
+#[test]
+fn the_agents_xdg_directories_are_set_for_the_target_not_passed() {
+    let mut held = launch();
+    held.env
+        .insert("XDG_CONFIG_HOME".to_owned(), "/state/kage".to_owned());
+    let policy = policy_bytes_with(&held, &overrides());
+
+    let pass = policy
+        .lines()
+        .find(|line| line.starts_with("pass = "))
+        .unwrap();
+    assert!(!pass.contains("XDG_CONFIG_HOME"), "{pass}");
+    let set = policy
+        .lines()
+        .find(|line| line.starts_with("set = "))
+        .unwrap();
+    assert!(set.contains("XDG_CONFIG_HOME = \"/state/kage\""), "{set}");
+}

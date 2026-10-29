@@ -2779,3 +2779,38 @@ async fn repeated_calls_without_the_key_are_recorded_once_a_minute() {
         warned[1]
     );
 }
+
+/// A header value that is not text is forwarded as it was sent, not blanked.
+#[test]
+fn a_header_value_that_is_not_text_is_forwarded_as_sent() {
+    let state = provider_state(Vec::new());
+    let route = provider_route("/provider", "https://upstream.test/v1");
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/provider/v1/messages")
+        .header(
+            "x-raw",
+            http::HeaderValue::from_bytes(b"caf\xe9").expect("a valid value"),
+        )
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let target = reqwest::Url::parse("https://upstream.test/v1/messages").unwrap();
+
+    let forwarded = super::build_forwarded(
+        &state,
+        request,
+        &route,
+        &target,
+        &Arc::new(std::sync::atomic::AtomicU64::new(0)),
+    )
+    .build()
+    .expect("a request");
+
+    assert_eq!(
+        forwarded
+            .headers()
+            .get("x-raw")
+            .map(http::HeaderValue::as_bytes),
+        Some(&b"caf\xe9"[..])
+    );
+}

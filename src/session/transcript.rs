@@ -99,10 +99,13 @@ impl Transcript {
         })
         .expect("a transcript entry serializes");
 
+        // A link at the name is refused rather than written through: the
+        // daemon writes this file, and what it would reach is not its to say.
         let written = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .mode(0o600)
+            .custom_flags(nix::fcntl::OFlag::O_NOFOLLOW.bits())
             .open(&self.path)
             .and_then(|mut file| file.write_all(format!("{line}\n").as_bytes()));
         if let Err(error) = written
