@@ -89,18 +89,17 @@ fn a_single_line_longer_than_the_limit_is_broken_up_before_anything_else() {
 }
 
 #[test]
-fn a_thread_is_named_after_the_project_and_what_was_asked() {
-    let name = thread_name("demo", "fix the failing test\nand explain why");
+fn a_thread_is_named_after_what_was_asked() {
+    let name = thread_name("fix the failing test\nand explain why");
 
-    assert!(name.contains("demo"));
-    assert!(name.contains("fix the failing test"));
+    assert_eq!(name, "fix the failing test");
     assert!(!name.contains("explain why"));
     assert!(name.chars().count() <= THREAD_NAME_LIMIT);
 }
 
 #[test]
 fn a_very_long_ask_is_cut_to_the_limit_without_splitting_a_character() {
-    let name = thread_name("demo", &"\u{1F50C}".repeat(200));
+    let name = thread_name(&"\u{1F50C}".repeat(200));
 
     assert!(name.chars().count() <= THREAD_NAME_LIMIT);
     assert!(!name.contains('\u{FFFD}'));

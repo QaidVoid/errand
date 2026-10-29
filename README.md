@@ -3,7 +3,7 @@
 Run a coding agent from a chat channel, in a sandbox it cannot escape.
 
 A message in one configured channel opens a thread and starts a session. The
-agent works in a project directory of your choosing and nowhere else. Replies
+agent works in a project directory of its own and nowhere else. Replies
 in the thread are prompts; what the agent says, runs, and changes comes back
 to the same thread.
 

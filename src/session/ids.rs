@@ -6,8 +6,6 @@
 //! rather than a label, which is why it is drawn from the system's random
 //! source and not from a pseudo-random generator.
 
-use crate::session::projects::ProjectSelection;
-
 /// Digits an id is written in: lower case, so it survives a case-blind path.
 const ALPHABET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 
@@ -39,23 +37,6 @@ pub fn session_token(length: usize) -> String {
         }
     }
     out
-}
-
-/// The id a session is known by, which says where it is working.
-///
-/// A named project is written into the id, so `errand-6a82hff` says which tree
-/// the transcript belongs to without anybody having to look it up. An unnamed
-/// session is its token alone: its project directory is named after the token
-/// already, and `6a82hff-6a82hff` says nothing twice.
-///
-/// The token is always present and always last, so two sessions in one project
-/// stay distinct and nothing has to parse the id to tell them apart.
-pub fn session_id(project: &ProjectSelection, token: &str) -> String {
-    if project.was_explicit {
-        format!("{}-{token}", project.name)
-    } else {
-        token.to_owned()
-    }
 }
 
 #[cfg(test)]

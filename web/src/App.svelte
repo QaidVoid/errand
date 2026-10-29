@@ -52,7 +52,6 @@
   let commandList = $state<CommandInfo[]>([]);
   /** What the home page will start, as it is being written. */
   let homeDraft = $state("");
-  let newProject = $state("");
   let newModel = $state<string | null>(null);
 
   /** Whether this browser may start and prompt sessions, whatever made it so. */
@@ -457,7 +456,6 @@
   }
 
   async function start(): Promise<void> {
-    const project = newProject.trim();
     const written = homeDraft.trim();
     if (written.length === 0) return;
     // The same flag a message in the channel would carry, so the daemon reads
@@ -466,8 +464,7 @@
 
     failure = null;
     try {
-      const started = await api.start(project, prompt);
-      newProject = "";
+      const started = await api.start(prompt);
       homeDraft = "";
       await refresh();
       if (started.id !== undefined) select(started.id);
@@ -654,17 +651,7 @@
             allowDefault
             onModel={(name) => (newModel = name)}
             onSend={() => void start()}
-          >
-            {#snippet tools()}
-              <input
-                class="project"
-                bind:value={newProject}
-                placeholder="project (optional)"
-                spellcheck="false"
-                title="A name to come back to the same directory next time"
-              />
-            {/snippet}
-          </Composer>
+          />
         {:else}
           {@render gate("start a session")}
         {/if}
@@ -1157,16 +1144,6 @@
     margin: 0;
     font-size: 13.5px;
     color: var(--faint);
-  }
-
-  .project {
-    flex: 0 1 150px;
-    width: 0;
-    min-width: 72px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    font-family: var(--mono);
-    font-size: 11.5px;
   }
 
   .recent {

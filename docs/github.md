@@ -64,8 +64,8 @@ on, as a chat message sent while it was down is not either.
 ## What happens
 
 A mention on an issue with no session opens a thread in the channel, saying who
-asked and linking the issue, and starts a session there in a workspace of its
-own named after the repository and number, such as `parser-42`. The agent is
+asked and linking the issue, and starts a session there in a project
+directory of its own, as every session has. The agent is
 told the issue's title and link, and what the issue says when the asking was a
 comment, and it clones the repository itself, as it would for any work.
 
@@ -86,8 +86,8 @@ before saying anything posts why instead, so whoever asked is not left
 waiting. The working, command answers, and the turn's numbers stay in the
 thread.
 
-A start that is turned away, for a spent usage window or a project that
-already has a session, is said in the channel rather than on the issue: that
+A start that is turned away, for a spent usage window or a model nothing
+serves, is said in the channel rather than on the issue: that
 is for whoever runs the bot, not for everybody watching the repository.
 
 ## How work is pushed

@@ -431,31 +431,6 @@ fn logins_named(text: &str) -> Vec<(usize, usize, &str)> {
     named
 }
 
-/// The project a session started on an issue works in.
-///
-/// One per issue or pull request, named after the repository and number, so
-/// two issues in one repository are worked on side by side and coming back to
-/// the same issue reaches the same directory.
-pub fn project_name(repository: &str, number: u64) -> String {
-    let name = repository.rsplit('/').next().unwrap_or(repository);
-    let mut project: String = name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
-                character.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    if !project.starts_with(|character: char| character.is_ascii_alphanumeric()) {
-        project.insert(0, 'r');
-    }
-    let suffix = format!("-{number}");
-    project.truncate(64 - suffix.len());
-    project + &suffix
-}
-
 /// What a session started on an issue is first told.
 ///
 /// The words asked, then where they were asked. A session started here has
@@ -463,13 +438,10 @@ pub fn project_name(repository: &str, number: u64) -> String {
 /// comment, what the issue itself says, come with them.
 fn opening(repository: &str, number: u64, issue: &Issue, text: &str, from_comment: bool) -> String {
     let mut opening = format!(
-        "{}: {text}\n\n(Asked on GitHub, on {} {repository}#{number}, \"{}\": {}. The last thing \
+        "{text}\n\n(Asked on GitHub, on {} {repository}#{number}, \"{}\": {}. The last thing \
          you say each turn is posted there as a comment, so write it for the people reading the \
-         {1}, and do not comment there yourself.)",
-        project_name(repository, number),
-        issue.kind,
-        issue.title,
-        issue.link
+         {0}, and do not comment there yourself.)",
+        issue.kind, issue.title, issue.link
     );
     if from_comment && !issue.body.trim().is_empty() {
         let body: String = issue.body.chars().take(ISSUE_TEXT_LIMIT).collect();

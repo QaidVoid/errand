@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 
-use super::{Heard, Poller, as_said, decide, mentions, project_name};
+use super::{Heard, Poller, as_said, decide, mentions};
 use crate::chat::inbound::InboundDecision;
 use crate::log::{LogFields, Logger};
 use crate::session::pr::{Api, ApiReply};
@@ -118,7 +118,7 @@ async fn a_new_issue_naming_the_bot_is_heard_and_marked_read() {
     assert_eq!(heard[0].message.author_id, "github:qaidvoid");
     assert!(
         heard[0].opening.starts_with(
-            "edu-7: fix the parser\n\n(Asked on GitHub, on issue QaidVoid/edu#7, \
+            "fix the parser\n\n(Asked on GitHub, on issue QaidVoid/edu#7, \
              \"The parser drops the last line\": https://github.com/QaidVoid/edu/issues/7."
         ),
         "{}",
@@ -260,17 +260,6 @@ fn a_mention_is_the_login_standing_on_its_own() {
     );
 }
 
-#[test]
-fn an_issue_gets_a_workspace_named_after_its_repository_and_number() {
-    assert_eq!(
-        project_name("QaidVoid/Edu.Playground", 19),
-        "edu.playground-19"
-    );
-    assert_eq!(project_name("o/.hidden", 3), "r.hidden-3");
-    assert_eq!(project_name("o/a+b", 1), "a-b-1");
-    assert!(project_name(&format!("o/{}", "x".repeat(80)), 12345).len() <= 64);
-}
-
 fn heard(mentions: bool) -> Heard {
     Heard {
         thread_id: "github:o/r#1".to_owned(),
@@ -285,7 +274,7 @@ fn heard(mentions: bool) -> Heard {
             content: "the words".to_owned(),
             attachments: Vec::new(),
         },
-        opening: "r-1: the words\n\n(Asked on GitHub...)".to_owned(),
+        opening: "the words\n\n(Asked on GitHub...)".to_owned(),
     }
 }
 
@@ -305,7 +294,7 @@ fn an_issue_with_a_session_continues_it_and_one_without_needs_the_bot_named() {
     );
 
     let (message, decision) = decide(heard(true), None).expect("started");
-    assert!(message.content.starts_with("r-1: the words"));
+    assert!(message.content.starts_with("the words\n\n(Asked on GitHub"));
     assert_eq!(decision, InboundDecision::Start);
 
     assert_eq!(decide(heard(false), None), None);

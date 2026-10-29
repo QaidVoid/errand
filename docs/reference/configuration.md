@@ -221,7 +221,7 @@ Deadlines that end or unblock a session.
 
 ## retention
 
-When what a cold session left on disk is collected.  A session that has not been used for `olderThan` loses its state directory, its record, its index entry and the receipts of its provider calls, and an unnamed session its project too. A named project is never collected. A live session is never collected, however old.
+When what a cold session left on disk is collected.  A session that has not been used for `olderThan` loses its state directory, its record, its index entry and the receipts of its provider calls, and its own project too. A project named by hand in an older errand is never collected. A live session is never collected, however old.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |

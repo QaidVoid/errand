@@ -58,7 +58,7 @@ export const api = {
 
   prompt: (session: string, text: string) => send(`/sessions/${session}/send`, { text }),
 
-  start: (project: string, prompt: string) => send("/sessions", { project, prompt }),
+  start: (prompt: string) => send("/sessions", { prompt }),
 
   /** Where the browser goes to log in with Discord. */
   loginUrl: "/auth/login",
