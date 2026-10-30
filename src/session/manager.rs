@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use crate::admission::scheduler::Scheduler;
-use crate::chat::render::{thread_name, warning_line};
+use crate::chat::render::{inert, thread_name, warning_line};
 use crate::config::live::LiveConfig;
 use crate::config::redact::secret_values;
 use crate::log::now_ms;
@@ -697,7 +697,15 @@ impl SessionManager {
                     Arc::clone(&self.shared.threads)
                         .open(
                             name.clone(),
-                            opened_from_interface(&name, self.shared.public_url.as_deref(), &id),
+                            opened_from_interface(
+                                &Starter {
+                                    id: &message.author_id,
+                                    name: message.author_name.as_deref(),
+                                },
+                                &name,
+                                self.shared.public_url.as_deref(),
+                                &id,
+                            ),
                         )
                         .await
                 }
@@ -1400,11 +1408,35 @@ fn daemon_open_pull_request() -> OpenPullRequest {
     })
 }
 
+/// Who started a session from the interface, as the channel is shown them.
+struct Starter<'a> {
+    /// Their chat service id.
+    id: &'a str,
+    /// Their display name, when it is known.
+    name: Option<&'a str>,
+}
+
 /// What the channel is told when the interface opens a session's thread:
-/// what the session is about, and where to follow it in the interface when
-/// that is reachable from outside.
-fn opened_from_interface(name: &str, public_url: Option<&str>, session_id: &str) -> String {
-    let opened = format!("Session started from the interface: {name}");
+/// who started it, what it is about, and where to follow it in the interface
+/// when that is reachable from outside.
+///
+/// The starter is mentioned, as a picture drawn in the channel is addressed
+/// to whoever asked for it. An id the channel cannot mention is shown as
+/// their name instead, made inert so it cannot ping or format anything.
+fn opened_from_interface(
+    starter: &Starter<'_>,
+    name: &str,
+    public_url: Option<&str>,
+    session_id: &str,
+) -> String {
+    let mentionable =
+        !starter.id.is_empty() && starter.id.bytes().all(|byte| byte.is_ascii_digit());
+    let who = if mentionable {
+        format!("<@{}>", starter.id)
+    } else {
+        format!("**{}**", inert(starter.name.unwrap_or("someone")).trim())
+    };
+    let opened = format!("{who} started a session from the interface: {name}");
     match public_url.map(str::trim).filter(|url| !url.is_empty()) {
         Some(url) => format!("{opened}\n{}", transcript_link(url, session_id)),
         None => opened,
