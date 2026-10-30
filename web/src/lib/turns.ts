@@ -62,7 +62,8 @@ export interface Reading {
 
 /** The closing notice reports the cost after the marker, when there is one. */
 function costOf(text: string): string | undefined {
-  const after = text.split("[done]")[1]?.trim();
+  // The thread's code spans read as stray backticks in a line of receipts.
+  const after = text.split("[done]")[1]?.replace(/`/g, "").trim();
   return after !== undefined && after.length > 0 ? after : undefined;
 }
 
