@@ -17,6 +17,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The `command` of a [`SessionEvent::Reply`] that refuses somebody rather
+/// than answering a command they ran.
+pub const REFUSAL: &str = "refused";
+
 /// What a session has cost so far.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -244,7 +248,8 @@ pub enum SessionEvent {
     ///
     /// A reply belongs to the command that asked for it rather than to the
     /// conversation, so a surface can attach it to that instead of showing it
-    /// as the agent having spoken.
+    /// as the agent having spoken. `command` is the command as it was asked,
+    /// or [`REFUSAL`] for a refusal, which is never recorded.
     Reply { text: String, command: String },
     /// Reports what a tool produced, once it has finished.
     ///

@@ -151,13 +151,20 @@ async fn a_closed_view_accepts_calls_and_sends_nothing() {
     assert!(receiver.try_recv().is_err());
 }
 
-/// A command's answer belongs to the thread it was asked in.
+/// A command's answer reaches the interface, which may be where it was
+/// asked, while a refusal and a reaction are the thread's alone.
 #[tokio::test]
 async fn what_a_thread_shows_and_the_interface_does_not_is_not_sent() {
     let (view, mut receiver) = WebView::new(None);
     view.observe(&SessionEvent::Reply {
+        text: "not yours".to_owned(),
+        command: crate::session::event::REFUSAL.to_owned(),
+    })
+    .await
+    .unwrap();
+    view.observe(&SessionEvent::Reply {
         text: "a listing".to_owned(),
-        command: "ls".to_owned(),
+        command: "!ls src".to_owned(),
     })
     .await
     .unwrap();
@@ -173,10 +180,16 @@ async fn what_a_thread_shows_and_the_interface_does_not_is_not_sent() {
     .await
     .unwrap();
 
-    let events = events_of(&mut receiver, 2).await;
+    let events = events_of(&mut receiver, 3).await;
 
-    assert_eq!(events.len(), 2);
-    assert!(events[1].1.to_string().contains("the only thing said"));
+    assert_eq!(events.len(), 3);
+    assert!(events[1].1.to_string().contains("\"command\":\"!ls src\""));
+    assert!(events[2].1.to_string().contains("the only thing said"));
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.1.to_string().contains("not yours"))
+    );
 }
 
 /// `<@1523363748427993218> [done]` names nobody to a reader in a browser.

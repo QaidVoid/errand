@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use futures_util::future::join_all;
 
 use crate::log::{LogValue, Logger, fields, now_ms};
-use crate::session::event::{ReactionOutcome, SessionEvent, SessionUsage};
+use crate::session::event::{REFUSAL, ReactionOutcome, SessionEvent, SessionUsage};
 
 /// How much of a session's output is kept for a view that attaches later.
 pub const DEFAULT_TRANSCRIPT_LIMIT: usize = 400;
@@ -379,7 +379,9 @@ impl ViewFanOut {
                 inner.busy = false;
                 return;
             }
-            SessionEvent::Reply { .. } => return,
+            // A refusal is addressed to the person who tripped it, in a
+            // conversation their message never joined, so it is not kept.
+            SessionEvent::Reply { command, .. } if command == REFUSAL => return,
             SessionEvent::Usage { usage } => {
                 inner.usage = Some(usage.clone());
                 if let Some(recorder) = &self.recorder {

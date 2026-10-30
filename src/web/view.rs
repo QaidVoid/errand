@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 use crate::log::now_ms;
-use crate::session::event::SessionEvent;
+use crate::session::event::{REFUSAL, SessionEvent};
 use crate::session::views::{SessionView, ViewError};
 
 /// How much is held for a browser that has stopped reading before dropping.
@@ -168,11 +168,17 @@ impl SessionView for WebView {
                     "text": text,
                     "at": at,
                 })),
-                // A command's answer goes to the thread it was asked in,
-                // not here: the interface shows what the agent did.
+                // A refusal is the thread's to show, to the person it refuses.
+                SessionEvent::Reply { command, .. } if command == REFUSAL => {}
+                SessionEvent::Reply { text, command } => self.entry(serde_json::json!({
+                    "kind": "reply",
+                    "text": self.clean(text),
+                    "command": command,
+                    "at": at,
+                })),
                 // Reactions are a chat affordance with no counterpart here:
                 // the interface shows a message's fate through the state.
-                SessionEvent::Reply { .. } | SessionEvent::Reaction { .. } => {}
+                SessionEvent::Reaction { .. } => {}
                 SessionEvent::ToolResult { result } => self.entry(serde_json::json!({
                     "kind": "toolResult",
                     "result": result,

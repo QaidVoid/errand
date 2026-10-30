@@ -347,23 +347,32 @@ async fn a_turn_is_announced_once_at_its_boundary_not_on_every_line() {
     );
 }
 
-/// A command's answer belongs to whoever ran it, in the moment they ran it.
+/// A command's answer is kept, so a browser that opens the session later
+/// sees what a command it ran said, while a refusal stays with the person it
+/// refused.
 #[tokio::test]
-async fn a_reply_to_a_command_is_not_part_of_the_conversation() {
+async fn a_reply_is_kept_and_a_refusal_is_not() {
     let fan = fan_out();
     let live = FakeView::new();
     fan.clone().attach(live.clone()).await;
     fan.send(SessionEvent::Reply {
         text: "a listing".to_owned(),
-        command: "!ls".to_owned(),
+        command: "!ls src".to_owned(),
+    })
+    .await;
+    fan.send(SessionEvent::Reply {
+        text: "not yours".to_owned(),
+        command: crate::session::event::REFUSAL.to_owned(),
     })
     .await;
 
     let late = FakeView::new();
     fan.clone().attach(late.clone()).await;
 
-    assert!(live.said("reply:!ls:a listing"));
-    assert!(!late.seen().iter().any(|line| line.starts_with("reply:")));
+    assert!(live.said("reply:!ls src:a listing"));
+    assert!(live.said("reply:refused:not yours"));
+    assert!(late.said("reply:!ls src:a listing"));
+    assert!(!late.seen().iter().any(|line| line.contains("not yours")));
 }
 
 #[tokio::test]

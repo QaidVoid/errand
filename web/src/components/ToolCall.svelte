@@ -13,6 +13,7 @@
     tool,
     line,
     result,
+    progress,
     at,
     showTime,
     command,
@@ -22,6 +23,8 @@
     /** The rendered line, used when there are no parts to lay out. */
     line: string;
     result?: ToolResult | undefined;
+    /** The newest line the call reported while it ran. */
+    progress?: string | undefined;
     at: number;
     /**
      * Whether to print the time on the folded line.
@@ -100,7 +103,7 @@
    * itself, and beyond that only the size is worth stating.
    */
   const summary = $derived.by(() => {
-    if (running) return "running";
+    if (running) return progress ?? "running";
     if (output.length === 0) return failed ? "failed" : "";
 
     const lines = output.split("\n");
@@ -159,6 +162,11 @@
         <div class="full">
           <span class="label">output</span>
           <pre>{output}</pre>
+        </div>
+      {:else if progress !== undefined}
+        <div class="full">
+          <span class="label">{running ? "now" : "last said"}</span>
+          <code>{progress}</code>
         </div>
       {:else if !running}
         <div class="full">

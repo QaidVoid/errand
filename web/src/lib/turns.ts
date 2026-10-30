@@ -14,6 +14,19 @@ export interface Call {
   result?: ToolResult | undefined;
   /** Changes the call made, shown on it rather than adrift after it. */
   changes: Extract<Entry, { kind: "diff" }>[];
+  /** The newest line it reported while it ran, when it reported any. */
+  progress?: string | undefined;
+}
+
+/**
+ * The words of a progress line, without the tool marker and code span a
+ * thread shows it in.
+ */
+function progressText(line: string): string {
+  return line
+    .replace(/^\S+\s+/u, "")
+    .replace(/^`(.*)`$/su, "$1")
+    .trim();
 }
 
 /** One entry as it will be drawn, with a call's result folded into it. */
@@ -96,6 +109,18 @@ export function read(entries: readonly Entry[]): Reading {
       current.asked = entry;
       current.at = entry.at;
       continue;
+    }
+
+    // A line with no call of its own is a running call reporting progress.
+    // It belongs on the newest call still running, or failing that the
+    // newest call, and is never a call itself.
+    if (entry.kind === "activity" && (entry.tool === undefined || entry.tool === null)) {
+      const calls = current.items.flatMap((item) => (item.kind === "call" ? [item.call] : []));
+      const owner = [...calls].reverse().find((call) => call.result === undefined) ?? calls.at(-1);
+      if (owner !== undefined) {
+        owner.progress = progressText(entry.line);
+        continue;
+      }
     }
 
     if (entry.kind === "activity") {

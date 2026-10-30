@@ -12,7 +12,7 @@ use crate::provider::models::{AvailableModel, Matched, match_model};
 use crate::session::commands::{
     COMMANDS, CommandAccess, Standing, help_text, may_run, parse_user_id,
 };
-use crate::session::event::{EndReason, ReactionOutcome, SessionEvent};
+use crate::session::event::{EndReason, REFUSAL, ReactionOutcome, SessionEvent};
 use crate::session::model::{expand_alias, split_level};
 
 /// Which model a name picked out, when a name can pick out more than one.
@@ -49,7 +49,7 @@ pub(super) fn choose(available: &[AvailableModel], wanted: &str, current: &str) 
 /// is left out rather than shown beside the name it repeats.
 impl Running {
     pub(super) async fn run_command(&mut self, word: &str, rest: &str, message: IncomingMessage) {
-        self.replying_to = Some(word.to_owned());
+        self.replying_to = Some(format!("{word} {rest}").trim_end().to_owned());
         self.answer_command(word, rest, &message).await;
         self.replying_to = None;
     }
@@ -524,7 +524,7 @@ impl Running {
             self.views
                 .send(SessionEvent::Reply {
                     text: why.to_owned(),
-                    command: "refused".to_owned(),
+                    command: REFUSAL.to_owned(),
                 })
                 .await;
         }

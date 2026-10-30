@@ -149,6 +149,7 @@
             tool={item.call.entry.tool}
             line={item.call.entry.line}
             result={item.call.result}
+            progress={item.call.progress}
             at={item.call.entry.at}
             showTime={timed[index]}
             {command}
@@ -194,11 +195,18 @@
             onOpen={onOpenFile}
           />
         </div>
+      {:else if item.entry.kind === "prompt"}
+        <!-- Said while the turn ran: an answer to a question, or a redirect. -->
+        <div class="asked">
+          <span class="who">{item.entry.author}</span>
+          <p class="said">{item.entry.text}</p>
+        </div>
       {:else if item.entry.kind === "reply"}
-        <details class="item reply">
-          <summary>{item.entry.command}</summary>
-          <pre>{item.entry.text}</pre>
-        </details>
+        <div class="item reply">
+          <code class="command">{item.entry.command}</code>
+          <!-- Sanitised in render(), which is what makes this safe to insert. -->
+          <div class="answer">{@html render(item.entry.text)}</div>
+        </div>
       {:else if item.entry.kind === "notice"}
         <p class="item notice {item.entry.level}">{item.entry.text}</p>
       {:else if item.entry.kind === "file"}
@@ -521,24 +529,25 @@
     overflow: hidden;
   }
 
-  .reply summary {
-    padding: 6px 12px;
+  .reply .command {
+    display: block;
+    padding: 6px 12px 0;
     font-family: var(--mono);
     font-size: var(--type-receipt);
     color: var(--text-faint);
-    cursor: pointer;
   }
 
-  .reply pre {
-    margin: 0;
-    padding: 10px 12px;
-    max-width: 100%;
+  .reply .answer {
+    padding: 4px 12px 8px;
     max-height: 340px;
     overflow: auto;
     font-size: var(--type-work);
     color: var(--text-dim);
-    white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+
+  .reply .answer :global(p) {
+    margin: 0 0 4px;
   }
 
   .notice {
