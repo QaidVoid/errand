@@ -69,6 +69,10 @@ What anyone sends from the interface is posted in the session's thread under
 their name, so the thread stays the whole conversation for the people reading
 it in Discord.
 
+A session started from the interface opens its thread from a message in the
+channel naming what it is about. With `publicUrl` set, that message also links
+to the session in the interface.
+
 Membership is checked when they log in, and again when they act once the last
 answer is ten minutes old, so somebody who leaves the server stops being able to
 act soon after. If Discord cannot be asked, nothing is done on their behalf

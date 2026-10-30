@@ -22,6 +22,7 @@ use crate::sandbox::backend::{
     CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
 };
 use crate::session::event::{EndReason, NoticeLevel, SessionEvent};
+use crate::session::github::transcript_link;
 use crate::session::ids::{TOKEN_LENGTH, session_token};
 use crate::session::model::{
     ChosenModel, configured_model, expand_alias, select_model, split_level,
@@ -696,7 +697,7 @@ impl SessionManager {
                     Arc::clone(&self.shared.threads)
                         .open(
                             name.clone(),
-                            format!("Session started from the interface: {name}"),
+                            opened_from_interface(&name, self.shared.public_url.as_deref(), &id),
                         )
                         .await
                 }
@@ -1397,6 +1398,17 @@ fn daemon_open_pull_request() -> OpenPullRequest {
             pr::open_pull_request(&request, &run, &api, &sleep).await
         })
     })
+}
+
+/// What the channel is told when the interface opens a session's thread:
+/// what the session is about, and where to follow it in the interface when
+/// that is reachable from outside.
+fn opened_from_interface(name: &str, public_url: Option<&str>, session_id: &str) -> String {
+    let opened = format!("Session started from the interface: {name}");
+    match public_url.map(str::trim).filter(|url| !url.is_empty()) {
+        Some(url) => format!("{opened}\n{}", transcript_link(url, session_id)),
+        None => opened,
+    }
 }
 
 #[cfg(test)]

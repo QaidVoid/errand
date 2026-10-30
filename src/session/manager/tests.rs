@@ -9,7 +9,7 @@ use tokio::sync::watch;
 
 use super::{
     CreatedThread, Delivery, DetachedRequest, FoundView, MadeThread, ManagerOptions, SandboxPool,
-    SessionManager, StartOutcome, ThreadFactory,
+    SessionManager, StartOutcome, ThreadFactory, opened_from_interface,
 };
 use crate::admission::scheduler::{Clock, Scheduler, Timer};
 use crate::agent::client::AgentProcess;
@@ -2105,4 +2105,19 @@ async fn a_surface_showing_a_sessions_files_scrubs_what_the_session_holds() {
         })
     })
     .await;
+}
+
+/// The channel is told where to follow a session the interface started, when
+/// the interface is reachable from outside, and only what it is about when not.
+#[test]
+fn a_session_opened_from_the_interface_links_to_it() {
+    assert_eq!(
+        opened_from_interface("fix the build", Some("https://talaria.example/"), "abc123"),
+        "Session started from the interface: fix the build\n\
+         https://talaria.example/?session=abc123"
+    );
+    assert_eq!(
+        opened_from_interface("fix the build", None, "abc123"),
+        "Session started from the interface: fix the build"
+    );
 }
