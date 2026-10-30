@@ -64,8 +64,7 @@
   /** Switches the open session's model the way the thread would, with `!model`. */
   async function switchModel(name: string | null): Promise<void> {
     if (name === null) return;
-    draft = `!model ${name}`;
-    await send();
+    await sendText(`!model ${name}`);
   }
 
   /** Back to the home page, where what is written starts a session. */
@@ -436,11 +435,22 @@
     });
   }
 
+  /** Sends what is written in the box, and gives it back if it was refused. */
   async function send(): Promise<void> {
     const text = draft.trim();
-    if (text.length === 0 || selected === null) return;
-    const id = selected;
+    if (text.length === 0) return;
     draft = "";
+    if (!(await sendText(text)) && draft === "") draft = text;
+  }
+
+  /**
+   * Sends text to the open session as though it were posted in its thread,
+   * and says whether it was accepted. Leaves the box alone, so a model switch
+   * or an answer to a question never costs somebody what they were writing.
+   */
+  async function sendText(text: string): Promise<boolean> {
+    if (selected === null) return false;
+    const id = selected;
     failure = null;
 
     const wasLive = live;
@@ -448,7 +458,7 @@
       await api.prompt(id, text);
     } catch (error) {
       fail(error);
-      return;
+      return false;
     }
 
     // Sending to a stopped session starts it again, so the stream only exists
@@ -457,6 +467,7 @@
       await refresh();
       if (selected === id) select(id);
     }
+    return true;
   }
 
   async function start(): Promise<void> {
@@ -818,10 +829,7 @@
           bind:this={transcript}
           session={selected}
           onAnswer={canAct && live && !ended
-            ? (choice) => {
-                draft = choice;
-                void send();
-              }
+            ? (choice) => void sendText(choice)
             : undefined}
           {entries}
           {busy}
