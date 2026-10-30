@@ -288,8 +288,20 @@ pub enum SessionEvent {
     /// What an upload is kept as once it has been sent.
     ///
     /// By name and size, never by contents: holding the bytes would mean a
-    /// long session pinning every file it ever sent in memory.
-    Attachment { name: String, size: u64 },
+    /// long session pinning every file it ever sent in memory. The bytes are
+    /// kept on disk beside the record instead, under `file`, so a surface
+    /// that can show a file asks for it there.
+    Attachment {
+        name: String,
+        size: u64,
+        /// The name it was kept under beside the record, absent in an older
+        /// recording or when it could not be kept.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+        /// What it was posted with, when it was posted with anything.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
     /// Uploads a file so it can be read or downloaded.
     Upload {
         name: String,

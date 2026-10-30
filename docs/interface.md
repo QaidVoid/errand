@@ -69,6 +69,11 @@ What anyone sends from the interface is posted in the session's thread under
 their name, so the thread stays the whole conversation for the people reading
 it in Discord.
 
+A picture or a clip a session posts is shown in place, with what it was posted
+with. It is kept in the session's record directory, under `uploads`, so it is
+still there once the session has stopped. Any other file is offered as a
+download.
+
 A session started from the interface opens its thread from a message in the
 channel naming who started it and what it is about. With `publicUrl` set, that
 message also links to the session in the interface.

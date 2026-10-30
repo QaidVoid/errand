@@ -788,6 +788,7 @@
       {#key selected}
         <Transcript
           bind:this={transcript}
+          session={selected}
           {entries}
           {busy}
           {waiting}

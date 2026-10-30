@@ -33,9 +33,9 @@ use crate::session::files::MAX_INLINE_BYTES;
 use crate::session::files::{read_directory, read_file_for_display};
 use crate::session::manager::StartOutcome;
 use crate::session::manager::{Delivery, DetachedRequest, SessionManager};
-use crate::session::record::transcript_path;
+use crate::session::record::{record_dir, transcript_path};
 use crate::session::session::IncomingMessage;
-use crate::session::transcript::Transcript;
+use crate::session::transcript::{Transcript, UPLOADS_DIRNAME, is_kept_name};
 use crate::web::address::check_bind_address;
 use crate::web::login::{Authorized, LoginFailure, Logins};
 use crate::web::view::{NameLookup, WebView, wire};
@@ -328,6 +328,7 @@ impl WebServer {
             .route("/api/sessions/{id}/tree", get(tree))
             .route("/api/sessions/{id}/file", get(file))
             .route("/api/sessions/{id}/download", get(download))
+            .route("/api/sessions/{id}/uploads/{file}", get(upload))
             .fallback(serve_asset)
             .with_state(state)
     }
@@ -1082,6 +1083,80 @@ async fn download(
 /// Reading a project is ordinary file access, which blocks. On the async
 /// workers a slow disk, or a directory with a million entries in it, would
 /// hold up every other request and the chat connection with them.
+/// A file a session posted, as kept beside its record.
+///
+/// Only a picture or a clip is shown in place. Anything else is offered as a
+/// download, an SVG included, since a browser runs the script one can carry.
+/// Scrubbed like a download, so a secret that slipped into one is not served.
+async fn upload(
+    State(server): State<ServerState>,
+    PathParam((id, file)): PathParam<(String, String)>,
+) -> Response {
+    let missing = || refused(json!({ "error": "no such file" }), StatusCode::NOT_FOUND);
+    if !is_kept_name(&file) {
+        return missing();
+    }
+    let Some(state_dir) = server.sessions.state_dir_of(&id) else {
+        return missing();
+    };
+    let path = std::path::Path::new(&record_dir(&state_dir))
+        .join(UPLOADS_DIRNAME)
+        .join(&file);
+    let read = blocking(move || {
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut bytes = Vec::new();
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::fcntl::OFlag::O_NOFOLLOW.bits())
+            .open(path)
+            .and_then(|mut opened| opened.read_to_end(&mut bytes))
+            .map(|_| bytes)
+    })
+    .await;
+    let Ok(Ok(bytes)) = read else {
+        return missing();
+    };
+
+    let mut scrubber = ByteScrubber::new(&server.sessions.secrets_for(&id));
+    let mut body = scrubber.push(&bytes);
+    body.extend(scrubber.finish());
+
+    let shown = shown_type(&file);
+    let disposition = match shown {
+        Some(_) => "inline".to_owned(),
+        None => format!("attachment; filename=\"{}\"", download_name(&file)),
+    };
+    Response::builder()
+        .header(
+            header::CONTENT_TYPE,
+            shown.unwrap_or("application/octet-stream"),
+        )
+        .header(header::CONTENT_DISPOSITION, disposition)
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(header::CACHE_CONTROL, "private, max-age=86400, immutable")
+        .body(axum::body::Body::from(body))
+        .unwrap_or_else(|_| unreachable!("an upload response always builds"))
+}
+
+/// The type a kept file is shown in place as, by its extension, or nothing
+/// for a file that is only offered as a download.
+fn shown_type(file: &str) -> Option<&'static str> {
+    let extension = file.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "flac" => "audio/flac",
+        "m4a" => "audio/mp4",
+        _ => return None,
+    })
+}
+
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, tokio::task::JoinError> {

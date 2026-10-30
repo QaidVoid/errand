@@ -64,7 +64,16 @@ export type Entry =
     | { kind: "thinking"; text: string; at: number }
     | { kind: "reply"; text: string; command: string; at: number }
     | { kind: "toolResult"; result: ToolResult; at: number }
-    | { kind: "file"; name: string; size: number; at: number }
+    | {
+      kind: "file";
+      name: string;
+      size: number;
+      /** Where it was kept beside the record, so it can be fetched; absent in an older one. */
+      file?: string | null;
+      /** What it was posted with. */
+      caption?: string | null;
+      at: number;
+    }
   | { kind: "delegation"; delegated: Delegated; at: number }
     | {
       kind: "diff";

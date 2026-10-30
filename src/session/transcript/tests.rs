@@ -1,9 +1,10 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use super::{MAX_TRANSCRIPT_BYTES, OPENING_SCAN_BYTES, Transcript};
+use super::{MAX_TRANSCRIPT_BYTES, OPENING_SCAN_BYTES, Transcript, UPLOADS_DIRNAME, is_kept_name};
 use crate::log::{LogFields, LogLevel, Logger, Sink};
 use crate::session::event::{NoticeLevel, SessionEvent};
+use crate::session::views::Recorder;
 
 /// A temp directory with a transcript in it, and the lines its log caught.
 struct Keep {
@@ -325,4 +326,37 @@ fn a_torn_byte_does_not_empty_the_transcript() {
             .iter()
             .any(|(level, line)| *level == LogLevel::Warn && line.contains("not UTF-8"))
     );
+}
+
+/// A posted file is kept beside the transcript under a name the interface may
+/// ask for, whatever the file was called, and two of the same name in one
+/// moment are both kept.
+#[test]
+fn a_posted_file_is_kept_under_a_name_that_can_be_asked_for() {
+    let keep = keep();
+    let transcript = keep.transcript();
+
+    let first = transcript
+        .keep("../../etc/my picture.png", b"one")
+        .expect("kept");
+    let second = transcript
+        .keep("../../etc/my picture.png", b"two")
+        .expect("kept");
+
+    assert!(is_kept_name(&first), "{first}");
+    assert!(first.ends_with("_my_picture.png"), "{first}");
+    assert_ne!(first, second);
+    let directory = keep.path.parent().unwrap().join(UPLOADS_DIRNAME);
+    assert_eq!(std::fs::read(directory.join(&first)).unwrap(), b"one");
+    assert_eq!(std::fs::read(directory.join(&second)).unwrap(), b"two");
+}
+
+/// Only a plain name is one a request may ask for: nothing that could reach
+/// out of the directory or name a hidden file.
+#[test]
+fn a_kept_name_is_plain() {
+    assert!(is_kept_name("1793379-0-image.png"));
+    for refused in ["", ".hidden", "../x", "a/b", "a\\b", "x y", "%2e%2e"] {
+        assert!(!is_kept_name(refused), "{refused}");
+    }
 }

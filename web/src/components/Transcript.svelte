@@ -14,6 +14,7 @@
   import Turn from "./Turn.svelte";
 
   let {
+    session = null,
     entries,
     busy,
     waiting,
@@ -26,6 +27,8 @@
     lens = $bindable("all"),
     onFound,
   }: {
+    /** Which session this is, so what it posted can be fetched. */
+    session?: string | null;
     entries: Entry[];
     busy: boolean;
     waiting: string | null;
@@ -270,6 +273,7 @@
         running={busy && waiting === null && index === reading.turns.length - 1}
         waiting={waiting !== null && index === reading.turns.length - 1}
         {needle}
+        {session}
         {onOpenFile}
         {command}
       />

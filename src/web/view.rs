@@ -114,10 +114,6 @@ impl WebView {
     fn state(&self, state: Value) {
         self.push("state", &state);
     }
-
-    fn clean(&self, text: &str) -> String {
-        without_mentions(text, self.names.as_ref())
-    }
 }
 
 impl SessionView for WebView {
@@ -140,89 +136,6 @@ impl SessionView for WebView {
                 SessionEvent::BeginTurn { turn } => {
                     *self.turn.lock().expect("the view turn lock") = Some(*turn);
                 }
-                SessionEvent::Post { text, .. } => self.entry(serde_json::json!({
-                    "kind": "message",
-                    "text": self.clean(text),
-                    "at": at,
-                })),
-                SessionEvent::Prompt { author, text, .. } => self.entry(serde_json::json!({
-                    "kind": "prompt",
-                    "author": author,
-                    "text": self.clean(text),
-                    "at": at,
-                })),
-                SessionEvent::Aside { author, text, .. } => self.entry(serde_json::json!({
-                    "kind": "aside",
-                    "author": author,
-                    "text": self.clean(text),
-                    "at": at,
-                })),
-                SessionEvent::Notice { text, level } => self.entry(serde_json::json!({
-                    "kind": "notice",
-                    "text": self.clean(text),
-                    "level": level,
-                    "at": at,
-                })),
-                SessionEvent::Thinking { text, .. } => self.entry(serde_json::json!({
-                    "kind": "thinking",
-                    "text": text,
-                    "at": at,
-                })),
-                // A refusal is the thread's to show, to the person it refuses.
-                SessionEvent::Reply { command, .. } if command == REFUSAL => {}
-                SessionEvent::Reply { text, command } => self.entry(serde_json::json!({
-                    "kind": "reply",
-                    "text": self.clean(text),
-                    "command": command,
-                    "at": at,
-                })),
-                // Reactions are a chat affordance with no counterpart here:
-                // the interface shows a message's fate through the state.
-                SessionEvent::Reaction { .. } => {}
-                SessionEvent::ToolResult { result } => self.entry(serde_json::json!({
-                    "kind": "toolResult",
-                    "result": result,
-                    "at": at,
-                })),
-                SessionEvent::Activity { line, tool } => self.entry(serde_json::json!({
-                    "kind": "activity",
-                    "line": line,
-                    "tool": tool,
-                    "at": at,
-                })),
-                SessionEvent::Delegation { delegated } => self.entry(serde_json::json!({
-                    "kind": "delegation",
-                    "delegated": delegated,
-                    "at": at,
-                })),
-                SessionEvent::Diff {
-                    path,
-                    added,
-                    removed,
-                    body,
-                    cause,
-                    ..
-                } => self.entry(serde_json::json!({
-                    "kind": "diff",
-                    "path": path,
-                    "added": added,
-                    "removed": removed,
-                    "body": body,
-                    "cause": cause,
-                    "at": at,
-                })),
-                SessionEvent::Attachment { name, size } => self.entry(serde_json::json!({
-                    "kind": "file",
-                    "name": name,
-                    "size": size,
-                    "at": at,
-                })),
-                SessionEvent::Upload { name, bytes, .. } => self.entry(serde_json::json!({
-                    "kind": "file",
-                    "name": name,
-                    "size": bytes.len(),
-                    "at": at,
-                })),
                 SessionEvent::Usage { usage } => {
                     self.state(serde_json::json!({ "usage": usage }));
                 }
@@ -238,6 +151,16 @@ impl SessionView for WebView {
                 SessionEvent::Close { .. } => {
                     self.state(serde_json::json!({ "ended": true, "busy": false }));
                 }
+                // A refusal is the thread's to show, to the person it refuses.
+                // Reactions are a chat affordance with no counterpart here:
+                // the interface shows a message's fate through the state. What
+                // an upload is kept as follows it, naming where the interface
+                // can fetch it, which the bytes here cannot.
+                SessionEvent::Reply { command, .. } if command == REFUSAL => {}
+                SessionEvent::Reaction { .. } | SessionEvent::Upload { .. } => {}
+                // Shown live exactly as it is read back from the record, so a
+                // browser draws a running session and a stopped one the same.
+                entry => self.entry(wire(entry, at, None, self.names.as_ref())),
             }
             Ok(())
         })
@@ -318,10 +241,17 @@ pub fn wire(entry: &SessionEvent, at: i64, turn: Option<u32>, names: Option<&Nam
             "cause": cause,
             "at": at,
         }),
-        SessionEvent::Attachment { name, size } => serde_json::json!({
+        SessionEvent::Attachment {
+            name,
+            size,
+            file,
+            caption,
+        } => serde_json::json!({
             "kind": "file",
             "name": name,
             "size": size,
+            "file": file,
+            "caption": caption.as_deref().map(clean),
             "at": at,
         }),
         // Never recorded, so never read back; the caller filters these out.

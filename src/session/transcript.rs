@@ -266,6 +266,88 @@ impl Recorder for Transcript {
     fn append(&self, entry: &SessionEvent, turn: u32) {
         self.append_at(entry, Some(turn), now_ms());
     }
+
+    /// Keeps a posted file in [`UPLOADS_DIRNAME`] beside the transcript,
+    /// under a name of the moment it was kept and its own name reduced to
+    /// what [`is_kept_name`] accepts.
+    ///
+    /// Never written through a link, and never over a file already there:
+    /// a name taken this millisecond is tried again with a count on it.
+    fn keep(&self, name: &str, bytes: &[u8]) -> Option<String> {
+        let directory = self.path.parent()?.join(UPLOADS_DIRNAME);
+        let reduced: String = name
+            .chars()
+            .rev()
+            .take(KEPT_NAME_CHARS)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let reduced = reduced.trim_start_matches('.');
+        let stamp = now_ms();
+        let mut failure = None;
+        if let Err(error) = std::fs::create_dir_all(&directory) {
+            failure = Some(error);
+        } else {
+            for attempt in 0..4 {
+                let kept = format!("{stamp}-{attempt}-{reduced}");
+                let written = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .custom_flags(nix::fcntl::OFlag::O_NOFOLLOW.bits())
+                    .open(directory.join(&kept))
+                    .and_then(|mut file| file.write_all(bytes));
+                match written {
+                    Ok(()) => return Some(kept),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(log) = &self.log {
+            log.warn(
+                "a posted file could not be kept beside the record, so the interface cannot show it",
+                &fields([
+                    ("name", name.into()),
+                    (
+                        "detail",
+                        failure.map_or_else(|| "every name was taken".to_owned(), |error| error.to_string()).into(),
+                    ),
+                ]),
+            );
+        }
+        None
+    }
+}
+
+/// The directory beside a transcript that the files a session posted are
+/// kept in.
+pub const UPLOADS_DIRNAME: &str = "uploads";
+
+/// How much of a posted file's own name the kept name carries.
+const KEPT_NAME_CHARS: usize = 80;
+
+/// Whether `file` is a name [`Recorder::keep`] could have given, which is
+/// all that a request for a kept file may name: no separator, no dot in
+/// front, nothing outside a plain set of characters.
+pub fn is_kept_name(file: &str) -> bool {
+    !file.is_empty()
+        && !file.starts_with('.')
+        && file.len() <= KEPT_NAME_CHARS + 32
+        && file
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
 #[cfg(test)]

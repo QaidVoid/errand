@@ -54,6 +54,13 @@ pub struct Held {
 /// about files and a test needs none.
 pub trait Recorder: Send + Sync {
     fn append(&self, entry: &SessionEvent, turn: u32);
+
+    /// Keeps a file the session posted beside the record, and says the name
+    /// it was kept under, or nothing when it was not kept.
+    fn keep(&self, name: &str, bytes: &[u8]) -> Option<String> {
+        let _ = (name, bytes);
+        None
+    }
 }
 
 /// What a failed delivery said.
@@ -298,15 +305,38 @@ impl ViewFanOut {
 
     /// Sends one event to every attached view, and keeps what replay needs.
     pub async fn send(&self, event: SessionEvent) {
+        // An upload is recorded as what it was kept as, and that is shown
+        // after it, to the surfaces that read files from the record rather
+        // than carrying the bytes. Kept before the lock is taken, since
+        // writing a picture out is the slowest thing here.
+        let attachment = match &event {
+            SessionEvent::Upload {
+                name,
+                bytes,
+                caption,
+            } => Some(SessionEvent::Attachment {
+                name: name.clone(),
+                size: bytes.len() as u64,
+                file: self
+                    .recorder
+                    .as_ref()
+                    .and_then(|recorder| recorder.keep(name, bytes)),
+                caption: Some(caption.clone()).filter(|caption| !caption.is_empty()),
+            }),
+            _ => None,
+        };
         // Recorded and the audience read under one lock, so a view attaching
         // now either sees the event in its replay or live, never both and
         // never neither.
         let views = {
             let mut inner = self.inner.lock().expect("the view fan-out lock");
-            self.record(&mut inner, &event);
+            self.record(&mut inner, attachment.as_ref().unwrap_or(&event));
             inner.views.clone()
         };
         self.deliver(&views, &event).await;
+        if let Some(attachment) = &attachment {
+            self.deliver(&views, attachment).await;
+        }
     }
 
     /// Attaches a view and shows it what it missed.
@@ -392,13 +422,7 @@ impl ViewFanOut {
             _ => {}
         }
 
-        let entry = match event {
-            SessionEvent::Upload { name, bytes, .. } => SessionEvent::Attachment {
-                name: name.clone(),
-                size: bytes.len() as u64,
-            },
-            other => other.clone(),
-        };
+        let entry = event.clone();
         if let Some(recorder) = &self.recorder {
             recorder.append(&entry, inner.turn);
         }
@@ -444,7 +468,10 @@ impl ViewFanOut {
             | SessionEvent::ToolResult { .. }
             | SessionEvent::Activity { .. }
             | SessionEvent::Delegation { .. }
-            | SessionEvent::Diff { .. } => view.observe_at(&held.entry, held.at).await?,
+            | SessionEvent::Diff { .. }
+            // Replayed as itself: a surface that can show the file reads it
+            // from the record, and a thread already posted it when it was sent.
+            | SessionEvent::Attachment { .. } => view.observe_at(&held.entry, held.at).await?,
             SessionEvent::Prompt {
                 author,
                 text,
@@ -466,15 +493,6 @@ impl ViewFanOut {
                         // Replayed into a view that may be a thread, which
                         // was shown it when it was first said.
                         from_interface: false,
-                    },
-                    held.at,
-                )
-                .await?;
-            }
-            SessionEvent::Attachment { name, size } => {
-                view.observe_at(
-                    &SessionEvent::Post {
-                        text: format!("[attached {name}, {size} bytes]"),
                     },
                     held.at,
                 )

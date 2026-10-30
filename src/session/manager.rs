@@ -1251,6 +1251,18 @@ impl SessionManager {
                 .is_some()
     }
 
+    /// Where a session this daemon knows keeps its state, running or not.
+    pub fn state_dir_of(&self, session_id: &str) -> Option<String> {
+        self.options
+            .registry
+            .lock()
+            .expect("the registry lock")
+            .all()
+            .into_iter()
+            .find(|record| record.session_id == session_id)
+            .map(|record| record.state_dir)
+    }
+
     /// Sessions that are not running but could be picked up again.
     ///
     /// A session that idled out is not over: the agent's history outlives its

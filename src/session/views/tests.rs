@@ -88,9 +88,11 @@ fn render(event: &SessionEvent) -> String {
             removed,
             ..
         } => format!("diff:{path}:+{added}-{removed}"),
-        SessionEvent::Attachment { .. }
-        | SessionEvent::Upload { .. }
-        | SessionEvent::Close { .. } => String::new(),
+        SessionEvent::Attachment { name, file, .. } => {
+            format!("attachment:{name}:{}", file.as_deref().unwrap_or("-"))
+        }
+        SessionEvent::Upload { name, .. } => format!("upload:{name}"),
+        SessionEvent::Close { .. } => String::new(),
         SessionEvent::Usage { usage } => format!("usage:{}", usage.total_tokens),
         SessionEvent::Waiting { text } => {
             format!("waiting:{}", text.as_deref().unwrap_or("null"))
@@ -548,4 +550,61 @@ async fn a_replay_carries_when_each_thing_happened() {
     let seen = late.0.lock().unwrap().clone();
     assert!(seen.contains(&("prompt".to_owned(), 1_234)), "{seen:?}");
     assert!(seen.contains(&("post".to_owned(), 1_234)), "{seen:?}");
+}
+
+/// Keeps every file it is given, as the transcript does, under a fixed name.
+struct Keeping(Mutex<Vec<String>>);
+
+impl Recorder for Keeping {
+    fn append(&self, entry: &SessionEvent, _turn: u32) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(serde_json::to_string(entry).unwrap());
+    }
+
+    fn keep(&self, name: &str, _bytes: &[u8]) -> Option<String> {
+        Some(format!("kept-{name}"))
+    }
+}
+
+/// An upload is recorded as where it was kept, never with its bytes, and a
+/// view is shown the upload and then that, so a thread can post the file and
+/// an interface can fetch it.
+#[tokio::test]
+async fn an_upload_is_recorded_as_where_it_was_kept() {
+    let sink = Arc::new(Keeping(Mutex::new(Vec::new())));
+    let recorded: Arc<dyn Recorder> = sink.clone();
+    let fan = Arc::new(ViewFanOut::with_recorder(
+        Logger::new(LogFields::new(), Arc::new(|_, _| {})),
+        DEFAULT_TRANSCRIPT_LIMIT,
+        Some(recorded),
+    ));
+    let live = FakeView::new();
+    fan.clone().attach(live.clone()).await;
+
+    fan.send(SessionEvent::Upload {
+        name: "image.png".to_owned(),
+        bytes: vec![1, 2, 3],
+        caption: "> a lighthouse".to_owned(),
+    })
+    .await;
+
+    let written = sink.0.lock().unwrap().clone();
+    assert_eq!(written.len(), 1, "{written:?}");
+    let entry: serde_json::Value = serde_json::from_str(&written[0]).unwrap();
+    assert_eq!(entry["call"], "attachment");
+    assert_eq!(entry["file"], "kept-image.png");
+    assert_eq!(entry["caption"], "> a lighthouse");
+    assert_eq!(entry["size"], 3);
+    let seen = live.seen();
+    let upload = seen
+        .iter()
+        .position(|line| line.starts_with("upload"))
+        .expect("the upload");
+    let attachment = seen
+        .iter()
+        .position(|line| line.starts_with("attachment"))
+        .expect("what it was kept as");
+    assert!(upload < attachment, "{seen:?}");
 }

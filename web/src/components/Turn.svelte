@@ -6,7 +6,8 @@
    * conversation is read in order, so nothing here folds: what folds is a tool
    * call, which hides a detail rather than a whole exchange.
    */
-  import { clock, exact } from "../lib/format.ts";
+  import { api } from "../lib/api.ts";
+  import { clock, exact, humanSize } from "../lib/format.ts";
   import { render } from "../lib/markdown.ts";
   import { marking } from "../lib/search.ts";
   import { callCount, type Turn } from "../lib/turns.ts";
@@ -20,6 +21,7 @@
     waiting,
     needle = "",
     linked,
+    session = null,
     onOpenFile,
     command,
   }: {
@@ -43,6 +45,8 @@
     needle?: string;
     /** True when the address names this exchange, so it says which one it is. */
     linked?: boolean;
+    /** Which session this is, so what it posted can be fetched. */
+    session?: string | null;
     onOpenFile?: ((path: string) => void) | undefined;
     command: { open: boolean; at: number };
   } = $props();
@@ -80,6 +84,21 @@
       return first;
     });
   });
+
+  /** Where a posted file can be fetched, when it was kept. */
+  function fetched(file: string | null | undefined): string | undefined {
+    return session === null || file === undefined || file === null
+      ? undefined
+      : api.uploadUrl(session, file);
+  }
+
+  /** How a posted file can be shown in place, by its extension. */
+  function shownAs(name: string): "picture" | "clip" | undefined {
+    const extension = name.split(".").pop()?.toLowerCase() ?? "";
+    if (["png", "jpg", "jpeg", "gif", "webp"].includes(extension)) return "picture";
+    if (["mp3", "wav", "ogg", "oga", "opus", "flac", "m4a"].includes(extension)) return "clip";
+    return undefined;
+  }
 
   /**
    * A stable identity for an item, so a redraw updates the nodes it has rather
@@ -210,7 +229,31 @@
       {:else if item.entry.kind === "notice"}
         <p class="item notice {item.entry.level}">{item.entry.text}</p>
       {:else if item.entry.kind === "file"}
-        <p class="item notice">attached {item.entry.name} ({item.entry.size} bytes)</p>
+        {@const url = fetched(item.entry.file)}
+        {@const shown = item.entry.file ? shownAs(item.entry.file) : undefined}
+        <figure class="item posted">
+          {#if url !== undefined && shown === "picture"}
+            <a href={url} target="_blank" rel="noopener noreferrer">
+              <img src={url} alt={item.entry.caption ?? item.entry.name} loading="lazy" />
+            </a>
+          {:else if url !== undefined && shown === "clip"}
+            <audio controls preload="none" src={url}></audio>
+          {/if}
+          <figcaption>
+            {#if item.entry.caption}
+              <!-- Sanitised in render(), which is what makes this safe to insert. -->
+              <div class="caption">{@html render(item.entry.caption)}</div>
+            {/if}
+            <span class="meta">
+              {#if url !== undefined}
+                <a href={url} target="_blank" rel="noopener noreferrer">{item.entry.name}</a>
+              {:else}
+                {item.entry.name}
+              {/if}
+              {humanSize(item.entry.size)}
+            </span>
+          </figcaption>
+        </figure>
       {/if}
     {/each}
   </div>
@@ -548,6 +591,50 @@
 
   .reply .answer :global(p) {
     margin: 0 0 4px;
+  }
+
+  .posted {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+  }
+
+  .posted img {
+    display: block;
+    max-width: min(520px, 100%);
+    max-height: 520px;
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius);
+    background: var(--bg-inset);
+    object-fit: contain;
+  }
+
+  .posted audio {
+    width: min(420px, 100%);
+  }
+
+  .posted figcaption {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--type-receipt);
+    color: var(--text-faint);
+  }
+
+  .posted .caption :global(p) {
+    margin: 0;
+  }
+
+  .posted .caption :global(blockquote) {
+    margin: 0;
+    padding-left: 8px;
+    border-left: 2px solid var(--line-soft);
+    color: var(--text-dim);
+  }
+
+  .posted .meta a {
+    color: inherit;
   }
 
   .notice {

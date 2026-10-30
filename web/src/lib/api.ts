@@ -53,6 +53,10 @@ export const api = {
   file: (session: string, path: string) =>
     json<FileContents>(`/sessions/${session}/file?path=${encodeURIComponent(path)}`),
 
+  /** A file the session posted, as kept beside its record. */
+  uploadUrl: (session: string, file: string) =>
+    `/api/sessions/${session}/uploads/${encodeURIComponent(file)}`,
+
   downloadUrl: (session: string, path: string) =>
     `/api/sessions/${session}/download?path=${encodeURIComponent(path)}`,
 
