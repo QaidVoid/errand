@@ -288,6 +288,15 @@ impl Backend {
         }
     }
 
+    /// What each launch reads from the configuration, for a reload to
+    /// replace.
+    pub fn settings(&self) -> backend::LiveSettings {
+        match self {
+            Backend::Bailey(bailey) => bailey.settings(),
+            Backend::Podman(podman) => podman.settings(),
+        }
+    }
+
     /// Starts one session's sandbox.
     pub async fn launch(
         &self,

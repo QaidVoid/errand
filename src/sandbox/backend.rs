@@ -5,11 +5,13 @@
 //! find sandboxes a previous run left behind. It is not a plugin system.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
 
 use serde_json::{Map, Value};
 
-use crate::config::schema::{PluginConfig, SandboxBackend};
+use crate::config::schema::{PluginConfig, SandboxBackend, SandboxConfig};
 use crate::memory::store::BLOCK_FILENAME;
+use crate::sandbox::broker::BrokerTemplate;
 use crate::sandbox::kage_providers::KageProviders;
 
 /// Where a session's project appears to the agent, under every backend.
@@ -41,6 +43,45 @@ pub const SESSION_LABEL: &str = "errand.session";
 
 /// Prefix for the name given to a session's sandbox.
 pub const SANDBOX_NAME_PREFIX: &str = "errand-";
+
+/// What a backend launches a session under that the configuration file says.
+#[derive(Clone)]
+pub struct LaunchSettings {
+    /// The sandbox section.
+    pub sandbox: SandboxConfig,
+    /// What each session's egress broker is built from, under
+    /// `egress.mode = proxy`.
+    pub broker: Option<BrokerTemplate>,
+    /// The host store's definitions of each defined provider's models, by
+    /// provider, for an entry naming one of them to be laid over.
+    pub built_in: BTreeMap<String, Vec<Value>>,
+}
+
+/// The [`LaunchSettings`] in force, shared by a backend and the reload that
+/// replaces them.
+///
+/// Replaced whole, so a launch reads one consistent set: the next session
+/// starts under the file as it now is, and a running one keeps what it was
+/// launched with.
+#[derive(Clone)]
+pub struct LiveSettings(Arc<RwLock<Arc<LaunchSettings>>>);
+
+impl LiveSettings {
+    /// Settings in force, which are the ones given.
+    pub fn new(settings: LaunchSettings) -> Self {
+        Self(Arc::new(RwLock::new(Arc::new(settings))))
+    }
+
+    /// The settings in force, for one launch to work from.
+    pub fn get(&self) -> Arc<LaunchSettings> {
+        Arc::clone(&self.0.read().expect("the launch settings lock"))
+    }
+
+    /// Puts settings in force for every launch after this one.
+    pub fn replace(&self, settings: LaunchSettings) {
+        *self.0.write().expect("the launch settings lock") = Arc::new(settings);
+    }
+}
 
 /// Everything a backend needs to start one session.
 #[derive(Debug, Clone, Default)]

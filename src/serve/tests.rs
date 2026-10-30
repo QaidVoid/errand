@@ -10,8 +10,8 @@ use serenity::model::id::ChannelId;
 
 use super::{
     BoxedGateRead, addressed, answer_in, brokerable_providers, brokering_credential_names,
-    changed_routes, check_provider_names, host_of, provider_upstreams, read_usage, rebuild_catalog,
-    refusal, reply_to, usage_sources,
+    check_provider_names, fixed_until_restart, host_of, provider_upstreams, read_usage,
+    rebuild_catalog, refusal, reload_launch_settings, reply_to, usage_sources,
 };
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
@@ -562,26 +562,75 @@ fn a_definitions_route_policy_reaches_its_broker_route() {
     );
 }
 
-/// A reload is said to have changed a route only for a provider routed both
-/// before and after whose policy differs.
-#[test]
-fn only_a_route_whose_policy_changed_is_named_after_a_reload() {
-    use crate::config::route::{Placement, RoutePolicy};
+/// The configuration a reload test starts from, with `providers` defined and
+/// its state kept under `state`.
+fn reloadable(
+    state: &std::path::Path,
+    providers: &serde_json::Value,
+) -> crate::config::schema::Config {
+    validate_config(&json!({
+        "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
+        "agent": { "provider": "first", "providers": providers },
+        "projectRoot": "/tmp/p",
+        "stateDir": state.display().to_string(),
+        "sandbox": {
+            "egress": { "mode": "proxy", "allow": ["*"], "allowInternal": true },
+        },
+    }))
+    .expect("resolves")
+}
 
-    let strict = RoutePolicy {
-        placement: Placement::Bearer,
-        ..RoutePolicy::default()
-    };
-    let before = std::collections::BTreeMap::from([
-        ("same".to_owned(), RoutePolicy::default()),
-        ("edited".to_owned(), RoutePolicy::default()),
-        ("removed".to_owned(), RoutePolicy::default()),
-    ]);
-    let after = std::collections::BTreeMap::from([
-        ("same".to_owned(), RoutePolicy::default()),
-        ("edited".to_owned(), strict.clone()),
-        ("added".to_owned(), strict),
-    ]);
+/// A reload puts the new file's broker routes in force for the next launch,
+/// and leaves the backend and image the probe checked as they were.
+#[tokio::test]
+async fn a_reload_replaces_the_routes_and_keeps_the_probed_backend() {
+    use crate::config::schema::SandboxBackend;
+    use crate::sandbox::backend::{LaunchSettings, LiveSettings};
 
-    assert_eq!(changed_routes(&before, &after), ["edited"]);
+    let state = tempfile::tempdir().expect("a temporary directory");
+    let started = reloadable(
+        state.path(),
+        &json!({ "first": { "baseUrl": "http://127.0.0.1:8080", "credential": "k" } }),
+    );
+    let settings = LiveSettings::new(LaunchSettings {
+        sandbox: started.sandbox.clone(),
+        broker: None,
+        built_in: std::collections::BTreeMap::new(),
+    });
+    let mut now = reloadable(
+        state.path(),
+        &json!({
+            "first": { "baseUrl": "http://127.0.0.1:8080", "credential": "k" },
+            "zai-proxy": {
+                "baseUrl": "http://127.0.0.1:8081",
+                "kind": "anthropic",
+                "credential": "z",
+                "models": [{ "id": "glm-5.3-flash" }],
+            },
+        }),
+    );
+    now.sandbox.backend = SandboxBackend::Podman;
+    now.sandbox.image = "another".to_owned();
+    now.sandbox.memory = "8g".to_owned();
+    let log = Logger::new(LogFields::new(), Arc::new(|_level, _line| {}));
+
+    reload_launch_settings(&now, &settings, None, &log).await;
+
+    let current = settings.get();
+    let routed: Vec<&str> = current
+        .broker
+        .as_ref()
+        .expect("a broker under proxy mode")
+        .providers
+        .iter()
+        .map(|provider| provider.name.as_str())
+        .collect();
+    assert_eq!(routed, ["first", "zai-proxy"]);
+    assert_eq!(current.sandbox.backend, started.sandbox.backend);
+    assert_eq!(current.sandbox.image, started.sandbox.image);
+    assert_eq!(current.sandbox.memory, "8g");
+    assert_eq!(
+        fixed_until_restart(&started, &now),
+        ["sandbox.backend", "sandbox.image"]
+    );
 }

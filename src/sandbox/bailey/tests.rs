@@ -13,7 +13,7 @@ use crate::config::schema::PolicyExtraConfig;
 use crate::config::schema::{EgressConfig, EgressMode, SandboxBackend, SandboxConfig, defaults};
 use crate::log::{LogFields, Logger};
 use crate::sandbox::Run;
-use crate::sandbox::backend::{Denials, SandboxLaunch};
+use crate::sandbox::backend::{Denials, LaunchSettings, SandboxLaunch};
 use crate::sandbox::broker::{Broker, BrokerTemplate, ProviderUpstream, SessionBroker};
 use crate::sandbox::egress::{brokered_env, egress_proxy_url, session_env};
 use crate::sandbox::kage_providers::INSTALLED_JSON;
@@ -631,10 +631,8 @@ fn egress_env_carries_the_credential_in_all_four_proxy_variables() {
         "CARGO_HOME".to_owned(),
         "/cache".to_owned(),
     )]));
-    let (run, _) = fake_run(BTreeMap::new());
-    let sandbox = bailey_with(&config, "/state", run, BaileyOptions::default());
     let broker = session_broker(8443, "run-secret");
-    let env = sandbox.egress_env(Some(&broker)).unwrap();
+    let env = BaileySandbox::egress_env(&config, Some(&broker)).unwrap();
     for name in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
         assert_eq!(env[name], "http://session:run-secret@169.254.169.1:8443");
     }
@@ -668,9 +666,7 @@ fn egress_env_names_no_proxy_without_a_broker_or_outside_proxy_mode() {
             if broker.is_some() {
                 config.egress.mode = EgressMode::Open;
             }
-            let (run, _) = fake_run(BTreeMap::new());
-            let sandbox = bailey_with(&config, "/state", run, BaileyOptions::default());
-            assert_eq!(sandbox.egress_env(broker.as_ref()), env);
+            assert_eq!(BaileySandbox::egress_env(&config, broker.as_ref()), env);
         }
     }
 }
@@ -887,4 +883,62 @@ fn a_provider_added_since_startup_does_not_cross_with_its_key() {
     assert_eq!(env.get("ZAI_KEY").map(String::as_str), Some("n-zai"));
     assert_eq!(env.get("ADDED_KEY"), None);
     assert_eq!(env.get("WHOLE_KEY").map(String::as_str), Some("real-whole"));
+}
+
+/// A launch after the settings are replaced, as a reload does, is brokered by
+/// the new routes, so a provider added to the file reaches the agent through
+/// the broker rather than at the address the file names.
+#[tokio::test]
+async fn a_launch_after_a_reload_is_brokered_by_the_new_routes() {
+    let root = TempDir::new().expect("a temporary directory");
+    let mut answers = BTreeMap::new();
+    answers.insert(
+        "trust".to_owned(),
+        (Some(1), None, Some("refused".to_owned())),
+    );
+    let (run, _calls) = fake_run(answers);
+    let sandbox = Arc::new(bailey_with(
+        &config(),
+        &root.path().to_string_lossy(),
+        run,
+        BaileyOptions {
+            broker: Some(template()),
+            lookup: Some(Arc::new(fake_agent)),
+            kage: Some(fake_kage(0, INSTALLED_JSON).0),
+            ..BaileyOptions::default()
+        },
+    ));
+    sandbox.probe().await.expect("a report");
+
+    let mut reloaded = template();
+    reloaded.providers[0].name = "zai-proxy".to_owned();
+    reloaded.providers[0].prefix = "/provider/zai-proxy".to_owned();
+    sandbox.settings().replace(LaunchSettings {
+        sandbox: config(),
+        broker: Some(reloaded),
+        built_in: BTreeMap::new(),
+    });
+
+    let state_dir = root.path().join("s-1");
+    let launch = SandboxLaunch {
+        session_id: "s-1".to_owned(),
+        state_dir: state_dir.to_string_lossy().into_owned(),
+        project_path: root.path().to_string_lossy().into_owned(),
+        providers: serde_json::from_value(serde_json::json!({
+            "zai-proxy": {
+                "baseUrl": "http://localhost:8080",
+                "kind": "anthropic",
+                "models": [{ "id": "glm-5.3-flash" }],
+            },
+        }))
+        .unwrap(),
+        ..launch()
+    };
+    let _ = sandbox.launch(&launch).await;
+
+    let written = std::fs::read_to_string(state_dir.join("kage/kage/config.toml"))
+        .expect("the agent's configuration");
+    assert!(written.contains("/provider/zai-proxy\""), "{written}");
+    assert!(!written.contains("localhost:8080"), "{written}");
+    assert!(!written.contains("zai-coding-cn"), "{written}");
 }

@@ -92,9 +92,9 @@ the session closes its broker first: from then on neither is honoured, even
 on a connection the session opened earlier, and the port is released. A
 tunnel already open is not cut, and ends when the session's processes do. The
 broker's log lines name the session they belong to, tunnels included. A
-provider added to the configuration after the daemon started has no route on
-any broker until a restart, so a session holds neither its key nor a stand-in
-for it until then.
+reload of the configuration rebuilds what brokers are made from, so a session
+launched after it routes the providers the file then defines, and a session
+already running keeps the routes it was launched with.
 
 Every provider call a session's broker handles is recorded as well, in
 `receipts.db` under the state directory. A receipt holds when the call ended,
@@ -216,9 +216,9 @@ parameters. Headers that ask a server to run a request as another method or
 at another path, such as `X-HTTP-Method-Override` and `X-Original-URL`, are
 not forwarded. A framework that reads the method from a `_method` field in the
 body or the query is not covered, since the broker does not read either.
-Placement and capabilities are read when the daemon starts, so a change to
-them, or to the `kind` a placement is derived from, takes effect at the next
-restart, and the daemon warns when a reload makes one. A tunnel is opaque
+Placement and capabilities are read when a session launches, so a change to
+them, or to the `kind` a placement is derived from, reaches every session
+launched after the reload that makes it. A tunnel is opaque
 once it is open, so `sandbox.egress.allow` governs tunnels by host alone, and
 only a provider route can be held to a method and a path.
 

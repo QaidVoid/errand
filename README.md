@@ -139,8 +139,14 @@ was serving:
 
 - the connection and the chat token, so who may use the bot in the served
   channel is fixed until a restart
-- the sandbox backend, the egress broker, and the provider routes it holds
+- the interface's address and login, and the state directory
+- the sandbox backend and, under podman, its image, which the startup probe
+  checked
 - sessions already running, which keep what they were launched with
+
+The rest of the sandbox section, the egress broker, and the provider routes it
+holds are rebuilt after a reload, so the next session launches under them. The
+log names any setting a reload changed that waits for a restart.
 
 The model list is derived from the file again after a change, so an edited
 `models` list is what `!model` lists straight away. `!models refresh` is for

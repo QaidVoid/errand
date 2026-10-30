@@ -20,8 +20,9 @@ use crate::sandbox::BaileyStop;
 use crate::sandbox::SandboxHandle;
 use crate::sandbox::agent_config::write_agent_config;
 use crate::sandbox::backend::{
-    AgentCommand, CapabilityReport, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
-    agent_command, agent_memory_path, fresh_disk_tmp, sandbox_name,
+    AgentCommand, CapabilityReport, LaunchSettings, LiveSettings, SandboxLaunch,
+    SandboxLaunchError, SandboxUnavailableError, agent_command, agent_memory_path, fresh_disk_tmp,
+    sandbox_name,
 };
 use crate::sandbox::broker::{BrokerTemplate, SessionBroker};
 use crate::sandbox::egress::{
@@ -213,7 +214,8 @@ pub const EGRESS_MAP_ADDRESS: &str = "169.254.169.1";
 /// Extras the daemon supplies, which a test has no need of.
 #[derive(Default)]
 pub struct BaileyOptions {
-    /// What each session's broker is built from, under `egress.mode = proxy`.
+    /// What each session's broker is built from, under `egress.mode = proxy`,
+    /// until a reload replaces it through [`BaileySandbox::settings`].
     pub broker: Option<BrokerTemplate>,
     /// Finds the agent. Injected so a test needs no agent installed.
     pub lookup: Option<Lookup>,
@@ -221,7 +223,8 @@ pub struct BaileyOptions {
     /// Injected so a test needs no agent installed.
     pub kage: Option<super::Run>,
     /// The host store's definitions of each defined provider's models, by
-    /// provider, for an entry naming one of them to be laid over.
+    /// provider, for an entry naming one of them to be laid over, until a
+    /// reload replaces them through [`BaileySandbox::settings`].
     pub built_in: BTreeMap<String, Vec<Value>>,
 }
 
@@ -275,7 +278,7 @@ pub fn bailey_args(
 
 /// Confines sessions as host processes.
 pub struct BaileySandbox {
-    config: SandboxConfig,
+    settings: LiveSettings,
     log: Logger,
     state_root: String,
     run: super::Run,
@@ -290,16 +293,27 @@ impl BaileySandbox {
         log: Logger,
         state_root: String,
         run: super::Run,
-        options: BaileyOptions,
+        mut options: BaileyOptions,
     ) -> Self {
+        let settings = LiveSettings::new(LaunchSettings {
+            sandbox: config,
+            broker: options.broker.take(),
+            built_in: std::mem::take(&mut options.built_in),
+        });
         Self {
-            config,
+            settings,
             log,
             state_root,
             run,
             options,
             kage_providers: Probed::default(),
         }
+    }
+
+    /// What each launch reads its sandbox section, broker, and store models
+    /// from, for a reload to replace.
+    pub fn settings(&self) -> LiveSettings {
+        self.settings.clone()
     }
 
     async fn call(&self, args: &[&str]) -> super::RunResult {
@@ -316,9 +330,12 @@ impl BaileySandbox {
     /// The operator env, with the proxy variables added under a brokered
     /// session, which reaches the network only through the broker. Outside
     /// proxy mode this is the operator env unchanged.
-    fn egress_env(&self, broker: Option<&SessionBroker>) -> Option<BTreeMap<String, String>> {
-        let mut base = self.config.env.clone().unwrap_or_default();
-        if self.config.egress.mode == EgressMode::Proxy
+    fn egress_env(
+        config: &SandboxConfig,
+        broker: Option<&SessionBroker>,
+    ) -> Option<BTreeMap<String, String>> {
+        let mut base = config.env.clone().unwrap_or_default();
+        if config.egress.mode == EgressMode::Proxy
             && let Some(broker) = broker
         {
             add_proxy_env(&mut base, EGRESS_MAP_ADDRESS, broker);
@@ -331,6 +348,8 @@ impl BaileySandbox {
     /// Returns [`SandboxUnavailableError`] when it cannot run at all. It never
     /// falls back to another backend or to running unconfined.
     pub async fn probe(&self) -> Result<CapabilityReport, SandboxUnavailableError> {
+        let settings = self.settings.get();
+        let config = &settings.sandbox;
         let doctor = self.call(&["doctor"]).await;
         if doctor.code != 0 {
             return Err(SandboxUnavailableError {
@@ -351,7 +370,7 @@ impl BaileySandbox {
         // Without this, a version too old for the generated policy surfaces as
         // every session failing to launch rather than once at startup, where
         // it is actionable.
-        if !self.accepts_generated_policy().await {
+        if !self.accepts_generated_policy(config).await {
             return Err(SandboxUnavailableError {
                 backend: SandboxBackend::Bailey,
                 reasons: vec![
@@ -383,7 +402,7 @@ impl BaileySandbox {
             format!(
                 "no single file may exceed {}, enforced as an rlimit and so holding with or \
                  without cgroups",
-                self.config.file_max
+                config.file_max
             ),
             // A note rather than a gap: the daemon never claims to enforce a
             // disk total, so calling it an unenforceable guarantee would make
@@ -391,9 +410,9 @@ impl BaileySandbox {
             format!(
                 "a session is stopped once it has written {}, which is measured rather than \
                  enforced",
-                self.config.disk
+                config.disk
             ),
-            if self.config.network == NetworkMode::None {
+            if config.network == NetworkMode::None {
                 "sessions have no network, so the agent cannot reach a model provider".to_owned()
             } else {
                 "sessions reach the model provider over TCP 443, and outbound access is not \
@@ -405,7 +424,7 @@ impl BaileySandbox {
         // Said out loud, so the report never describes a tighter boundary than
         // the one actually applied. Write is named separately: it is the grant
         // that lets a session change something outside its own project.
-        if let Some(extra) = &self.config.policy_extra {
+        if let Some(extra) = &config.policy_extra {
             let granted = extra.read.len() + extra.write.len() + extra.execute.len();
             notes.push(format!(
                 "sandbox.policyExtra grants {granted} path(s) beyond the generated policy"
@@ -420,7 +439,7 @@ impl BaileySandbox {
             }
         }
 
-        let on_path = self.config.path_extra.clone().unwrap_or_default();
+        let on_path = config.path_extra.clone().unwrap_or_default();
         if !on_path.is_empty() {
             notes.push(format!(
                 "sessions find programs in {}, ahead of the system copies",
@@ -430,8 +449,8 @@ impl BaileySandbox {
 
         // Names only. A value is the operator's own and may be anything, and a
         // report is read in places a configuration file is not.
-        if self.config.env.as_ref().is_some_and(|env| !env.is_empty()) {
-            let env = self.config.env.as_ref().expect("checked above");
+        if config.env.as_ref().is_some_and(|env| !env.is_empty()) {
+            let env = config.env.as_ref().expect("checked above");
             let mut names: Vec<String> = env.keys().cloned().collect();
             names.sort();
             notes.push(format!(
@@ -496,12 +515,14 @@ impl BaileySandbox {
 
         // Started first and dropped on any failure below, which closes it, so a
         // launch that does not finish leaves no listener honouring its nonces.
-        let broker = self.start_broker(launch).await?;
+        let settings = self.settings.get();
+        let config = &settings.sandbox;
+        let broker = self.start_broker(settings.broker.as_ref(), launch).await?;
 
         tokio::fs::create_dir_all(&launch.state_dir)
             .await
             .map_err(|error| SandboxLaunchError(error.to_string()))?;
-        if self.config.disk_tmp {
+        if config.disk_tmp {
             // The grant and TMPDIR point here, so it has to exist before the
             // policy is applied.
             fresh_disk_tmp(&launch.state_dir).await?;
@@ -509,7 +530,7 @@ impl BaileySandbox {
         write_agent_config(
             launch,
             &brokered_providers(EGRESS_MAP_ADDRESS, broker.as_ref()),
-            &self.options.built_in,
+            &settings.built_in,
             &launch.credential_names,
             &self.log,
             &self.kage_providers.get()?,
@@ -530,17 +551,17 @@ impl BaileySandbox {
             POLICY_FILENAME,
             policy_contents(&PolicyOptions {
                 launch: &launch,
-                network: self.config.network,
-                egress_ports: Some(&self.config.egress_ports),
+                network: config.network,
+                egress_ports: Some(&config.egress_ports),
                 runtime: &runtime,
-                file_max: &self.config.file_max,
-                tmp_size: &self.config.tmp_size,
-                shm_size: &self.config.shm_size,
-                disk_tmp: self.config.disk_tmp,
+                file_max: &config.file_max,
+                tmp_size: &config.tmp_size,
+                shm_size: &config.shm_size,
+                disk_tmp: config.disk_tmp,
                 resolv_conf: &resolv,
-                extra: self.config.policy_extra.as_ref(),
-                env: self.egress_env(broker.as_ref()).as_ref(),
-                path_extra: self.config.path_extra.as_deref(),
+                extra: config.policy_extra.as_ref(),
+                env: Self::egress_env(config, broker.as_ref()).as_ref(),
+                path_extra: config.path_extra.as_deref(),
             })
             .as_bytes(),
         )
@@ -553,7 +574,7 @@ impl BaileySandbox {
                 trusted.stderr.trim()
             )));
         }
-        self.verify_policy_applies(&policy).await?;
+        self.verify_policy_applies(config.network, &policy).await?;
 
         // Started from the project, so the tool enters it after the pivot. It
         // is the agent's working directory, and without this the agent starts
@@ -565,7 +586,7 @@ impl BaileySandbox {
             &format!("{}/home", launch.state_dir),
         );
         let args = bailey_args(
-            &self.config,
+            config,
             &launch,
             &policy,
             broker.as_ref().map(|broker| broker.port),
@@ -593,7 +614,7 @@ impl BaileySandbox {
             spawned,
             policy,
             run,
-            grace_ms: self.config.grace_period_ms,
+            grace_ms: config.grace_period_ms,
             log: self.log.clone(),
             broker: std::sync::Mutex::new(broker.map(|broker| broker.broker)),
             stopped: std::sync::atomic::AtomicBool::new(false),
@@ -603,10 +624,11 @@ impl BaileySandbox {
     /// Starts this session's own egress broker, when egress is brokered.
     async fn start_broker(
         &self,
+        template: Option<&BrokerTemplate>,
         launch: &SandboxLaunch,
     ) -> Result<Option<SessionBroker>, SandboxLaunchError> {
         start_session_broker(
-            self.options.broker.as_ref(),
+            template,
             &launch.session_id,
             launch.grants.clone(),
             EGRESS_MAP_ADDRESS,
@@ -660,7 +682,7 @@ impl BaileySandbox {
     /// It rejects a config holding a key it does not know, so a version older
     /// than a feature used here fails every launch. Checking the shape rather
     /// than one key means a later addition is covered by the same check.
-    async fn accepts_generated_policy(&self) -> bool {
+    async fn accepts_generated_policy(&self, config: &SandboxConfig) -> bool {
         let probe_dir = std::path::Path::new(&self.state_root).join("probe");
         let probe = probe_dir.to_string_lossy().into_owned();
         tokio::fs::create_dir_all(&probe_dir)
@@ -680,15 +702,15 @@ impl BaileySandbox {
             &policy,
             policy_contents(&PolicyOptions {
                 launch: &launch,
-                network: self.config.network,
+                network: config.network,
                 egress_ports: None,
                 // The probe runs `true`, so it needs nothing of the agent
                 // granted.
                 runtime: &AgentRuntime::default(),
-                file_max: &self.config.file_max,
-                tmp_size: &self.config.tmp_size,
-                shm_size: &self.config.shm_size,
-                disk_tmp: self.config.disk_tmp,
+                file_max: &config.file_max,
+                tmp_size: &config.tmp_size,
+                shm_size: &config.shm_size,
+                disk_tmp: config.disk_tmp,
                 resolv_conf: &resolver,
                 extra: None,
                 env: None,
@@ -721,8 +743,12 @@ impl BaileySandbox {
     /// session. The check is one vendor's warning phrase plus the exit code,
     /// not a proof: what it catches is the known shape of refusal, and a run
     /// that failed outright.
-    async fn verify_policy_applies(&self, policy: &str) -> Result<(), SandboxLaunchError> {
-        let profile = if self.config.network == NetworkMode::None {
+    async fn verify_policy_applies(
+        &self,
+        network: NetworkMode,
+        policy: &str,
+    ) -> Result<(), SandboxLaunchError> {
+        let profile = if network == NetworkMode::None {
             OFFLINE_PROFILE
         } else {
             AGENT_PROFILE

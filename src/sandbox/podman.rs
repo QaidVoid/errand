@@ -25,9 +25,9 @@ use crate::log::fields;
 use crate::sandbox::SandboxHandle;
 use crate::sandbox::agent_config::write_agent_config;
 use crate::sandbox::backend::{
-    AGENT_HOME, AgentCommand, CapabilityReport, SESSION_LABEL, STATE_PATH, SYSTEM_LABEL,
-    SandboxLaunch, SandboxLaunchError, SandboxUnavailableError, WORKSPACE_PATH, agent_command,
-    agent_memory_path, disk_tmp_dir, fresh_disk_tmp, sandbox_name,
+    AGENT_HOME, AgentCommand, CapabilityReport, LaunchSettings, LiveSettings, SESSION_LABEL,
+    STATE_PATH, SYSTEM_LABEL, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
+    WORKSPACE_PATH, agent_command, agent_memory_path, disk_tmp_dir, fresh_disk_tmp, sandbox_name,
 };
 use crate::sandbox::broker::{BrokerTemplate, SessionBroker};
 use crate::sandbox::egress::{
@@ -213,11 +213,9 @@ pub fn session_command(
 
 /// Rootless podman, one container per session.
 pub struct PodmanSandbox {
-    config: SandboxConfig,
+    settings: LiveSettings,
     log: Logger,
     run: super::Run,
-    built_in: BTreeMap<String, Vec<Value>>,
-    broker: Option<BrokerTemplate>,
     kage_providers: Probed,
 }
 
@@ -253,7 +251,8 @@ impl PodmanSandbox {
     /// `built_in` is the host store's definitions of each defined provider's
     /// models, for an entry naming one of them to be laid over. `broker` is
     /// what each session's egress broker is built from, under
-    /// `egress.mode = proxy`.
+    /// `egress.mode = proxy`. A reload replaces all three through
+    /// [`PodmanSandbox::settings`].
     pub fn new(
         config: SandboxConfig,
         log: Logger,
@@ -262,13 +261,21 @@ impl PodmanSandbox {
         broker: Option<BrokerTemplate>,
     ) -> Self {
         Self {
-            config,
+            settings: LiveSettings::new(LaunchSettings {
+                sandbox: config,
+                broker,
+                built_in,
+            }),
             log,
             run,
-            built_in,
-            broker,
             kage_providers: Probed::default(),
         }
+    }
+
+    /// What each launch reads its sandbox section, broker, and store models
+    /// from, for a reload to replace.
+    pub fn settings(&self) -> LiveSettings {
+        self.settings.clone()
     }
 
     async fn call(&self, args: &[&str]) -> super::RunResult {
@@ -287,6 +294,8 @@ impl PodmanSandbox {
     /// Returns [`SandboxUnavailableError`] when it cannot run at all. It never
     /// falls back to another backend or to running unconfined.
     pub async fn probe(&self) -> Result<CapabilityReport, SandboxUnavailableError> {
+        let settings = self.settings.get();
+        let config = &settings.sandbox;
         let mut reasons = Vec::new();
 
         let info = self
@@ -299,11 +308,11 @@ impl PodmanSandbox {
         }
 
         if reasons.is_empty() {
-            let image = self.call(&["image", "exists", &self.config.image]).await;
+            let image = self.call(&["image", "exists", &config.image]).await;
             if image.code != 0 {
                 reasons.push(format!(
                     "the configured image {} is not present; build it before starting",
-                    self.config.image
+                    config.image
                 ));
             }
         }
@@ -317,24 +326,21 @@ impl PodmanSandbox {
 
         // The image's kage, not the host's: it is the one sessions run, and
         // the two need not be the same build.
-        let mut ask = vec!["run", "--rm", "--network=none", &self.config.image, "kage"];
+        let mut ask = vec!["run", "--rm", "--network=none", &config.image, "kage"];
         ask.extend(LIST_ARGS);
         let kage_providers = KageProviders::from_run(&self.call(&ask).await).map_err(|reason| {
             SandboxUnavailableError {
                 backend: SandboxBackend::Podman,
-                reasons: vec![format!("in {}, {reason}", self.config.image)],
+                reasons: vec![format!("in {}, {reason}", config.image)],
             }
         })?;
         self.kage_providers.keep(kage_providers.clone());
 
         let notes = vec![
-            format!(
-                "sessions run in rootless containers from {}",
-                self.config.image
-            ),
-            if self.config.network == NetworkMode::None {
+            format!("sessions run in rootless containers from {}", config.image),
+            if config.network == NetworkMode::None {
                 "sessions have no network, so the agent cannot reach a model provider".to_owned()
-            } else if self.brokers() {
+            } else if Self::brokers(&settings) {
                 "sessions reach the network only through their egress broker, and host \
                  services are unreachable"
                     .to_owned()
@@ -343,11 +349,11 @@ impl PodmanSandbox {
             },
             format!(
                 "limits per session: memory {}, cpus {}, pids {}",
-                self.config.memory, self.config.cpus, self.config.pids
+                config.memory, config.cpus, config.pids
             ),
             format!(
                 "no single file may exceed {}, set as an fsize ulimit on the container",
-                self.config.file_max
+                config.file_max
             ),
             // A note rather than a gap: the daemon never claims to enforce a
             // disk total, so calling it an unenforceable guarantee would make
@@ -355,13 +361,13 @@ impl PodmanSandbox {
             format!(
                 "a session is stopped once it has written {}, which is measured rather than \
                  enforced",
-                self.config.disk
+                config.disk
             ),
         ];
 
         // Proxy mode promises the broker, so a backend that would run without
         // one says so rather than pass for brokered.
-        let gaps = if self.config.egress.mode == EgressMode::Proxy && !self.brokers() {
+        let gaps = if config.egress.mode == EgressMode::Proxy && !Self::brokers(&settings) {
             vec![
                 "egress.mode is proxy but no broker is wired for this backend: provider keys \
                  and the GitHub token cross whole into the container, and its connections go \
@@ -380,9 +386,9 @@ impl PodmanSandbox {
         })
     }
 
-    /// Whether sessions here are brokered.
-    fn brokers(&self) -> bool {
-        self.config.egress.mode == EgressMode::Proxy && self.broker.is_some()
+    /// Whether sessions launched under `settings` are brokered.
+    fn brokers(settings: &LaunchSettings) -> bool {
+        settings.sandbox.egress.mode == EgressMode::Proxy && settings.broker.is_some()
     }
 
     /// Starts one session's sandbox.
@@ -390,16 +396,18 @@ impl PodmanSandbox {
         &self,
         launch: &SandboxLaunch,
     ) -> Result<SandboxHandle, SandboxLaunchError> {
+        let settings = self.settings.get();
+        let config = &settings.sandbox;
         // Started first and dropped on any failure below, which closes it.
         let broker = start_session_broker(
-            self.broker.as_ref(),
+            settings.broker.as_ref(),
             &launch.session_id,
             launch.grants.clone(),
             BROKER_ADDRESS,
             &self.log,
         )
         .await?;
-        if self.config.disk_tmp {
+        if config.disk_tmp {
             fresh_disk_tmp(&launch.state_dir).await?;
         }
         // The agent reads every provider's key from the environment, which
@@ -408,14 +416,14 @@ impl PodmanSandbox {
         write_agent_config(
             launch,
             &brokered_providers(BROKER_ADDRESS, broker.as_ref()),
-            &self.built_in,
+            &settings.built_in,
             &launch.credential_names,
             &self.log,
             &self.kage_providers.get()?,
         )
         .await?;
         let name = sandbox_name(&launch.session_id);
-        let mut command = session_command(&self.config, launch, broker.as_ref());
+        let mut command = session_command(config, launch, broker.as_ref());
         // podman finds its network helper on its PATH, and is otherwise given
         // only the session's secrets.
         if let Ok(path) = std::env::var("PATH") {
@@ -438,7 +446,7 @@ impl PodmanSandbox {
             project_path: launch.project_path.clone(),
             spawned,
             run: Arc::clone(&self.run),
-            grace_ms: self.config.grace_period_ms,
+            grace_ms: config.grace_period_ms,
             log: self.log.clone(),
             broker: std::sync::Mutex::new(broker.map(|broker| broker.broker)),
             stopped: std::sync::atomic::AtomicBool::new(false),

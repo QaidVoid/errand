@@ -29,7 +29,9 @@ use crate::config::live::LiveConfig;
 use crate::config::load::Environment;
 use crate::config::redact::{contains_secret, redact_text, secret_values};
 use crate::config::route::RoutePolicy;
-use crate::config::schema::{AgentConfig, Config, EgressMode, GithubConfig, GithubTrigger};
+use crate::config::schema::{
+    AgentConfig, Config, EgressMode, GithubConfig, GithubTrigger, SandboxConfig,
+};
 use crate::config::usage::UsageShape;
 use crate::config::watch::{AfterReload, POLL, watch};
 use crate::daemon::SlashCommand;
@@ -67,6 +69,7 @@ use crate::provider::usage::{
 use crate::provider::vision::HttpPost;
 use crate::provider::vision::image_describer;
 use crate::provider::zai::fetch_quota;
+use crate::sandbox::backend::{LaunchSettings, LiveSettings};
 use crate::sandbox::broker::ProviderUpstream;
 use crate::sandbox::broker::{BrokerTemplate, RECEIPTS_FILENAME, ReceiptStore};
 use crate::sandbox::broker::{LOOKUP_TIMEOUT, NoAddress, public_addresses, upstream_url};
@@ -437,24 +440,81 @@ fn provider_upstreams(agent: &AgentConfig, store: Option<&str>) -> Vec<ProviderU
         .collect()
 }
 
-/// What each brokered provider's route allows, by provider.
-fn route_policies(agent: &AgentConfig, store: Option<&str>) -> BTreeMap<String, RoutePolicy> {
-    provider_upstreams(agent, store)
-        .into_iter()
-        .map(|upstream| (upstream.name, upstream.policy))
+/// The host store's definitions of each defined provider's models, by
+/// provider, leaving out those it has none for.
+fn built_in_models(
+    agent: &AgentConfig,
+    store: Option<&str>,
+) -> BTreeMap<String, Vec<serde_json::Value>> {
+    agent
+        .providers
+        .keys()
+        .map(|name| (name.clone(), store_entries(store, name)))
+        .filter(|(_, models)| !models.is_empty())
         .collect()
 }
 
-/// The providers routed both before and after whose policy is not the same.
-fn changed_routes(
-    before: &BTreeMap<String, RoutePolicy>,
-    after: &BTreeMap<String, RoutePolicy>,
-) -> Vec<String> {
-    before
-        .iter()
-        .filter(|(name, policy)| after.get(*name).is_some_and(|now| now != *policy))
-        .map(|(name, _)| name.clone())
-        .collect()
+/// What a reload cannot reach that differs between the configuration the
+/// daemon started on and the one now in force, named as the file names it.
+///
+/// The connection and the interface are up, the state directory holds the
+/// lock and every session's files, and the backend's probe is what decided
+/// the daemon could run at all.
+fn fixed_until_restart(started: &Config, now: &Config) -> Vec<&'static str> {
+    [
+        ("chat.token", started.chat.token != now.chat.token),
+        (
+            "chat.channelId",
+            started.chat.channel_id != now.chat.channel_id,
+        ),
+        ("web", started.web != now.web),
+        ("stateDir", started.state_dir != now.state_dir),
+        (
+            "sandbox.backend",
+            started.sandbox.backend != now.sandbox.backend,
+        ),
+        ("sandbox.image", started.sandbox.image != now.sandbox.image),
+    ]
+    .into_iter()
+    .filter(|(_, changed)| *changed)
+    .map(|(name, _)| name)
+    .collect()
+}
+
+/// Puts the reloaded file's sandbox section, broker routes, and store models
+/// in force for every session launched after this.
+///
+/// The backend and image stay as the probe found them, since nothing else
+/// has checked that another one can run here. A broker the new file cannot
+/// have leaves sessions launching under the one from before, which is said.
+async fn reload_launch_settings(
+    config: &Config,
+    settings: &LiveSettings,
+    store: Option<&str>,
+    log: &Logger,
+) {
+    let current = settings.get();
+    let receipts = current
+        .broker
+        .as_ref()
+        .and_then(|broker| broker.receipts.clone());
+    let Ok(broker) = broker_template(config, log, receipts).await else {
+        log.warn(
+            "sessions keep launching under the sandbox and broker settings from before, since \
+             the new ones cannot be used",
+            &fields([]),
+        );
+        return;
+    };
+    settings.replace(LaunchSettings {
+        sandbox: SandboxConfig {
+            backend: current.sandbox.backend,
+            image: current.sandbox.image.clone(),
+            ..config.sandbox.clone()
+        },
+        broker,
+        built_in: built_in_models(&config.agent, store),
+    });
 }
 
 /// The provider variables the broker rewrites or strips, by provider.
@@ -701,8 +761,13 @@ fn collect_cold_sessions(daemon: Arc<Daemon>, live: LiveConfig, log: Logger) {
 /// from the model store the agent would reach it at.
 ///
 /// Returns nothing when the mode asks for no broker, and an exit code when
-/// one was asked for and could not be had.
-async fn broker_template(config: &Config, log: &Logger) -> Result<Option<BrokerTemplate>, Exit> {
+/// one was asked for and could not be had. `receipts` is a store already
+/// open, which is opened here when there is none.
+async fn broker_template(
+    config: &Config,
+    log: &Logger,
+    receipts: Option<Arc<ReceiptStore>>,
+) -> Result<Option<BrokerTemplate>, Exit> {
     if config.sandbox.egress.mode != EgressMode::Proxy {
         return Ok(None);
     }
@@ -758,7 +823,7 @@ async fn broker_template(config: &Config, log: &Logger) -> Result<Option<BrokerT
         log: log.clone(),
         providers,
         credential_names: brokering_credential_names(&config.agent),
-        receipts: open_receipts(&config.state_dir, log),
+        receipts: receipts.or_else(|| open_receipts(&config.state_dir, log)),
         now: Arc::new(crate::log::now_ms),
     }))
 }
@@ -801,8 +866,8 @@ fn open_receipts(state_dir: &str, log: &Logger) -> Option<Arc<ReceiptStore>> {
 /// replaces what is in it while the daemon is already running. The copy read
 /// here is what startup committed to; the handle is what a later change to
 /// the file reaches. What was committed to cannot be rewound: the connection
-/// is already up, what each session's broker is built from is fixed, and a
-/// running session keeps what it was launched with.
+/// is already up, and a running session keeps what it was launched with.
+/// What the next session launches under is replaced after each reload.
 #[expect(clippy::too_many_lines)]
 async fn run(
     live: &LiveConfig,
@@ -833,7 +898,7 @@ async fn run(
         return code;
     }
 
-    let broker = match broker_template(config, log).await {
+    let broker = match broker_template(config, log, None).await {
         Ok(broker) => broker,
         Err(code) => return code,
     };
@@ -842,14 +907,9 @@ async fn run(
     // image or an unenforceable guarantee fails immediately rather than after
     // a login round trip.
     let store = agent_directory(&host_environment());
-    let built_in = config
-        .agent
-        .providers
-        .keys()
-        .map(|name| (name.clone(), store_entries(store.as_deref(), name)))
-        .filter(|(_, models)| !models.is_empty())
-        .collect();
+    let built_in = built_in_models(&config.agent, store.as_deref());
     let sandbox = Arc::new(create_sandbox(config, log.clone(), broker, built_in));
+    let launch_settings = sandbox.settings();
     let report = match probe_sandbox(sandbox.as_ref(), config, log).await {
         Ok(report) => report,
         Err(error) => {
@@ -1464,44 +1524,42 @@ async fn run(
     );
 
     // Started once the daemon is serving, so a change to the file is applied
-    // to a daemon that is already answering. What was committed to at startup
-    // is not rewound by it: the connection is already up, what each session's
-    // broker is built from is fixed, and a session already running keeps what
-    // it was launched with. The next session, and the daemon's own answers,
-    // are what read the new file.
+    // to a daemon that is already answering. A session already running keeps
+    // what it was launched with, and the next one launches under the new
+    // file: its sandbox section, its broker routes, and the store's models
+    // are rebuilt here. What startup connected or probed is not rewound, and
+    // a change to it is said rather than left to look applied.
     //
     // The catalog is derived from the file as well, so it is derived again
     // after a change. Without that, an edited `models` list would be in force
     // and `!model` would still list the one from before, which looks exactly
     // like the reload not working.
-    //
-    // A route's placement and capabilities are among what is fixed, so an
-    // edit to them, or to the `kind` a placement is derived from, is said
-    // rather than left to look applied.
     let after: AfterReload = {
         let live = live.clone();
         let log = log.clone();
-        let routed = route_policies(&config.agent, store.as_deref());
+        let started = config.clone();
         Arc::new(move || {
-            let (live, store, log, catalog, routed) = (
+            let (live, store, log, catalog, started, launch_settings) = (
                 live.clone(),
                 store.clone(),
                 log.clone(),
                 catalog.clone(),
-                routed.clone(),
+                started.clone(),
+                launch_settings.clone(),
             );
             Box::pin(async move {
-                let agent = live.get().agent;
-                for provider in changed_routes(&routed, &route_policies(&agent, store.as_deref())) {
+                let config = live.get();
+                for setting in fixed_until_restart(&started, &config) {
                     log.warn(
-                        "a provider's placement or capabilities changed, and its broker route \
-                         keeps the old ones until the daemon restarts",
-                        &fields([("provider", LogValue::from(provider))]),
+                        "a setting changed that the daemon reads only at startup, and it keeps \
+                         the old one until it restarts",
+                        &fields([("setting", LogValue::from(setting))]),
                     );
                 }
+                reload_launch_settings(&config, &launch_settings, store.as_deref(), &log).await;
                 // What each provider answered is already in the log, from the
                 // reporting inside the one place the catalog is built.
-                rebuild_catalog(&agent, store.as_deref(), &log, &catalog).await;
+                rebuild_catalog(&config.agent, store.as_deref(), &log, &catalog).await;
             }) as Pin<Box<dyn Future<Output = ()> + Send>>
         }) as AfterReload
     };
