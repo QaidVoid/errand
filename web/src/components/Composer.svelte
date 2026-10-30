@@ -109,7 +109,7 @@
       {#if commands !== null}
         <CommandPicker {commands} onPick={complete} />
       {/if}
-      <ModelPicker {catalog} current={model} {allowDefault} onPick={onModel} />
+      <ModelPicker {catalog} current={model} {allowDefault} {disabled} onPick={onModel} />
       {@render tools?.()}
       <button
         class="send"

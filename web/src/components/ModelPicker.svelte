@@ -12,6 +12,7 @@
     catalog,
     current,
     allowDefault = false,
+    disabled = false,
     onPick,
   }: {
     catalog: ModelCatalog | null;
@@ -19,6 +20,8 @@
     current: string | null;
     /** Whether "the default" is itself a choice, as it is before a session starts. */
     allowDefault?: boolean;
+    /** True where nothing can be sent, so a pick would go nowhere. */
+    disabled?: boolean;
     onPick: (name: string | null) => void;
   } = $props();
 
@@ -84,6 +87,7 @@
     aria-haspopup="listbox"
     aria-expanded={open}
     title="Choose the model"
+    {disabled}
     onclick={() => (open = !open)}
   >
     <span class="name">{shown}</span>

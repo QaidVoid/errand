@@ -67,8 +67,14 @@
     await sendText(`!model ${name}`);
   }
 
-  /** Back to the home page, where what is written starts a session. */
-  function goHome(): void {
+  /**
+   * Back to the home page, where what is written starts a session.
+   *
+   * `fromAddress` is set when the address already says so, as after Back,
+   * where pushing it again would make Forward lead nowhere.
+   */
+  function goHome(fromAddress = false): void {
+    keepDraft();
     stop?.();
     stop = null;
     stopDrawing();
@@ -77,10 +83,23 @@
     usage = null;
     viewing = null;
     drawer = null;
+    reading = null;
+    connected = true;
+    if (fromAddress) return;
     const url = new URL(location.href);
     url.searchParams.delete("session");
     url.hash = "";
     history.pushState({}, "", url);
+  }
+
+  /** What was being written in each session, so moving away does not lose it. */
+  const drafts = new Map<string, string>();
+
+  /** Keeps what is in the box for the session that is open. */
+  function keepDraft(): void {
+    if (selected === null) return;
+    if (draft.trim().length > 0) drafts.set(selected, draft);
+    else drafts.delete(selected);
   }
   /** Whether the list shows only this visitor's sessions, and only running ones. */
   let onlyMine = $state(localStorage.getItem("only-mine") === "true");
@@ -102,6 +121,14 @@
         (!onlyMine || visitor === null || session.owner === visitor.id) &&
         (!onlyRunning || session.live),
     ),
+  );
+
+  /** The listed sessions in the order the sidebar shows them, for `n` and `p`. */
+  const ordered = $derived(
+    [...listed].sort((a, b) => {
+      if (a.live !== b.live) return a.live ? -1 : 1;
+      return b.lastActiveAt - a.lastActiveAt;
+    }),
   );
   /** Whether the file pane is showing, kept so the choice survives a reload. */
   let filesOpen = $state(localStorage.getItem("files-open") === "true");
@@ -234,9 +261,9 @@
   }
 
   function moveSession(by: number): void {
-    if (listed.length === 0) return;
-    const at = listed.findIndex((session) => session.id === selected);
-    const next = listed[Math.max(0, Math.min(listed.length - 1, at + by))];
+    if (ordered.length === 0) return;
+    const at = ordered.findIndex((session) => session.id === selected);
+    const next = ordered[Math.max(0, Math.min(ordered.length - 1, at + by))];
     if (next !== undefined && next.id !== selected) select(next.id);
   }
 
@@ -360,7 +387,13 @@
       fail(error);
       return;
     }
-    if (selected !== null) return;
+    if (selected !== null) {
+      // A session that stopped or started again since it was opened is
+      // followed: its stream ended with it, and a new one began elsewhere.
+      const now = sessions.find((session) => session.id === selected);
+      if (now !== undefined && now.live !== live) connect(selected);
+      return;
+    }
 
     // Only a session the address names is opened. Anything else lands on the
     // home page, which is where a new session is started from.
@@ -370,21 +403,33 @@
 
   function select(id: string, fromAddress = false): void {
     if (!fromAddress) remember(id);
-    stop?.();
-    stop = null;
-    stopDrawing();
+    keepDraft();
     selected = id;
-    entries = [];
-    dropped = 0;
-    usage = null;
+    draft = drafts.get(id) ?? "";
     browsing = "";
     search = "";
     lens = "all";
     viewing = null;
+    drawer = null;
+    reading = null;
+    connect(id);
+  }
+
+  /**
+   * Shows a session as it is now: streamed while it runs, read back from its
+   * record once it has stopped. Called again when it changes between the two.
+   */
+  function connect(id: string): void {
+    stop?.();
+    stop = null;
+    stopDrawing();
+    entries = [];
+    dropped = 0;
+    usage = null;
     busy = false;
     ended = false;
     waiting = null;
-    drawer = null;
+    connected = true;
 
     // A stopped session has nothing to stream until it is sent to, so it is
     // shown from the list alone rather than by opening a stream that is not
@@ -404,7 +449,9 @@
           // reports its model and how much context it was carrying.
           usage = stored.usage ?? null;
         })
-        .catch(() => undefined);
+        .catch((error: unknown) => {
+          if (selected === id) fail(error);
+        });
       return;
     }
 
@@ -439,8 +486,9 @@
   async function send(): Promise<void> {
     const text = draft.trim();
     if (text.length === 0) return;
+    const id = selected;
     draft = "";
-    if (!(await sendText(text)) && draft === "") draft = text;
+    if (!(await sendText(text)) && selected === id && draft === "") draft = text;
   }
 
   /**
@@ -473,20 +521,27 @@
   async function start(): Promise<void> {
     const written = homeDraft.trim();
     if (written.length === 0 || homeWorking) return;
+    homeWorking = true;
+    try {
+      await startOrRun(written);
+    } finally {
+      homeWorking = false;
+    }
+  }
+
+  /** Runs a `!` command as the channel would, or starts a session for anything else. */
+  async function startOrRun(written: string): Promise<void> {
 
     // A command is run as the channel runs it rather than starting a session
     // to answer it, so asking for a picture here does not open a thread.
     if (written.startsWith("!")) {
       failure = null;
       homeAnswer = null;
-      homeWorking = true;
       try {
         homeAnswer = (await api.command(written)).answer;
         homeDraft = "";
       } catch (error) {
         fail(error);
-      } finally {
-        homeWorking = false;
       }
       return;
     }
@@ -527,11 +582,13 @@
 
   async function open(path: string): Promise<void> {
     if (selected === null) return;
+    const id = selected;
     failure = null;
     try {
-      viewing = await api.file(selected, path);
+      const contents = await api.file(id, path);
+      if (selected === id) viewing = contents;
     } catch (error) {
-      fail(error);
+      if (selected === id) fail(error);
     }
   }
 
@@ -539,7 +596,11 @@
     // Back and forward move between sessions, because each is its own address.
     const back = () => {
       const asked = inAddress();
-      if (asked !== null && asked !== selected) select(asked, true);
+      if (asked === null) {
+        if (selected !== null) goHome(true);
+      } else if (asked !== selected) {
+        select(asked, true);
+      }
     };
     window.addEventListener("popstate", back);
     window.addEventListener("keydown", onKeys);
@@ -595,7 +656,7 @@
     </header>
 
     {#if !observer && (mayAct || !login)}
-      <button class="new" onclick={goHome}>
+      <button class="new" onclick={() => goHome()}>
         <Icon name="plus" /> New session
       </button>
     {/if}
@@ -829,7 +890,7 @@
           bind:this={transcript}
           session={selected}
           onAnswer={canAct && live && !ended
-            ? (choice) => void sendText(choice)
+            ? (choice) => sendText(choice)
             : undefined}
           {entries}
           {busy}

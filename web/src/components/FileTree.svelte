@@ -42,16 +42,22 @@
       .map((name, index, parts) => ({ name, path: parts.slice(0, index + 1).join("/") })),
   );
 
+  /** Counts listings asked for, so only the newest one is shown. */
+  let asked = 0;
+
   async function load(path: string): Promise<void> {
+    const ticket = ++asked;
     loading = true;
     failed = null;
     try {
-      nodes = await api.tree(session, path);
+      const listed = await api.tree(session, path);
+      if (ticket === asked) nodes = listed;
     } catch (error) {
+      if (ticket !== asked) return;
       failed = error instanceof Error ? error.message : String(error);
       nodes = [];
     } finally {
-      loading = false;
+      if (ticket === asked) loading = false;
     }
   }
 
@@ -62,8 +68,8 @@
   // Depends on the session and where we are, and nothing it writes.
   $effect(() => {
     const where = at;
-    const which = session;
-    untrack(() => void load(where === "" ? "" : where).then(() => which));
+    void session;
+    untrack(() => void load(where));
   });
 </script>
 

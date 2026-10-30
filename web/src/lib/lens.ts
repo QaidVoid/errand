@@ -40,12 +40,15 @@ export function keeps(lens: Lens, item: Item): boolean {
     return item.entry.kind === "diff";
   }
 
-  // What was said: the conversation, which is the agent's own words and the
-  // asides around them. A prompt opens an exchange rather than being an item
-  // in it, so an exchange that was only asked something still has one.
+  // What was said: the conversation, which is the agent's own words, its
+  // questions and what answered them, what it posted, the asides around
+  // them, and what commands said back. A prompt opens an exchange rather than
+  // being an item in it, so an exchange that was only asked something still
+  // has one.
   return item.kind === "entry" &&
-    (item.entry.kind === "message" || item.entry.kind === "aside" ||
-      item.entry.kind === "thinking");
+    ["message", "aside", "thinking", "prompt", "question", "reply", "file"].includes(
+      item.entry.kind,
+    );
 }
 
 /** An exchange with only what the lens keeps in it. */

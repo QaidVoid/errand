@@ -49,7 +49,7 @@
     /** Which session this is, so what it posted can be fetched. */
     session?: string | null;
     /** Answers a question the agent is waiting on, or undefined where nobody here may. */
-    onAnswer?: ((choice: string) => void) | undefined;
+    onAnswer?: ((choice: string) => Promise<boolean>) | undefined;
     onOpenFile?: ((path: string) => void) | undefined;
     command: { open: boolean; at: number };
   } = $props();
@@ -97,6 +97,21 @@
       if (item.kind === "entry" && item.entry.kind === "prompt") return item.entry.text.trim();
     }
     return undefined;
+  }
+
+  /**
+   * Answers sent from here and not yet echoed back, by the question's index,
+   * so a second press cannot send a second answer.
+   */
+  let sending = $state<Record<number, string>>({});
+
+  async function answer(index: number, choice: string): Promise<void> {
+    if (onAnswer === undefined || sending[index] !== undefined) return;
+    sending = { ...sending, [index]: choice };
+    if (!(await onAnswer(choice))) {
+      const { [index]: _, ...rest } = sending;
+      sending = rest;
+    }
   }
 
   /** Whether an answer picked a choice, by its text or by its number. */
@@ -190,6 +205,7 @@
             line={item.call.entry.line}
             result={item.call.result}
             progress={item.call.progress}
+            active={running}
             at={item.call.entry.at}
             showTime={timed[index]}
             {command}
@@ -242,9 +258,9 @@
           <p class="said">{item.entry.text}</p>
         </div>
       {:else if item.entry.kind === "question"}
-        {@const answer = answerTo(index)}
-        {@const open = answer === undefined && running && onAnswer !== undefined}
-        <div class="item question" class:answered={answer !== undefined}>
+        {@const answered = answerTo(index) ?? sending[index]}
+        {@const open = answered === undefined && running && onAnswer !== undefined}
+        <div class="item question" class:answered={answered !== undefined}>
           <p class="title"><span class="mark" aria-hidden="true">?</span>{item.entry.title}</p>
           {#if item.entry.message}
             <p class="message">{item.entry.message}</p>
@@ -255,17 +271,17 @@
                 <button
                   type="button"
                   class="choice"
-                  class:chosen={picked(answer, choice, choiceIndex)}
+                  class:chosen={picked(answered, choice, choiceIndex)}
                   disabled={!open}
-                  onclick={() => onAnswer?.(choice)}
+                  onclick={() => void answer(index, choice)}
                 >
                   <span class="number">{choiceIndex + 1}</span>{choice}
                 </button>
               {/each}
             </div>
           {/if}
-          {#if answer !== undefined}
-            <p class="state">answered: {answer}</p>
+          {#if answered !== undefined}
+            <p class="state">answered: {answered}</p>
           {:else if running}
             <p class="state">{open ? "waiting for an answer" : "waiting for an answer in the thread"}</p>
           {:else}

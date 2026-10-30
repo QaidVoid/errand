@@ -16,6 +16,7 @@
     line,
     result,
     progress,
+    active = true,
     at,
     showTime,
     command,
@@ -27,6 +28,11 @@
     result?: ToolResult | undefined;
     /** The newest line the call reported while it ran. */
     progress?: string | undefined;
+    /**
+     * Whether the exchange it belongs to is still working, without which a
+     * call with no result was cut off rather than still going.
+     */
+    active?: boolean;
     at: number;
     /**
      * Whether to print the time on the folded line.
@@ -56,7 +62,10 @@
   const output = $derived(result?.output.trim() ?? "");
 
   /** True while a call has started and nothing has come back for it yet. */
-  const running = $derived(tool?.id !== undefined && result === undefined && !failed);
+  const running = $derived(active && tool?.id !== undefined && result === undefined && !failed);
+
+  /** A call that never reported back before its exchange stopped. */
+  const cut = $derived(!active && tool?.id !== undefined && result === undefined && !failed);
 
   /** The workspace as the agent sees it, which is not a path a reader wants. */
   const WORKSPACE = /^\/workspace\/?/;
@@ -73,7 +82,9 @@
   });
 
   /** A one line account of how it went, so a folded call still says something. */
-  const summary = $derived(running ? (progress ?? "running") : summarize(tool?.name, output, failed));
+  const summary = $derived(
+    running ? (progress ?? "running") : cut ? "did not finish" : summarize(tool?.name, output, failed),
+  );
 
   /** A todo list's items, when this call reported one. */
   const listed = $derived(tool?.name === "todo_list" ? todos(output) : []);

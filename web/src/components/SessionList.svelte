@@ -55,7 +55,14 @@
     const start = midnight.getTime();
     if (at >= start) return "today";
     if (at >= start - 86_400_000) return "yesterday";
-    return new Date(at).toLocaleDateString([], { month: "short", day: "numeric" });
+    // The year only once it is not this one, so two of the same date apart
+    // never read as, or group as, one day.
+    const sameYear = new Date(at).getFullYear() === new Date(now).getFullYear();
+    return new Date(at).toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      ...(sameYear ? {} : { year: "numeric" }),
+    });
   }
 
   /** What to call a session that was never asked anything. */

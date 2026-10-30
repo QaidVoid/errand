@@ -31,7 +31,7 @@
     /** Which session this is, so what it posted can be fetched. */
     session?: string | null;
     /** Answers a question the agent is waiting on, or undefined where nobody here may. */
-    onAnswer?: ((choice: string) => void) | undefined;
+    onAnswer?: ((choice: string) => Promise<boolean>) | undefined;
     entries: Entry[];
     busy: boolean;
     waiting: string | null;
@@ -78,6 +78,9 @@
         parts.push(question, answer ?? "", refused ?? "", model ?? "", describes ?? "");
       }
       if (entry.kind === "diff") parts.push(entry.path, entry.body);
+      if (entry.kind === "question") parts.push(entry.title, entry.message ?? "", ...entry.choices);
+      if (entry.kind === "file") parts.push(entry.name, entry.caption ?? "");
+      if (entry.kind === "reply") parts.push(entry.command);
     }
     return parts.join("\n");
   }
@@ -166,6 +169,9 @@
     const turns = reading.turns;
     untrack(() => {
       if (asked === undefined || applied === asked || turns.length === 0) return;
+      // A long live session arrives in batches, so the exchange may not be
+      // here yet. It is waited for rather than given up on at the first one.
+      if (!turns.some((turn) => turn.number === asked)) return;
       applied = asked;
       // Marked before it is reached, so the element exists to be scrolled to.
       linked = asked;
