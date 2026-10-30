@@ -365,13 +365,6 @@ impl Running {
             return;
         }
 
-        if self.ticket.is_some() {
-            self.say("a turn is running; wait for it, or stop it with `!interrupt`")
-                .await;
-            self.react(&message.id, ReactionOutcome::Failed).await;
-            return;
-        }
-
         // Refused rather than passed through, so a typo becomes a message
         // here instead of a turn that fails against the provider later.
         //
@@ -387,6 +380,21 @@ impl Running {
         // the bare id and the level separately, because the agent's rpc does
         // not.
         let wanted = chosen.with_level(&asked_level);
+
+        // Switching underneath a running turn would change the model partway
+        // through an answer, so the switch waits for the turn to settle. A
+        // later one replaces it, since the last thing asked for is what is
+        // meant.
+        if self.ticket.is_some() {
+            self.say(&format!(
+                "switching to `{}/{wanted}` once this turn ends",
+                chosen.provider
+            ))
+            .await;
+            self.pending_switch = Some((rest.to_owned(), message.clone()));
+            return;
+        }
+
         if !self.change_model(&chosen, &wanted).await {
             self.react(&message.id, ReactionOutcome::Failed).await;
             return;
@@ -394,6 +402,7 @@ impl Running {
 
         self.note_command(message, &format!("!model {wanted}"))
             .await;
+        self.publish_model().await;
         self.say(&connection_line(&format!(
             "this session now runs on `{wanted}`, keeping what was said"
         )))

@@ -809,6 +809,11 @@ struct Running {
     github_scrubbed: Vec<(String, i64)>,
     ticket: Option<Ticket>,
     pending_withdrawals: Vec<String>,
+    /// A `!model` asked for while a turn ran, applied once it settles: what
+    /// followed the command, and the message that asked.
+    pending_switch: Option<(String, IncomingMessage)>,
+    /// The model the agent last said answered, when it said.
+    reported_model: Option<String>,
     current_message_id: Option<String>,
     current_author_id: Option<String>,
     /// When the prompt that opened this turn was sent, on the monotonic
@@ -942,6 +947,8 @@ impl Running {
             client: None,
             ticket: None,
             pending_withdrawals: Vec::new(),
+            pending_switch: None,
+            reported_model: None,
             current_message_id: None,
             current_author_id: None,
             turn_started_at: None,
@@ -1419,6 +1426,7 @@ impl Running {
             return false;
         }
         self.remember_kage_session_id();
+        self.publish_model().await;
 
         // Which sandbox confines a session is not named in the thread. It
         // tells a reader nothing they can act on, and tells anyone else what
@@ -1949,6 +1957,9 @@ impl Running {
         // Now that the agent is not writing to its own conversation, anything
         // a running turn held back can be applied to it.
         self.drain_withdrawals().await;
+        if let Some((rest, message)) = self.pending_switch.take() {
+            self.switch_model(&rest, &message).await;
+        }
 
         if let Some(ticket) = ticket
             && !self.options.scheduler.release(&ticket)
@@ -1993,8 +2004,9 @@ impl Running {
         total.context_window = context_window.or(total.context_window);
         total.turns += 1;
         if let Some(model) = &usage.model {
-            total.model = Some(model.clone());
+            self.reported_model = Some(model.clone());
         }
+        self.usage.model = self.reported_model.clone().or_else(|| self.shown_model());
         let current = self.usage.clone();
         self.views
             .send(SessionEvent::Usage { usage: current })
@@ -2147,8 +2159,7 @@ impl Running {
         // was last asked to run: a switch the agent refused must not be
         // reported as though it had taken.
         let answered = self
-            .usage
-            .model
+            .reported_model
             .clone()
             .or_else(|| self.running_model())
             .unwrap_or_default();
@@ -2596,6 +2607,45 @@ impl Running {
             .unwrap_or_else(|| self.options.config.agent.provider.clone())
     }
 
+    /// The model this session runs on, as `provider/model` the way `!model`
+    /// lists it, from what errand itself chose: a switch, then the model the
+    /// session was started on, then the configured one.
+    ///
+    /// Never read from what the agent reported, since the agent names no
+    /// model in its usage and this is what fills that in.
+    fn shown_model(&self) -> Option<String> {
+        let model = self
+            .switched
+            .as_ref()
+            .map(|(_, model)| model.clone())
+            .or_else(|| {
+                self.options
+                    .chosen
+                    .as_ref()
+                    .map(|chosen| chosen.model.clone())
+            })
+            .or_else(|| {
+                crate::session::model::configured_model(&self.options.config.agent)
+                    .map(|configured| configured.model)
+            })?;
+        Some(format!("{}/{model}", self.provider()))
+    }
+
+    /// Tells every view which model the session runs on without waiting for
+    /// a turn, so the interface names it from the start and straight after a
+    /// switch rather than showing the host's default.
+    pub(super) async fn publish_model(&mut self) {
+        let Some(model) = self.shown_model() else {
+            return;
+        };
+        self.usage.model = Some(model);
+        self.views
+            .send(SessionEvent::Usage {
+                usage: self.usage.clone(),
+            })
+            .await;
+    }
+
     /// The model this session runs on, as a name to show somebody.
     ///
     /// A switch is the most recent thing anyone said about it, so it is read
@@ -2612,7 +2662,7 @@ impl Running {
                     .as_ref()
                     .map(|chosen| chosen.model.clone())
             })
-            .or_else(|| self.usage.model.clone())
+            .or_else(|| self.reported_model.clone())
             .or_else(|| {
                 crate::session::model::configured_model(&self.options.config.agent)
                     .map(|configured| configured.model)

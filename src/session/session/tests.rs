@@ -5967,3 +5967,76 @@ async fn every_token_still_good_is_revoked_when_the_session_ends() {
     })
     .await;
 }
+
+/// The interface is told which model a session runs on as soon as it starts,
+/// since the agent never names one, and a switch asked for during a turn
+/// waits for it to end rather than being refused, then is shown too.
+#[tokio::test(start_paused = true)]
+async fn the_model_is_published_and_a_switch_during_a_turn_waits_for_it() {
+    let case = SessionTestCase {
+        config: Some(config_with(&json!({
+            "agent": {
+                "provider": "anthropic",
+                "model": "claude-a",
+                "providers": {
+                    "anthropic": { "credential": "secret" },
+                    "ajamxhacker": { "credential": "secret" },
+                },
+                "aliases": { "muse": "ajamxhacker/musecringe:max" },
+            },
+        }))),
+        available_models: vec![AvailableModel {
+            provider: "ajamxhacker".to_owned(),
+            id: "musecringe".to_owned(),
+            default_level: None,
+        }],
+        ..SessionTestCase::default()
+    };
+
+    with_session(case, |harness| {
+        Box::pin(async move {
+            assert_eq!(
+                harness.thread.usage().and_then(|usage| usage.model),
+                Some("anthropic/claude-a".to_owned())
+            );
+
+            let before = harness.controls().written().len();
+            harness
+                .session
+                .handle(message_from("!model muse", OWNER, "m2"))
+                .await;
+            settle().await;
+            assert!(
+                harness
+                    .thread
+                    .everything()
+                    .contains("switching to `ajamxhacker/musecringe:max` once this turn ends"),
+                "{}",
+                harness.thread.everything()
+            );
+            assert!(
+                !harness.controls().written()[before..]
+                    .iter()
+                    .any(|line| line.contains("set_config_option")),
+                "nothing is switched under a running turn"
+            );
+
+            harness.controls().turn_end();
+            settle().await;
+            harness.controls().answer(&json!({}));
+            settle().await;
+
+            assert!(
+                harness.controls().written()[before..]
+                    .iter()
+                    .any(|line| line.contains("session/set_config_option")),
+                "the switch is sent once the turn ends"
+            );
+            assert_eq!(
+                harness.thread.usage().and_then(|usage| usage.model),
+                Some("ajamxhacker/musecringe:max".to_owned())
+            );
+        })
+    })
+    .await;
+}

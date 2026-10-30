@@ -174,9 +174,10 @@ said, and the next turn is answered by the model named.
 
 That is the useful shape for "plan on the capable model, carry it out on the
 cheap one". The cheap model works in the same thread, with the same tools, in
-the same sandbox, and you switch back to review. Switching is refused while a
-turn is running, because changing the model underneath a turn answers half a
-question with each.
+the same sandbox, and you switch back to review. A switch asked for while a
+turn is running waits for it to end, because changing the model underneath a
+turn answers half a question with each. The thread is told it is waiting, and a
+later switch replaces an earlier one that is still waiting.
 
 ## How hard a model thinks
 
