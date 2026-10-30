@@ -7,6 +7,8 @@
    * tool produced, so nothing is lost by folding it away.
    */
   import { clock, exact } from "../lib/format.ts";
+  import { render } from "../lib/markdown.ts";
+  import { agentRuns, duration, glyph, summarize, todos, toolKind } from "../lib/tools.ts";
   import type { ToolActivity, ToolResult } from "../lib/types.ts";
 
   let {
@@ -56,33 +58,6 @@
   /** True while a call has started and nothing has come back for it yet. */
   const running = $derived(tool?.id !== undefined && result === undefined && !failed);
 
-  /**
-   * A glyph per kind of tool, so a run of calls can be scanned by shape.
-   *
-   * ASCII only, like everything else in this repository.
-   */
-  function glyph(name: string | undefined): string {
-    if (name === undefined) return "*";
-    const lowered = name.toLowerCase();
-    if (/(edit|write|create|apply|patch)/.test(lowered)) return "+";
-    if (/(read|cat|view|open)/.test(lowered)) return ">";
-    if (/(search|grep|find|glob|ls|list)/.test(lowered)) return "*";
-    if (/(bash|shell|run|exec|command)/.test(lowered)) return "$";
-    if (/(fetch|http|web|url)/.test(lowered)) return "@";
-    if (/(think|plan|todo|task)/.test(lowered)) return "~";
-    return "-";
-  }
-
-  /** Which colour a tool takes, by what it does to the project. */
-  function kind(name: string | undefined): string {
-    if (name === undefined) return "other";
-    const lowered = name.toLowerCase();
-    if (/(edit|write|create|apply|patch)/.test(lowered)) return "writes";
-    if (/(bash|shell|run|exec|command)/.test(lowered)) return "runs";
-    if (/(read|cat|view|open|search|grep|find|glob|ls|list)/.test(lowered)) return "reads";
-    return "other";
-  }
-
   /** The workspace as the agent sees it, which is not a path a reader wants. */
   const WORKSPACE = /^\/workspace\/?/;
 
@@ -92,28 +67,22 @@
   /** A target that names a file in the project, so it can be opened. */
   const path = $derived.by(() => {
     if (tool?.target === undefined || onOpenFile === undefined) return undefined;
-    if (kind(tool?.name) === "runs" || /\s/.test(target)) return undefined;
+    if (toolKind(tool?.name) !== "reads" && toolKind(tool?.name) !== "writes") return undefined;
+    if (/\s/.test(target)) return undefined;
     return target.length === 0 ? undefined : target;
   });
 
-  /**
-   * A one line account of how it went, so a folded call still says something.
-   *
-   * The first line of the output is usually the summary a tool writes for
-   * itself, and beyond that only the size is worth stating.
-   */
-  const summary = $derived.by(() => {
-    if (running) return progress ?? "running";
-    if (output.length === 0) return failed ? "failed" : "";
+  /** A one line account of how it went, so a folded call still says something. */
+  const summary = $derived(running ? (progress ?? "running") : summarize(tool?.name, output, failed));
 
-    const lines = output.split("\n");
-    const first = lines[0] ?? "";
-    if (lines.length === 1 && first.length <= 60) return first;
-    return `${lines.length} lines`;
-  });
+  /** A todo list's items, when this call reported one. */
+  const listed = $derived(tool?.name === "todo_list" ? todos(output) : []);
+
+  /** The agents this call ran and what each reported, when it ran any. */
+  const runs = $derived(tool?.name === "agent" || tool?.name === "swarm" ? agentRuns(output) : []);
 </script>
 
-<article class="call {kind(tool?.name)}" class:failed class:open class:running>
+<article class="call {toolKind(tool?.name)}" class:failed class:open class:running>
   <button
     class="head"
     aria-expanded={open}
@@ -158,7 +127,34 @@
         <span class="when">{exact(at)}</span>
       </div>
 
-      {#if output.length > 0}
+      {#if listed.length > 0}
+        <div class="full">
+          <span class="label">list</span>
+          <ul class="todos">
+            {#each listed as todo, index (index)}
+              <li class={todo.state}>
+                <span class="box" aria-hidden="true">{todo.state === "done" ? "x" : todo.state === "doing" ? "~" : " "}</span>
+                {todo.text}
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {:else if runs.length > 0}
+        {#each runs as run, index (index)}
+          <div class="full">
+            <span class="label">{runs.length > 1 ? `agent ${index + 1}` : "agent"}</span>
+            <div class="run">
+              <p class="about">
+                {run.name}{run.state ? `, ${run.state}` : ""}{run.model ? ` on ${run.model}` : ""}{run.tools !== undefined
+                  ? `, ${run.tools} tools`
+                  : ""}{run.ms !== undefined ? `, ${duration(run.ms)}` : ""}
+              </p>
+              <!-- Sanitised in render(), which is what makes this safe to insert. -->
+              <div class="report">{@html render(run.report)}</div>
+            </div>
+          </div>
+        {/each}
+      {:else if output.length > 0}
         <div class="full">
           <span class="label">output</span>
           <pre>{output}</pre>
@@ -219,8 +215,14 @@
   .writes .dot {
     color: var(--ok);
   }
-  .runs .dot {
+  .runs .dot,
+  .asks .dot {
     color: var(--accent);
+  }
+  .web .dot,
+  .agents .dot,
+  .media .dot {
+    color: var(--text-dim);
   }
   .failed .dot {
     color: var(--bad);
@@ -323,6 +325,57 @@
   .full pre {
     max-height: 320px;
     overflow: auto;
+  }
+
+  .todos {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--type-work);
+    color: var(--text-dim);
+  }
+
+  .todos li {
+    display: flex;
+    gap: 8px;
+  }
+
+  .todos .box {
+    flex-shrink: 0;
+    font-family: var(--mono);
+    color: var(--text-faint);
+  }
+
+  .todos .done {
+    color: var(--text-faint);
+    text-decoration: line-through;
+  }
+
+  .todos .doing {
+    color: var(--text);
+  }
+
+  .todos .doing .box {
+    color: var(--accent);
+  }
+
+  .run {
+    min-width: 0;
+  }
+
+  .run .about {
+    margin: 0 0 4px;
+    font-family: var(--mono);
+    font-size: var(--type-receipt);
+    color: var(--text-faint);
+  }
+
+  .run .report {
+    max-height: 420px;
+    overflow: auto;
+    font-size: var(--type-work);
+    color: var(--text-dim);
+    overflow-wrap: anywhere;
   }
 
   .when {
