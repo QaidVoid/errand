@@ -69,6 +69,10 @@ What anyone sends from the interface is posted in the session's thread under
 their name, so the thread stays the whole conversation for the people reading
 it in Discord.
 
+A `!` command typed on the home page runs as it would in the channel instead
+of starting a session: a listing such as `!usage` is answered under the box, and
+`!gen-image` or `!gen-speech` posts its result to the channel, addressed to you.
+
 A picture or a clip a session posts is shown in place, with what it was posted
 with. It is kept in the session's record directory, under `uploads`, so it is
 still there once the session has stopped. Any other file is offered as a

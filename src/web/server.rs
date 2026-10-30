@@ -128,6 +128,18 @@ fn normalize_request(wanted: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
+/// Runs a command typed outside any session as the channel runs it, for the
+/// account given by id and name, and answers with what the channel says back.
+pub type ChannelCommand = Arc<
+    dyn Fn(
+            String,
+            String,
+            String,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// The interface, bound to one address.
 pub struct WebServer {
     config: WebConfig,
@@ -137,6 +149,7 @@ pub struct WebServer {
     guild_id: Option<String>,
     names: Option<NameLookup>,
     logins: Option<Logins>,
+    commands: Option<ChannelCommand>,
     streams: Arc<std::sync::atomic::AtomicUsize>,
     started: Mutex<HashMap<String, i64>>,
     openings: Mutex<HashMap<String, String>>,
@@ -196,6 +209,10 @@ pub type ServerState = Arc<WebServer>;
 
 impl WebServer {
     /// An interface over one session manager and one built bundle.
+    ///
+    /// `commands` runs what is typed on the home page as a command, which
+    /// would otherwise start a session to answer it.
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         config: WebConfig,
         sessions: Arc<SessionManager>,
@@ -204,6 +221,7 @@ impl WebServer {
         guild_id: Option<String>,
         names: Option<NameLookup>,
         logins: Option<Logins>,
+        commands: Option<ChannelCommand>,
     ) -> Arc<Self> {
         Arc::new(Self {
             config,
@@ -213,6 +231,7 @@ impl WebServer {
             guild_id,
             names,
             logins,
+            commands,
             streams: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             started: Mutex::new(HashMap::new()),
             openings: Mutex::new(HashMap::new()),
@@ -322,6 +341,7 @@ impl WebServer {
             .route("/api/models", get(models))
             .route("/api/commands", get(commands))
             .route("/api/sessions", get(list_sessions).post(start_session))
+            .route("/api/command", post(channel_command))
             .route("/api/sessions/{id}/send", post(send))
             .route("/api/sessions/{id}/stream", get(stream_session))
             .route("/api/sessions/{id}/transcript", get(transcript))
@@ -758,6 +778,42 @@ async fn start_session(
             refused(json!({ "error": reason }), StatusCode::CONFLICT)
         }
     }
+}
+
+/// Runs a command typed on the home page as the channel would, rather than
+/// starting a session to answer it: a listing is answered here, and a picture
+/// or a clip is posted to the channel, addressed to whoever asked.
+async fn channel_command(
+    State(server): State<ServerState>,
+    headers: HeaderMap,
+    body: Option<axum::Json<SendBody>>,
+) -> Response {
+    let actor = match server.actor(&headers).await {
+        Ok(actor) => actor,
+        Err(refusal) => return refusal,
+    };
+    let text = body
+        .and_then(|axum::Json(body)| body.text)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if !text.starts_with('!') {
+        return refused(
+            json!({ "error": "a command starts with !" }),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    if let Some(refusal) = too_long(&text) {
+        return refusal;
+    }
+    let Some(commands) = server.commands.clone() else {
+        return refused(
+            json!({ "error": "commands cannot be run from here" }),
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+    };
+    let answer = commands(actor.id, actor.name, text).await;
+    ok(json!({ "answer": answer }))
 }
 
 /// Hands a message to a live session, as if posted in its thread.

@@ -52,6 +52,10 @@
   let commandList = $state<CommandInfo[]>([]);
   /** What the home page will start, as it is being written. */
   let homeDraft = $state("");
+  /** What a command run from the home page answered, once it has. */
+  let homeAnswer = $state<string | null>(null);
+  /** True while a command run from the home page is still working. */
+  let homeWorking = $state(false);
   let newModel = $state<string | null>(null);
 
   /** Whether this browser may start and prompt sessions, whatever made it so. */
@@ -457,7 +461,25 @@
 
   async function start(): Promise<void> {
     const written = homeDraft.trim();
-    if (written.length === 0) return;
+    if (written.length === 0 || homeWorking) return;
+
+    // A command is run as the channel runs it rather than starting a session
+    // to answer it, so asking for a picture here does not open a thread.
+    if (written.startsWith("!")) {
+      failure = null;
+      homeAnswer = null;
+      homeWorking = true;
+      try {
+        homeAnswer = (await api.command(written)).answer;
+        homeDraft = "";
+      } catch (error) {
+        fail(error);
+      } finally {
+        homeWorking = false;
+      }
+      return;
+    }
+
     // The same flag a message in the channel would carry, so the daemon reads
     // the model exactly as it would there.
     const prompt = newModel === null ? written : `--model ${newModel} ${written}`;
@@ -645,13 +667,19 @@
           <Composer
             bind:draft={homeDraft}
             roomy
-            placeholder="Describe the task. Enter starts it."
+            disabled={homeWorking}
+            placeholder="Describe the task. Enter starts it. A ! command runs as it would in the channel."
             {catalog}
             model={newModel}
             allowDefault
             onModel={(name) => (newModel = name)}
             onSend={() => void start()}
           />
+          {#if homeWorking}
+            <p class="answered working" role="status">Working on it...</p>
+          {:else if homeAnswer !== null}
+            <p class="answered" role="status">{homeAnswer}</p>
+          {/if}
         {:else}
           {@render gate("start a session")}
         {/if}
@@ -1145,6 +1173,17 @@
     margin: 0;
     font-size: 13.5px;
     color: var(--faint);
+  }
+
+  .answered {
+    margin: 10px 0 0;
+    font-size: 13px;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+  }
+
+  .answered.working {
+    color: var(--text-faint);
   }
 
   .recent {

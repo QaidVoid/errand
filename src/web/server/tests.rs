@@ -435,6 +435,10 @@ async fn with_server_using(
                 Arc::new(|| 1_000),
             )
         }),
+        Some(Arc::new(|id: String, name: String, text: String| {
+            Box::pin(async move { format!("{name} ({id}) ran {text}") })
+                as std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send>>
+        })),
     );
     if assets {
         server.start().await.expect("the interface starts");
@@ -577,6 +581,43 @@ async fn a_session_can_be_started_from_the_interface() {
             assert_eq!(answer.status(), 200);
             assert_eq!(answer.json::<Value>().await.unwrap()["id"], "s1");
             assert_eq!(harness.manager.sessions().len(), 1);
+        })
+    })
+    .await;
+}
+
+/// A command typed on the home page is run as the channel runs it, for the
+/// account acting, and starts no session; text that is not a command is sent
+/// to start one instead.
+#[tokio::test]
+async fn a_command_from_the_home_page_starts_no_session() {
+    with_server_where(false, true, |harness| {
+        Box::pin(async move {
+            let client = reqwest::Client::new();
+            let answer = post(
+                &client,
+                &harness.base,
+                "/api/command",
+                &json!({ "text": "!gen-image a lighthouse" }),
+            )
+            .await;
+
+            assert_eq!(answer.status(), 200);
+            let said = answer.json::<Value>().await.unwrap()["answer"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            assert!(said.ends_with("ran !gen-image a lighthouse"), "{said}");
+            assert!(harness.manager.sessions().is_empty());
+
+            let refused = post(
+                &client,
+                &harness.base,
+                "/api/command",
+                &json!({ "text": "fix the parser" }),
+            )
+            .await;
+            assert_eq!(refused.status(), 400);
         })
     })
     .await;
@@ -1020,6 +1061,7 @@ async fn an_interface_asked_to_bind_publicly_refuses_to_start() {
         manager,
         &[],
         silent(),
+        None,
         None,
         None,
         None,

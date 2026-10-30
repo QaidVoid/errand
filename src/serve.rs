@@ -1484,6 +1484,7 @@ async fn run(
             guild_id.map(|guild| guild.get().to_string()),
             Some(names),
             logins,
+            Some(channel_commands(&daemon)),
         );
         match web_server.start().await {
             Ok(()) => {
@@ -1585,6 +1586,26 @@ async fn run(
     daemon.shutdown().await;
     lock.release();
     Exit::Served
+}
+
+/// Runs what the interface's home page sends as a command the way a slash
+/// command typed at the channel runs, so asking for a picture there draws
+/// it into the channel instead of starting a session to answer it.
+fn channel_commands(daemon: &Arc<Daemon>) -> crate::web::server::ChannelCommand {
+    let daemon = Arc::clone(daemon);
+    Arc::new(move |user_id, user_name, content| {
+        let daemon = Arc::clone(&daemon);
+        Box::pin(async move {
+            daemon
+                .run_command(&SlashCommand {
+                    thread_id: None,
+                    user_id,
+                    user_name,
+                    content,
+                })
+                .await
+        })
+    })
 }
 
 /// Hands the gateway to the chat library, which holds handlers behind an Arc

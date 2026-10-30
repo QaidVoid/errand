@@ -62,6 +62,14 @@ export const api = {
 
   prompt: (session: string, text: string) => send(`/sessions/${session}/send`, { text }),
 
+  /** Runs a command the way the channel does, without starting a session. */
+  command: (text: string) =>
+    json<{ answer: string }>("/command", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    }),
+
   start: (prompt: string) => send("/sessions", { prompt }),
 
   /** Where the browser goes to log in with Discord. */
