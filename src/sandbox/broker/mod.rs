@@ -769,6 +769,12 @@ pub fn upstream_url(upstream: &str) -> Result<reqwest::Url, &'static str> {
     match base.scheme() {
         "https" => {}
         "http" if is_loopback(&base) => {}
+        "http" if base.host_str() == Some("localhost") => {
+            return Err(
+                "the base URL is not HTTPS, and plain http is taken only to a loopback address \
+                 written as one; write 127.0.0.1 in place of localhost",
+            );
+        }
         "http" => return Err("the base URL is not HTTPS, so the key would cross in the clear"),
         _ => return Err("the scheme is not http or https"),
     }

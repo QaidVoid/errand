@@ -1976,7 +1976,10 @@ fn a_provider_upstream_is_https_or_loopback() {
     }
     for (bad, why) in [
         ("http://api.example.com/v4", "not HTTPS"),
-        ("http://localhost:8080/v1", "not HTTPS"),
+        (
+            "http://localhost:8080/v1",
+            "write 127.0.0.1 in place of localhost",
+        ),
         ("api.example.com/v4", "no scheme"),
         ("ftp://api.example.com/v4", "not http or https"),
         ("https://user:pass@api.example.com/v4", "credentials"),
