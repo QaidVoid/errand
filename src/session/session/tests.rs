@@ -518,6 +518,7 @@ impl FakeThread {
             .iter()
             .filter_map(|event| match event {
                 SessionEvent::Post { text }
+                | SessionEvent::Question { text, .. }
                 | SessionEvent::Notice { text, .. }
                 | SessionEvent::Reply { text, .. } => Some(text.clone()),
                 _ => None,
@@ -2401,6 +2402,21 @@ async fn a_question_from_the_agent_is_asked_in_the_thread_and_answered_back() {
                 .await;
 
             assert!(harness.thread.everything().contains("Delete the branch?"));
+            // Carried as its parts too, so a surface with buttons can offer
+            // each choice as written, which is how it answers the question.
+            let asked = harness.thread.pick(|event| match event {
+                SessionEvent::Question { title, choices, .. } => {
+                    Some((title.clone(), choices.clone()))
+                }
+                _ => None,
+            });
+            assert_eq!(
+                asked,
+                [(
+                    "Delete the branch?".to_owned(),
+                    vec!["Allow".to_owned(), "Deny".to_owned()]
+                )]
+            );
             assert!(harness.written().contains("\"outcome\""));
             assert_eq!(
                 harness.thread.final_reaction("m2"),

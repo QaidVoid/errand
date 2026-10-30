@@ -63,6 +63,14 @@ export type Entry =
     | { kind: "notice"; text: string; level: NoticeLevel; at: number }
     | { kind: "thinking"; text: string; at: number }
     | { kind: "reply"; text: string; command: string; at: number }
+    | {
+      kind: "question";
+      title: string;
+      message?: string | null;
+      /** Each written as it answers the question when sent back. */
+      choices: string[];
+      at: number;
+    }
     | { kind: "toolResult"; result: ToolResult; at: number }
     | {
       kind: "file";

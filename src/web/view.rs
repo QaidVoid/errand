@@ -172,6 +172,10 @@ impl SessionView for WebView {
 /// The same shape a live stream carries, so a browser renders either the same
 /// way. Usage never becomes an entry: it is state, and the transcript caller
 /// reports the latest total separately.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per event keeps the shape the interface reads readable"
+)]
 pub fn wire(entry: &SessionEvent, at: i64, turn: Option<u32>, names: Option<&NameLookup>) -> Value {
     let clean = |text: &str| without_mentions(text, names);
     let mut shown = match entry {
@@ -201,6 +205,18 @@ pub fn wire(entry: &SessionEvent, at: i64, turn: Option<u32>, names: Option<&Nam
         SessionEvent::Thinking { text, .. } => serde_json::json!({
             "kind": "thinking",
             "text": text,
+            "at": at,
+        }),
+        SessionEvent::Question {
+            title,
+            message,
+            choices,
+            ..
+        } => serde_json::json!({
+            "kind": "question",
+            "title": clean(title),
+            "message": message.as_deref().map(clean),
+            "choices": choices.iter().map(|choice| clean(choice)).collect::<Vec<_>>(),
             "at": at,
         }),
         SessionEvent::Reply { text, command, .. } => serde_json::json!({

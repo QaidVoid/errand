@@ -22,6 +22,7 @@
     needle = "",
     linked,
     session = null,
+    onAnswer,
     onOpenFile,
     command,
   }: {
@@ -47,6 +48,8 @@
     linked?: boolean;
     /** Which session this is, so what it posted can be fetched. */
     session?: string | null;
+    /** Answers a question the agent is waiting on, or undefined where nobody here may. */
+    onAnswer?: ((choice: string) => void) | undefined;
     onOpenFile?: ((path: string) => void) | undefined;
     command: { open: boolean; at: number };
   } = $props();
@@ -84,6 +87,24 @@
       return first;
     });
   });
+
+  /**
+   * What answered the question at an index: the next thing said in the turn,
+   * which is what the agent was waiting for.
+   */
+  function answerTo(index: number): string | undefined {
+    for (const item of turn.items.slice(index + 1)) {
+      if (item.kind === "entry" && item.entry.kind === "prompt") return item.entry.text.trim();
+    }
+    return undefined;
+  }
+
+  /** Whether an answer picked a choice, by its text or by its number. */
+  function picked(answer: string | undefined, choice: string, index: number): boolean {
+    if (answer === undefined) return false;
+    const said = answer.toLowerCase();
+    return said === choice.toLowerCase() || said === String(index + 1);
+  }
 
   /** Where a posted file can be fetched, when it was kept. */
   function fetched(file: string | null | undefined): string | undefined {
@@ -219,6 +240,37 @@
         <div class="asked">
           <span class="who">{item.entry.author}</span>
           <p class="said">{item.entry.text}</p>
+        </div>
+      {:else if item.entry.kind === "question"}
+        {@const answer = answerTo(index)}
+        {@const open = answer === undefined && running && onAnswer !== undefined}
+        <div class="item question" class:answered={answer !== undefined}>
+          <p class="title"><span class="mark" aria-hidden="true">?</span>{item.entry.title}</p>
+          {#if item.entry.message}
+            <p class="message">{item.entry.message}</p>
+          {/if}
+          {#if item.entry.choices.length > 0}
+            <div class="choices" role="group" aria-label="Answers">
+              {#each item.entry.choices as choice, choiceIndex (choice)}
+                <button
+                  type="button"
+                  class="choice"
+                  class:chosen={picked(answer, choice, choiceIndex)}
+                  disabled={!open}
+                  onclick={() => onAnswer?.(choice)}
+                >
+                  <span class="number">{choiceIndex + 1}</span>{choice}
+                </button>
+              {/each}
+            </div>
+          {/if}
+          {#if answer !== undefined}
+            <p class="state">answered: {answer}</p>
+          {:else if running}
+            <p class="state">{open ? "waiting for an answer" : "waiting for an answer in the thread"}</p>
+          {:else}
+            <p class="state">not answered</p>
+          {/if}
         </div>
       {:else if item.entry.kind === "reply"}
         <div class="item reply">
@@ -591,6 +643,86 @@
 
   .reply .answer :global(p) {
     margin: 0 0 4px;
+  }
+
+  .question {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--line-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--bg-inset);
+  }
+
+  .question.answered {
+    border-left-color: var(--line-soft);
+  }
+
+  .question .title {
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .question .mark {
+    color: var(--accent);
+    font-family: var(--mono);
+  }
+
+  .question .message {
+    margin: 0;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+  }
+
+  .choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .choice {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 5px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .choice:not(:disabled):hover {
+    border-color: var(--accent);
+    background: var(--fill-hover);
+  }
+
+  .choice:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+
+  .choice.chosen {
+    border-color: var(--accent);
+    color: var(--accent);
+    opacity: 1;
+  }
+
+  .choice .number {
+    font-family: var(--mono);
+    font-size: var(--type-receipt);
+    color: var(--text-faint);
+  }
+
+  .question .state {
+    margin: 0;
+    font-size: var(--type-receipt);
+    color: var(--text-faint);
   }
 
   .posted {

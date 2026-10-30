@@ -63,6 +63,7 @@ impl SessionView for FakeView {
 fn render(event: &SessionEvent) -> String {
     match event {
         SessionEvent::Post { text } => format!("post:{text}"),
+        SessionEvent::Question { title, .. } => format!("question:{title}"),
         SessionEvent::Prompt { author, text, .. } => format!("prompt:{author}:{text}"),
         SessionEvent::Aside { author, text, .. } => format!("aside:{author}:{text}"),
         SessionEvent::Notice { text, level } => {

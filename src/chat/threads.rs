@@ -690,7 +690,8 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
                 // above it in the thread.
                 SessionEvent::Post { text }
                 | SessionEvent::Notice { text, .. }
-                | SessionEvent::Reply { text, .. } => self.post(text),
+                | SessionEvent::Reply { text, .. }
+                | SessionEvent::Question { text, .. } => self.post(text),
                 SessionEvent::Diff {
                     path,
                     added,

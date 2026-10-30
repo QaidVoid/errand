@@ -817,6 +817,12 @@
         <Transcript
           bind:this={transcript}
           session={selected}
+          onAnswer={canAct && live && !ended
+            ? (choice) => {
+                draft = choice;
+                void send();
+              }
+            : undefined}
           {entries}
           {busy}
           {waiting}

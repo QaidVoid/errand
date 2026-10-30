@@ -244,6 +244,19 @@ pub enum SessionEvent {
     /// A thread does not show this: it is long, and a conversation is not the
     /// place for it. A surface that can fold it away shows it.
     Thinking { text: String },
+    /// Asks something the agent is waiting on an answer to.
+    ///
+    /// Carried as the text a thread posts and as its parts, so a surface with
+    /// buttons can offer the choices rather than ask for a typed reply. A
+    /// choice answers the question when it is sent back as it is written.
+    Question {
+        text: String,
+        title: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        #[serde(default)]
+        choices: Vec<String>,
+    },
     /// Answers a command.
     ///
     /// A reply belongs to the command that asked for it rather than to the

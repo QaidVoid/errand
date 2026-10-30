@@ -23,7 +23,9 @@ use crate::agent::client::AnswerOutcome;
 use crate::agent::client::{AgentClient, AgentHandlers, AgentProcess};
 use crate::agent::delegate::{DelegationOutcome, TurnDelegations};
 use crate::agent::delegation::Sources;
-use crate::agent::protocol::{AgentImage, DialogRequest, ProducedMedia, StreamingBehavior, Usage};
+use crate::agent::protocol::{
+    AgentImage, DialogMethod, DialogRequest, ProducedMedia, StreamingBehavior, Usage,
+};
 use crate::agent::requests::{
     DELEGATE_COMMAND, RECALL_COMMAND, delegate_command_contents, recall_command_contents,
 };
@@ -241,6 +243,16 @@ const PROGRESS_INTERVAL_MS: i64 = 15_000;
 
 /// A progress line as a thread shows it: one line, bounded, and marked as
 /// tool output.
+/// What a dialog may be answered with, each written as it answers it: the
+/// options of a select, yes or no for a confirm, and nothing for free text.
+fn dialog_choices(request: &DialogRequest) -> Vec<String> {
+    match request.method {
+        DialogMethod::Select => request.options.clone().unwrap_or_default(),
+        DialogMethod::Confirm => vec!["yes".to_owned(), "no".to_owned()],
+        DialogMethod::Input | DialogMethod::Editor => Vec::new(),
+    }
+}
+
 fn progress_line(text: &str) -> String {
     let line = text
         .lines()
@@ -1159,7 +1171,14 @@ impl Running {
                 }
                 Signal::Dialog(request) => {
                     self.reset_idle_timer();
-                    self.say(&question_line(&dialog_lines(&request))).await;
+                    self.views
+                        .send(SessionEvent::Question {
+                            text: question_line(&dialog_lines(&request)),
+                            title: request.title.clone(),
+                            message: request.message.clone(),
+                            choices: dialog_choices(&request),
+                        })
+                        .await;
                 }
                 Signal::DialogTimeout => {
                     self.say(

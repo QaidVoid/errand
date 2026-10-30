@@ -15,6 +15,7 @@
 
   let {
     session = null,
+    onAnswer,
     entries,
     busy,
     waiting,
@@ -29,6 +30,8 @@
   }: {
     /** Which session this is, so what it posted can be fetched. */
     session?: string | null;
+    /** Answers a question the agent is waiting on, or undefined where nobody here may. */
+    onAnswer?: ((choice: string) => void) | undefined;
     entries: Entry[];
     busy: boolean;
     waiting: string | null;
@@ -274,6 +277,7 @@
         waiting={waiting !== null && index === reading.turns.length - 1}
         {needle}
         {session}
+        {onAnswer}
         {onOpenFile}
         {command}
       />

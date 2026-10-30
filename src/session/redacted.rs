@@ -29,6 +29,10 @@ use crate::session::views::ViewFanOut;
 /// A message id is not one of them: it is minted by the chat service and never
 /// carries agent output, and neither does a turn number, a reaction, a usage
 /// total, nor the author a message is attributed to.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per event keeps what is scrubbed on each readable"
+)]
 pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
     let clean = |text: &str| redact_text(text, secrets);
     let maybe = |text: &Option<String>| text.as_deref().map(clean);
@@ -114,8 +118,20 @@ pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
             caption: clean(&caption),
         },
         SessionEvent::Waiting { text } => SessionEvent::Waiting { text: maybe(&text) },
+        SessionEvent::Question {
+            text,
+            title,
+            message,
+            choices,
+        } => SessionEvent::Question {
+            text: clean(&text),
+            title: clean(&title),
+            message: maybe(&message),
+            choices: choices.iter().map(|choice| clean(choice)).collect(),
+        },
         // Reactions, usage, and the frame around the conversation carry
-        // nothing the agent said. An attachment is recorded, never delivered.
+        // nothing the agent said. An attachment is made from an upload that
+        // was scrubbed here already.
         SessionEvent::Attachment { .. }
         | SessionEvent::Reaction { .. }
         | SessionEvent::Usage { .. }

@@ -141,6 +141,7 @@ struct Snapshot {
 fn label_of(event: &SessionEvent) -> &'static str {
     match event {
         SessionEvent::Post { .. } => "post",
+        SessionEvent::Question { .. } => "question",
         SessionEvent::Prompt { .. } => "prompt",
         SessionEvent::Aside { .. } => "aside",
         SessionEvent::Notice { .. } => "notice",
@@ -462,6 +463,7 @@ impl ViewFanOut {
     async fn replay_held(view: &Arc<dyn SessionView>, held: &Held) -> Result<(), ViewError> {
         match &held.entry {
             SessionEvent::Post { .. }
+            | SessionEvent::Question { .. }
             | SessionEvent::Notice { .. }
             | SessionEvent::Thinking { .. }
             | SessionEvent::Reply { .. }

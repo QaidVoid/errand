@@ -114,7 +114,7 @@ impl SessionView for IssueView {
     ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
         Box::pin(async move {
             match event {
-                SessionEvent::Post { text } => {
+                SessionEvent::Post { text } | SessionEvent::Question { text, .. } => {
                     self.turn.lock().expect("the issue turn lock").answer = Some(text.clone());
                 }
                 SessionEvent::Notice {
