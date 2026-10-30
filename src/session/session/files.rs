@@ -340,7 +340,7 @@ impl Running {
         )))
         .await;
 
-        let drawn = match draw_image(endpoint.clone(), prompt).await {
+        let drawn = match draw_image(endpoint.clone(), prompt.clone()).await {
             Ok(drawn) => drawn,
             Err(refused) => {
                 self.say(&refused).await;
@@ -349,7 +349,7 @@ impl Running {
             }
         };
         let limit = self.options.config.output.max_upload_bytes;
-        let picture = match drawn.into_picture(&endpoint.model, limit) {
+        let picture = match drawn.into_picture(&prompt, &endpoint.model, limit) {
             Ok(picture) => picture,
             Err(refused) => {
                 self.say(&refused.0).await;

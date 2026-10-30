@@ -15,7 +15,7 @@ use std::future::Future;
 
 use serde_json::{Value, json};
 
-use crate::chat::render::{inert, server_text};
+use crate::chat::render::{inert, quoted, server_text};
 use crate::config::schema::AgentConfig;
 use crate::provider::models::{AvailableModel, serving};
 use crate::session::model::split_level;
@@ -126,11 +126,17 @@ pub struct Picture {
 impl Drawn {
     /// The picture to post, or why it cannot be.
     ///
-    /// `limit` is the largest upload the surface takes, and the caption names
-    /// the model that drew it and what the server said about the prompt when
-    /// it said anything. The model is made inert, and the server's text goes
-    /// through [`server_text`] into a code span of its own.
-    pub fn into_picture(self, model: &str, limit: u64) -> Result<Picture, ImageError> {
+    /// `limit` is the largest upload the surface takes, and the caption quotes
+    /// the `prompt` it was drawn from, then names the model that drew it and
+    /// what the server said about the prompt when it said anything. The
+    /// prompt goes through [`quoted`], the model is made inert, and the
+    /// server's text goes through [`server_text`] into a code span of its own.
+    pub fn into_picture(
+        self,
+        prompt: &str,
+        model: &str,
+        limit: u64,
+    ) -> Result<Picture, ImageError> {
         let size = u64::try_from(self.bytes.len()).unwrap_or(u64::MAX);
         if size > limit {
             return Err(ImageError(format!(
@@ -143,15 +149,21 @@ impl Drawn {
                 "what came back is not a PNG, JPEG, GIF or WebP, so it was not posted".to_owned(),
             ));
         };
+        let drawn_on = match self
+            .revised_prompt
+            .as_deref()
+            .map(server_text)
+            .filter(|revised| !revised.is_empty())
+        {
+            Some(revised) => format!("drawn on `{}`: `{revised}`", inert(model)),
+            None => format!("drawn on `{}`", inert(model)),
+        };
+        let prompt = quoted(prompt);
         Ok(Picture {
-            caption: match self
-                .revised_prompt
-                .as_deref()
-                .map(server_text)
-                .filter(|revised| !revised.is_empty())
-            {
-                Some(revised) => format!("drawn on `{}`: `{revised}`", inert(model)),
-                None => format!("drawn on `{}`", inert(model)),
+            caption: if prompt.is_empty() {
+                drawn_on
+            } else {
+                format!("{prompt}\n{drawn_on}")
             },
             name: format!("image.{extension}"),
             bytes: self.bytes,

@@ -55,6 +55,36 @@ pub fn server_text(text: &str) -> String {
     }
 }
 
+/// The longest stretch of a person's prompt a caption quotes back.
+pub const MAX_QUOTED_CHARS: usize = 600;
+
+/// A person's text as a block quote, one `> ` per line, cut short with `...`
+/// past [`MAX_QUOTED_CHARS`].
+///
+/// Markdown and mention syntax is escaped rather than removed, so the quote
+/// reads as it was written, yet cannot ping anyone, format the message, or
+/// carry a masked link under the bot's name.
+pub fn quoted(text: &str) -> String {
+    let text = text.trim();
+    let mut kept: String = text.chars().take(MAX_QUOTED_CHARS).collect();
+    if kept.len() < text.len() {
+        kept = format!("{}...", kept.trim_end());
+    }
+    kept.lines()
+        .map(|line| {
+            let mut out = String::from("> ");
+            for character in line.chars() {
+                if "\\*_~`|<>#[]()-".contains(character) {
+                    out.push('\\');
+                }
+                out.push(character);
+            }
+            out
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The service's per-message character limit.
 pub const MESSAGE_LIMIT: usize = 2000;
 

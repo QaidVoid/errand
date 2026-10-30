@@ -559,3 +559,30 @@ fn server_text_is_one_inert_line_cut_short() {
 fn inert_strips_mention_and_span_syntax() {
     assert_eq!(super::inert("<@123> a`b@c"), "  123> a b c");
 }
+
+/// A quoted prompt keeps its words and its lines, each under `> `, while
+/// anything that would ping, format, or link is escaped to show as typed.
+#[test]
+fn a_quoted_prompt_shows_as_typed_and_cannot_ping_or_format() {
+    assert_eq!(
+        super::quoted("  a cat\nin *space* <@111> [x](https://e.example)\n"),
+        "> a cat\n> in \\*space\\* \\<@111\\> \\[x\\]\\(https://e.example\\)"
+    );
+    assert_eq!(super::quoted("   "), "");
+}
+
+/// A long prompt is cut on a character boundary and says so.
+#[test]
+fn a_long_quoted_prompt_is_cut_short() {
+    let long = "e\u{301}".repeat(super::MAX_QUOTED_CHARS);
+    let shown = super::quoted(&long);
+    assert!(shown.ends_with("..."), "{shown}");
+    assert_eq!(
+        shown
+            .trim_start_matches("> ")
+            .trim_end_matches("...")
+            .chars()
+            .count(),
+        super::MAX_QUOTED_CHARS
+    );
+}

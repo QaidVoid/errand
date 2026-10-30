@@ -1771,10 +1771,14 @@ struct PostedFile<'a> {
 /// bare login, the way every other message here writes one: a channel cannot
 /// mention `github:alice`, and the mention syntax around it would render as
 /// literal text.
+///
+/// A caption opening with a block quote starts on a line of its own, since a
+/// quote marker renders only at the start of one.
 fn addressed(author_id: &str, caption: &str) -> String {
+    let gap = if caption.starts_with('>') { "\n" } else { " " };
     match author_id.strip_prefix(crate::issues::thread::PREFIX) {
-        Some(login) => format!("{login} {caption}"),
-        None => format!("<@{author_id}> {caption}"),
+        Some(login) => format!("{login}{gap}{caption}"),
+        None => format!("<@{author_id}>{gap}{caption}"),
     }
 }
 

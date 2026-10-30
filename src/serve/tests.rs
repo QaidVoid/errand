@@ -419,6 +419,16 @@ fn a_posted_picture_is_addressed_to_whoever_asked() {
     );
 }
 
+/// A caption opening with a quoted prompt starts on its own line, where the
+/// quote renders, rather than after the mention, where it would not.
+#[test]
+fn a_quoted_caption_starts_below_the_mention() {
+    assert_eq!(
+        addressed("100000000000000001", "> a lighthouse\ndrawn on `image:max`"),
+        "<@100000000000000001>\n> a lighthouse\ndrawn on `image:max`"
+    );
+}
+
 /// An account from somewhere else is written as its bare login, since a
 /// channel cannot mention one and the syntax would render as literal text.
 #[test]

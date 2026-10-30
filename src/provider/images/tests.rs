@@ -346,7 +346,7 @@ fn a_picture_over_the_upload_limit_is_refused() {
     };
 
     let refused = drawn
-        .into_picture("image:max", 4)
+        .into_picture("", "image:max", 4)
         .expect_err("over the limit");
 
     assert!(refused.0.contains("over the 4 byte"), "{}", refused.0);
@@ -362,7 +362,7 @@ fn bytes_that_are_not_an_image_are_refused() {
     };
 
     let refused = drawn
-        .into_picture("image:max", u64::MAX)
+        .into_picture("", "image:max", u64::MAX)
         .expect_err("not an image");
 
     assert!(refused.0.contains("not a PNG"), "{}", refused.0);
@@ -378,11 +378,14 @@ fn a_picture_is_named_for_its_type_and_captioned_with_its_model() {
     };
 
     let picture = drawn
-        .into_picture("image:max", u64::MAX)
+        .into_picture("a lighthouse", "image:max", u64::MAX)
         .expect("a picture");
 
     assert_eq!(picture.name, "image.png");
-    assert_eq!(picture.caption, "drawn on `image:max`: `a tall lighthouse`");
+    assert_eq!(
+        picture.caption,
+        "> a lighthouse\ndrawn on `image:max`: `a tall lighthouse`"
+    );
 }
 
 /// The error is what a thread is told, so it has to read as a sentence.
@@ -752,7 +755,7 @@ fn image_captions_cannot_carry_mentions_or_escape_the_model_span() {
         bytes: PNG.to_vec(),
         revised_prompt: Some("<@111> nice `day`\n# [verify](https://evil.example)".to_owned()),
     }
-    .into_picture("image:`<@222>", u64::MAX)
+    .into_picture("", "image:`<@222>", u64::MAX)
     .unwrap();
     assert!(!picture.caption.contains(['<', '@', '\n']));
     assert_eq!(picture.caption.matches('`').count(), 4);

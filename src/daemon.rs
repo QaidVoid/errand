@@ -999,7 +999,7 @@ impl Daemon {
         .map_err(|refused| refused.0)?;
         let drawn = draw_image(endpoint.clone(), prompt.to_owned()).await?;
         drawn
-            .into_picture(&endpoint.model, config.output.max_upload_bytes)
+            .into_picture(prompt, &endpoint.model, config.output.max_upload_bytes)
             .map_err(|refused| refused.0)
     }
 
