@@ -642,6 +642,37 @@ async fn text_fragments_are_reported_as_one_message_when_the_span_ends() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_whitespace_only_fragment_is_kept_between_words() {
+    let said: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let text_seen = Arc::clone(&said);
+    let setup = client(
+        AgentHandlers {
+            on_assistant_text: Some(Box::new(move |text: String| {
+                text_seen.lock().unwrap().push(text);
+            })),
+            ..AgentHandlers::default()
+        },
+        300_000,
+    );
+
+    setup.controls.send(&text_chunk("created, public,"));
+    setup.controls.send(&text_chunk(" "));
+    setup.controls.send(&text_chunk("0BSD."));
+    setup.controls.send(&text_chunk("\n"));
+    setup
+        .controls
+        .send(&text_chunk("Reframed around the problem."));
+    setup.controls.send(&turn_end());
+    settle().await;
+
+    assert_eq!(
+        *said.lock().unwrap(),
+        vec!["created, public, 0BSD.\nReframed around the problem.".to_owned()]
+    );
+    setup.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn thinking_is_reported_once_a_turn_and_each_span_of_thought_as_it_ends() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let thinking_seen = Arc::clone(&seen);

@@ -463,6 +463,10 @@ fn tool_output_text(content: Option<&Value>) -> String {
 
 /// A piece of the agent's reply: its words, or media the model drew or
 /// spoke into it.
+///
+/// A chunk that is only whitespace is kept: a stream splits runs of spaces
+/// and newlines into deltas of their own, and dropping one would glue the
+/// words either side of it together.
 fn message_chunk(content: Option<&Value>) -> AcpUpdate {
     if let Some((kind, bytes)) = content.and_then(media_bytes) {
         return AcpUpdate::AgentMedia(ProducedMedia {
@@ -475,7 +479,7 @@ fn message_chunk(content: Option<&Value>) -> AcpUpdate {
     }
     content
         .and_then(block_text)
-        .filter(|text| !text.trim().is_empty())
+        .filter(|text| !text.is_empty())
         .map_or(AcpUpdate::Ignored, AcpUpdate::AgentText)
 }
 
@@ -537,7 +541,8 @@ pub fn classify_update(update: &Value) -> AcpUpdate {
         Some("agent_thought_chunk") => update
             .get("content")
             .and_then(block_text)
-            .filter(|text| !text.trim().is_empty())
+            // Whitespace is kept, for the same reason message_chunk keeps it.
+            .filter(|text| !text.is_empty())
             .map_or(AcpUpdate::Ignored, AcpUpdate::ThoughtText),
         Some("tool_call") => {
             let id = update

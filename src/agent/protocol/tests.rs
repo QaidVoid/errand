@@ -167,6 +167,20 @@ fn updates_sort_into_text_thoughts_tools_usage_turns_and_compactions() {
             "sessionUpdate": "agent_message_chunk",
             "content": { "type": "text", "text": "   " },
         })),
+        AcpUpdate::AgentText("   ".to_owned())
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "agent_thought_chunk",
+            "content": { "type": "text", "text": "\n" },
+        })),
+        AcpUpdate::ThoughtText("\n".to_owned())
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "type": "text", "text": "" },
+        })),
         AcpUpdate::Ignored
     );
     assert_eq!(
