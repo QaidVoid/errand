@@ -327,16 +327,24 @@ pub fn kage_config(
                 .filter(|url| !url.is_empty())
                 .map(str::to_owned)
         });
-        // Validation refuses an id kage reserves, at startup and on reload.
-        // One reaching here anyway is left out rather than written into a
-        // file kage would refuse whole.
-        if (through.is_none() && definition.is_none()) || kage.reserves(name) {
+        // Validation refuses an id kage reserves, and a `kind` kage's own
+        // provider does not speak under an id that takes no custom provider,
+        // at startup and on reload. One reaching here anyway is left out
+        // rather than written into a file kage would refuse whole.
+        let kind = definition
+            .and_then(|fields| fields.get("kind"))
+            .and_then(Value::as_str);
+        let replaced = kage.replaces(name, kind);
+        if (through.is_none() && definition.is_none())
+            || kage.reserves(name)
+            || (kage.speaks_otherwise(name, kind) && !replaced)
+        {
             continue;
         }
         if let Some(url) = &base_url {
             endpoints.insert(name.as_str(), url.clone());
         }
-        let known = kage.overrides(name);
+        let known = kage.overrides(name) && !replaced;
         let models = if known {
             Vec::new()
         } else {

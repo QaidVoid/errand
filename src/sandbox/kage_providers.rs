@@ -96,6 +96,28 @@ impl KageProviders {
             .is_some_and(|provider| !provider.overridable && !provider.custom)
     }
 
+    /// Whether a definition's `kind` names a protocol other than the one
+    /// kage's own `id` provider speaks.
+    ///
+    /// An override cannot change what kage's provider speaks, so writing such
+    /// a definition as one would have the agent send the wrong requests with
+    /// its key in a header the broker's route does not take. It is written as
+    /// a custom provider under the same id instead, where kage takes one.
+    pub fn speaks_otherwise(&self, id: &str, kind: Option<&str>) -> bool {
+        let (Some(provider), Some(kind)) = (self.get(id), kind) else {
+            return false;
+        };
+        let same = provider.api == kind || (kind == "openai" && provider.api == "openai-responses");
+        !same
+    }
+
+    /// Whether errand writes `id` as a custom provider in place of kage's
+    /// own, because its definition names another `kind` and kage takes a
+    /// custom provider under that id.
+    pub fn replaces(&self, id: &str, kind: Option<&str>) -> bool {
+        self.speaks_otherwise(id, kind) && self.get(id).is_some_and(|provider| provider.custom)
+    }
+
     /// What in the operator's provider definitions this kage cannot take, one
     /// problem each, in the words validation uses.
     ///
@@ -113,6 +135,19 @@ impl KageProviders {
                     "agent.providers.{name} is named for a provider kage reserves, which takes \
                      neither an override nor a custom provider; rename it"
                 ));
+                continue;
+            }
+            let kind = definition.get("kind").and_then(Value::as_str);
+            if self.speaks_otherwise(name, kind) && !self.replaces(name, kind) {
+                let api = self.get(name).map_or("", |provider| provider.api.as_str());
+                problems.push(format!(
+                    "agent.providers.{name}.kind is {kind}, but kage's {name} provider speaks \
+                     the {api} API and takes no custom provider under its id; rename it",
+                    kind = kind.unwrap_or_default()
+                ));
+                continue;
+            }
+            if self.replaces(name, kind) {
                 continue;
             }
             let api = self.get(name).map(|provider| provider.api.as_str());

@@ -365,6 +365,39 @@ fn a_kind_on_a_known_provider_is_left_out() {
     assert!(!config.contains("kind ="), "{config}");
 }
 
+/// A provider named for one kage knows, whose `kind` is not what kage's speaks,
+/// is written as a custom provider under that id with its kind and models.
+/// Written as an override, kage would speak its own protocol and send the key
+/// in a header the broker's route refuses.
+#[test]
+fn a_kind_kage_does_not_speak_under_a_known_id_is_written_custom() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "zai".to_owned(),
+        json!({
+            "baseUrl": "http://localhost:8080",
+            "kind": "anthropic",
+            "models": [{ "id": "glm-5.3-flash" }],
+        }),
+    );
+    let names = BTreeMap::from([("zai".to_owned(), "ZAI_API_KEY".to_owned())]);
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &names,
+        &[],
+        &Denials::default(),
+        &as_installed(),
+    )
+    .toml;
+
+    assert!(!config.contains("[providers.zai]"), "{config}");
+    assert!(config.contains("[providers.custom.zai]"), "{config}");
+    assert!(config.contains("kind = \"anthropic\""), "{config}");
+    assert!(config.contains("id = \"glm-5.3-flash\""), "{config}");
+}
+
 /// A provider with no key, no endpoint, and no models has nothing to say and
 /// no variable to name, so it is left out.
 #[test]

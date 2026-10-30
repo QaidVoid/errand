@@ -153,6 +153,28 @@ fn what_kage_takes_is_not_refused() {
     assert!(problems.is_empty(), "{problems:?}");
 }
 
+/// A `kind` kage's own provider does not speak is refused under an id that
+/// takes no custom provider, and allowed under one that does, while a kind
+/// matching kage's protocol, `openai` over `openai-responses` included, is not
+/// a mismatch at all.
+#[test]
+fn a_kind_kage_does_not_speak_is_refused_only_without_a_custom_slot() {
+    let problems = as_installed().refuses(&defined(&serde_json::json!({
+        "anthropic": { "credential": "k", "kind": "openai" },
+        "zai": { "credential": "k", "kind": "anthropic", "baseUrl": "http://p.example" },
+        "openai": { "credential": "k", "kind": "openai" },
+        "kenari-claude": { "credential": "k", "kind": "anthropic" },
+    })));
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains(
+            "agent.providers.anthropic.kind is openai, but kage's anthropic provider speaks the \
+             anthropic API"
+        ),
+        "{problems:?}"
+    );
+}
+
 /// Music cannot reach a kage provider that speaks the Anthropic API either.
 #[test]
 fn music_on_a_kage_provider_without_a_music_endpoint_is_refused() {
