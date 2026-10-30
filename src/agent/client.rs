@@ -139,16 +139,28 @@ const STDERR_KEPT: usize = 2_000;
 const AFFIRMATIVE: [&str; 5] = ["yes", "y", "true", "ok", "confirm"];
 const NEGATIVE: [&str; 5] = ["no", "n", "false", "cancel", "deny"];
 
+/// How the bailey launcher marks the lines it prints itself, on the same
+/// stderr as the agent it runs.
+const LAUNCHER_PREFIX: &str = "bailey: ";
+
 /// How a process that has ended is described, for whoever has to act on it.
 ///
 /// The exit code on its own is close to useless: an agent refused for want of
 /// a credential and one that hit a bug both exit with 1. Whatever it printed
 /// on its way out is the part that says which.
+///
+/// Under bailey the last line is the launcher's own `target exited with 1`,
+/// which repeats the code and hides the reason above it, so the agent's last
+/// line is preferred. The launcher's is kept when it printed nothing else,
+/// as when it failed before the agent started.
 fn describe_exit(code: i64, last_words: &str) -> String {
+    let said = |line: &&str| !line.trim().is_empty();
     let words = last_words
         .lines()
         .rev()
-        .find(|line| !line.trim().is_empty());
+        .filter(said)
+        .find(|line| !line.starts_with(LAUNCHER_PREFIX))
+        .or_else(|| last_words.lines().rev().find(said));
     match words {
         Some(words) => format!("the agent exited with code {code}: {words}"),
         None => format!("the agent exited with code {code} and said nothing about why"),

@@ -521,6 +521,27 @@ fn an_exit_report_carries_the_last_thing_the_agent_printed() {
     );
 }
 
+/// Under bailey the launcher's closing line is passed over for the agent's
+/// own reason, and kept only when the launcher said everything there is.
+#[test]
+fn an_exit_report_names_the_agent_rather_than_its_launcher() {
+    assert_eq!(
+        super::describe_exit(
+            1,
+            "bailey: created private home\nkage: no provider credentials found\n\
+             bailey: enforced: landlock, seccomp\nbailey: target exited with 1\n"
+        ),
+        "the agent exited with code 1: kage: no provider credentials found"
+    );
+    assert_eq!(
+        super::describe_exit(
+            1,
+            "bailey: not applying the policy\nbailey: target exited with 1"
+        ),
+        "the agent exited with code 1: bailey: target exited with 1"
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn prompts_before_readiness_are_dropped_for_want_of_a_session() {
     let setup = client(AgentHandlers::default(), 300_000);
