@@ -565,14 +565,21 @@ fn plugin_capabilities(plugins: &[PluginConfig]) -> String {
     out
 }
 
-/// What the operator refuses, refused by the agent itself.
+/// What the operator refuses, refused by the agent itself, and the one
+/// permission every session turns off.
 ///
 /// The agent runs with `--yolo`, so every tool runs without asking: a thread
 /// cannot serve a permission prompt, and an ask nobody sees is a session that
 /// waits out its dialog timer. A configured deny still refuses under it, so
 /// only the operator's refusals are written.
+///
+/// The agent's own path confinement is off. Under every backend the session
+/// is already confined, by the container or by the host policy, and the state
+/// directory sits outside the workspace on purpose. The guard would refuse
+/// anything the agent writes there, while the shell tool can reach the same
+/// path anyway, so it buys no safety and costs a working session.
 fn permissions_section(denied: &Denials) -> String {
-    let mut out = String::new();
+    let mut out = String::from("\n[permissions]\nconfine_paths = false\n");
     let denied_tool = |tool: &str| denied.tools.iter().any(|denied| denied == tool);
     // A tool refused outright takes no denied commands: it runs nothing
     // either way, and a second table for it is a TOML parse error.

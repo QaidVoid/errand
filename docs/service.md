@@ -11,6 +11,12 @@ writes in a project belong to the person whose project it is.
 ```sh
 useradd --system --home-dir /var/lib/errand --create-home errand
 
+# Only for the incus backend: the daemon account must reach the Incus API, and
+# the host uid that owns the project must be mappable into the guest.
+adduser errand incus-admin
+echo 'root:1000:1' | sudo tee -a /etc/subuid
+echo 'root:1000:1' | sudo tee -a /etc/subgid
+
 git clone https://github.com/QaidVoid/errand
 cd errand && cargo build --release
 install -m 0755 dist/errand /usr/local/bin/errand
@@ -19,6 +25,10 @@ install -o errand -g errand -m 0700 -d /var/lib/errand/.config/errand
 install -o errand -g errand -m 0600 config.json \
         /var/lib/errand/.config/errand/config.json
 ```
+
+The subuid and subgid values are the uid and gid that own the project and
+state directories, not necessarily 1000. The startup probe reports a missing
+allocation rather than failing at the first launch.
 
 ## OpenRC
 

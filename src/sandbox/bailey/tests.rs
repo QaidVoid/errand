@@ -10,7 +10,9 @@ use super::{
 };
 use crate::config::schema::NetworkMode;
 use crate::config::schema::PolicyExtraConfig;
-use crate::config::schema::{EgressConfig, EgressMode, SandboxBackend, SandboxConfig, defaults};
+use crate::config::schema::{
+    EgressConfig, EgressMode, IncusConfig, SandboxBackend, SandboxConfig, defaults,
+};
 use crate::log::{LogFields, Logger};
 use crate::sandbox::Run;
 use crate::sandbox::backend::{Denials, LaunchSettings, SandboxLaunch};
@@ -42,6 +44,7 @@ fn defaults_only() -> SandboxConfig {
         },
         hide_host_address: defaults::HIDE_HOST_ADDRESS,
         image: defaults::IMAGE.to_owned(),
+        incus: IncusConfig::default(),
         memory: defaults::MEMORY.to_owned(),
         cpus: defaults::CPUS,
         pids: defaults::PIDS,
@@ -88,7 +91,7 @@ type Calls = Arc<Mutex<Vec<Vec<String>>>>;
 fn fake_run(answers: BTreeMap<String, Answer>) -> (Run, Calls) {
     let calls: Calls = Arc::new(Mutex::new(Vec::new()));
     let call_log = Arc::clone(&calls);
-    let run = move |args: Vec<String>, _cwd: Option<String>| {
+    let run = move |args: Vec<String>, _cwd: Option<String>, _stdin: Option<String>| {
         let answers = answers.clone();
         let calls = Arc::clone(&call_log);
         Box::pin(async move {
@@ -177,7 +180,7 @@ async fn no_cgroup_delegation_is_a_gap_that_is_reported_not_a_refusal() {
 
 #[tokio::test]
 async fn a_tool_that_is_not_installed_is_reported_as_unavailable() {
-    let run = |_args: Vec<String>, _cwd: Option<String>| {
+    let run = |_args: Vec<String>, _cwd: Option<String>, _stdin: Option<String>| {
         Box::pin(async move {
             Err::<super::super::RunResult, _>(std::io::Error::other("no such command"))
         }) as super::super::RunFuture<super::super::RunResult>
@@ -443,7 +446,7 @@ fn fake_agent(name: &str) -> Option<String> {
 fn fake_kage(code: i32, stdout: &'static str) -> (Run, Calls) {
     let calls: Calls = Arc::new(Mutex::new(Vec::new()));
     let call_log = Arc::clone(&calls);
-    let run = move |args: Vec<String>, _cwd: Option<String>| {
+    let run = move |args: Vec<String>, _cwd: Option<String>, _stdin: Option<String>| {
         call_log.lock().unwrap().push(args);
         Box::pin(async move {
             Ok(super::super::RunResult {
@@ -821,7 +824,10 @@ async fn each_launch_has_its_own_broker_and_a_failed_one_leaves_none() {
 /// honoured once it is asked to stop.
 #[tokio::test]
 async fn stopping_a_session_closes_its_broker() {
-    let started = template().start("s-1", None).await.expect("a broker");
+    let started = template()
+        .start("s-1", None, crate::sandbox::broker::BrokerListen::Tcp)
+        .await
+        .expect("a broker");
     let port = started.port;
     let env = BTreeMap::from([("PATH".to_owned(), std::env::var("PATH").unwrap_or_default())]);
     let spawned = crate::sandbox::spawn::spawn_agent("sleep", &["30".to_owned()], Some(&env), None)

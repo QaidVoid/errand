@@ -7,7 +7,7 @@ use super::{PodmanSandbox, RESTRICTED_NETWORK, podman_args};
 use tempfile::TempDir;
 
 use crate::config::schema::{
-    EgressConfig, EgressMode, NetworkMode, SandboxBackend, SandboxConfig, defaults,
+    EgressConfig, EgressMode, IncusConfig, NetworkMode, SandboxBackend, SandboxConfig, defaults,
 };
 use crate::config::size::parse_size;
 use crate::log::{LogFields, Logger};
@@ -51,6 +51,7 @@ fn defaults_config() -> SandboxConfig {
         },
         hide_host_address: defaults::HIDE_HOST_ADDRESS,
         image: defaults::IMAGE.to_owned(),
+        incus: IncusConfig::default(),
         memory: defaults::MEMORY.to_owned(),
         cpus: defaults::CPUS,
         pids: defaults::PIDS,
@@ -95,7 +96,7 @@ type Calls = Arc<Mutex<Vec<Vec<String>>>>;
 fn fake_run(answers: BTreeMap<String, Answer>) -> (Run, Calls) {
     let calls: Calls = Arc::new(Mutex::new(Vec::new()));
     let call_log = Arc::clone(&calls);
-    let run = move |args: Vec<String>, _cwd: Option<String>| {
+    let run = move |args: Vec<String>, _cwd: Option<String>, _stdin: Option<String>| {
         let answers = answers.clone();
         let calls = Arc::clone(&call_log);
         Box::pin(async move {
@@ -582,7 +583,10 @@ async fn stopping_a_container_closes_its_broker() {
         receipts: None,
         now: Arc::new(|| 0),
     };
-    let started = template.start("s-1", None).await.expect("a broker");
+    let started = template
+        .start("s-1", None, crate::sandbox::broker::BrokerListen::Tcp)
+        .await
+        .expect("a broker");
     let port = started.port;
     let env = BTreeMap::from([("PATH".to_owned(), std::env::var("PATH").unwrap_or_default())]);
     let spawned = crate::sandbox::spawn::spawn_agent("sleep", &["30".to_owned()], Some(&env), None)

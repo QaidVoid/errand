@@ -1,0 +1,86 @@
+#!/bin/sh
+# Brings up a virtual X display, a window manager and a session bus, then
+# prints the exports a shell needs to reach them.
+#
+#   eval "$(errand-gui)"
+#
+# A later command starts in a fresh shell, so the state is kept in
+# /tmp/errand-gui-<uid> and read back from there. Calling the script again
+# reuses whatever is still running. `errand-gui --stop` tears it all down.
+set -eu
+
+state=/tmp/errand-gui-$(id -u)
+env_file=$state/env
+display=:99
+geometry=1920x1080x24
+
+mkdir -p "$state"
+chmod 700 "$state"
+
+if [ "${1:-}" = "--stop" ]; then
+    for pid_file in "$state/xvfb.pid" "$state/openbox.pid" "$state/dbus.pid"; do
+        if [ -s "$pid_file" ]; then
+            kill "$(cat "$pid_file")" 2>/dev/null || true
+        fi
+    done
+    rm -rf "$state"
+    exit 0
+fi
+
+# The display outlives this script. setsid detaches it from the caller's
+# process group, so a shell that exits does not take Xvfb with it.
+if ! xdpyinfo -display "$display" >/dev/null 2>&1; then
+    setsid nohup Xvfb "$display" -screen 0 "$geometry" -nolisten tcp \
+        >"$state/xvfb.log" 2>&1 &
+    echo $! >"$state/xvfb.pid"
+    tries=0
+    until xdpyinfo -display "$display" >/dev/null 2>&1; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 100 ]; then
+            echo "errand-gui: Xvfb did not answer on $display" >&2
+            echo "errand-gui: see $state/xvfb.log" >&2
+            exit 1
+        fi
+        sleep 0.1
+    done
+fi
+
+if [ -s "$state/dbus.address" ] && [ -s "$state/dbus.pid" ] &&
+    kill -0 "$(cat "$state/dbus.pid")" 2>/dev/null; then
+    dbus_address=$(cat "$state/dbus.address")
+else
+    eval "$(dbus-launch --sh-syntax)"
+    printf '%s\n' "$DBUS_SESSION_BUS_ADDRESS" >"$state/dbus.address"
+    printf '%s\n' "$DBUS_SESSION_BUS_PID" >"$state/dbus.pid"
+    dbus_address=$DBUS_SESSION_BUS_ADDRESS
+fi
+
+# openbox is the smallest window manager that sets the EWMH properties most
+# toolkits wait for. The check is the property, not the pid, so a stale pid
+# file cannot report success.
+if ! DISPLAY=$display wmctrl -m >/dev/null 2>&1; then
+    DISPLAY=$display setsid nohup openbox >"$state/openbox.log" 2>&1 &
+    echo $! >"$state/openbox.pid"
+    tries=0
+    until DISPLAY=$display wmctrl -m >/dev/null 2>&1; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 50 ]; then
+            echo "errand-gui: openbox did not start" >&2
+            echo "errand-gui: see $state/openbox.log" >&2
+            exit 1
+        fi
+        sleep 0.1
+    done
+fi
+
+{
+    printf 'export DISPLAY=%s\n' "$display"
+    printf 'export DBUS_SESSION_BUS_ADDRESS=%s\n' "$dbus_address"
+} >"$env_file"
+chmod 600 "$env_file"
+
+if [ "${1:-}" = "--file" ]; then
+    printf '%s\n' "$env_file"
+else
+    cat "$env_file"
+fi

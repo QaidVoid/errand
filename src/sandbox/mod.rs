@@ -1,4 +1,4 @@
-//! The boundary: the policy a confined agent is given, the two backends that
+//! The boundary: the policy a confined agent is given, the backends that
 //! enforce it, and the spawn that starts a session.
 
 use std::future::Future;
@@ -26,6 +26,8 @@ pub mod bailey;
 pub mod broker;
 /// What a brokered session is handed to reach its broker.
 pub mod egress;
+/// The incus backend: a session in an unprivileged system container.
+pub mod incus;
 /// The provider ids the installed kage knows.
 pub mod kage_providers;
 /// Whether a path stays inside the directory a session is confined to.
@@ -54,8 +56,12 @@ pub struct RunResult {
 pub(crate) type RunFuture<T> = Pin<Box<dyn Future<Output = std::io::Result<T>> + Send>>;
 
 /// Runs one backend tool. Injected, so tests answer from a script.
+///
+/// The arguments are the command line, the working directory, and what to
+/// write to the tool's standard input. The last is `None` for tools that read
+/// nothing, which is most of them.
 pub(crate) type Run =
-    Arc<dyn Fn(Vec<String>, Option<String>) -> RunFuture<RunResult> + Send + Sync>;
+    Arc<dyn Fn(Vec<String>, Option<String>, Option<String>) -> RunFuture<RunResult> + Send + Sync>;
 
 /// Everything the bailey stop path needs.
 pub struct BaileyStop {
@@ -103,12 +109,40 @@ pub struct PodmanStop {
     pub stopped: std::sync::atomic::AtomicBool,
 }
 
+/// Everything the incus stop path needs.
+pub struct IncusStop {
+    /// The session being stopped.
+    pub session_id: String,
+    /// The sandbox's name.
+    pub name: String,
+    /// The Incus project the sandbox lives in.
+    pub project: String,
+    /// The project the sandbox works in, for path translation.
+    pub project_path: String,
+    /// The directory holding the broker socket, when one was started.
+    pub broker_dir: Option<String>,
+    /// The launcher, whose group is ended after the instance stops.
+    pub spawned: Arc<spawn::SpawnedAgent>,
+    /// The tool runner.
+    pub run: Run,
+    /// How long the instance may take to stop before it is deleted by force.
+    pub grace_ms: u64,
+    /// The logger the warnings go to.
+    pub log: Logger,
+    /// The session's own egress broker, closed when the session is stopped.
+    pub broker: std::sync::Mutex<Option<broker::Broker>>,
+    /// Whether the stop already ran.
+    pub stopped: std::sync::atomic::AtomicBool,
+}
+
 /// A running sandbox and the handle needed to end it.
 pub enum SandboxHandle {
     /// A confined host process.
     Bailey(Box<BaileyStop>),
     /// A rootless container.
     Podman(Box<PodmanStop>),
+    /// An unprivileged system container.
+    Incus(Box<IncusStop>),
 }
 
 impl SandboxHandle {
@@ -117,6 +151,7 @@ impl SandboxHandle {
         match self {
             SandboxHandle::Bailey(stop) => stop.project_path(),
             SandboxHandle::Podman(stop) => stop.project_path(),
+            SandboxHandle::Incus(stop) => stop.project_path(),
         }
     }
 
@@ -139,6 +174,7 @@ impl SandboxHandle {
         match self {
             SandboxHandle::Bailey(stop) => Arc::clone(&stop.spawned.process),
             SandboxHandle::Podman(stop) => Arc::clone(&stop.spawned.process),
+            SandboxHandle::Incus(stop) => Arc::clone(&stop.spawned.process),
         }
     }
 
@@ -150,6 +186,7 @@ impl SandboxHandle {
         match self {
             SandboxHandle::Bailey(stop) => stop.stop().await,
             SandboxHandle::Podman(stop) => stop.stop().await,
+            SandboxHandle::Incus(stop) => stop.stop().await,
         }
     }
 }
@@ -194,7 +231,7 @@ impl BaileyStop {
 
         let policy = self.policy.clone();
         let run = Arc::clone(&self.run);
-        let _ = run(vec!["untrust".to_owned(), policy], None).await;
+        let _ = run(vec!["untrust".to_owned(), policy], None, None).await;
         killed
     }
 }
@@ -237,6 +274,7 @@ impl PodmanStop {
                 name.clone(),
             ],
             None,
+            None,
         )
         .await
         .unwrap_or_else(|error| RunResult {
@@ -252,6 +290,7 @@ impl PodmanStop {
         let _ = (self.run)(
             vec!["rm".to_owned(), "--force".to_owned(), name.clone()],
             None,
+            None,
         )
         .await;
         self.spawned.kill(nix::sys::signal::Signal::SIGKILL);
@@ -266,12 +305,104 @@ impl PodmanStop {
     }
 }
 
-/// One sandbox backend, of exactly the two that exist.
+impl IncusStop {
+    fn project_path(&self) -> String {
+        self.project_path.clone()
+    }
+
+    fn command(&self, args: &[&str]) -> Vec<String> {
+        let mut command = vec![
+            "--force-local".to_owned(),
+            "--project".to_owned(),
+            self.project.clone(),
+        ];
+        command.extend(args.iter().map(|arg| (*arg).to_owned()));
+        command
+    }
+
+    async fn stop(&self) -> bool {
+        if self
+            .stopped
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            return false;
+        }
+
+        close_broker(&self.broker);
+
+        let timeout = incus::stop_timeout(self.grace_ms).to_string();
+        let failed = |error: std::io::Error| RunResult {
+            code: -1,
+            stdout: String::new(),
+            stderr: error.to_string(),
+        };
+        let stopped = (self.run)(
+            self.command(&["stop", self.name.as_str(), "--timeout", &timeout]),
+            None,
+            None,
+        )
+        .await
+        .unwrap_or_else(failed);
+        let killed = stopped.code != 0;
+
+        if stopped.code == 0 {
+            let deleted = (self.run)(self.command(&["delete", self.name.as_str()]), None, None)
+                .await
+                .unwrap_or_else(failed);
+            if deleted.code != 0 {
+                self.log.warn(
+                    "the stopped system container could not be deleted",
+                    &fields([
+                        ("session", self.session_id.as_str().into()),
+                        ("name", self.name.as_str().into()),
+                        ("detail", deleted.stderr.trim().to_owned().into()),
+                    ]),
+                );
+            }
+        } else {
+            self.log.warn(
+                "the system container did not stop and was deleted",
+                &fields([
+                    ("session", self.session_id.as_str().into()),
+                    ("name", self.name.as_str().into()),
+                    ("detail", stopped.stderr.trim().to_owned().into()),
+                ]),
+            );
+            let deleted = (self.run)(
+                self.command(&["delete", "--force", self.name.as_str()]),
+                None,
+                None,
+            )
+            .await
+            .unwrap_or_else(failed);
+            if deleted.code != 0 {
+                self.log.warn(
+                    "the system container could not be deleted even by force",
+                    &fields([
+                        ("session", self.session_id.as_str().into()),
+                        ("name", self.name.as_str().into()),
+                        ("detail", deleted.stderr.trim().to_owned().into()),
+                    ]),
+                );
+            }
+        }
+
+        self.spawned.kill(nix::sys::signal::Signal::SIGKILL);
+        if let Some(directory) = &self.broker_dir {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        killed
+    }
+}
+
+/// One sandbox backend, of exactly the three that exist.
 pub enum Backend {
     /// Landlock and seccomp, with no container.
     Bailey(Arc<bailey::BaileySandbox>),
     /// Rootless podman containers.
     Podman(Arc<podman::PodmanSandbox>),
+    /// Unprivileged Incus system containers.
+    Incus(Arc<incus::IncusSandbox>),
 }
 
 impl Backend {
@@ -285,6 +416,7 @@ impl Backend {
         match self {
             Backend::Bailey(bailey) => bailey.probe().await,
             Backend::Podman(podman) => podman.probe().await,
+            Backend::Incus(incus) => incus.probe().await,
         }
     }
 
@@ -294,6 +426,7 @@ impl Backend {
         match self {
             Backend::Bailey(bailey) => bailey.settings(),
             Backend::Podman(podman) => podman.settings(),
+            Backend::Incus(incus) => incus.settings(),
         }
     }
 
@@ -307,6 +440,7 @@ impl Backend {
             // the launch is reached through the same arc.
             Backend::Bailey(bailey) => bailey.launch(launch).await,
             Backend::Podman(podman) => podman.launch(launch).await,
+            Backend::Incus(incus) => incus.launch(launch).await,
         }
     }
 
@@ -315,6 +449,7 @@ impl Backend {
         match self {
             Backend::Bailey(bailey) => Ok(bailey.list_orphans()),
             Backend::Podman(podman) => podman.list_orphans().await,
+            Backend::Incus(incus) => incus.list_orphans().await,
         }
     }
 
@@ -323,6 +458,7 @@ impl Backend {
         match self {
             Backend::Bailey(bailey) => bailey.remove_orphans(names),
             Backend::Podman(podman) => podman.remove_orphans(names).await,
+            Backend::Incus(incus) => incus.remove_orphans(names).await,
         }
     }
 }
@@ -394,8 +530,10 @@ impl SandboxPool for Backend {
         })
     }
 
-    fn list_orphans(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + '_>> {
-        Box::pin(async move { Self::list_orphans(self).await.unwrap_or_default() })
+    fn list_orphans(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, SandboxLaunchError>> + Send + '_>> {
+        Box::pin(async move { Self::list_orphans(self).await })
     }
 
     fn remove_orphans<'a>(

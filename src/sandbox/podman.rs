@@ -29,7 +29,7 @@ use crate::sandbox::backend::{
     STATE_PATH, SYSTEM_LABEL, SandboxLaunch, SandboxLaunchError, SandboxUnavailableError,
     WORKSPACE_PATH, agent_command, agent_memory_path, disk_tmp_dir, fresh_disk_tmp, sandbox_name,
 };
-use crate::sandbox::broker::{BrokerTemplate, SessionBroker};
+use crate::sandbox::broker::{BrokerListen, BrokerTemplate, SessionBroker};
 use crate::sandbox::egress::{
     PROXY_VARIABLES, add_proxy_env, brokered_providers, session_env, start_session_broker,
 };
@@ -220,7 +220,11 @@ pub struct PodmanSandbox {
 }
 
 /// Runs the installed tool. Injected for tests.
-pub fn run_podman(args: Vec<String>, cwd: Option<String>) -> super::RunFuture<super::RunResult> {
+pub fn run_podman(
+    args: Vec<String>,
+    cwd: Option<String>,
+    _stdin: Option<String>,
+) -> super::RunFuture<super::RunResult> {
     Box::pin(async move {
         let mut command = tokio::process::Command::new("podman");
         command
@@ -280,7 +284,7 @@ impl PodmanSandbox {
 
     async fn call(&self, args: &[&str]) -> super::RunResult {
         let args: Vec<String> = args.iter().map(std::string::ToString::to_string).collect();
-        (self.run)(args, None)
+        (self.run)(args, None, None)
             .await
             .unwrap_or_else(|error| super::RunResult {
                 code: -1,
@@ -404,6 +408,7 @@ impl PodmanSandbox {
             &launch.session_id,
             launch.grants.clone(),
             BROKER_ADDRESS,
+            BrokerListen::Tcp,
             &self.log,
         )
         .await?;

@@ -694,10 +694,11 @@ fn denying_the_shell_tool_takes_no_command_patterns_with_it() {
     );
 }
 
-/// Under `--yolo` nothing needs allowing, so without denials no permission
-/// is written, and several denied commands share one list.
+/// The confinement setting is written for every session, denials only when
+/// configured. Under `--yolo` nothing needs allowing, so several denied
+/// commands share one list.
 #[test]
-fn only_denials_are_written() {
+fn only_denials_are_written_beside_the_confinement_setting() {
     let config = kage_config(
         &serde_json::Map::new(),
         &BTreeMap::new(),
@@ -708,7 +709,11 @@ fn only_denials_are_written() {
         &as_installed(),
     )
     .toml;
-    assert!(!config.contains("[permissions"), "{config}");
+    assert!(
+        config.contains("[permissions]\nconfine_paths = false\n"),
+        "{config}"
+    );
+    assert!(!config.contains("[permissions.tools"), "{config}");
 
     let denied = Denials {
         commands: vec!["rm -rf *".to_owned(), "git push*".to_owned()],
@@ -728,6 +733,34 @@ fn only_denials_are_written() {
         config.contains("[permissions.tools.shell]\ndeny = [\"rm -rf *\", \"git push*\"]\n"),
         "{config}"
     );
+}
+
+/// The agent's own workdir guard is off, and the base table comes before any
+/// tool table, which TOML requires.
+#[test]
+fn the_agent_runs_without_its_own_path_confinement() {
+    let denied = Denials {
+        commands: vec!["rm -rf *".to_owned()],
+        tools: Vec::new(),
+    };
+    let config = kage_config(
+        &serde_json::Map::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &[],
+        &denied,
+        &as_installed(),
+    )
+    .toml;
+
+    let base = config
+        .find("[permissions]\nconfine_paths = false\n")
+        .expect("the confinement setting is written");
+    let tools = config
+        .find("[permissions.tools.shell]")
+        .expect("the shell denial is written");
+    assert!(base < tools, "{config}");
 }
 
 /// The broker's route for one provider, as the backend hands it over.

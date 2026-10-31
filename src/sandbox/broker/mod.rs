@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub use receipts::{Ledger, RECEIPTS_FILENAME, ReceiptStore};
-pub use server::{Broker, BrokerTemplate, SessionBroker};
+pub use server::{Broker, BrokerListen, BrokerTemplate, SessionBroker};
 
 use receipts::{Outcome, Receipt, ReceiptGuard};
 

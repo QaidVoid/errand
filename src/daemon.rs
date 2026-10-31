@@ -17,7 +17,9 @@ use crate::config::duration::parse_duration;
 use crate::config::live::LiveConfig;
 use crate::config::redact::redact_config;
 use crate::config::schema::defaults::IMAGE;
-use crate::config::schema::{ALLOW_EVERY_USER, ChatConfig, Config, ConfigError, SandboxBackend};
+use crate::config::schema::{
+    ALLOW_EVERY_USER, ChatConfig, Config, ConfigError, EgressMode, IncusConfig, SandboxBackend,
+};
 use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::{MemoryStore, Scope};
@@ -32,6 +34,8 @@ use crate::sandbox::bailey::run_bailey_arc;
 use crate::sandbox::broker::BrokerTemplate;
 use crate::sandbox::broker::RECEIPTS_FILENAME;
 use crate::sandbox::broker::receipts::forget_sessions;
+use crate::sandbox::incus::IncusSandbox;
+use crate::sandbox::incus::run_incus_arc;
 use crate::sandbox::podman::PodmanSandbox;
 use crate::sandbox::podman::run_podman_arc;
 use crate::session::attachments::RawAttachment;
@@ -108,6 +112,16 @@ pub fn create_sandbox(
                 ..Default::default()
             },
         ))),
+        SandboxBackend::Incus => Backend::Incus(Arc::new(IncusSandbox::new(
+            config.sandbox.clone(),
+            log,
+            config.project_root.clone(),
+            config.state_dir.clone(),
+            crate::sandbox::incus::HostFacts::read(),
+            run_incus_arc(),
+            built_in,
+            broker,
+        ))),
     }
 }
 
@@ -127,13 +141,76 @@ fn posted_reply(posted: bool, done: &str, file: &str) -> String {
 /// effective. Only a value that differs from the default counts, since that
 /// is the only evidence available that somebody chose it deliberately.
 pub fn inert_settings(config: &Config) -> Vec<String> {
-    if config.sandbox.backend != SandboxBackend::Bailey {
-        return Vec::new();
+    let sandbox = &config.sandbox;
+    let mut inert = Vec::new();
+    let incus_set = sandbox.incus != IncusConfig::default();
+    let image_set = sandbox.image != IMAGE;
+    let ports_set = sandbox.egress_ports != vec![443];
+
+    match sandbox.backend {
+        SandboxBackend::Bailey => {
+            if image_set {
+                inert.push("sandbox.image is set but only the podman backend uses it".to_owned());
+            }
+            if incus_set {
+                inert.push("sandbox.incus is set but only the incus backend uses it".to_owned());
+            }
+        }
+        SandboxBackend::Podman => {
+            if incus_set {
+                inert.push("sandbox.incus is set but only the incus backend uses it".to_owned());
+            }
+            if sandbox.policy_extra.is_some() {
+                inert.push(
+                    "sandbox.policyExtra is set but only the bailey backend uses it".to_owned(),
+                );
+            }
+            if sandbox.path_extra.is_some() {
+                inert.push(
+                    "sandbox.pathExtra is set but only the bailey backend uses it".to_owned(),
+                );
+            }
+            if sandbox.hide_host_address {
+                inert.push(
+                    "sandbox.hideHostAddress is set but only the bailey backend uses it".to_owned(),
+                );
+            }
+            if sandbox.egress.mode == EgressMode::Open && ports_set {
+                inert.push(
+                    "sandbox.egressPorts is set but egress.mode is open, so it is not enforced"
+                        .to_owned(),
+                );
+            }
+        }
+        SandboxBackend::Incus => {
+            if image_set {
+                inert.push("sandbox.image is set but only the podman backend uses it".to_owned());
+            }
+            if sandbox.policy_extra.is_some() {
+                inert.push(
+                    "sandbox.policyExtra is set but only the bailey backend uses it".to_owned(),
+                );
+            }
+            if sandbox.path_extra.is_some() {
+                inert.push(
+                    "sandbox.pathExtra is set but only the bailey backend uses it".to_owned(),
+                );
+            }
+            if sandbox.hide_host_address {
+                inert.push(
+                    "sandbox.hideHostAddress has no effect under incus, which hides the host by having no NIC in proxy mode"
+                        .to_owned(),
+                );
+            }
+            if sandbox.egress.mode == EgressMode::Open && ports_set {
+                inert.push(
+                    "sandbox.egressPorts is set but egress.mode is open, so it is not enforced"
+                        .to_owned(),
+                );
+            }
+        }
     }
-    if config.sandbox.image == IMAGE {
-        return Vec::new();
-    }
-    vec!["sandbox.image is set but only the podman backend uses it".to_owned()]
+    inert
 }
 
 /// Renders what the chosen backend can and cannot enforce here.

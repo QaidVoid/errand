@@ -16,8 +16,8 @@ use crate::config::redact::MIN_SCRUBBABLE_LENGTH;
 use crate::config::route::{Placement, RoutePolicy};
 use crate::config::schema::{
     self, AgentConfig, ChatConfig, Config, ConfigError, DelegateConfig, EgressConfig, EgressMode,
-    GithubAppConfig, GithubConfig, GithubTrigger, LimitsConfig, NetworkMode, OutputConfig,
-    PluginConfig, PolicyExtraConfig, RetentionConfig, SandboxBackend, SandboxConfig,
+    GithubAppConfig, GithubConfig, GithubTrigger, IncusConfig, LimitsConfig, NetworkMode,
+    OutputConfig, PluginConfig, PolicyExtraConfig, RetentionConfig, SandboxBackend, SandboxConfig,
     ShutdownConfig, TimeoutsConfig, WebConfig, WebLoginConfig,
 };
 use crate::config::size::parse_size;
@@ -74,7 +74,7 @@ const KNOWN_AGENT: [&str; 16] = [
 ];
 const KNOWN_DELEGATE: [&str; 4] = ["model", "perTurn", "deadlineMs", "baseUrl"];
 const KNOWN_GITHUB: [&str; 5] = ["token", "userName", "userEmail", "trigger", "app"];
-const KNOWN_SANDBOX: [&str; 20] = [
+const KNOWN_SANDBOX: [&str; 21] = [
     "backend",
     "requireFullEnforcement",
     "network",
@@ -82,6 +82,7 @@ const KNOWN_SANDBOX: [&str; 20] = [
     "egress",
     "hideHostAddress",
     "image",
+    "incus",
     "memory",
     "cpus",
     "pids",
@@ -98,6 +99,7 @@ const KNOWN_SANDBOX: [&str; 20] = [
 ];
 const KNOWN_EGRESS: [&str; 3] = ["mode", "allow", "allowInternal"];
 const KNOWN_POLICY_EXTRA: [&str; 3] = ["read", "write", "execute"];
+const KNOWN_INCUS: [&str; 5] = ["project", "image", "golden", "rootSize", "guestUid"];
 const KNOWN_SHUTDOWN: [&str; 1] = ["allowedUserIds"];
 const KNOWN_WEB: [&str; 5] = ["host", "port", "observer", "publicUrl", "login"];
 const KNOWN_WEB_LOGIN: [&str; 2] = ["clientId", "clientSecret"];
@@ -1454,7 +1456,7 @@ fn validate_sandbox(raw: &Map<String, Value>, problems: &mut Problems) -> Sandbo
         &source,
         "backend",
         parse_backend,
-        "podman, bailey",
+        "podman, bailey, incus",
         schema::defaults::BACKEND,
         "sandbox",
         problems,
@@ -1496,6 +1498,7 @@ fn validate_sandbox(raw: &Map<String, Value>, problems: &mut Problems) -> Sandbo
         ),
         image: optional_string(&source, "image", "sandbox", problems)
             .unwrap_or_else(|| schema::defaults::IMAGE.to_owned()),
+        incus: validate_incus(&source, problems),
         memory: size(
             &source,
             "memory",
@@ -1551,6 +1554,45 @@ fn validate_sandbox(raw: &Map<String, Value>, problems: &mut Problems) -> Sandbo
         policy_extra: validate_policy_extra(&source, problems),
         path_extra: validate_path_extra(&source, problems),
         env: validate_sandbox_env(&source, problems),
+    }
+}
+
+/// The Incus settings, defaulted when the block is absent.
+fn validate_incus(source: &Map<String, Value>, problems: &mut Problems) -> IncusConfig {
+    let Some(raw) = source.get("incus") else {
+        return IncusConfig::default();
+    };
+    let Some(incus) = raw.as_object() else {
+        problems.add("sandbox.incus must be an object");
+        return IncusConfig::default();
+    };
+    reject_unknown(incus, &KNOWN_INCUS, "sandbox.incus", problems);
+
+    let guest_uid = positive_as(
+        incus,
+        "guestUid",
+        schema::defaults::INCUS_GUEST_UID,
+        "sandbox.incus",
+        problems,
+    );
+    if guest_uid > u32::from(u16::MAX) {
+        problems.add("sandbox.incus.guestUid must be a uid a guest can hold");
+    }
+
+    IncusConfig {
+        project: optional_string(incus, "project", "sandbox.incus", problems)
+            .unwrap_or_else(|| schema::defaults::INCUS_PROJECT.to_owned()),
+        image: optional_string(incus, "image", "sandbox.incus", problems)
+            .unwrap_or_else(|| schema::defaults::INCUS_IMAGE.to_owned()),
+        golden: optional_string(incus, "golden", "sandbox.incus", problems),
+        root_size: size(
+            incus,
+            "rootSize",
+            schema::defaults::INCUS_ROOT_SIZE,
+            "sandbox.incus",
+            problems,
+        ),
+        guest_uid,
     }
 }
 
@@ -1994,6 +2036,7 @@ fn parse_backend(value: &str) -> Option<SandboxBackend> {
     match value {
         "podman" => Some(SandboxBackend::Podman),
         "bailey" => Some(SandboxBackend::Bailey),
+        "incus" => Some(SandboxBackend::Incus),
         _ => None,
     }
 }

@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -15,7 +16,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, UnixListener};
 use tokio::sync::oneshot;
 
 use super::grants::{GrantStore, askable};
@@ -66,7 +67,8 @@ pub struct SessionBroker {
     /// The running broker. Closing or dropping it refuses every request made
     /// after, on any connection, so everything below is worthless from then.
     pub broker: Broker,
-    /// The loopback port the broker listens on.
+    /// The port the sandbox dials: the broker's loopback port over TCP, or
+    /// the guest relay's loopback port over a Unix socket.
     pub port: u16,
     /// The proxy credential this session's tools send.
     pub proxy_secret: String,
@@ -77,6 +79,20 @@ pub struct SessionBroker {
     pub credential_names: BTreeMap<String, String>,
 }
 
+/// Where a session's broker listens, and where the session is told to dial.
+///
+/// A backend that shares the host's loopback uses TCP. A backend with no
+/// route to the host reaches a Unix socket instead, and is told to dial the
+/// guest-side relay that forwards to it.
+#[derive(Debug, Clone)]
+pub enum BrokerListen {
+    /// A loopback TCP port, dialled at the port the broker bound.
+    Tcp,
+    /// A Unix socket at `path`, dialled through a relay at `guest_port`.
+    #[allow(dead_code)] // Constructed by the Incus backend.
+    Unix { path: PathBuf, guest_port: u16 },
+}
+
 impl BrokerTemplate {
     /// Starts a broker for `session_id`, with its own listener, its own proxy
     /// credential, and its own nonce for every provider, admitting what
@@ -85,6 +101,7 @@ impl BrokerTemplate {
         &self,
         session_id: &str,
         grants: Option<Arc<GrantStore>>,
+        listen: BrokerListen,
     ) -> std::io::Result<SessionBroker> {
         let mut nonces = BTreeMap::new();
         let routes = self
@@ -118,9 +135,15 @@ impl BrokerTemplate {
             }),
         );
         broker.grants = grants;
-        // The listener sits on loopback; the address a sandbox dials is only
-        // mapped back to this host from inside it.
-        let port = broker.listen("127.0.0.1").await?;
+        let port = match listen {
+            // The listener sits on loopback; the address a sandbox dials is
+            // only mapped back to this host from inside it.
+            BrokerListen::Tcp => broker.listen("127.0.0.1").await?,
+            BrokerListen::Unix { path, guest_port } => {
+                broker.listen_unix(&path).await?;
+                guest_port
+            }
+        };
         Ok(SessionBroker {
             broker,
             port,
@@ -186,6 +209,8 @@ pub struct Broker {
     pub(super) grants: Option<Arc<GrantStore>>,
     accept_shutdown: Option<oneshot::Sender<()>>,
     provider_shutdown: Option<oneshot::Sender<()>>,
+    /// The socket this broker bound, removed when it closes.
+    unix_path: Option<PathBuf>,
     closed: Arc<AtomicBool>,
 }
 
@@ -214,8 +239,29 @@ impl Broker {
             grants: None,
             accept_shutdown: None,
             provider_shutdown: None,
+            unix_path: None,
             closed: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// The state every listener hands to `handle`, and the provider server
+    /// shares.
+    fn state(&self, client: reqwest::Client, provider_port: u16) -> Arc<ProviderState> {
+        Arc::new(ProviderState {
+            routes: self.routes.clone(),
+            allow: self.allow.clone(),
+            ports: self.ports.clone(),
+            allow_internal: self.allow_internal,
+            proxy_authorization: self.proxy_authorization.clone(),
+            log: self.log.clone(),
+            resolve: None,
+            provider_port,
+            client,
+            closed: Arc::clone(&self.closed),
+            ledger: self.ledger.clone(),
+            denied: std::sync::Mutex::default(),
+            grants: self.grants.clone(),
+        })
     }
 
     /// Binds to a loopback port and starts admitting connections. Returns the
@@ -232,21 +278,7 @@ impl Broker {
         };
         let listener = TcpListener::bind((host, 0)).await?;
         let port = listener.local_addr()?.port();
-        let state = Arc::new(ProviderState {
-            routes: self.routes.clone(),
-            allow: self.allow.clone(),
-            ports: self.ports.clone(),
-            allow_internal: self.allow_internal,
-            proxy_authorization: self.proxy_authorization.clone(),
-            log: self.log.clone(),
-            resolve: None,
-            provider_port,
-            client,
-            closed: Arc::clone(&self.closed),
-            ledger: self.ledger.clone(),
-            denied: std::sync::Mutex::default(),
-            grants: self.grants.clone(),
-        });
+        let state = self.state(client, provider_port);
         let (shutdown_sender, mut shutdown_receiver) = oneshot::channel::<()>();
         tokio::spawn(async move {
             loop {
@@ -288,6 +320,71 @@ impl Broker {
         Ok(port)
     }
 
+    /// Binds a Unix socket and starts admitting connections.
+    ///
+    /// The socket is created mode 0600. The directory it sits in belongs to
+    /// the caller, which creates and protects it. The socket file is removed
+    /// when the broker closes, so a later session on the same path can bind.
+    pub async fn listen_unix(&mut self, path: &Path) -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let client = provider_client(None)?;
+        let provider_port = if self.routes.is_empty() {
+            0
+        } else {
+            self.start_provider(client.clone()).await?
+        };
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let listener = UnixListener::bind(path)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        self.unix_path = Some(path.to_path_buf());
+        let state = self.state(client, provider_port);
+        let (shutdown_sender, mut shutdown_receiver) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            loop {
+                let accepted = tokio::select! {
+                    biased;
+                    _ = &mut shutdown_receiver => break,
+                    accepted = listener.accept() => accepted,
+                };
+                let (stream, _peer) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        state.log.warn(
+                            "the egress broker could not accept a connection, and tries again",
+                            &fields([
+                                ("detail", error.to_string().into()),
+                                (
+                                    "retry_ms",
+                                    u64::try_from(ACCEPT_RETRY.as_millis())
+                                        .unwrap_or(u64::MAX)
+                                        .into(),
+                                ),
+                            ]),
+                        );
+                        tokio::time::sleep(ACCEPT_RETRY).await;
+                        continue;
+                    }
+                };
+                let state = Arc::clone(&state);
+                tokio::spawn(handle(
+                    stream,
+                    state,
+                    |addresses, port, deadline| async move { dial(&addresses, port, deadline).await },
+                ));
+            }
+        });
+        self.accept_shutdown = Some(shutdown_sender);
+        Ok(())
+    }
+
     async fn start_provider(&mut self, client: reqwest::Client) -> std::io::Result<u16> {
         let (shutdown_sender, shutdown_receiver) = oneshot::channel::<()>();
         let app = axum::Router::new().fallback(
@@ -296,21 +393,7 @@ impl Broker {
                 super::serve_provider_request(state, request).await
             },
         );
-        let state = Arc::new(ProviderState {
-            routes: self.routes.clone(),
-            allow: self.allow.clone(),
-            ports: self.ports.clone(),
-            allow_internal: self.allow_internal,
-            proxy_authorization: self.proxy_authorization.clone(),
-            log: self.log.clone(),
-            resolve: None,
-            provider_port: 0,
-            client,
-            closed: Arc::clone(&self.closed),
-            ledger: self.ledger.clone(),
-            denied: std::sync::Mutex::default(),
-            grants: self.grants.clone(),
-        });
+        let state = self.state(client, 0);
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
         self.provider_shutdown = Some(shutdown_sender);
@@ -338,6 +421,9 @@ impl Broker {
         }
         if let Some(shutdown) = self.provider_shutdown.take() {
             let _ = shutdown.send(());
+        }
+        if let Some(path) = self.unix_path.take() {
+            let _ = std::fs::remove_file(path);
         }
     }
 }

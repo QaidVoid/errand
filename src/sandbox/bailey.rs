@@ -24,7 +24,7 @@ use crate::sandbox::backend::{
     SandboxLaunchError, SandboxUnavailableError, agent_command, agent_memory_path, fresh_disk_tmp,
     sandbox_name,
 };
-use crate::sandbox::broker::{BrokerTemplate, SessionBroker};
+use crate::sandbox::broker::{BrokerListen, BrokerTemplate, SessionBroker};
 use crate::sandbox::egress::{
     add_proxy_env, brokered_providers, session_env, start_session_broker,
 };
@@ -50,8 +50,12 @@ const NOT_APPLYING: &str = "not applying";
 const INHERITED_VARIABLES: [&str; 5] = ["PATH", "LANG", "LC_ALL", "TERM", "BAILEY_CGROUP_ROOT"];
 
 /// Runs the installed tool. Injected for tests.
-pub fn run_bailey(args: Vec<String>, cwd: Option<String>) -> super::RunFuture<super::RunResult> {
-    run_program("bailey".to_owned(), args, cwd, true)
+pub fn run_bailey(
+    args: Vec<String>,
+    cwd: Option<String>,
+    stdin: Option<String>,
+) -> super::RunFuture<super::RunResult> {
+    run_program("bailey".to_owned(), args, cwd, true, stdin)
 }
 
 /// Runs the host's kage, named by its path ahead of the arguments. Injected
@@ -59,12 +63,16 @@ pub fn run_bailey(args: Vec<String>, cwd: Option<String>) -> super::RunFuture<su
 ///
 /// The environment is emptied: the daemon's own holds the chat token, and
 /// asking kage what it knows needs none of it.
-pub fn run_kage(args: Vec<String>, cwd: Option<String>) -> super::RunFuture<super::RunResult> {
+pub fn run_kage(
+    args: Vec<String>,
+    cwd: Option<String>,
+    stdin: Option<String>,
+) -> super::RunFuture<super::RunResult> {
     let mut args = args.into_iter();
     let Some(program) = args.next() else {
         return Box::pin(async { Err(std::io::Error::other("no kage was named to run")) });
     };
-    run_program(program, args.collect(), cwd, false)
+    run_program(program, args.collect(), cwd, false, stdin)
 }
 
 /// Runs `program` with `args` and collects what it wrote, inheriting the
@@ -74,6 +82,7 @@ fn run_program(
     args: Vec<String>,
     cwd: Option<String>,
     inherit: bool,
+    stdin: Option<String>,
 ) -> super::RunFuture<super::RunResult> {
     Box::pin(async move {
         let mut command = tokio::process::Command::new(program);
@@ -82,13 +91,22 @@ fn run_program(
         }
         command
             .args(&args)
-            .stdin(std::process::Stdio::null())
+            .stdin(if stdin.is_some() {
+                std::process::Stdio::piped()
+            } else {
+                std::process::Stdio::null()
+            })
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
-        let output = command.output().await?;
+        let mut child = command.spawn()?;
+        if let (Some(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
+            use tokio::io::AsyncWriteExt;
+            pipe.write_all(bytes.as_bytes()).await?;
+        }
+        let output = child.wait_with_output().await?;
         Ok(super::RunResult {
             code: output.status.code().unwrap_or(-1),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -318,7 +336,7 @@ impl BaileySandbox {
 
     async fn call(&self, args: &[&str]) -> super::RunResult {
         let args: Vec<String> = args.iter().map(std::string::ToString::to_string).collect();
-        (self.run)(args, None)
+        (self.run)(args, None, None)
             .await
             .unwrap_or_else(|error| super::RunResult {
                 code: -1,
@@ -477,7 +495,7 @@ impl BaileySandbox {
             .unwrap_or_else(|| Arc::new(run_kage));
         let mut args = vec![launcher.to_owned()];
         args.extend(LIST_ARGS.iter().map(|arg| (*arg).to_owned()));
-        let result = run(args, None)
+        let result = run(args, None, None)
             .await
             .unwrap_or_else(|error| super::RunResult {
                 code: -1,
@@ -632,6 +650,7 @@ impl BaileySandbox {
             &launch.session_id,
             launch.grants.clone(),
             EGRESS_MAP_ADDRESS,
+            BrokerListen::Tcp,
             &self.log,
         )
         .await
@@ -785,7 +804,7 @@ impl BaileySandbox {
     async fn call_in(&self, args: &[&str], cwd: Option<&str>) -> super::RunResult {
         let args: Vec<String> = args.iter().map(std::string::ToString::to_string).collect();
         let cwd = cwd.map(str::to_owned);
-        (self.run)(args, cwd)
+        (self.run)(args, cwd, None)
             .await
             .unwrap_or_else(|error| super::RunResult {
                 code: -1,

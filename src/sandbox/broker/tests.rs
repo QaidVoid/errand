@@ -8,9 +8,11 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UnixStream};
 
-use super::server::{Broker, BrokerTemplate, dial, proxy_authorization, read_request_head};
+use super::server::{
+    Broker, BrokerListen, BrokerTemplate, dial, proxy_authorization, read_request_head,
+};
 use super::{
     NoAddress, ProviderRoute, ProviderUpstream, Resolve, carries_nonce, host_allowed,
     is_private_address, parse_connect, parse_forward, public_addresses,
@@ -1607,8 +1609,14 @@ async fn sessions_share_no_listener_and_no_nonce() {
     let upstream_port = start_upstream(Arc::clone(&seen), "one").await;
     let template = template_for(upstream_port, silent());
 
-    let a = template.start("s-a", None).await.expect("a broker for a");
-    let b = template.start("s-b", None).await.expect("a broker for b");
+    let a = template
+        .start("s-a", None, BrokerListen::Tcp)
+        .await
+        .expect("a broker for a");
+    let b = template
+        .start("s-b", None, BrokerListen::Tcp)
+        .await
+        .expect("a broker for b");
 
     assert_ne!(a.port, b.port);
     assert_ne!(a.proxy_secret, b.proxy_secret);
@@ -1620,12 +1628,67 @@ async fn sessions_share_no_listener_and_no_nonce() {
     assert_eq!(call_provider(a.port, &b.nonces["zai"]).await, 401);
 }
 
+/// A Unix listener answers the same authenticated protocol as a TCP one, and
+/// removes its socket when the session stops.
+#[tokio::test]
+async fn a_unix_listener_serves_the_same_authenticated_requests() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let template = BrokerTemplate {
+        allow: vec!["*".to_owned()],
+        ports: vec![443],
+        allow_internal: true,
+        log: silent(),
+        providers: Vec::new(),
+        credential_names: BTreeMap::new(),
+        receipts: None,
+        now: Arc::new(|| 0),
+    };
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let path = directory.path().join("broker.sock");
+    let started = template
+        .start(
+            "s-1",
+            None,
+            BrokerListen::Unix {
+                path: path.clone(),
+                guest_port: 3128,
+            },
+        )
+        .await
+        .expect("a broker");
+
+    assert_eq!(started.port, 3128);
+    assert_eq!(
+        std::fs::metadata(&path)
+            .expect("the socket")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+
+    let mut conn = UnixStream::connect(&path).await.expect("the socket");
+    conn.write_all(b"CONNECT elsewhere.example:443 HTTP/1.1\r\n\r\n")
+        .await
+        .expect("written");
+    let mut refused = String::new();
+    let _ = conn.read_to_string(&mut refused).await;
+    assert!(refused.starts_with("HTTP/1.1 407"), "{refused}");
+
+    drop(started);
+    assert!(!path.exists(), "the socket file stayed behind");
+}
+
 /// A session broker that is dropped, as one is when a launch fails part way
 /// or a handle is let go without a stop, stops listening all the same.
 #[tokio::test]
 async fn a_dropped_session_broker_stops_listening() {
     let template = template_for(9, silent());
-    let started = template.start("s-1", None).await.expect("a broker");
+    let started = template
+        .start("s-1", None, BrokerListen::Tcp)
+        .await
+        .expect("a broker");
     let port = started.port;
     assert!(TcpStream::connect(("127.0.0.1", port)).await.is_ok());
 
@@ -1648,7 +1711,10 @@ async fn what_a_session_broker_logs_names_the_session() {
         Arc::new(move |_level, line| recorded.lock().unwrap().push(line.to_owned())),
     );
     let template = template_for(9, log);
-    let started = template.start("s-7", None).await.expect("a broker");
+    let started = template
+        .start("s-7", None, BrokerListen::Tcp)
+        .await
+        .expect("a broker");
 
     let mut conn = TcpStream::connect(("127.0.0.1", started.port))
         .await
@@ -1791,7 +1857,7 @@ async fn a_session_stopped_during_a_dial_gets_no_tunnel() {
 #[tokio::test]
 async fn what_a_session_is_handed_is_prefixed_and_scrubbed() {
     let started = template_for(9, silent())
-        .start("s-1", None)
+        .start("s-1", None, BrokerListen::Tcp)
         .await
         .expect("a broker");
     for secret in [&started.proxy_secret, &started.nonces["zai"]] {
@@ -1832,7 +1898,7 @@ async fn an_upstream_that_echoes_the_key_hands_the_session_none_of_it() {
         axum::serve(listener, app).await.expect("serves");
     });
     let started = template_for(upstream_port, silent())
-        .start("s-1", None)
+        .start("s-1", None, BrokerListen::Tcp)
         .await
         .expect("a broker");
 
@@ -1888,7 +1954,7 @@ async fn a_redirect_is_not_followed_and_the_second_host_sees_nothing() {
     let (first_port, first) =
         counting_upstream(302, Some(format!("http://127.0.0.1:{second_port}/stolen"))).await;
     let started = template_for(first_port, silent())
-        .start("s-1", None)
+        .start("s-1", None, BrokerListen::Tcp)
         .await
         .expect("a broker");
 
@@ -2042,7 +2108,7 @@ async fn each_provider_call_leaves_one_receipt() {
     let seen: Arc<Mutex<BTreeMap<String, String>>> = Arc::new(Mutex::new(BTreeMap::new()));
     let upstream_port = start_upstream(Arc::clone(&seen), "one").await;
     let started = recorded_template(upstream_port, root.path())
-        .start("s-1", None)
+        .start("s-1", None, BrokerListen::Tcp)
         .await
         .expect("a broker");
     let nonce = started.nonces["zai"].clone();
@@ -2108,7 +2174,10 @@ async fn refused_and_unreachable_calls_are_recorded_and_tunnels_are_not() {
         credential: "key".to_owned(),
         policy: RoutePolicy::default(),
     });
-    let started = template.start("s-2", None).await.expect("a broker");
+    let started = template
+        .start("s-2", None, BrokerListen::Tcp)
+        .await
+        .expect("a broker");
 
     assert_eq!(
         call_provider(started.port, &started.nonces["zai"]).await,

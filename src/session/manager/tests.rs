@@ -302,8 +302,10 @@ impl SandboxPool for FakeSandbox {
         })
     }
 
-    fn list_orphans(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + '_>> {
-        Box::pin(async { self.orphans.lock().unwrap().clone() })
+    fn list_orphans(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, SandboxLaunchError>> + Send + '_>> {
+        Box::pin(async { Ok(self.orphans.lock().unwrap().clone()) })
     }
 
     fn remove_orphans<'a>(

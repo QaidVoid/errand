@@ -265,11 +265,18 @@ fn default_of(section: &str, field: &str) -> String {
 ///
 /// Written out rather than reflected, because the constants are named for the
 /// code that reads them and the page is named for the file that holds them.
+#[expect(clippy::too_many_lines, reason = "one row per documented default")]
 fn defaults_table() -> BTreeMap<&'static str, Value> {
     let egress = serde_json::json!({
         "mode": defaults::EGRESS_MODE,
         "allow": defaults::EGRESS_ALLOW,
         "allowInternal": defaults::EGRESS_ALLOW_INTERNAL,
+    });
+    let incus = serde_json::json!({
+        "project": defaults::INCUS_PROJECT,
+        "image": defaults::INCUS_IMAGE,
+        "rootSize": defaults::INCUS_ROOT_SIZE,
+        "guestUid": defaults::INCUS_GUEST_UID,
     });
     BTreeMap::from([
         (
@@ -293,6 +300,11 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
         // left out means the default list above.
         ("egress/allow", serde_json::json!([])),
         ("egress/allowinternal", egress["allowInternal"].clone()),
+        ("sandbox/incus", incus.clone()),
+        ("incus/project", incus["project"].clone()),
+        ("incus/image", incus["image"].clone()),
+        ("incus/rootsize", incus["rootSize"].clone()),
+        ("incus/guestuid", incus["guestUid"].clone()),
         (
             "retention/enabled",
             Value::Bool(defaults::RETENTION_ENABLED),
@@ -373,7 +385,7 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
 ///
 /// Ordered here rather than taken from the file, because what a reader needs
 /// first is not the order the types happen to be declared in.
-const KEYS: [(&str, &str); 16] = [
+const KEYS: [(&str, &str); 17] = [
     ("Root", "top level"),
     ("Chat", "chat"),
     ("Agent", "agent"),
@@ -382,6 +394,7 @@ const KEYS: [(&str, &str); 16] = [
     ("GithubApp", "github.app"),
     ("Sandbox", "sandbox"),
     ("Egress", "sandbox.egress"),
+    ("Incus", "sandbox.incus"),
     ("PolicyExtra", "sandbox.policyExtra"),
     ("Output", "output"),
     ("Web", "web"),
@@ -479,7 +492,7 @@ fn json_type(type_: &str, sections: &[Section]) -> Value {
             "type": "object",
             "additionalProperties": { "type": "string" },
         }),
-        "SandboxBackend" => json!({ "type": "string", "enum": ["podman", "bailey"] }),
+        "SandboxBackend" => json!({ "type": "string", "enum": ["podman", "bailey", "incus"] }),
         "NetworkMode" => json!({ "type": "string", "enum": ["restricted", "none"] }),
         _ => {
             let section = sections.iter().find(|section| {

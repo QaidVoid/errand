@@ -1,0 +1,39 @@
+#!/bin/sh
+# Reads a session's environment from the tmpfs file the backend writes, starts
+# the broker relay when one is asked for, and execs the agent.
+#
+# The file holds one NAME=VALUE per line. Values are exported as they are read,
+# never evaluated, and the file is removed before the agent exists.
+set -eu
+
+env_file=/run/errand/env
+if [ -f "$env_file" ]; then
+    while IFS= read -r line; do
+        [ -n "$line" ] && export "$line"
+    done < "$env_file"
+    rm -f "$env_file"
+fi
+
+# The image's Rust proxies are rustup shims, so the toolchain root has to be
+# named. Cargo's own home stays under the agent's HOME, inside the session
+# state, so the registry and build cache persist with it.
+PATH=/usr/local/bun/bin:/usr/local/cargo/bin:$PATH
+export PATH
+RUSTUP_HOME=${RUSTUP_HOME:-/usr/local/rustup}
+export RUSTUP_HOME
+# The Rust cross tool uses the guest's rootless podman unless the operator
+# names another engine.
+CROSS_CONTAINER_ENGINE=${CROSS_CONTAINER_ENGINE:-podman}
+export CROSS_CONTAINER_ENGINE
+
+if [ -n "${ERRAND_BROKER_SOCKET:-}" ] && [ -n "${ERRAND_BROKER_PORT:-}" ]; then
+    socat "TCP-LISTEN:${ERRAND_BROKER_PORT},bind=127.0.0.1,fork,reuseaddr" \
+        "UNIX-CONNECT:${ERRAND_BROKER_SOCKET}" &
+fi
+
+if [ "$#" -eq 0 ]; then
+    echo "errand-exec: no command was given" >&2
+    exit 2
+fi
+
+exec "$@"
