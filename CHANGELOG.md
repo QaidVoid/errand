@@ -1,6 +1,26 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.4.1] - 2026-10-31
+
+
+### Features
+- (images) Quote the prompt in a drawn picture's caption ([8540a5f](https://github.com/QaidVoid/errand/commit/8540a5f111876f506407ea351ae5a67b57ec8de8))
+- (sandbox) Rebuild launch settings and broker routes on reload ([b0f7d78](https://github.com/QaidVoid/errand/commit/b0f7d7846986f33c3a74cb2006c07fca894a3960))
+- (session) Name who started a web session in its channel post ([cac04d6](https://github.com/QaidVoid/errand/commit/cac04d6e731f10807d1786ed8066401001a16d2b))
+- (session) Link a web-started session from its channel post ([8c0aee2](https://github.com/QaidVoid/errand/commit/8c0aee200d36e37c432d727c86b996d285ac2e07))
+- (web) Show the agent's questions with answer buttons ([2170cc9](https://github.com/QaidVoid/errand/commit/2170cc9c094878674721f39e7301025e7132a31c))
+- (web) Run home page commands without starting a session ([8432181](https://github.com/QaidVoid/errand/commit/8432181bb84a9cadb70ab849c664527d3a92223f))
+- (web) Keep posted files and show pictures in place ([c9d9cd6](https://github.com/QaidVoid/errand/commit/c9d9cd6bb74ebe44a4180f36c3cac8a2a52d905b))
+
+### Fixes
+- (agent) Report the agent's exit reason over bailey's ([c2748ba](https://github.com/QaidVoid/errand/commit/c2748ba446356e7846a37c2518e57cf17f7ff6aa))
+- (agent) Keep whitespace-only stream deltas ([edcd51d](https://github.com/QaidVoid/errand/commit/edcd51dc3f84845595677cd54e74dfe5bcdfe2d2))
+- (broker) Tell an http localhost upstream to use 127.0.0.1 ([0d626cf](https://github.com/QaidVoid/errand/commit/0d626cfb030aa0ddd80eae5d1094ec5cf2714fd9))
+- (sandbox) Write a provider kage speaks otherwise as custom ([ae81f6b](https://github.com/QaidVoid/errand/commit/ae81f6b89279ce53b37eeb977e7820edee383ace))
+- (session) Show the running model and defer a mid-turn switch ([4bf5553](https://github.com/QaidVoid/errand/commit/4bf55533d34b3697842c154702b875bd62544fe0))
+- (web) Show command answers, mid-turn prompts, and tool progress ([5a94c46](https://github.com/QaidVoid/errand/commit/5a94c464be898be194f47d589afcf9b130a4aa0a))
+
 ## [0.4.0] - 2026-10-29
 
 
