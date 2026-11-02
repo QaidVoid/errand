@@ -216,7 +216,8 @@
           "type": "string",
           "enum": [
             "podman",
-            "bailey"
+            "bailey",
+            "incus"
           ],
           "description": "Which backend confines sessions."
         },
@@ -254,7 +255,34 @@
         },
         "image": {
           "type": "string",
-          "description": "Container image the podman backend runs. Inert under bailey."
+          "description": "Container image the podman backend runs. Inert under bailey and incus."
+        },
+        "incus": {
+          "type": "object",
+          "description": "How the Incus backend starts a session. Inert under the others.",
+          "additionalProperties": false,
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "The Incus project instances and images live in."
+            },
+            "image": {
+              "type": "string",
+              "description": "The image alias a session starts from when no golden is set."
+            },
+            "golden": {
+              "type": "string",
+              "description": "A stopped instance to copy for each session, or none to create from the image each time."
+            },
+            "rootSize": {
+              "type": "string",
+              "description": "The size of a session's root filesystem, in size syntax such as `20g`."
+            },
+            "guestUid": {
+              "type": "number",
+              "description": "The uid the agent runs as inside the guest."
+            }
+          }
         },
         "memory": {
           "type": "string",

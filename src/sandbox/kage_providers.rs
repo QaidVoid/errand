@@ -64,17 +64,21 @@ impl KageProviders {
                     .unwrap_or("it said nothing")
             ));
         }
-        let listed: Self = serde_json::from_str(result.stdout.trim()).map_err(|error| {
+        Self::from_json(&result.stdout).map_err(|error| {
             format!(
                 "the installed kage answered `kage {}` with something errand cannot read: {error}",
                 LIST_ARGS.join(" ")
             )
-        })?;
+        })
+    }
+
+    /// Reads a provider list already held as JSON, as an image's contract
+    /// carries it, without running anything.
+    pub fn from_json(text: &str) -> Result<Self, String> {
+        let listed: Self = serde_json::from_str(text.trim())
+            .map_err(|error| format!("the provider list does not read: {error}"))?;
         if listed.providers.is_empty() {
-            return Err(format!(
-                "the installed kage answered `kage {}` with no providers at all",
-                LIST_ARGS.join(" ")
-            ));
+            return Err("the provider list is empty".to_owned());
         }
         Ok(listed)
     }

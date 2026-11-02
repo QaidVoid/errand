@@ -147,8 +147,71 @@ fn sizes_and_counts_are_checked_so_a_typo_cannot_become_a_limit() {
 fn a_backend_that_does_not_exist_is_named_with_the_ones_that_do() {
     assert!(problems_contain(
         &valid(json!({ "sandbox": { "backend": "docker" } })),
-        "sandbox.backend must be one of podman, bailey"
+        "sandbox.backend must be one of podman, bailey, incus"
     ));
+}
+
+#[test]
+fn the_incus_block_has_its_own_defaults() {
+    let config = validate_config(&valid(json!({}))).expect("a minimal file resolves");
+    assert_eq!(config.sandbox.incus.project, defaults::INCUS_PROJECT);
+    assert_eq!(config.sandbox.incus.image, defaults::INCUS_IMAGE);
+    assert_eq!(config.sandbox.incus.golden, None);
+    assert_eq!(config.sandbox.incus.root_size, defaults::INCUS_ROOT_SIZE);
+    assert_eq!(config.sandbox.incus.guest_uid, defaults::INCUS_GUEST_UID);
+}
+
+#[test]
+fn the_incus_image_does_not_inherit_the_podman_image() {
+    let config = validate_config(&valid(json!({
+        "sandbox": {
+            "backend": "incus",
+            "image": "localhost/podman-only:latest",
+            "incus": { "project": "mine" },
+        },
+    })))
+    .expect("the file resolves");
+
+    assert_eq!(config.sandbox.image, "localhost/podman-only:latest");
+    assert_eq!(config.sandbox.incus.image, defaults::INCUS_IMAGE);
+    assert_eq!(config.sandbox.incus.project, "mine");
+}
+
+#[test]
+fn an_unknown_incus_setting_is_refused() {
+    assert!(problems_contain(
+        &valid(json!({ "sandbox": { "incus": { "projekt": "errand" } } })),
+        "sandbox.incus.projekt is not a setting"
+    ));
+}
+
+#[test]
+fn a_guest_uid_a_guest_cannot_hold_is_refused() {
+    assert!(problems_contain(
+        &valid(json!({ "sandbox": { "incus": { "guestUid": 70000 } } })),
+        "sandbox.incus.guestUid must be a uid a guest can hold"
+    ));
+    assert!(problems_contain(
+        &valid(json!({ "sandbox": { "incus": { "guestUid": 0 } } })),
+        "sandbox.incus.guestUid must be a number greater than zero"
+    ));
+}
+
+#[test]
+fn an_incus_root_size_must_be_a_size() {
+    assert!(problems_contain(
+        &valid(json!({ "sandbox": { "incus": { "rootSize": "large" } } })),
+        "sandbox.incus.rootSize must be a size"
+    ));
+}
+
+#[test]
+fn incus_settings_under_another_backend_are_accepted() {
+    let config = validate_config(&valid(json!({
+        "sandbox": { "backend": "podman", "incus": { "project": "mine" } },
+    })))
+    .expect("the file resolves");
+    assert_eq!(config.sandbox.incus.project, "mine");
 }
 
 #[test]

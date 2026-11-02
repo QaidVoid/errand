@@ -14,8 +14,17 @@ Sessions use the host's own tools, so there is no image to build or keep.
 Use it when you would rather the session saw a filesystem you assembled than the
 host's.
 
-Either way, the daemon asks the kage that sessions run which providers it
-knows when it starts: the host's under bailey, and the image's under podman. A
+**incus** runs the session in an unprivileged Incus system container from an
+image you provide. The guest has its own init and package manager, so Docker,
+rootful and rootless podman, a database, a FUSE mount or a systemd service are
+ordinary inside it. It shares the host kernel, so a kernel bug reachable from
+the guest is a host problem, and the startup report says so. The host needs the
+`errand` Incus project and an image carrying the contract property. The
+`image/` directory builds one.
+
+Under every backend, the daemon asks the kage that sessions run which providers
+it knows when it starts: the host's under bailey, and the image's under podman
+and incus. A
 provider kage already knows is written into its configuration as an override,
 keeping kage's models, and any other as a custom provider. A configuration
 naming one kage would refuse, such as `acp`, which it reserves, is refused
@@ -293,6 +302,153 @@ grant for once that was never used stays until it is. Only a single exact
 name is ever suggested, so a session that asks for `*.com` is refused without
 a command to paste. The owner and the daemon's operators may grant, as they
 may stop the session.
+
+## The Incus host
+
+The daemon runs as an ordinary account, not root. For the incus backend that
+account must be in the `incus-admin` group, because the restricted per-user
+`incus` group cannot grant the project exceptions below:
+
+```sh
+sudo adduser errand incus-admin
+```
+
+The project the sessions live in must allow exactly what the backend needs and
+nothing more. Create it once:
+
+```sh
+incus project create errand
+incus project set errand restricted=true
+incus project set errand restricted.containers.nesting=allow
+incus project set errand restricted.containers.lowlevel=allow
+incus project set errand restricted.containers.privilege=unprivileged
+incus project set errand restricted.devices.disk=allow
+incus project set errand restricted.devices.disk.paths=/srv/errand,/var/lib/errand
+incus project set errand restricted.devices.proxy=block
+incus project set errand restricted.idmap.uid=1000
+incus project set errand restricted.idmap.gid=1000
+incus profile device add default root disk path=/ pool=default --project errand
+incus profile device add default eth0 nic network=incusbr0 --project errand
+```
+
+QEMU can use hardware acceleration only when the host has `/dev/kvm` and the
+project passes it. This is optional, and it widens the attack surface: a KVM
+bug is a path out of the container.
+
+```sh
+incus project set errand restricted.devices.unix-char=allow
+incus profile device add default kvm unix-char path=/dev/kvm --project errand
+```
+
+The runtime creates the node as 0660 `root:kvm`, which the agent uid cannot
+open, and the device's `gid` and `mode` options are not applied at start. The
+image sets the mode to 0666 at boot with a systemd unit instead. Without the
+device the unit is skipped and QEMU uses TCG.
+
+The idmap values are the host uid and gid that own the project and state
+directories, which are the daemon account's. The guest maps them to
+`sandbox.incus.guestUid`. Both ids also need an allocation for `root` in
+`/etc/subuid` and `/etc/subgid`, or `newuidmap` refuses the instance at start:
+
+```sh
+echo 'root:1000:1' | sudo tee -a /etc/subuid
+echo 'root:1000:1' | sudo tee -a /etc/subgid
+```
+
+The paths in `restricted.devices.disk.paths` must cover `projectRoot` and
+`stateDir`. The broker's socket lives beside a session's state directory, so
+the state root covers it too.
+
+Configure the backend:
+
+```json
+{
+  "sandbox": {
+    "backend": "incus",
+    "incus": {
+      "project": "errand",
+      "image": "errand-agent",
+      "rootSize": "20g",
+      "guestUid": 1000
+    }
+  }
+}
+```
+
+`sandbox.incus.image` is the image alias the sessions start from. It is not
+`sandbox.image`, which stays the podman image. The image must carry a
+`user.errand.contract` property naming its contract version and the provider
+list its kage knows; the probe refuses an image without one. `image/README.md`
+describes the property and the build.
+
+`sandbox.incus.golden` names a stopped instance to copy for each session
+instead of creating one from the image. The golden must not carry
+`user.errand.system`, or the orphan sweep would delete it, and it must carry
+the same contract as instance config. Leave it out to create from the image
+each time.
+
+### Network and the broker
+
+The three network modes mean the same thing under incus as under podman.
+
+- `network: none`: no NIC, no broker link, no network at all.
+- `network: restricted` with `egress.mode=proxy`: no NIC, and the session
+  reaches its broker through a read-only Unix socket mount and a relay on the
+  guest's loopback. Every connection goes through the broker.
+- `network: restricted` with `egress.mode=open`: the profile NIC stays, and
+  the session reaches the network directly. The host allowlist is not
+  enforced, and the startup report says so.
+
+The broker's Unix socket is a sibling of the session's state directory, never
+inside it, because the state is writable by the agent. The relay runs inside
+the guest as the agent uid and is started by the wrapper.
+
+### Limits
+
+| configuration | Incus setting |
+| --- | --- |
+| `sandbox.memory` | `limits.memory`, converted to `KiB`..`GiB` |
+| `sandbox.memory` | `limits.memory.swap=false` |
+| `sandbox.cpus` | `limits.cpu.allowance` as a time quota, with `limits.cpu` unset |
+| `sandbox.pids` | `limits.processes` |
+| `sandbox.fileMax` | `limits.kernel.fsize`, in bytes |
+| `sandbox.gracePeriodMs` | `incus stop --timeout`, in whole seconds rounded up |
+| `sandbox.incus.rootSize` | the root disk size, on a pool that enforces quotas |
+| `sandbox.tmpSize`, `sandbox.shmSize` | the guest's `/tmp` and `/dev/shm`, remounted at launch |
+| `sandbox.diskTmp` | a disk device from the state directory at `/tmp` |
+
+The backend mounts a fresh tmpfs at `/tmp` and `/dev/shm` at the configured
+sizes, after creating the directories, so the image only needs the directories
+themselves. The in-repo image carries the tools a session needs, including
+Rust, Go, Bun, Node.js, uv, Zig, cross, gcc, clang, QEMU, Xvfb, openbox,
+xdotool, the X11 clients, ImageMagick, the `errand-gui` launcher, jj, `gh`,
+ffmpeg, Docker and podman, so host `policyExtra` and `pathExtra` paths are
+not available inside the guest.
+
+The image sets rootless podman's default network to the guest's host network.
+Under `egress.mode=proxy` the guest has no NIC, and pasta cannot set routes in
+that empty namespace, so a default podman container would fail before it
+started. On the host network it shares the guest's loopback and reaches the
+broker relay, and podman passes the session's proxy variables into it. Docker
+keeps its default bridge, which has no uplink in proxy mode; a Docker
+container that needs the broker uses `--network=host`, and the daemon itself
+needs its own proxy configuration for pulls. Direct DNS and ICMP are not
+available in proxy mode; the broker resolves names for proxied HTTP and
+HTTPS, and a public nameserver should not be hardcoded. In open mode the
+profile NIC provides both. The agent has passwordless sudo inside the guest,
+including for apt and pip, and the proxy variables survive sudo so those tools
+use the broker. The apt directories remain root-owned; use sudo rather than
+loosening them.
+
+The agent's own path confinement is turned off in the configuration errand
+writes. The session is already confined by the backend, and the state
+directory sits outside `/workspace` on purpose, so the guard would refuse
+writes there while the shell tool can reach the same path anyway. Under
+bailey the host policy is the boundary, so the setting is off there too.
+
+Those keys, and `sandbox.image` and
+`sandbox.hideHostAddress`, do nothing under incus and are reported as inert. `sandbox.egressPorts` is inert
+under `egress.mode=open`, where the broker is not in the path.
 
 ## Checking it on this host
 

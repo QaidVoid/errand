@@ -10,7 +10,7 @@ use crate::log::{Logger, fields};
 use crate::sandbox::agent_config::BrokeredProvider;
 use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::broker::grants::GrantStore;
-use crate::sandbox::broker::{BrokerTemplate, SessionBroker};
+use crate::sandbox::broker::{BrokerListen, BrokerTemplate, SessionBroker};
 
 /// The variables that point a session's tools at its broker. Each carries the
 /// session's proxy credential.
@@ -103,16 +103,20 @@ pub async fn start_session_broker(
     session_id: &str,
     grants: Option<std::sync::Arc<GrantStore>>,
     reached_at: &str,
+    listen: BrokerListen,
     log: &Logger,
 ) -> Result<Option<SessionBroker>, SandboxLaunchError> {
     let Some(template) = template else {
         return Ok(None);
     };
-    let broker = template.start(session_id, grants).await.map_err(|error| {
-        SandboxLaunchError(format!(
-            "the session's egress broker could not be started: {error}"
-        ))
-    })?;
+    let broker = template
+        .start(session_id, grants, listen)
+        .await
+        .map_err(|error| {
+            SandboxLaunchError(format!(
+                "the session's egress broker could not be started: {error}"
+            ))
+        })?;
     log.info(
         "egress is brokered for this session",
         &fields([

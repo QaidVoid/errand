@@ -19,6 +19,8 @@ pub enum SandboxBackend {
     Podman,
     /// The Landlock and seccomp sandbox, with no container overhead.
     Bailey,
+    /// Unprivileged Incus system containers.
+    Incus,
 }
 
 impl std::fmt::Display for SandboxBackend {
@@ -26,6 +28,7 @@ impl std::fmt::Display for SandboxBackend {
         match self {
             SandboxBackend::Podman => write!(f, "podman"),
             SandboxBackend::Bailey => write!(f, "bailey"),
+            SandboxBackend::Incus => write!(f, "incus"),
         }
     }
 }
@@ -510,6 +513,38 @@ pub struct PolicyExtraConfig {
     pub execute: Vec<String>,
 }
 
+/// How the Incus backend starts a session's system container.
+///
+/// Inert under any other backend.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncusConfig {
+    /// The Incus project instances and images live in.
+    pub project: String,
+    /// The image alias a session starts from when no golden is set.
+    pub image: String,
+    /// A stopped instance to copy for each session, or none to create from
+    /// the image each time.
+    pub golden: Option<String>,
+    /// The size of a session's root filesystem, in size syntax such as
+    /// `20g`.
+    pub root_size: String,
+    /// The uid the agent runs as inside the guest.
+    pub guest_uid: u32,
+}
+
+impl Default for IncusConfig {
+    fn default() -> Self {
+        Self {
+            project: defaults::INCUS_PROJECT.to_owned(),
+            image: defaults::INCUS_IMAGE.to_owned(),
+            golden: None,
+            root_size: defaults::INCUS_ROOT_SIZE.to_owned(),
+            guest_uid: defaults::INCUS_GUEST_UID,
+        }
+    }
+}
+
 /// What a session may consume, and what the backend enforces.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -525,8 +560,11 @@ pub struct SandboxConfig {
     pub egress_ports: Vec<u16>,
     /// What a session may reach outbound, and whether it is brokered.
     pub egress: EgressConfig,
-    /// Container image the podman backend runs. Inert under bailey.
+    /// Container image the podman backend runs. Inert under bailey and
+    /// incus.
     pub image: String,
+    /// How the Incus backend starts a session. Inert under the others.
+    pub incus: IncusConfig,
     /// Memory ceiling per session, in size syntax such as `4g`.
     pub memory: String,
     /// CPU ceiling per session, in cores.
@@ -774,6 +812,18 @@ pub mod defaults {
     pub const HIDE_HOST_ADDRESS: bool = false;
     /// The image the podman backend runs.
     pub const IMAGE: &str = "localhost/errand-agent:latest";
+
+    /// The Incus project sessions and images live in.
+    pub const INCUS_PROJECT: &str = "errand";
+
+    /// The Incus image alias a session starts from when no golden is set.
+    pub const INCUS_IMAGE: &str = "errand-agent";
+
+    /// The size of a session's Incus root filesystem.
+    pub const INCUS_ROOT_SIZE: &str = "20g";
+
+    /// The uid the agent runs as inside an Incus guest.
+    pub const INCUS_GUEST_UID: u32 = 1000;
     /// The memory ceiling per session.
     pub const MEMORY: &str = "4g";
     /// The CPU ceiling per session.

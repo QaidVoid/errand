@@ -119,7 +119,8 @@ What a session may consume, and what the backend enforces.
 | `network` | `NetworkMode` | `"restricted"` | Network exposure granted to a session. |
 | `egressPorts` | `Vec<u16` | `[443]` | Ports a session may open outbound, when the network is not `none`. |
 | `egress` | `EgressConfig` | `{"mode":"proxy","allow":["*"],"allowInternal":false}` | What a session may reach outbound, and whether it is brokered. |
-| `image` | `string` | `"localhost/errand-agent:latest"` | Container image the podman backend runs. Inert under bailey. |
+| `image` | `string` | `"localhost/errand-agent:latest"` | Container image the podman backend runs. Inert under bailey and incus. |
+| `incus` | `IncusConfig` | `{"project":"errand","image":"errand-agent","rootSize":"20g","guestUid":1000}` | How the Incus backend starts a session. Inert under the others. |
 | `memory` | `string` | `"4g"` | Memory ceiling per session, in size syntax such as `4g`. |
 | `cpus` | `number` | `2` | CPU ceiling per session, in cores. |
 | `pids` | `number` | `512` | Process count ceiling per session. |
@@ -143,6 +144,18 @@ What a session may reach outbound, and how that is enforced.
 | `mode` | `EgressMode` | `"proxy"` | Whether egress is port-only or forced through the broker. |
 | `allow` | `Vec<String` | `[]` | Hosts the broker permits, on top of the provider. A leading `*.` matches subdomains, and a lone `*` admits any host. A host not named here is refused, and a thread's owner can grant it with `!grant`. |
 | `allowInternal` | `boolean` | `false` | Whether the broker may dial an address on the host's own network.  Only an address written as a literal: a name that resolves somewhere internal stays refused, since what it points at is not the operator's to decide. |
+
+## sandbox.incus
+
+How the Incus backend starts a session's system container.  Inert under any other backend.
+
+| field | type | default | what it does |
+| --- | --- | --- | --- |
+| `project` | `string` | `"errand"` | The Incus project instances and images live in. |
+| `image` | `string` | `"errand-agent"` | The image alias a session starts from when no golden is set. |
+| `golden` | `string or undefined` | none | A stopped instance to copy for each session, or none to create from the image each time. |
+| `rootSize` | `string` | `"20g"` | The size of a session's root filesystem, in size syntax such as `20g`. |
+| `guestUid` | `number` | `1000` | The uid the agent runs as inside the guest. |
 
 ## sandbox.policyExtra
 

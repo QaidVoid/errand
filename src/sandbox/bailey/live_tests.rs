@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use super::{bailey_args, egress_proxy_endpoint, parse_doctor};
 use crate::config::schema::{
-    EgressConfig, EgressMode, NetworkMode, PolicyExtraConfig, SandboxBackend, SandboxConfig,
-    defaults,
+    EgressConfig, EgressMode, IncusConfig, NetworkMode, PolicyExtraConfig, SandboxBackend,
+    SandboxConfig, defaults,
 };
 use crate::sandbox::backend::SandboxLaunch;
 use crate::sandbox::policy::{PolicyOptions, policy_contents};
@@ -141,6 +141,7 @@ fn default_config(also: u16, directory: &str) -> SandboxConfig {
         },
         hide_host_address: defaults::HIDE_HOST_ADDRESS,
         image: defaults::IMAGE.to_owned(),
+        incus: IncusConfig::default(),
         memory: defaults::MEMORY.to_owned(),
         cpus: defaults::CPUS,
         pids: defaults::PIDS,

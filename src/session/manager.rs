@@ -130,7 +130,12 @@ pub trait SandboxPool: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<RunningBox, SandboxLaunchError>> + Send>>;
 
     /// Names the sandboxes a previous run left behind.
-    fn list_orphans(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send + '_>>;
+    ///
+    /// A failure to list is an error, never an empty list: a sandbox left
+    /// running must not look like one that is gone.
+    fn list_orphans(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, SandboxLaunchError>> + Send + '_>>;
 
     /// Removes the named sandboxes, returning how many went.
     fn remove_orphans<'a>(
@@ -413,7 +418,16 @@ impl SessionManager {
     /// leave containers running against a project while a new daemon starts
     /// more.
     pub async fn sweep_orphans(&self) -> usize {
-        let orphans = self.options.sandbox.list_orphans().await;
+        let orphans = match self.options.sandbox.list_orphans().await {
+            Ok(orphans) => orphans,
+            Err(error) => {
+                self.options.log.error(
+                    "could not list sandboxes left by a previous run, so none were removed",
+                    &fields([("detail", error.to_string().into())]),
+                );
+                return 0;
+            }
+        };
         if orphans.is_empty() {
             return 0;
         }
