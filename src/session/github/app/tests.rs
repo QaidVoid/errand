@@ -5,7 +5,7 @@ use base64::Engine as _;
 use serde_json::{Value, json};
 
 use super::{RETRY_MS, SessionToken, app_jwt, mint, renew_in_ms, token_line};
-use crate::config::schema::GithubAppConfig;
+use crate::config::schema::ForgeAppConfig;
 use crate::session::pr::{Api, ApiReply};
 
 /// A throwaway key made for these tests, never a credential.
@@ -54,8 +54,8 @@ fn the_app_proves_itself_with_a_token_its_key_signed() {
     assert!(app_jwt(42, "not a key", 0).is_err());
 }
 
-fn app(key_path: &str) -> GithubAppConfig {
-    GithubAppConfig {
+fn app(key_path: &str) -> ForgeAppConfig {
+    ForgeAppConfig {
         app_id: 42,
         installation_id: 7,
         private_key_path: key_path.to_owned(),

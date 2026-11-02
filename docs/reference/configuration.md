@@ -2,7 +2,7 @@
 
 # Configuration
 
-Every field the daemon reads, taken from `src/config/schema.rs`. A key that
+Every field the daemon accepts, projected from `src/config/schema.rs`. A key that
 is not one of these is a refusal to start rather than a setting quietly
 ignored, so a misspelling says so. Inside a provider definition, which may
 carry keys of the operator's own, only a misspelling of a route key is
@@ -26,17 +26,8 @@ The fully resolved configuration the daemon runs on.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `chat` | `ChatConfig` | none | Chat connection and who may drive the bot. |
-| `agent` | `AgentConfig` | none | Which model the agent talks to, and the credential it reaches it with. |
 | `projectRoot` | `string` | required | Absolute path under which every session's project directory lives. |
 | `stateDir` | `string` | required | Where per-session state directories are created on the host.  Neither this nor `projectRoot` may sit inside the other. A session may write both, and the transcript is kept beside this directory precisely so that it cannot. |
-| `sandbox` | `SandboxConfig` | none | What a session may consume, and what the backend enforces. |
-| `output` | `OutputConfig` | none | How much of the agent's activity reaches the thread. |
-| `shutdown` | `ShutdownConfig` | none | Who may power off the host. Empty means nobody, which is the default. |
-| `limits` | `LimitsConfig` | none | Bounds on how much work exists at once. |
-| `timeouts` | `TimeoutsConfig` | none | Deadlines that end or unblock a session. |
-| `retention` | `RetentionConfig` | none | When what a cold session left on disk is collected. |
-| `problems` | `Vec<String` | none | Every problem found, in the order the checks ran. |
 
 ## chat
 
@@ -46,9 +37,9 @@ Chat connection and who may drive the bot.
 | --- | --- | --- | --- |
 | `token` | `string` | required | Bot token. Secret. Never enters a sandbox. At least 8 bytes, so it can be scrubbed from what is posted. |
 | `channelId` | `string` | required | The single channel the daemon serves. Everything else is ignored. |
-| `allowedUserIds` | `Vec<String` | required | Accounts permitted to drive sessions. Must not be empty. |
-| `blockedUserIds` | `Vec<String` | none | Accounts refused before anything else is considered. |
-| `operatorUserIds` | `Vec<String` | none | Accounts that may control any session, not only their own. |
+| `allowedUserIds` | `string[]` | required | Accounts permitted to drive sessions. Must not be empty. |
+| `blockedUserIds` | `string[]` | none | Accounts refused before anything else is considered. |
+| `operatorUserIds` | `string[]` | none | Accounts that may control any session, not only their own. |
 | `startOnMention` | `boolean` | `false` | Require a message to mention the bot before it starts a session. |
 
 ## agent
@@ -63,12 +54,12 @@ Which model the agent talks to, and the credential it reaches it with.
 | `imageGen` | `string or undefined` | none | Model `!gen-image` draws with, or none.  Named as `!model` names them: an alias, `provider/id`, or a bare model id, with the effort to use as a level on the end, as `image:max`. The level stays on the model, because it is part of the name the images endpoint is asked for. It is the standing effort: one asked for on the command, as `--effort <level>` or a level on a model named there, replaces it for that picture. A name nothing lists is refused when the command is used, not here.  The command calls the provider's own `POST /images/generations` with this model and the prompt, and posts what comes back as an upload. The provider is the one that lists the model, so its `baseUrl` is where the request goes, and a name two providers list is refused rather than guessed at. The provider a session runs on is preferred when it lists the name too. A provider with no `baseUrl` cannot draw. |
 | `speechGen` | `string or undefined` | none | Model `!gen-speech` reads aloud with, or none.  Named as `!model` names them: an alias, `provider/id`, or a bare model id. It takes no effort level, because the speech tiers are model names on the server. A name nothing lists is refused when the command is used, not here. |
 | `rulesPath` | `string or undefined` | none | File of standing instructions given to every session, or none. |
-| `providers` | `Map<String, serde_json::Value` | none | Every provider, the one a session starts on included.  A provider is named with lowercase letters, digits and dashes, which is all kage accepts in a provider id. One marked `extension: true` may be named anything, since errand never writes it into kage's configuration.  Each entry carries the credential errand reaches that provider with, optionally the `credentialName` the agent reads it from, and whatever else locates it: `baseUrl`, `kind`, `models`. A `kind` of `openai` or `anthropic` says which wire protocol a provider kage does not already know speaks, in kage's own words; omitted means `openai`. A provider kage knows needs no `kind`, since its name already says it. Endpoints reach the agent's own configuration translated, because that schema belongs to the agent; the credential never enters it, traveling in the environment instead. Under `egress.mode = proxy`, a provider the broker routes, unless marked `broker: false`, is given to the session as a stand-in, `errand-session-` and 64 hex digits, minted for that session alone and honoured only by its broker until the session stops. It authenticates the session to its broker, which puts the real credential on; it is worth nothing to the provider, and the session's reported text is scrubbed of it. An entry of `models` naming a model the host's store already defines for that provider lends its name and context to the declaration, so the agent can address it.  `discover` asks the provider which models it serves, at startup, after a change to this file, and on `!models refresh`, under its `baseUrl`. `true` reads the usual `/models` listing. An object moves it: `path`, `list` for where the array sits, `fields` naming where `id`, `name`, `contextWindow`, and `maxTokens` sit in an entry, and `defaults` for fields every model found carries. An entry of `models` naming a model found overrides the fields it names and keeps the rest.  `usage` says how to read what is left of the provider's usage window, for `!usage`, the bot's status, and refusing a session the window cannot serve: `"zai"` for z.ai's quota endpoint, `"gateway"` for `/usage` under the `baseUrl`, or an object with `path`, `auth` (`bearer` or `raw`), `percent` and `percentIs` (`used` or `left`), and `resets` and `resetsAs` (`iso`, `ms`, or `s`). Several windows go under `windows`, the one to show first: a missing or stale one gives way to the next, and a spent one outranks them all. A path may pick a list entry by a field, as `windows[id=5h].usedPercent`. `spentRefuses: false` is for a plan that bills past a spent window to a credit balance: the window still shows, but no longer refuses a session. A provider without `usage` is not metered, whatever it is called.  A `defaultThinkingLevel` on a provider says how hard its models think when nobody says, and one on an entry of `models` says it for that model alone. Naming a model the host's store already lists says it for that model without listing it twice.  An `images` object on one provider, naming a `model`, gives sessions kage's `generate_image` tool through it, for an endpoint that answers `POST /images/generations`. A provider the agent already reaches for chat lends the tool its endpoint and key. One kage does not know that lists no models is an images endpoint of its own, written for the tool alone so its image models are never offered as chat models, and it needs a `baseUrl`. An `editModel` beside the `model` also gives sessions kage's `edit_image` tool on the same endpoint, which answers `POST /images/edits` with that model.  A `speech` object on one provider, naming a `model` and an optional `voice`, gives sessions kage's `generate_speech` tool, for an endpoint that answers `POST /audio/speech`. The three shapes are the same as for `images`: a provider the agent already reaches for chat lends the tool its endpoint and key, and one kage does not know that lists no models is a speech endpoint of its own and needs a `baseUrl`. The `voice` is the one asked for when the agent names none. It needs a kage newer than 0.5.1.  A `music` object on one provider, naming a `model`, gives sessions kage's `generate_music` tool, for an endpoint that answers `POST /music/generations`, in the same three shapes. It needs a kage newer than 0.5.1.  On a brokered provider, `placement` (`bearer` or `x-api-key`) says which header its key travels in, following an explicit `kind` when left out, and `capabilities`, a list of `method` and `path` or `"*"`, says which calls the key may make. A list only warns until `strictCapabilities` is `true`; the sandboxing page describes both. A key that reads as a misspelling of one of these three is refused. Any other key errand does not read is ignored.  A provider entry may instead be marked `extension: true`, which means a kage plugin registers it. Errand writes nothing for it into the agent's configuration and does not broker it: the plugin holds the endpoint, and a signing plugin needs the real credential, so that travels whole in the environment under `credentialName`. Its `models` are read only so a session can list and switch to them. |
-| `plugins` | `Vec<PluginConfig` | none | Kage plugins handed to every session. |
-| `aliases` | `BTreeMap<String, String` | none | Short names for models, so a session is started without spelling one. |
-| `fallback` | `Vec<String` | none | Models to start a session on instead, in order, when the provider it would start on has spent its usage window. Named as `!model` names them, aliases included. The first whose provider has room is used; a session is turned away only when every one is spent too. |
-| `deny` | `Vec<String` | none | Commands the agent may not run, whatever else is permitted.  Sessions run with every tool allowed, since the chat cannot serve a prompt the agent waits on and a permission ask nobody sees is a session that stalls. This is what stands in for that prompt: glob patterns matched against the command line, the same patterns kage's own rules use. A match is refused by the agent itself and the reason reaches the thread, so a refusal is visible rather than silent.  Patterns are checked against the whole command line, so `rm -rf *` covers the form that is actually typed. To refuse one tool outright whatever it is asked to do, use `deniedTools`. |
-| `deniedTools` | `Vec<String` | none | Tools the agent may not call at all.  Named by the tool kage calls it, such as `shell` or `write`. Refused whatever their input carries, which is the blunt end: `deny` refuses particular commands, this refuses a whole capability. |
+| `providers` | `Map<String, serde_json::Value>` | none | Every provider, the one a session starts on included.  A provider is named with lowercase letters, digits and dashes, which is all kage accepts in a provider id. One marked `extension: true` may be named anything, since errand never writes it into kage's configuration.  Each entry carries the credential errand reaches that provider with, optionally the `credentialName` the agent reads it from, and whatever else locates it: `baseUrl`, `kind`, `models`. A `kind` of `openai` or `anthropic` says which wire protocol a provider kage does not already know speaks, in kage's own words; omitted means `openai`. A provider kage knows needs no `kind`, since its name already says it. Endpoints reach the agent's own configuration translated, because that schema belongs to the agent; the credential never enters it, traveling in the environment instead. Under `egress.mode = proxy`, a provider the broker routes, unless marked `broker: false`, is given to the session as a stand-in, `errand-session-` and 64 hex digits, minted for that session alone and honoured only by its broker until the session stops. It authenticates the session to its broker, which puts the real credential on; it is worth nothing to the provider, and the session's reported text is scrubbed of it. An entry of `models` naming a model the host's store already defines for that provider lends its name and context to the declaration, so the agent can address it.  `discover` asks the provider which models it serves, at startup, after a change to this file, and on `!models refresh`, under its `baseUrl`. `true` reads the usual `/models` listing. An object moves it: `path`, `list` for where the array sits, `fields` naming where `id`, `name`, `contextWindow`, and `maxTokens` sit in an entry, and `defaults` for fields every model found carries. An entry of `models` naming a model found overrides the fields it names and keeps the rest.  `usage` says how to read what is left of the provider's usage window, for `!usage`, the bot's status, and refusing a session the window cannot serve: `"zai"` for z.ai's quota endpoint, `"gateway"` for `/usage` under the `baseUrl`, or an object with `path`, `auth` (`bearer` or `raw`), `percent` and `percentIs` (`used` or `left`), and `resets` and `resetsAs` (`iso`, `ms`, or `s`). Several windows go under `windows`, the one to show first: a missing or stale one gives way to the next, and a spent one outranks them all. A path may pick a list entry by a field, as `windows[id=5h].usedPercent`. `spentRefuses: false` is for a plan that bills past a spent window to a credit balance: the window still shows, but no longer refuses a session. A provider without `usage` is not metered, whatever it is called.  A `defaultThinkingLevel` on a provider says how hard its models think when nobody says, and one on an entry of `models` says it for that model alone. Naming a model the host's store already lists says it for that model without listing it twice.  An `images` object on one provider, naming a `model`, gives sessions kage's `generate_image` tool through it, for an endpoint that answers `POST /images/generations`. A provider the agent already reaches for chat lends the tool its endpoint and key. One kage does not know that lists no models is an images endpoint of its own, written for the tool alone so its image models are never offered as chat models, and it needs a `baseUrl`. An `editModel` beside the `model` also gives sessions kage's `edit_image` tool on the same endpoint, which answers `POST /images/edits` with that model.  A `speech` object on one provider, naming a `model` and an optional `voice`, gives sessions kage's `generate_speech` tool, for an endpoint that answers `POST /audio/speech`. The three shapes are the same as for `images`: a provider the agent already reaches for chat lends the tool its endpoint and key, and one kage does not know that lists no models is a speech endpoint of its own and needs a `baseUrl`. The `voice` is the one asked for when the agent names none. It needs a kage newer than 0.5.1.  A `music` object on one provider, naming a `model`, gives sessions kage's `generate_music` tool, for an endpoint that answers `POST /music/generations`, in the same three shapes. It needs a kage newer than 0.5.1.  On a brokered provider, `placement` (`bearer` or `x-api-key`) says which header its key travels in, following an explicit `kind` when left out, and `capabilities`, a list of `method` and `path` or `"*"`, says which calls the key may make. A list only warns until `strictCapabilities` is `true`; the sandboxing page describes both. A key that reads as a misspelling of one of these three is refused. Any other key errand does not read is ignored.  A provider entry may instead be marked `extension: true`, which means a kage plugin registers it. Errand writes nothing for it into the agent's configuration and does not broker it: the plugin holds the endpoint, and a signing plugin needs the real credential, so that travels whole in the environment under `credentialName`. Its `models` are read only so a session can list and switch to them. |
+| `plugins` | `Vec<PluginConfig>` | none | Kage plugins handed to every session. |
+| `aliases` | `Record<string, string>` | none | Short names for models, so a session is started without spelling one. |
+| `fallback` | `string[]` | none | Models to start a session on instead, in order, when the provider it would start on has spent its usage window. Named as `!model` names them, aliases included. The first whose provider has room is used; a session is turned away only when every one is spent too. |
+| `deny` | `string[]` | none | Commands the agent may not run, whatever else is permitted.  Sessions run with every tool allowed, since the chat cannot serve a prompt the agent waits on and a permission ask nobody sees is a session that stalls. This is what stands in for that prompt: glob patterns matched against the command line, the same patterns kage's own rules use. A match is refused by the agent itself and the reason reaches the thread, so a refusal is visible rather than silent.  Patterns are checked against the whole command line, so `rm -rf *` covers the form that is actually typed. To refuse one tool outright whatever it is asked to do, use `deniedTools`. |
+| `deniedTools` | `string[]` | none | Tools the agent may not call at all.  Named by the tool kage calls it, such as `shell` or `write`. Refused whatever their input carries, which is the blunt end: `deny` refuses particular commands, this refuses a whole capability. |
 
 ## agent.delegate
 
@@ -81,22 +72,29 @@ A cheaper model the session's model may ask about one artefact.  Absent means no
 | `deadlineMs` | `number` | none | How long one delegation may take before it is abandoned. |
 | `baseUrl` | `string or undefined` | none | Where the provider is reached, when the model store does not say. |
 
-## github
+## forge
 
-The GitHub identity a session works with, when one is configured.  A session with no GitHub configuration still runs, and simply has no credential to reach a repository with.
+The forge identity a session works with, when one is configured.  A session with no forge configuration still runs, and simply has no credential to reach a repository with.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `token` | `string` | required | The daemon's token, a classic one, which it reads notifications, composes pull requests and pushes with. A session holds it too unless `app` is set. Secret, and at least 8 bytes, so it can be scrubbed from what is posted. |
+| `type` | `ForgeKind` | `"github"` | Which forge this is. GitHub unless `type` says otherwise, so the section reads the same as the `github` spelling it replaces. |
+| `url` | `string or undefined` | none | The instance's address, such as `https://forge.example.com`. Forgejo is the only forge configured by one: GitHub is always github.com, and naming a `url` there is refused. |
+| `token` | `string` | required | The daemon's token, which it reads notifications, composes pull requests and pushes with. A session holds it too unless `app` is set, which only GitHub has. Secret, and at least 8 bytes, so it can be scrubbed from what is posted. |
 | `userName` | `string` | required | Name commits are authored with. |
 | `userEmail` | `string` | required | Email commits are authored with. |
-| `trigger` | `GithubTrigger or undefined` | none | Who may start a session from GitHub, by mentioning the bot's account on an issue or pull request or assigning one to it. Absent means GitHub is only where work is sent, never where it is asked for. |
-| `allowedUsers` | `Vec<String` | none | The GitHub logins whose mentions and assignments start a session, and whose comments continue one. Nobody else is heard: on a public repository anyone can comment, and every session runs code. |
-| `repositories` | `Vec<String` | none | The repositories listened to, as `owner/repo`, or `owner/*` for every one an account or organisation holds. Absent means wherever the bot is mentioned or assigned. |
-| `onMention` | `boolean` | none | Whether a mention of the bot starts a session. On unless `on` leaves `mention` out. |
-| `onAssign` | `boolean` | none | Whether assigning an issue or pull request to the bot starts one. On unless `on` leaves `assign` out. |
 
-## github.app
+## forge.trigger
+
+Who may ask for work from the forge.
+
+| field | type | default | what it does |
+| --- | --- | --- | --- |
+| `allowedUsers` | `string[]` | required | The forge logins whose mentions and assignments start a session, and whose comments continue one. Nobody else is heard: on a public repository anyone can comment, and every session runs code. Required and non-empty. A wildcard `*` is refused. |
+| `repositories` | `string[]` | `[]` | The repositories listened to, as `owner/repo`, or `owner/*` for every one an account or organisation holds. Absent means wherever the bot is mentioned or assigned. |
+| `on` | `string[] or undefined` | `["mention","assign"]` | Events that start a session: `mention`, `assign`, or both. Must not be empty. Omitted means both events. |
+
+## forge.app
 
 The GitHub App a session's credential is minted from.
 
@@ -105,8 +103,18 @@ The GitHub App a session's credential is minted from.
 | `appId` | `number` | none | The App's id. |
 | `installationId` | `number` | none | The installation tokens are minted for. |
 | `privateKeyPath` | `string` | none | The absolute path of the App's private key, as GitHub gave it. |
-| `permissions` | `BTreeMap<String, String` | `{}` | What each token may do, by permission, as `read` or `write`. Empty asks for everything the installation was granted. |
-| `repositories` | `Vec<String` | `[]` | The repositories each token covers, by name without their owner. Empty covers every repository of the installation. |
+| `permissions` | `Record<string, string>` | `{}` | What each token may do, by permission, as `read` or `write`. Empty asks for everything the installation was granted. |
+| `repositories` | `string[]` | `[]` | The repositories each token covers, by name without their owner. Empty covers every repository of the installation. |
+
+## github
+
+Deprecated but still supported: the legacy GitHub identity. Rename `github` to `forge`; `forge.type` defaults to `github`. Do not set both sections. Only `token`, `userName`, `userEmail`, `trigger`, and `app` are accepted here, not `type` or `url`. The optional `trigger` and `app` objects use the fields documented under `forge.trigger` and `forge.app`.
+
+| field | type | default | what it does |
+| --- | --- | --- | --- |
+| `token` | `string` | required | The daemon's token, which it reads notifications, composes pull requests and pushes with. A session holds it too unless `app` is set, which only GitHub has. Secret, and at least 8 bytes, so it can be scrubbed from what is posted. |
+| `userName` | `string` | required | Name commits are authored with. |
+| `userEmail` | `string` | required | Email commits are authored with. |
 
 ## sandbox
 
@@ -117,10 +125,8 @@ What a session may consume, and what the backend enforces.
 | `backend` | `SandboxBackend` | none | Which backend confines sessions. |
 | `requireFullEnforcement` | `boolean` | `true` | Refuse to start when the backend cannot enforce every configured guarantee on this host, rather than reporting the gap and continuing. |
 | `network` | `NetworkMode` | `"restricted"` | Network exposure granted to a session. |
-| `egressPorts` | `Vec<u16` | `[443]` | Ports a session may open outbound, when the network is not `none`. |
-| `egress` | `EgressConfig` | `{"mode":"proxy","allow":["*"],"allowInternal":false}` | What a session may reach outbound, and whether it is brokered. |
+| `egressPorts` | `number[]` | `[443]` | Ports a session may open outbound, when the network is not `none`. |
 | `image` | `string` | `"localhost/errand-agent:latest"` | Container image the podman backend runs. Inert under bailey and incus. |
-| `incus` | `IncusConfig` | `{"project":"errand","image":"errand-agent","rootSize":"20g","guestUid":1000}` | How the Incus backend starts a session. Inert under the others. |
 | `memory` | `string` | `"4g"` | Memory ceiling per session, in size syntax such as `4g`. |
 | `cpus` | `number` | `2` | CPU ceiling per session, in cores. |
 | `pids` | `number` | `512` | Process count ceiling per session. |
@@ -132,8 +138,8 @@ What a session may consume, and what the backend enforces.
 | `diskCheckMs` | `number` | `30000` | How often a session's disk use is measured, in milliseconds. |
 | `gracePeriodMs` | `number` | `10000` | How long a sandbox may take to stop before it is killed. |
 | `hideHostAddress` | `boolean` | `false` | Hide the host's network identity from a session, when it has a network. |
-| `pathExtra` | `Vec<String or undefined` | none | Directories added to a session's PATH, or none. |
-| `env` | `BTreeMap<String, String or undefined` | none | Variables set in every session's environment, or none. |
+| `pathExtra` | `string[] or undefined` | none | Directories added to a session's PATH, or none. |
+| `env` | `Record<string, string> or undefined` | none | Variables set in every session's environment, or none. |
 
 ## sandbox.egress
 
@@ -142,7 +148,7 @@ What a session may reach outbound, and how that is enforced.
 | field | type | default | what it does |
 | --- | --- | --- | --- |
 | `mode` | `EgressMode` | `"proxy"` | Whether egress is port-only or forced through the broker. |
-| `allow` | `Vec<String` | `[]` | Hosts the broker permits, on top of the provider. A leading `*.` matches subdomains, and a lone `*` admits any host. A host not named here is refused, and a thread's owner can grant it with `!grant`. |
+| `allow` | `string[]` | `[]` | Hosts the broker permits, on top of the provider. A leading `*.` matches subdomains, and a lone `*` admits any host. A host not named here is refused, and a thread's owner can grant it with `!grant`. |
 | `allowInternal` | `boolean` | `false` | Whether the broker may dial an address on the host's own network.  Only an address written as a literal: a name that resolves somewhere internal stays refused, since what it points at is not the operator's to decide. |
 
 ## sandbox.incus
@@ -163,9 +169,9 @@ Paths granted to a session on top of what the daemon already grants.  Additive o
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `read` | `Vec<String` | none | Directories or files a session may read. |
-| `write` | `Vec<String` | none | Directories or files a session may write. |
-| `execute` | `Vec<String` | none | Directories a session may execute from. |
+| `read` | `string[]` | none | Directories or files a session may read. |
+| `write` | `string[]` | none | Directories or files a session may write. |
+| `execute` | `string[]` | none | Directories a session may execute from. |
 
 ## output
 
@@ -208,7 +214,7 @@ Who may power off the host from a chat message.  Off unless the list has somebod
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `allowedUserIds` | `Vec<String` | none | Account ids permitted to power off the host. |
+| `allowedUserIds` | `string[]` | none | Account ids permitted to power off the host. |
 
 ## limits
 

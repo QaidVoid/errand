@@ -13,6 +13,7 @@ use crate::admission::scheduler::Scheduler;
 use crate::chat::render::{inert, thread_name, warning_line};
 use crate::config::live::LiveConfig;
 use crate::config::redact::secret_values;
+use crate::config::schema::Config;
 use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
 use crate::memory::store::MemoryStore;
@@ -780,7 +781,7 @@ impl SessionManager {
             owner_name: message.author_name.clone(),
             start_turn: None,
             open_pull_request: Some(daemon_open_pull_request()),
-            github_api: Some(Arc::new(pr::call_api)),
+            github_api: github_api_of(&self.options.config.get()),
             thread_id: Some(thread.id.clone()),
             guild_id: self.shared.guild_id.lock().expect("the guild lock").clone(),
             public_url: self.shared.public_url.clone(),
@@ -997,7 +998,7 @@ impl SessionManager {
             owner_name: None,
             start_turn: Some(fan_out.current_turn()),
             open_pull_request: Some(daemon_open_pull_request()),
-            github_api: Some(Arc::new(pr::call_api)),
+            github_api: github_api_of(&self.options.config.get()),
             thread_id: Some(record.thread_id.clone()),
             guild_id: self.shared.guild_id.lock().expect("the guild lock").clone(),
             public_url: self.shared.public_url.clone(),
@@ -1422,12 +1423,22 @@ fn reason_name(reason: EndReason) -> &'static str {
     }
 }
 
+/// The API a session's App token is minted through, pointed at the
+/// configured forge, or none when there is no forge to mint from.
+///
+/// The App mechanism is GitHub's, so a Forgejo forge never has one to mint;
+/// the closure is handed over all the same, since a session that finds no
+/// App asks it for nothing.
+fn github_api_of(config: &Config) -> Option<pr::Api> {
+    config.forge.as_ref().map(|forge| pr::api_for(forge))
+}
+
 /// The pull request opener a session is given: the daemon's own route.
 fn daemon_open_pull_request() -> OpenPullRequest {
     Arc::new(move |request: pr::Request| {
         Box::pin(async move {
             let run: pr::Run = Arc::new(pr::run_command);
-            let api: pr::Api = Arc::new(pr::call_api);
+            let api: pr::Api = pr::api_for(&request.forge);
             let sleep: pr::Sleep = Arc::new(pr::pause);
             pr::open_pull_request(&request, &run, &api, &sleep).await
         })

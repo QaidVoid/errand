@@ -189,3 +189,103 @@ fn the_egress_defaults_show_in_the_page_and_the_schema() {
     assert!(egress.is_object(), "{schema}");
     assert!(egress.get("required").is_none(), "{egress}");
 }
+
+#[test]
+fn trigger_schemas_describe_input_events_instead_of_resolved_flags() {
+    let sections = read_schema(&schema());
+    let schema: serde_json::Value = serde_json::from_str(&config_schema(&sections)).expect("JSON");
+    for key in ["forge", "github"] {
+        let trigger = &schema["properties"][key]["properties"]["trigger"];
+        let properties = trigger["properties"].as_object().expect("trigger fields");
+        assert_eq!(properties.len(), 3, "{key}: {properties:?}");
+        assert!(!properties.contains_key("onMention"));
+        assert!(!properties.contains_key("onAssign"));
+        assert_eq!(trigger["additionalProperties"], false);
+        assert_eq!(trigger["required"], serde_json::json!(["allowedUsers"]));
+        assert_eq!(properties["allowedUsers"]["minItems"], 1);
+        assert_eq!(properties["repositories"]["default"], serde_json::json!([]));
+        let on = &properties["on"];
+        assert_eq!(on["type"], "array");
+        assert_eq!(on["items"]["type"], "string");
+        assert_eq!(
+            on["items"]["enum"],
+            serde_json::json!(["mention", "assign"])
+        );
+        assert_eq!(on["minItems"], 1);
+        assert_eq!(on["default"], serde_json::json!(["mention", "assign"]));
+    }
+}
+
+#[test]
+fn the_forge_discriminator_is_optional_and_defaults_to_github() {
+    let sections = read_schema(&schema());
+    let schema: serde_json::Value = serde_json::from_str(&config_schema(&sections)).expect("JSON");
+    let forge = &schema["properties"]["forge"];
+    assert_eq!(forge["properties"]["type"]["type"], "string");
+    assert_eq!(forge["properties"]["type"]["default"], "github");
+    assert_eq!(
+        forge["properties"]["type"]["enum"],
+        serde_json::json!(["github", "forgejo"])
+    );
+    assert_eq!(
+        forge["required"],
+        serde_json::json!(["token", "userName", "userEmail"])
+    );
+}
+
+#[test]
+fn the_legacy_github_input_is_deprecated_and_exclusive_with_forge() {
+    let sections = read_schema(&schema());
+    let schema: serde_json::Value = serde_json::from_str(&config_schema(&sections)).expect("JSON");
+    let github = &schema["properties"]["github"];
+    assert_eq!(github["type"], "object");
+    assert_eq!(github["deprecated"], true);
+    assert_eq!(github["additionalProperties"], false);
+    assert_eq!(
+        github["properties"]
+            .as_object()
+            .expect("legacy fields")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["token", "userName", "userEmail", "trigger", "app"]
+    );
+    assert_eq!(
+        github["required"],
+        serde_json::json!(["token", "userName", "userEmail"])
+    );
+    for field in ["trigger", "app"] {
+        assert_eq!(
+            github["properties"][field],
+            schema["properties"]["forge"]["properties"][field]
+        );
+    }
+    let required = schema["required"].as_array().expect("root required fields");
+    assert!(!required.contains(&serde_json::json!("forge")));
+    assert!(!required.contains(&serde_json::json!("github")));
+    assert_eq!(
+        schema["not"],
+        serde_json::json!({ "required": ["forge", "github"] })
+    );
+}
+
+#[test]
+fn the_reference_explains_forge_input_defaults_and_legacy_support() {
+    let generated = pages(&schema());
+    let page = &generated["docs/reference/configuration.md"];
+    let trigger = page
+        .split("## forge.trigger\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("trigger reference");
+    assert!(trigger.contains("| `on` | `string[] or undefined` | `[\"mention\",\"assign\"]` |"));
+    assert!(trigger.contains("| `allowedUsers` | `string[]` | required |"));
+    assert!(trigger.contains("| `repositories` | `string[]` | `[]` |"));
+    assert!(!page.contains("`onMention`"));
+    assert!(!page.contains("`onAssign`"));
+    assert!(page.contains("| `type` | `ForgeKind` | `\"github\"` |"));
+    assert!(page.contains("## github\n"));
+    assert!(page.contains("Deprecated but still supported"));
+    assert!(page.contains("Do not set both sections."));
+    assert!(page.contains("not `type` or `url`"));
+}

@@ -30,7 +30,7 @@ use crate::config::load::Environment;
 use crate::config::redact::{contains_secret, redact_text, secret_values};
 use crate::config::route::RoutePolicy;
 use crate::config::schema::{
-    AgentConfig, Config, EgressMode, GithubConfig, GithubTrigger, SandboxConfig,
+    AgentConfig, Config, EgressMode, ForgeConfig, ForgeTrigger, SandboxConfig,
 };
 use crate::config::usage::UsageShape;
 use crate::config::watch::{AfterReload, POLL, watch};
@@ -38,6 +38,7 @@ use crate::daemon::SlashCommand;
 use crate::daemon::StartError;
 use crate::daemon::{Daemon, DaemonOptions};
 use crate::daemon::{create_sandbox, probe_sandbox};
+use crate::forge;
 use crate::issues::poll::{Poller, decide};
 use crate::issues::route::{ByThread, LINKS_FILENAME};
 use crate::issues::thread::issue_of;
@@ -77,7 +78,7 @@ use crate::sandbox::egress::provider_prefix;
 use crate::sandbox::paths;
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
 use crate::session::model::{configured_model, split_level};
-use crate::session::pr::{ApiCall, call_api};
+use crate::session::pr::ApiCall;
 use crate::session::session::DescribeImages;
 use crate::session::session::DrawImage;
 use crate::session::session::FetchLinked;
@@ -96,55 +97,60 @@ pub const MEMORY_FILENAME: &str = "memory.db";
 /// How long the chat service has to answer a login.
 const READY_TIMEOUT_MS: u64 = 30_000;
 
-/// How often GitHub is asked what was said to the bot. GitHub asks for no
-/// more than once a minute.
-const GITHUB_POLL: std::time::Duration = std::time::Duration::from_secs(60);
+/// How often the forge is asked what was said to the bot. GitHub asks for no
+/// more than once a minute, and there is nothing to gain from asking a
+/// Forgejo instance faster.
+const FORGE_POLL: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Starts hearing what is said to the bot on GitHub, for as long as the
+/// Starts hearing what is said to the bot on the forge, for as long as the
 /// daemon runs.
 ///
 /// Whose token it is decides whose mentions count, so the login is asked for
-/// first. A token that cannot say whose it is leaves GitHub unheard, and the
-/// log says so, rather than stopping a daemon that still serves the chat.
-async fn listen_on_github(
-    github: &GithubConfig,
-    trigger: &GithubTrigger,
+/// first. A token that cannot say whose it is leaves the forge unheard, and
+/// the log says so, rather than stopping a daemon that still serves the chat.
+async fn listen_on_forge(
+    forge: &ForgeConfig,
+    trigger: &ForgeTrigger,
     daemon: Arc<Daemon>,
     router: Arc<ByThread>,
     log: &Logger,
 ) {
-    let me = call_api(
+    let name = forge::display(forge.kind);
+    let api = crate::session::pr::api_for(forge);
+    let me = api(
         "/user".to_owned(),
         ApiCall {
             method: "GET".to_owned(),
-            token: github.token.clone(),
+            token: forge.token.clone(),
             body: None,
         },
     )
     .await;
     let Some(bot) = me.body["login"].as_str().filter(|_| me.status == 200) else {
         log.error(
-            "GitHub did not say whose token this is, so nothing said there is heard",
+            &format!("{name} did not say whose token this is, so nothing said there is heard"),
             &fields([("status", LogValue::from(i64::from(me.status)))]),
         );
         return;
     };
     log.info(
-        "listening on GitHub",
+        &format!("listening on {name}"),
         &fields([
             ("as", LogValue::from(bot)),
             ("allowed", LogValue::from(trigger.allowed_users.join(", "))),
         ]),
     );
-    let poller = Poller {
-        api: Arc::new(call_api),
-        token: github.token.clone(),
+    let mut poller = Poller {
+        api,
+        kind: forge.kind,
+        token: forge.token.clone(),
         bot: bot.to_owned(),
         allowed: trigger.allowed_users.clone(),
         repositories: trigger.repositories.clone(),
         on_mention: trigger.on_mention,
         on_assign: trigger.on_assign,
         since: jiff::Timestamp::now(),
+        floors: BTreeMap::new(),
         log: log.clone(),
     };
     let log = log.clone();
@@ -163,11 +169,13 @@ async fn listen_on_github(
                     }
                 }
                 Err(why) => log.warn(
-                    "GitHub could not be asked what was said to the bot; asking again shortly",
+                    &format!(
+                        "{name} could not be asked what was said to the bot; asking again shortly"
+                    ),
                     &fields([("detail", LogValue::from(why))]),
                 ),
             }
-            tokio::time::sleep(GITHUB_POLL).await;
+            tokio::time::sleep(FORGE_POLL).await;
         }
     });
 }
@@ -1075,16 +1083,17 @@ async fn run(
         watching,
     ));
 
-    // Only when somebody may ask for work there: otherwise GitHub stays where
-    // work is sent, and nothing about it is started.
+    // Only when somebody may ask for work there: otherwise the forge stays
+    // where work is sent, and nothing about it is started.
     let issue_threads = config
-        .github
+        .forge
         .as_ref()
-        .filter(|github| github.trigger.is_some())
-        .map(|github| {
+        .filter(|forge| forge.trigger.is_some())
+        .map(|forge| {
             Arc::new(IssueThreads {
-                api: Arc::new(call_api),
-                token: github.token.clone(),
+                kind: forge.kind,
+                api: crate::session::pr::api_for(forge),
+                token: forge.token.clone(),
                 log: log.clone(),
             })
         });
@@ -1239,12 +1248,15 @@ async fn run(
         }
         Arc::new(FactoryAdapter(thread_factory)) as Arc<dyn ThreadFactory>
     };
-    // Work asked for on GitHub runs in a chat thread like any other, and the
-    // issue it came from is answered beside it.
+    // Work asked for on a forge runs in a chat thread like any other, and
+    // the issue it came from is answered beside it.
     let issue_router = issue_threads.as_ref().map(|issues| {
+        let forge = config.forge.as_ref().expect("the issues name their forge");
         Arc::new(ByThread::new(
             Arc::clone(&chat_threads),
             Arc::clone(issues),
+            forge::display(forge.kind),
+            &forge::site_base(forge),
             std::path::Path::new(&config.state_dir).join(LINKS_FILENAME),
             log.clone(),
         ))
@@ -1273,10 +1285,16 @@ async fn run(
                     // issue hears a session's turns, not the daemon turning
                     // work away, which is for whoever runs it.
                     let text = match issue_of(&message.channel_id) {
-                        Some((repository, number)) => format!(
-                            "{} asked on GitHub, on {repository}#{number}, and {text}",
-                            message.author_name.as_deref().unwrap_or("somebody")
-                        ),
+                        Some((repository, number)) => {
+                            let name = live
+                                .get()
+                                .forge
+                                .map_or("the forge", |forge| forge::display(forge.kind));
+                            format!(
+                                "{} asked on {name}, on {repository}#{number}, and {text}",
+                                message.author_name.as_deref().unwrap_or("somebody")
+                            )
+                        }
                         None => text,
                     };
                     // Read from the configuration in force, so that a
@@ -1405,28 +1423,17 @@ async fn run(
         return Exit::Failed;
     }
     collect_cold_sessions(Arc::clone(&daemon), live.clone(), log.clone());
-    if config
-        .github
-        .as_ref()
-        .is_some_and(|github| github.app.is_none())
-    {
-        log.warn(
-            "sessions hold the daemon's own GitHub token, since github.app is not set. An App \
-             narrows what a session holds to one installation for an hour at a time",
-            &fields([]),
-        );
-    }
-    if let (Some(github), Some(router)) = (config.github.as_ref(), &issue_router)
-        && let Some(trigger) = &github.trigger
-    {
-        listen_on_github(
-            github,
-            trigger,
-            Arc::clone(&daemon),
-            Arc::clone(router),
-            log,
-        )
-        .await;
+    if let Some(forge) = config.forge.as_ref() {
+        if forge.kind == crate::config::schema::ForgeKind::Github && forge.app.is_none() {
+            log.warn(
+                "sessions hold the daemon's own GitHub token, since forge.app is not set. An App \
+                 narrows what a session holds to one installation for an hour at a time",
+                &fields([]),
+            );
+        }
+        if let (Some(router), Some(trigger)) = (&issue_router, &forge.trigger) {
+            listen_on_forge(forge, trigger, Arc::clone(&daemon), Arc::clone(router), log).await;
+        }
     }
 
     // Registered after startup, so a bot invited without the commands scope
@@ -1797,7 +1804,10 @@ struct PostedFile<'a> {
 /// quote marker renders only at the start of one.
 fn addressed(author_id: &str, caption: &str) -> String {
     let gap = if caption.starts_with('>') { "\n" } else { " " };
-    match author_id.strip_prefix(crate::issues::thread::PREFIX) {
+    match crate::issues::thread::PREFIXES
+        .iter()
+        .find_map(|prefix| author_id.strip_prefix(prefix))
+    {
         Some(login) => format!("{login}{gap}{caption}"),
         None => format!("<@{author_id}>{gap}{caption}"),
     }

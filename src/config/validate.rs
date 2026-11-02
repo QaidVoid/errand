@@ -16,7 +16,7 @@ use crate::config::redact::MIN_SCRUBBABLE_LENGTH;
 use crate::config::route::{Placement, RoutePolicy};
 use crate::config::schema::{
     self, AgentConfig, ChatConfig, Config, ConfigError, DelegateConfig, EgressConfig, EgressMode,
-    GithubAppConfig, GithubConfig, GithubTrigger, IncusConfig, LimitsConfig, NetworkMode,
+    ForgeAppConfig, ForgeConfig, ForgeKind, ForgeTrigger, IncusConfig, LimitsConfig, NetworkMode,
     OutputConfig, PluginConfig, PolicyExtraConfig, RetentionConfig, SandboxBackend, SandboxConfig,
     ShutdownConfig, TimeoutsConfig, WebConfig, WebLoginConfig,
 };
@@ -26,12 +26,13 @@ use crate::config::usage::UsageShape;
 /// Variables the policy sets itself, and so refuses to take from a file.
 const SET_BY_THE_POLICY: [&str; 2] = ["PATH", "HOME"];
 
-const KNOWN_ROOT: [&str; 13] = [
+const KNOWN_ROOT: [&str; 14] = [
     // Not a setting: it is how an editor finds the schema to check the file
     // against, and refusing it would make the file uncheckable.
     "$schema",
     "chat",
     "agent",
+    "forge",
     "github",
     "projectRoot",
     "stateDir",
@@ -73,6 +74,17 @@ const KNOWN_AGENT: [&str; 16] = [
     "extensions",
 ];
 const KNOWN_DELEGATE: [&str; 4] = ["model", "perTurn", "deadlineMs", "baseUrl"];
+const KNOWN_FORGE: [&str; 7] = [
+    "type",
+    "url",
+    "token",
+    "userName",
+    "userEmail",
+    "trigger",
+    "app",
+];
+// The deprecated spelling of `forge` with "type": "github", still read so an
+// existing configuration carries on until it is renamed.
 const KNOWN_GITHUB: [&str; 5] = ["token", "userName", "userEmail", "trigger", "app"];
 const KNOWN_SANDBOX: [&str; 21] = [
     "backend",
@@ -1142,31 +1154,163 @@ fn validate_delegate(
     })
 }
 
-/// Reads the GitHub identity, which the whole section may omit.
+/// Reads the forge identity, which the whole section may omit.
 ///
 /// Present but incomplete is a problem rather than a partial identity: a
 /// session that pushes as half of somebody is worse than one that cannot push.
-fn validate_github(raw: &Map<String, Value>, problems: &mut Problems) -> Option<GithubConfig> {
-    raw.get("github")?;
-    let source = section(raw, "github");
-    reject_unknown(&source, &KNOWN_GITHUB, "github", problems);
+/// The `github` spelling is still read, as a forge of the `github` type, and
+/// naming both spellings is a refusal rather than a shadowing.
+fn validate_forge(raw: &Map<String, Value>, problems: &mut Problems) -> Option<ForgeConfig> {
+    let named = raw.get("forge").is_some();
+    let deprecated = raw.get("github").is_some();
+    if named && deprecated {
+        problems.add(
+            "forge and github cannot both be set: `github` is the deprecated spelling of `forge` \
+             with \"type\": \"github\"",
+        );
+    }
+    if !named && !deprecated {
+        return None;
+    }
+    let key = if named { "forge" } else { "github" };
+    let source = section(raw, key);
+    if named {
+        reject_unknown(&source, &KNOWN_FORGE, "forge", problems);
+    } else {
+        reject_unknown(&source, &KNOWN_GITHUB, "github", problems);
+    }
 
-    Some(GithubConfig {
-        token: required_token(&source, "github", problems),
-        user_name: required_string(&source, "userName", "github", problems),
-        user_email: required_string(&source, "userEmail", "github", problems),
-        trigger: validate_github_trigger(&source, problems),
-        app: validate_github_app(&source, problems),
+    let kind = read_forge_kind(&source, key, problems);
+    let url = read_forge_url(&source, key, kind, problems);
+
+    Some(ForgeConfig {
+        kind,
+        url,
+        token: required_token(&source, key, problems),
+        user_name: required_string(&source, "userName", key, problems),
+        user_email: required_string(&source, "userEmail", key, problems),
+        trigger: validate_forge_trigger(&source, key, problems),
+        app: validate_forge_app(&source, key, kind, problems),
     })
 }
 
-/// Reads the GitHub App a session's credential is minted from, if one is
-/// named.
-fn validate_github_app(
+/// Reads which forge the section names, GitHub when it names none.
+fn read_forge_kind(source: &Map<String, Value>, key: &str, problems: &mut Problems) -> ForgeKind {
+    match source.get("type") {
+        None => ForgeKind::Github,
+        Some(Value::String(kind)) => match kind.as_str() {
+            "github" => ForgeKind::Github,
+            "forgejo" => ForgeKind::Forgejo,
+            other => {
+                problems.add(format!(
+                    "{key}.type is `{other}`; a forge is `github` or `forgejo`"
+                ));
+                ForgeKind::Github
+            }
+        },
+        Some(_) => {
+            problems.add(format!("{key}.type must be \"github\" or \"forgejo\""));
+            ForgeKind::Github
+        }
+    }
+}
+
+/// Reads the instance's address, which only a Forgejo forge has.
+///
+/// Kept as a scheme, a host with an optional port, and any path the instance
+/// is mounted under: every address the daemon builds later, from the API to a
+/// clone URL, is that address with a suffix on, so anything else accepted
+/// here would be misbuilt there.
+fn read_forge_url(
     source: &Map<String, Value>,
+    key: &str,
+    kind: ForgeKind,
     problems: &mut Problems,
-) -> Option<GithubAppConfig> {
+) -> Option<String> {
+    let written = match (kind, source.get("url")) {
+        (ForgeKind::Github, None) => return None,
+        (ForgeKind::Github, Some(_)) => {
+            problems.add(format!(
+                "{key}.url names nothing errand can reach: GitHub is always github.com, and \
+                 `type: \"forgejo\"` is what chooses an instance"
+            ));
+            return None;
+        }
+        (ForgeKind::Forgejo, None) => {
+            problems.add(format!(
+                "{key}.url is required for a Forgejo forge: the instance's address, as \
+                 \"https://forge.example.com\""
+            ));
+            return None;
+        }
+        (ForgeKind::Forgejo, Some(Value::String(written))) => written,
+        (ForgeKind::Forgejo, Some(_)) => {
+            problems.add(format!(
+                "{key}.url must be the instance's address, as \"https://forge.example.com\""
+            ));
+            return None;
+        }
+    };
+    let written = written.trim();
+    let Some((scheme, rest)) = written.split_once("://") else {
+        problems.add(format!(
+            "{key}.url must start with its scheme, as \"https://forge.example.com\""
+        ));
+        return None;
+    };
+    if scheme != "http" && scheme != "https" {
+        problems.add(format!(
+            "{key}.url must be an http or https address, not \"{scheme}://\""
+        ));
+        return None;
+    }
+    let rest = rest.trim_end_matches('/');
+    if rest.contains('?') || rest.contains('#') {
+        problems.add(format!(
+            "{key}.url is the instance's address alone: a query or a fragment has no place in \"https://forge.example.com\""
+        ));
+        return None;
+    }
+    let authority = rest.split('/').next().unwrap_or("");
+    if authority.is_empty()
+        || authority.contains('@')
+        || authority.contains(' ')
+        || host_of(authority).is_empty()
+    {
+        problems.add(format!(
+            "{key}.url must name the instance's host, as \"https://forge.example.com\""
+        ));
+        return None;
+    }
+    Some(format!("{scheme}://{rest}"))
+}
+
+/// The host of a URL's authority, with any port and IPv6 brackets off it.
+fn host_of(authority: &str) -> &str {
+    let without_port = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
+        _ => authority,
+    };
+    without_port.trim_start_matches('[').trim_end_matches(']')
+}
+
+/// Reads the forge App a session's credential is minted from, if one is
+/// named. A GitHub App is the only kind there is, so naming one for a
+/// Forgejo forge is refused rather than read and ignored.
+fn validate_forge_app(
+    source: &Map<String, Value>,
+    key: &str,
+    kind: ForgeKind,
+    problems: &mut Problems,
+) -> Option<ForgeAppConfig> {
     source.get("app")?;
+    if kind == ForgeKind::Forgejo {
+        problems.add(format!(
+            "{key}.app mints GitHub App installation tokens, which Forgejo has no equivalent of, \
+             so there is nothing to mint from there; leave it out and sessions hold {key}.token"
+        ));
+        return None;
+    }
     let app = section(source, "app");
     reject_unknown(
         &app,
@@ -1177,11 +1321,11 @@ fn validate_github_app(
             "permissions",
             "repositories",
         ],
-        "github.app",
+        &format!("{key}.app"),
         problems,
     );
-    let id = |key: &str, problems: &mut Problems| {
-        let read = match app.get(key) {
+    let id = |field: &str, problems: &mut Problems| {
+        let read = match app.get(field) {
             Some(Value::Number(number)) => number.as_u64(),
             Some(Value::String(written)) => written.trim().parse::<u64>().ok(),
             _ => None,
@@ -1190,7 +1334,7 @@ fn validate_github_app(
             Some(id) if id > 0 => id,
             _ => {
                 problems.add(format!(
-                    "github.app.{key} must be the number GitHub shows for it"
+                    "{key}.app.{field} must be the number GitHub shows for it"
                 ));
                 0
             }
@@ -1198,9 +1342,9 @@ fn validate_github_app(
     };
     let app_id = id("appId", problems);
     let installation_id = id("installationId", problems);
-    let private_key_path = required_string(&app, "privateKeyPath", "github.app", problems);
+    let private_key_path = required_string(&app, "privateKeyPath", &format!("{key}.app"), problems);
     if !private_key_path.is_empty() && !is_absolute(&private_key_path) {
-        problems.add("github.app.privateKeyPath must be an absolute path");
+        problems.add(format!("{key}.app.privateKeyPath must be an absolute path"));
     }
     let mut permissions = BTreeMap::new();
     match app.get("permissions") {
@@ -1212,26 +1356,26 @@ fn validate_github_app(
                         permissions.insert(name.clone(), level.to_owned());
                     }
                     _ => problems.add(format!(
-                        "github.app.permissions.{name} must be \"read\" or \"write\""
+                        "{key}.app.permissions.{name} must be \"read\" or \"write\""
                     )),
                 }
             }
         }
-        Some(_) => problems.add(
-            "github.app.permissions must map a permission to \"read\" or \"write\", as \
-             { \"contents\": \"write\" }",
-        ),
+        Some(_) => problems.add(format!(
+            "{key}.app.permissions must map a permission to \"read\" or \"write\", as \
+             {{ \"contents\": \"write\" }}"
+        )),
     }
-    let repositories = id_list(&app, "repositories", "github.app", problems);
+    let repositories = id_list(&app, "repositories", &format!("{key}.app"), problems);
     for repository in &repositories {
         if repository.contains('/') {
             problems.add(format!(
-                "github.app.repositories names `{repository}`, but a repository is named here \
+                "{key}.app.repositories names `{repository}`, but a repository is named here \
                  without its owner, which is the installation's"
             ));
         }
     }
-    Some(GithubAppConfig {
+    Some(ForgeAppConfig {
         app_id,
         installation_id,
         private_key_path,
@@ -1240,60 +1384,74 @@ fn validate_github_app(
     })
 }
 
-/// Reads who may ask for work from GitHub, if anybody.
+/// Reads who may ask for work from the forge, if anybody.
 ///
 /// A wildcard is refused rather than read: on a public repository anyone can
 /// comment, so "anyone" would mean running whatever a stranger wrote.
-fn validate_github_trigger(
+fn validate_forge_trigger(
     source: &Map<String, Value>,
+    key: &str,
     problems: &mut Problems,
-) -> Option<GithubTrigger> {
+) -> Option<ForgeTrigger> {
     source.get("trigger")?;
     let trigger = section(source, "trigger");
     reject_unknown(
         &trigger,
         &["allowedUsers", "repositories", "on"],
-        "github.trigger",
+        &format!("{key}.trigger"),
         problems,
     );
-    let allowed_users = id_list(&trigger, "allowedUsers", "github.trigger", problems);
-    let repositories = id_list(&trigger, "repositories", "github.trigger", problems);
+    let allowed_users = id_list(
+        &trigger,
+        "allowedUsers",
+        &format!("{key}.trigger"),
+        problems,
+    );
+    let repositories = id_list(
+        &trigger,
+        "repositories",
+        &format!("{key}.trigger"),
+        problems,
+    );
     for repository in &repositories {
         let named = repository.split_once('/').is_some_and(|(owner, name)| {
             !owner.is_empty() && !name.is_empty() && !name.contains('/')
         });
         if !named {
             problems.add(format!(
-                "github.trigger.repositories names `{repository}`, which is not `owner/repo` or \
+                "{key}.trigger.repositories names `{repository}`, which is not `owner/repo` or \
                  `owner/*`"
             ));
         }
     }
     let on = match trigger.get("on") {
         None => vec!["mention".to_owned(), "assign".to_owned()],
-        Some(_) => id_list(&trigger, "on", "github.trigger", problems),
+        Some(_) => id_list(&trigger, "on", &format!("{key}.trigger"), problems),
     };
     for starts in &on {
         if starts != "mention" && starts != "assign" {
             problems.add(format!(
-                "github.trigger.on names `{starts}`; what starts a session is `mention` or `assign`"
+                "{key}.trigger.on names `{starts}`; what starts a session is `mention` or `assign`"
             ));
         }
     }
     if on.is_empty() {
-        problems.add("github.trigger.on names nothing, so nothing would ever start a session");
+        problems.add(format!(
+            "{key}.trigger.on names nothing, so nothing would ever start a session"
+        ));
     }
     if allowed_users.is_empty() {
-        problems
-            .add("github.trigger.allowedUsers must name the GitHub logins that may ask for work");
+        problems.add(format!(
+            "{key}.trigger.allowedUsers must name the logins that may ask for work"
+        ));
     }
     if allowed_users.iter().any(|login| login == "*") {
-        problems.add(
-            "github.trigger.allowedUsers cannot be \"*\": anyone can comment on a public \
-             repository, and every session runs code",
-        );
+        problems.add(format!(
+            "{key}.trigger.allowedUsers cannot be \"*\": anyone can comment on a public \
+             repository, and every session runs code"
+        ));
     }
-    Some(GithubTrigger {
+    Some(ForgeTrigger {
         allowed_users,
         repositories,
         on_mention: on.iter().any(|starts| starts == "mention"),
@@ -1910,6 +2068,24 @@ fn validate_retention(raw: &Map<String, Value>, problems: &mut Problems) -> Rete
     }
 }
 
+/// What a configuration that still spells the forge section `github` should
+/// be told, as a warning rather than a refusal: the spelling is read, and
+/// accepted until it is not. Empty when the file names `forge`, or no forge
+/// at all.
+pub fn forge_deprecations(parsed: &Value) -> Vec<String> {
+    let Some(raw) = parsed.as_object() else {
+        return Vec::new();
+    };
+    if !raw.contains_key("github") || raw.contains_key("forge") {
+        return Vec::new();
+    }
+    vec![
+        "`github` is the deprecated spelling of `forge` with \"type\": \"github\"; rename the \
+         section to keep following along"
+            .to_owned(),
+    ]
+}
+
 /// Validates a parsed configuration file.
 ///
 /// Returns a [`ConfigError`] carrying every problem found, so that a first run
@@ -1925,7 +2101,7 @@ pub fn validate_config(parsed: &Value) -> Result<Config, ConfigError> {
 
     let chat = validate_chat(raw, &mut problems);
     let agent = validate_agent(raw, &mut problems);
-    let github = validate_github(raw, &mut problems);
+    let forge = validate_forge(raw, &mut problems);
     let project_root = directory(raw, "projectRoot", &mut problems);
     let state_dir = directory(raw, "stateDir", &mut problems);
     let sandbox = validate_sandbox(raw, &mut problems);
@@ -1952,19 +2128,24 @@ pub fn validate_config(parsed: &Value) -> Result<Config, ConfigError> {
     // read is the App itself, able to mint any permission it was granted.
     // Compared where each really is, so neither a `..` nor a link moves the
     // key into a root without it showing.
-    if let Some(key) = github
+    if let Some(key) = forge
         .as_ref()
-        .and_then(|github| github.app.as_ref())
+        .and_then(|forge| forge.app.as_ref())
         .map(|app| real_path(&app.private_key_path))
         .filter(|key| !key.is_empty())
         && [&project_root, &state_dir]
             .iter()
             .any(|root| !root.is_empty() && nests(&real_path(root), &key))
     {
-        problems.add(
-            "github.app.privateKeyPath must lie outside projectRoot and stateDir, which a session \
+        problems.add(format!(
+            "{}.app.privateKeyPath must lie outside projectRoot and stateDir, which a session \
              can read",
-        );
+            if raw.contains_key("forge") {
+                "forge"
+            } else {
+                "github"
+            }
+        ));
     }
 
     if !project_root.is_empty() && !state_dir.is_empty() && nests(&project_root, &state_dir) {
@@ -1979,7 +2160,7 @@ pub fn validate_config(parsed: &Value) -> Result<Config, ConfigError> {
         Ok(Config {
             chat,
             agent,
-            github,
+            forge,
             project_root,
             state_dir,
             sandbox,

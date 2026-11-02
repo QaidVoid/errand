@@ -21,7 +21,8 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::config::schema::GithubConfig;
+use crate::config::schema::{ForgeConfig, ForgeKind};
+use crate::forge;
 use crate::sandbox::backend::WORKSPACE_PATH;
 use crate::sandbox::paths;
 use crate::session::github::{SessionLinks, attribution_footer};
@@ -37,36 +38,57 @@ pub struct Repo {
 
 /// Reads the owner and repository out of a remote URL.
 ///
-/// Both forms are accepted because a project may have been cloned either way,
-/// and the daemon has no say in which.
+/// HTTP and SSH forms are accepted because a project may have been cloned
+/// either way. HTTP remotes must be under the configured installation's web
+/// path and port. Forgejo also requires its configured HTTP scheme. SSH remotes
+/// match only its hostname, since their port and repository paths are
+/// independent of the web server.
 ///
-/// Returns None for anything that is not GitHub, since there is nothing
-/// useful to do with it here.
-pub fn parse_remote(url: &str) -> Option<Repo> {
+/// Returns None for anything that is not the configured forge's own host,
+/// since there is nothing useful to do with it here: the pull request goes
+/// where the daemon can reach.
+pub fn parse_remote(url: &str, forge: &ForgeConfig) -> Option<Repo> {
+    let expected = reqwest::Url::parse(&forge::site_base(forge)).ok()?;
     let trimmed = url.trim();
-    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-
-    if let Some(rest) = trimmed
-        .strip_prefix("https://")
-        .or_else(|| trimmed.strip_prefix("http://"))
-    {
-        // An optional userinfo stands before the first slash, as in a token
-        // embedded by a service that cloned on the agent's behalf.
-        let rest = match rest.find('@') {
-            Some(at) if rest[..at].find('/').is_none() => &rest[at + 1..],
-            _ => rest,
+    let remote = if trimmed.contains("://") {
+        reqwest::Url::parse(trimmed).ok()?
+    } else {
+        let rest = trimmed.strip_prefix("git@")?;
+        let host_end = if rest.starts_with('[') {
+            rest.find(']')? + 1
+        } else {
+            rest.find([':', '/'])?
         };
-        let (host, path) = rest.split_once('/')?;
-        if host != "github.com" {
-            return None;
-        }
-        return owner_name(path);
+        let (host, path) = rest.split_at(host_end);
+        let path = path.strip_prefix(':').or_else(|| path.strip_prefix('/'))?;
+        reqwest::Url::parse(&format!("ssh://git@{host}/{path}")).ok()?
+    };
+    if remote.query().is_some()
+        || remote.fragment().is_some()
+        || !remote
+            .host_str()?
+            .eq_ignore_ascii_case(expected.host_str()?)
+    {
+        return None;
     }
-
-    let rest = trimmed.strip_prefix("ssh://").unwrap_or(trimmed);
-    let rest = rest.strip_prefix("git@github.com")?;
-    let rest = rest.strip_prefix(':').or_else(|| rest.strip_prefix('/'))?;
-    owner_name(rest)
+    let path = match remote.scheme() {
+        // Url removes each scheme's default port. Only GitHub permits both
+        // HTTP schemes, preserving its existing remote acceptance.
+        "http" | "https"
+            if remote.port() == expected.port()
+                && (forge.kind == ForgeKind::Github || remote.scheme() == expected.scheme()) =>
+        {
+            remote
+                .path()
+                .strip_prefix(expected.path().trim_end_matches('/'))?
+                .strip_prefix('/')?
+        }
+        "ssh" if remote.username() == "git" && remote.password().is_none() => {
+            remote.path().strip_prefix('/')?
+        }
+        _ => return None,
+    };
+    owner_name(path.strip_suffix(".git").unwrap_or(path))
 }
 
 fn owner_name(path: &str) -> Option<Repo> {
@@ -134,8 +156,8 @@ pub struct PullRequestError(pub String);
 
 /// What a session produced, and where it should go.
 pub struct Request {
-    /// How this host reaches GitHub, and who it pushes as.
-    pub github: GithubConfig,
+    /// How this host reaches the forge, and who it pushes as.
+    pub forge: ForgeConfig,
     /// The session's directory, which holds the repository rather than being
     /// one.
     pub project_path: String,
@@ -445,7 +467,11 @@ pub async fn current_branch(run: &Run, project_path: &str) -> Result<String, Pul
 /// Not always where a pull request from it belongs: a session that cloned its
 /// fork of something still means the work for that something, and the opening
 /// reads the fork relationship off GitHub rather than assuming it.
-pub async fn origin_remote(run: &Run, project_path: &str) -> Result<Repo, PullRequestError> {
+pub async fn origin_remote(
+    run: &Run,
+    project_path: &str,
+    forge: &ForgeConfig,
+) -> Result<Repo, PullRequestError> {
     let remote = git(run, project_path, &["remote", "get-url", "origin"], None).await;
     if remote.code != 0 {
         return Err(PullRequestError(
@@ -453,9 +479,10 @@ pub async fn origin_remote(run: &Run, project_path: &str) -> Result<Repo, PullRe
                 .to_owned(),
         ));
     }
-    parse_remote(&remote.stdout).ok_or_else(|| {
+    parse_remote(&remote.stdout, forge).ok_or_else(|| {
         PullRequestError(format!(
-            "origin is not a GitHub remote: {}",
+            "origin is not a {} remote: {}",
+            forge::display(forge.kind),
             remote.stdout.trim()
         ))
     })
@@ -657,7 +684,7 @@ fn named(body: &Value) -> Option<Repo> {
 fn detail(body: &Value) -> String {
     body.get("message")
         .and_then(Value::as_str)
-        .map_or_else(|| "GitHub refused it".to_owned(), str::to_owned)
+        .map_or_else(|| "the forge refused it".to_owned(), str::to_owned)
 }
 
 fn first_line(text: &str) -> String {
@@ -670,7 +697,7 @@ fn first_line(text: &str) -> String {
 /// The bot's fork of the repository the work is for, once it is there to
 /// push to.
 ///
-/// Where it lands is read from GitHub rather than assumed. The name is not
+/// Where it lands is read from the forge rather than assumed. The name is not
 /// always the upstream's, since an account already holding a repository of
 /// that name gets the fork under a different one, and the owner is a login,
 /// which is not what the configured author name has to be.
@@ -678,6 +705,11 @@ fn first_line(text: &str) -> String {
 /// Waiting is the other half. Forking is asynchronous and answered before it
 /// has finished, and pushing inside that window fails as though the repository
 /// did not exist.
+///
+/// A forge that already holds the bot's fork says so differently: GitHub
+/// answers with the fork it already made, and Forgejo refuses the second
+/// attempt with a name collision, leaving it here to find the fork it made
+/// the first time.
 async fn fork_of(
     api: &Api,
     token: &str,
@@ -693,6 +725,9 @@ async fn fork_of(
         },
     )
     .await;
+    if made.status == 409 {
+        return existing_fork(api, token, target, &made).await;
+    }
     if made.status >= 400 {
         // A repository the token cannot see is reported as missing rather than
         // as forbidden, so the two are worth naming together.
@@ -711,7 +746,7 @@ async fn fork_of(
     }
 
     let fork = named(&made.body).ok_or_else(|| {
-        PullRequestError("GitHub accepted the fork but did not say where it put it".to_owned())
+        PullRequestError("the forge accepted the fork but did not say where it put it".to_owned())
     })?;
 
     let deadline = Instant::now() + Duration::from_millis(FORK_WAIT_MS);
@@ -736,6 +771,80 @@ async fn fork_of(
         }
         sleep(FORK_POLL_MS).await;
     }
+}
+
+/// The fork a `name already exists` refusal is about, found rather than
+/// guessed.
+///
+/// The collision is looked up under the login the token belongs to, and only
+/// taken when it really is a fork of the repository the work is for: an
+/// unrelated repository of the same name is the bot's own, and nothing of
+/// this session belongs there.
+async fn existing_fork(
+    api: &Api,
+    token: &str,
+    target: &Repo,
+    made: &ApiReply,
+) -> Result<Repo, PullRequestError> {
+    let refused = || {
+        PullRequestError(format!(
+            "could not fork {}/{}: {}",
+            target.owner,
+            target.name,
+            detail(&made.body)
+        ))
+    };
+    let login = bot_login(api, token).await.ok_or_else(refused)?;
+    let there = api(
+        format!("/repos/{login}/{}", target.name),
+        ApiCall {
+            method: "GET".to_owned(),
+            token: token.to_owned(),
+            body: None,
+        },
+    )
+    .await;
+    if there.status != 200 {
+        return Err(refused());
+    }
+    let is_fork = there
+        .body
+        .get("fork")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && there
+            .body
+            .get("parent")
+            .and_then(named)
+            .is_some_and(|parent| parent == *target);
+    if !is_fork {
+        return Err(PullRequestError(format!(
+            "could not fork {}/{}: {} already holds a repository named {} that is not its fork",
+            target.owner, target.name, login, target.name
+        )));
+    }
+    named(&there.body).ok_or_else(refused)
+}
+
+/// The login the token belongs to.
+async fn bot_login(api: &Api, token: &str) -> Option<String> {
+    let answer = api(
+        "/user".to_owned(),
+        ApiCall {
+            method: "GET".to_owned(),
+            token: token.to_owned(),
+            body: None,
+        },
+    )
+    .await;
+    if answer.status != 200 {
+        return None;
+    }
+    answer
+        .body
+        .get("login")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 /// What the base repository merges into, which is not always `main`.
@@ -867,16 +976,16 @@ pub async fn open_pull_request(
     refuse_borrowed_store(run, &snapshot, &project_path).await?;
     assert_contained(run, &snapshot).await?;
     let branch = current_branch(run, &snapshot).await?;
-    let origin = origin_remote(run, &snapshot).await?;
+    let origin = origin_remote(run, &snapshot, &request.forge).await?;
 
-    let looked = look_at(api, &request.github.token, &origin).await;
+    let looked = look_at(api, &request.forge.token, &origin).await;
     let (base, pushing_to) = if looked.can_push {
         (
             looked.parent.unwrap_or_else(|| origin.clone()),
             origin.clone(),
         )
     } else {
-        let fork = fork_of(api, &request.github.token, &origin, sleep).await?;
+        let fork = fork_of(api, &request.forge.token, &origin, sleep).await?;
         (origin.clone(), fork)
     };
 
@@ -886,10 +995,12 @@ pub async fn open_pull_request(
         &snapshot,
         &branch,
         &format!(
-            "https://github.com/{}/{}.git",
-            pushing_to.owner, pushing_to.name
+            "{}/{}/{}.git",
+            forge::site_base(&request.forge),
+            pushing_to.owner,
+            pushing_to.name
         ),
-        &request.github.token,
+        &request.forge.token,
     )
     .await?;
 
@@ -897,12 +1008,13 @@ pub async fn open_pull_request(
         format!("/repos/{}/{}/pulls", base.owner, base.name),
         ApiCall {
             method: "POST".to_owned(),
-            token: request.github.token.clone(),
+            token: request.forge.token.clone(),
             body: Some(make_pull(
+                request.forge.kind,
                 &request.title,
                 (pushing_to != base).then_some(pushing_to.owner.as_str()),
                 &branch,
-                &default_branch(api, &request.github.token, &base).await,
+                &default_branch(api, &request.forge.token, &base).await,
                 &pull_request_body(&summary, &request.requested_by, &request.links),
             )),
         },
@@ -921,23 +1033,37 @@ pub async fn open_pull_request(
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| {
-            PullRequestError("the pull request was created but GitHub did not say where".to_owned())
+            PullRequestError(
+                "the pull request was created but the forge did not say where".to_owned(),
+            )
         })
 }
 
 /// The request body, with `head` naming the fork only when there is one.
 ///
 /// A same-repository request names the branch alone. Qualifying it with the
-/// owner is what a cross-repository request needs, and GitHub refuses the
+/// owner is what a cross-repository request needs, and the forge refuses the
 /// qualified form when the head and the base are the same repository.
-fn make_pull(title: &str, fork_owner: Option<&str>, branch: &str, base: &str, body: &str) -> Value {
+///
+/// Letting a maintainer edit the branch is asked for on GitHub, which is the
+/// only forge that has the field; a Forgejo forge decides that by its own
+/// repository settings.
+fn make_pull(
+    kind: crate::config::schema::ForgeKind,
+    title: &str,
+    fork_owner: Option<&str>,
+    branch: &str,
+    base: &str,
+    body: &str,
+) -> Value {
     #[derive(Serialize)]
     struct NewPull<'a> {
         title: &'a str,
         head: String,
         base: &'a str,
         body: &'a str,
-        maintainer_can_modify: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        maintainer_can_modify: Option<bool>,
     }
     json!(NewPull {
         title,
@@ -947,7 +1073,7 @@ fn make_pull(title: &str, fork_owner: Option<&str>, branch: &str, base: &str, bo
         },
         base,
         body,
-        maintainer_can_modify: true,
+        maintainer_can_modify: (kind == crate::config::schema::ForgeKind::Github).then_some(true),
     })
 }
 
@@ -998,7 +1124,7 @@ pub fn run_command(
     })
 }
 
-/// How the daemon names itself to GitHub.
+/// How the daemon names itself to a forge.
 ///
 /// GitHub refuses a request that carries no `User-Agent` with a 403 that
 /// reads like a permissions failure. Deno's `fetch` sets one of its own, so
@@ -1007,8 +1133,8 @@ pub fn run_command(
 /// cannot reach.
 const USER_AGENT: &str = concat!("errand/", env!("CARGO_PKG_VERSION"));
 
-/// The client the daemon calls GitHub with.
-fn github_client() -> reqwest::Client {
+/// The client the daemon calls a forge with.
+fn forge_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent(USER_AGENT)
@@ -1016,33 +1142,49 @@ fn github_client() -> reqwest::Client {
         .unwrap_or_default()
 }
 
-/// Calls the GitHub REST API as the bot.
-pub fn call_api(path: String, init: ApiCall) -> Pin<Box<dyn Future<Output = ApiReply> + Send>> {
-    Box::pin(async move {
-        let client = github_client();
-        let method =
-            reqwest::Method::from_bytes(init.method.as_bytes()).unwrap_or(reqwest::Method::GET);
-        let mut request = client
-            .request(method, format!("https://api.github.com{path}"))
-            .header("Authorization", format!("Bearer {}", init.token))
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28");
-        if let Some(body) = &init.body {
-            request = request
-                .header("Content-Type", "application/json")
-                .body(body.to_string());
-        }
-        match request.send().await {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let body = response.json::<Value>().await.unwrap_or_else(|_| json!({}));
-                ApiReply { status, body }
+/// The REST API as the bot, pointed at the configured forge.
+///
+/// Everything a call needs besides its path and body comes from the forge:
+/// where the API lives, how the credential header is written, and which
+/// vocabulary the `Accept` header speaks. A session's App-minted tokens ride
+/// the same closure, presented the same way.
+pub fn api_for(forge: &ForgeConfig) -> Api {
+    let kind = forge.kind;
+    let base = forge::api_base(forge);
+    Arc::new(move |path: String, init: ApiCall| {
+        let base = base.clone();
+        Box::pin(async move {
+            let client = forge_client();
+            let method =
+                reqwest::Method::from_bytes(init.method.as_bytes()).unwrap_or(reqwest::Method::GET);
+            let mut request = client
+                .request(method, format!("{base}{path}"))
+                .header("Authorization", forge::auth_header(kind, &init.token));
+            request = match kind {
+                crate::config::schema::ForgeKind::Github => request
+                    .header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28"),
+                crate::config::schema::ForgeKind::Forgejo => {
+                    request.header("Accept", "application/json")
+                }
+            };
+            if let Some(body) = &init.body {
+                request = request
+                    .header("Content-Type", "application/json")
+                    .body(body.to_string());
             }
-            Err(error) => ApiReply {
-                status: 0,
-                body: json!({ "message": error.to_string() }),
-            },
-        }
+            match request.send().await {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    let body = response.json::<Value>().await.unwrap_or_else(|_| json!({}));
+                    ApiReply { status, body }
+                }
+                Err(error) => ApiReply {
+                    status: 0,
+                    body: json!({ "message": error.to_string() }),
+                },
+            }
+        })
     })
 }
 

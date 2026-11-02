@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 
-use super::{IssueThreads, for_github};
+use super::{IssueThreads, for_forge};
 use crate::log::{LogFields, Logger};
 use crate::session::event::{NoticeLevel, SessionEvent};
 use crate::session::pr::{Api, ApiReply};
@@ -33,6 +33,7 @@ fn api() -> (Api, Posted) {
 
 fn threads(api: Api) -> Arc<IssueThreads> {
     Arc::new(IssueThreads {
+        kind: crate::config::schema::ForgeKind::Github,
         api,
         token: "ghp".to_owned(),
         log: Logger::new(LogFields::new(), Arc::new(|_level, _line| {})),
@@ -118,10 +119,10 @@ async fn a_turn_that_said_nothing_tells_the_issue_why_it_failed() {
 
 #[test]
 fn chat_markup_is_said_in_githubs_terms_and_the_rest_is_left_alone() {
-    assert_eq!(for_github("hi <@github:QaidVoid>"), "hi @QaidVoid");
-    assert_eq!(for_github("at <t:0:R>"), "at 1970-01-01 00:00 UTC");
+    assert_eq!(for_forge("hi <@github:QaidVoid>"), "hi @QaidVoid");
+    assert_eq!(for_forge("at <t:0:R>"), "at 1970-01-01 00:00 UTC");
     assert_eq!(
-        for_github("<@123> kept, a < b > c, <t:x:R>, <open"),
+        for_forge("<@123> kept, a < b > c, <t:x:R>, <open"),
         "<@123> kept, a < b > c, <t:x:R>, <open"
     );
 }
@@ -130,4 +131,14 @@ fn chat_markup_is_said_in_githubs_terms_and_the_rest_is_left_alone() {
 fn only_an_issue_has_a_view() {
     let (api, _) = api();
     assert!(threads(api).view_for("1552528761872851095").is_none());
+}
+
+#[test]
+fn a_view_never_crosses_forge_kinds() {
+    let (api, _) = api();
+    let mut views = threads(api);
+    assert!(views.view_for("forgejo:o/r#4").is_none());
+    Arc::get_mut(&mut views).unwrap().kind = crate::config::schema::ForgeKind::Forgejo;
+    assert!(views.view_for("github:o/r#4").is_none());
+    assert!(views.view_for("forgejo:o/r#4").is_some());
 }

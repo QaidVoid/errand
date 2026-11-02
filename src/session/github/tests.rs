@@ -1,14 +1,16 @@
 use std::collections::BTreeMap;
 
 use super::{
-    REQUEST_FILENAME, SessionLinks, attribution_footer, gh_shim_contents, git_config_contents,
-    git_identity_env, review_instructions, thread_link, transcript_link,
+    REQUEST_FILENAME, SessionLinks, attribution_footer, forge_gh_shim_contents, gh_shim_contents,
+    git_config_contents, git_identity_env, review_instructions, thread_link, transcript_link,
 };
-use crate::config::schema::GithubConfig;
+use crate::config::schema::{ForgeConfig, ForgeKind};
 use crate::sandbox::backend::STATE_PATH;
 
-fn github() -> GithubConfig {
-    GithubConfig {
+fn github() -> ForgeConfig {
+    ForgeConfig {
+        kind: crate::config::schema::ForgeKind::Github,
+        url: None,
         token: "ghp-value".to_owned(),
         user_name: "errand-bot".to_owned(),
         user_email: "bot@example.com".to_owned(),
@@ -24,6 +26,24 @@ fn the_git_config_commits_as_the_bot_and_gets_its_token_from_gh() {
     assert!(config.contains("name = errand-bot"));
     assert!(config.contains("email = bot@example.com"));
     assert!(config.contains("helper = !gh auth git-credential"));
+}
+
+/// The Forgejo helper is named by its place on the session's own path, not
+/// by name: a git helper written bare is looked up through whatever PATH the
+/// calling shell happens to carry, and one that lost the session's bin
+/// directory would push to the forge unauthenticated.
+#[test]
+fn the_forgejo_git_config_names_its_helper_by_whole_path() {
+    let forgejo = ForgeConfig {
+        kind: ForgeKind::Forgejo,
+        url: Some("https://git.example.com".to_owned()),
+        ..github()
+    };
+    let config = git_config_contents(&forgejo);
+
+    assert!(config.contains("[credential \"https://git.example.com\"]"));
+    assert!(config.contains("helper = !/state/home/bin/forge-credential"));
+    assert!(!config.contains("ghp-value"));
 }
 
 /// A second copy of the token on disk buys nothing and can be read.
@@ -287,6 +307,69 @@ fn the_instructions_say_the_request_is_not_the_result() {
     assert!(instructions.contains("a request, not the result"));
     assert!(instructions.contains("do not say a pull request"));
     assert!(instructions.contains("Never run `gh pr create`"));
+}
+
+/// The Forgejo session is told there is no `gh` before it reaches for one.
+#[test]
+fn the_forgejo_instructions_name_the_refusing_gh() {
+    let forgejo = ForgeConfig {
+        kind: ForgeKind::Forgejo,
+        url: Some("https://forge.example.com".to_owned()),
+        ..github()
+    };
+    let instructions = review_instructions(&forgejo, "amelia", &SessionLinks::default());
+
+    assert!(instructions.contains("There is no `gh`"));
+    assert!(instructions.contains("a helper script errand installs that git runs itself"));
+    assert!(instructions.contains("are the daemon's work"));
+}
+
+/// A Forgejo session's `gh` refuses whatever it is called with, and a real
+/// `gh` later on the path is never found: the agent's reflex must land on
+/// the reminder, not on GitHub.
+#[test]
+fn the_forgejo_gh_refuses_and_never_reaches_a_real_gh() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::write(real.join("gh"), "#!/bin/sh\necho real gh ran $*\n").unwrap();
+    std::fs::set_permissions(real.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let shim = root.path().join("gh");
+    std::fs::write(
+        &shim,
+        forge_gh_shim_contents()
+            .replace(STATE_PATH, &root.path().join("state").display().to_string()),
+    )
+    .unwrap();
+    std::fs::set_permissions(shim.clone(), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    for args in [
+        vec!["pr", "list"],
+        vec!["issue", "view", "7"],
+        vec!["api", "user"],
+        vec!["auth", "status"],
+        vec![],
+    ] {
+        let ran = std::process::Command::new("/bin/sh")
+            .arg(&shim)
+            .args(&args)
+            .env_clear()
+            .env("PATH", &real)
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&ran.stdout).into_owned()
+            + &String::from_utf8_lossy(&ran.stderr);
+        assert_eq!(ran.status.code(), Some(1), "gh {args:?}: {said}");
+        assert!(!said.contains("real gh ran"), "gh {args:?}: {said}");
+        assert!(said.contains("works with Forgejo"), "gh {args:?}: {said}");
+        assert!(said.contains("opened by the daemon"), "gh {args:?}: {said}");
+        assert!(
+            said.contains(REQUEST_FILENAME),
+            "gh {args:?}: the refusal names where a request is written: {said}"
+        );
+    }
 }
 
 /// A host named through the environment is refused as one named by flag is.

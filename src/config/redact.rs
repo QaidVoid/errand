@@ -74,8 +74,8 @@ pub fn secret_values(config: &Config) -> Vec<String> {
         }
     };
     hold(Some(&config.chat.token));
-    if let Some(github) = &config.github {
-        hold(Some(&github.token));
+    if let Some(forge) = &config.forge {
+        hold(Some(&forge.token));
     }
     if let Some(login) = config.web.as_ref().and_then(|web| web.login.as_ref()) {
         hold(Some(&login.client_secret));

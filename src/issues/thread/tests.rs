@@ -1,19 +1,31 @@
 //! Tests for naming an issue as a thread.
 
-use super::{account_id, is_github_thread, issue_of, logins_plainly, thread_id};
+use super::{ForgeKind, account_id, is_forge_thread, issue_of, logins_plainly, thread_id};
 
 #[test]
 fn an_issue_is_named_as_a_thread_and_read_back() {
-    let named = thread_id("talaria0101/edu-playground", 19);
+    let named = thread_id("talaria0101/edu-playground", 19, ForgeKind::Github);
     assert_eq!(named, "github:talaria0101/edu-playground#19");
-    assert!(is_github_thread(&named));
+    assert!(is_forge_thread(&named));
     assert_eq!(issue_of(&named), Some(("talaria0101/edu-playground", 19)));
 
-    assert!(!is_github_thread("1552528761872851095"));
+    assert!(!is_forge_thread("1552528761872851095"));
     assert_eq!(issue_of("github:no-slash#1"), None);
     assert_eq!(issue_of("github:a/b/c#1"), None);
     assert_eq!(issue_of("github:a/b#one"), None);
-    assert_eq!(account_id("QaidVoid"), "github:qaidvoid");
+    assert_eq!(account_id("QaidVoid", ForgeKind::Github), "github:qaidvoid");
+}
+
+#[test]
+fn a_forgejo_thread_is_named_with_its_own_kind() {
+    let named = thread_id("talaria0101/edu-playground", 19, ForgeKind::Forgejo);
+    assert_eq!(named, "forgejo:talaria0101/edu-playground#19");
+    assert!(is_forge_thread(&named));
+    assert_eq!(issue_of(&named), Some(("talaria0101/edu-playground", 19)));
+    assert_eq!(
+        account_id("QaidVoid", ForgeKind::Forgejo),
+        "forgejo:qaidvoid"
+    );
 }
 
 #[test]

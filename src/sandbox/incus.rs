@@ -986,7 +986,7 @@ impl IncusSandbox {
 
         if config.egress.mode == EgressMode::Proxy && settings.broker.is_none() {
             gaps.push(
-                "egress.mode is proxy but no broker is wired for this backend: provider keys and the GitHub token cross whole into the guest"
+                "egress.mode is proxy but no broker is wired for this backend: provider keys and the forge token cross whole into the guest"
                     .to_owned(),
             );
         }

@@ -21,9 +21,9 @@ impl Running {
         let Some(app) = self
             .options
             .config
-            .github
+            .forge
             .as_ref()
-            .and_then(|github| github.app.clone())
+            .and_then(|forge| forge.app.clone())
         else {
             return true;
         };
@@ -63,9 +63,9 @@ impl Running {
         let (Some(app), Some(api)) = (
             self.options
                 .config
-                .github
+                .forge
                 .as_ref()
-                .and_then(|github| github.app.clone()),
+                .and_then(|forge| forge.app.clone()),
             self.options.github_api.clone(),
         ) else {
             return;
@@ -140,22 +140,22 @@ impl Running {
         Ok(())
     }
 
-    /// What the session's GitHub credential is, for `!status`, or nothing
-    /// when GitHub is not configured.
+    /// What the session's forge credential is, for `!status`, or nothing
+    /// when no forge is configured.
     pub(super) fn github_line(&self) -> Option<String> {
-        let github = self.options.config.github.as_ref()?;
-        Some(match (&github.app, &self.github_token) {
-            (None, _) => "GitHub: this session holds the daemon's own token".to_owned(),
-            (Some(_), Some(token)) if token.expires_at_ms <= now_ms() => {
-                "GitHub: the App token has expired, and its renewal is tried again every minute"
-                    .to_owned()
-            }
+        let forge = self.options.config.forge.as_ref()?;
+        let name = crate::forge::display(forge.kind);
+        Some(match (&forge.app, &self.github_token) {
+            (None, _) => format!("{name}: this session holds the daemon's own token"),
+            (Some(_), Some(token)) if token.expires_at_ms <= now_ms() => format!(
+                "{name}: the App token has expired, and its renewal is tried again every minute"
+            ),
             (Some(_), Some(token)) if self.github_renewal_failing => format!(
                 "{}, but its last renewal failed and is tried again every minute",
                 token_line(token, now_ms())
             ),
             (Some(_), Some(token)) => token_line(token, now_ms()),
-            (Some(_), None) => "GitHub: no App token is held yet".to_owned(),
+            (Some(_), None) => format!("{name}: no App token is held yet"),
         })
     }
 

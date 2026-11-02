@@ -13,17 +13,22 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use super::thread::issue_of;
+use crate::config::schema::ForgeKind;
+use crate::forge;
 use crate::log::{LogValue, Logger, fields};
 use crate::session::event::{NoticeLevel, SessionEvent};
 use crate::session::pr::{Api, ApiCall};
 use crate::session::views::{SessionView, ViewError};
 
-/// The most a comment carries. GitHub refuses one past 65,536 characters.
+/// The most a comment carries. GitHub refuses one past 65,536 characters,
+/// and a Forgejo instance gains nothing from a longer one.
 const COMMENT_LIMIT: usize = 60_000;
 
 /// Makes the views that answer issues and pull requests.
 pub struct IssueThreads {
-    /// Calls the GitHub API.
+    /// Which forge the API and token belong to.
+    pub kind: ForgeKind,
+    /// Calls the forge API.
     pub api: Api,
     /// The token it is called with.
     pub token: String,
@@ -34,6 +39,7 @@ pub struct IssueThreads {
 impl IssueThreads {
     /// The view that answers the issue a thread name names.
     pub fn view_for(&self, thread_id: &str) -> Option<Arc<IssueView>> {
+        thread_id.strip_prefix(forge::thread_prefix(self.kind))?;
         let (repository, number) = issue_of(thread_id)?;
         Some(Arc::new(IssueView {
             api: Arc::clone(&self.api),
@@ -76,7 +82,7 @@ impl IssueView {
     }
 
     async fn post(&self, text: &str) -> Result<(), ViewError> {
-        let mut body: String = for_github(text).chars().take(COMMENT_LIMIT).collect();
+        let mut body: String = for_forge(text).chars().take(COMMENT_LIMIT).collect();
         if body.chars().count() == COMMENT_LIMIT {
             body.push_str("\n\n(cut short; the rest is in the session's transcript)");
         }
@@ -93,7 +99,7 @@ impl IssueView {
             return Ok(());
         }
         let why = format!(
-            "GitHub answered {} to a comment on {}#{}: {}",
+            "the forge answered {} to a comment on {}#{}: {}",
             answer.status,
             self.repository,
             self.number,
@@ -133,12 +139,13 @@ impl SessionView for IssueView {
     }
 }
 
-/// Says in GitHub's terms what was written for the chat service.
+/// Says in the forge's terms what was written for the chat service.
 ///
-/// A chat mention of a GitHub account, `<@github:login>`, becomes `@login`,
-/// and a chat timestamp, `<t:seconds:R>`, becomes the moment in UTC, since
-/// GitHub renders neither.
-pub fn for_github(text: &str) -> String {
+/// A chat mention of a forge account, `<@github:login>` or
+/// `<@forgejo:login>`, becomes `@login`, and a chat timestamp,
+/// `<t:seconds:R>`, becomes the moment in UTC, since neither forge renders
+/// the markup the chat service does.
+pub fn for_forge(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find('<') {
@@ -159,10 +166,14 @@ pub fn for_github(text: &str) -> String {
     out
 }
 
-/// One chat markup token in GitHub's terms, or nothing to leave it alone.
+/// One chat markup token in the forge's terms, or nothing to leave it alone.
 fn translated(inside: &str) -> Option<String> {
-    if let Some(login) = inside.strip_prefix("@github:") {
-        return Some(format!("@{login}"));
+    if let Some(named) = inside.strip_prefix('@') {
+        for prefix in super::thread::PREFIXES {
+            if let Some(login) = named.strip_prefix(prefix) {
+                return Some(format!("@{login}"));
+            }
+        }
     }
     let seconds = inside
         .strip_prefix("t:")?

@@ -410,3 +410,24 @@ fn a_speech_flag_after_the_text_stays_in_the_text() {
     assert_eq!(asked.voice, None);
     assert_eq!(asked.text, "hello there --voice alloy");
 }
+
+#[test]
+fn forge_account_mentions_validate_the_named_forges_login_grammar() {
+    for login in ["Alice_B", "Alice.B", &"a".repeat(40)] {
+        assert_eq!(
+            parse_user_id(&format!("<@forgejo:{login}>")),
+            Some(format!("forgejo:{}", login.to_ascii_lowercase()))
+        );
+        assert_eq!(parse_user_id(&format!("<@github:{login}>")), None);
+    }
+    let github_limit = "a".repeat(39);
+    assert_eq!(
+        parse_user_id(&format!("<@github:{github_limit}>")),
+        Some(format!("github:{github_limit}"))
+    );
+    for login in ["", "not a login", "a/b", "name>extra", &"a".repeat(41)] {
+        for prefix in ["github", "forgejo"] {
+            assert_eq!(parse_user_id(&format!("<@{prefix}:{login}>")), None);
+        }
+    }
+}

@@ -64,6 +64,14 @@ impl ThreadFactory for Chat {
 }
 
 fn routed(path: std::path::PathBuf) -> (Arc<ByThread>, Arc<Chat>, Arc<Mutex<Vec<String>>>) {
+    routed_at(path, "GitHub", "https://github.com")
+}
+
+fn routed_at(
+    path: std::path::PathBuf,
+    name: &'static str,
+    site: &str,
+) -> (Arc<ByThread>, Arc<Chat>, Arc<Mutex<Vec<String>>>) {
     let posted = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&posted);
     let api: Api = Arc::new(move |path, _init| {
@@ -80,6 +88,11 @@ fn routed(path: std::path::PathBuf) -> (Arc<ByThread>, Arc<Chat>, Arc<Mutex<Vec<
         view: Arc::new(Counted(Mutex::new(0))),
     });
     let issues = Arc::new(IssueThreads {
+        kind: if name == "GitHub" {
+            crate::config::schema::ForgeKind::Github
+        } else {
+            crate::config::schema::ForgeKind::Forgejo
+        },
         api,
         token: "ghp".to_owned(),
         log: silent(),
@@ -87,6 +100,8 @@ fn routed(path: std::path::PathBuf) -> (Arc<ByThread>, Arc<Chat>, Arc<Mutex<Vec<
     let router = Arc::new(ByThread::new(
         Arc::clone(&chat) as Arc<dyn ThreadFactory>,
         issues,
+        name,
+        site,
         path,
         silent(),
     ));
@@ -181,6 +196,133 @@ async fn a_chat_message_is_threaded_by_the_chat_alone() {
         .unwrap();
 
     assert_eq!(made.id, "under-github-comment:5");
+    assert!(chat.opened.lock().unwrap().is_empty());
+    assert!(posted.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_legacy_github_link_never_posts_to_forgejo() {
+    let state = tempfile::tempdir().unwrap();
+    let links = state.path().join("issue-threads.json");
+    std::fs::write(&links, r#"{"github:o/r#4":"old-thread"}"#).unwrap();
+    let (router, _, posted) = routed_at(links.clone(), "Forgejo", "https://forge.example");
+    assert_eq!(router.thread_for("github:o/r#4"), None);
+    let view = Arc::clone(&router)
+        .port_for("old-thread".to_owned())
+        .await
+        .unwrap();
+    finish_turn(&view).await;
+    assert!(posted.lock().unwrap().is_empty());
+
+    let (github, _, posted) = routed(links);
+    assert_eq!(
+        github.thread_for("github:o/r#4").as_deref(),
+        Some("old-thread")
+    );
+    let view = Arc::clone(&github)
+        .port_for("old-thread".to_owned())
+        .await
+        .unwrap();
+    finish_turn(&view).await;
+    assert_eq!(*posted.lock().unwrap(), ["/repos/o/r/issues/4/comments"]);
+}
+
+#[tokio::test]
+async fn a_saved_link_belongs_to_one_forgejo_instance() {
+    let state = tempfile::tempdir().unwrap();
+    let links = state.path().join("issue-threads.json");
+    let (first, _, _) = routed_at(links.clone(), "Forgejo", "https://forge.example/first");
+    Arc::clone(&first)
+        .create(said("forgejo:o/r#4"), "first".to_owned())
+        .await
+        .unwrap();
+
+    for site in [
+        "https://other.example/first",
+        "https://forge.example/second",
+    ] {
+        let (other, _, posted) = routed_at(links.clone(), "Forgejo", site);
+        assert_eq!(other.thread_for("forgejo:o/r#4"), None);
+        let view = Arc::clone(&other).port_for("t1".to_owned()).await.unwrap();
+        finish_turn(&view).await;
+        assert!(posted.lock().unwrap().is_empty());
+    }
+
+    let (restarted, _, posted) = routed_at(links, "Forgejo", "https://forge.example/first");
+    assert_eq!(restarted.thread_for("forgejo:o/r#4").as_deref(), Some("t1"));
+    let view = Arc::clone(&restarted)
+        .port_for("t1".to_owned())
+        .await
+        .unwrap();
+    finish_turn(&view).await;
+    assert_eq!(*posted.lock().unwrap(), ["/repos/o/r/issues/4/comments"]);
+}
+
+#[tokio::test]
+async fn an_unscoped_legacy_forgejo_link_has_no_safe_destination() {
+    let state = tempfile::tempdir().unwrap();
+    let links = state.path().join("issue-threads.json");
+    std::fs::write(&links, r#"{"forgejo:o/r#4":"old-thread"}"#).unwrap();
+    let (router, _, posted) = routed_at(links, "Forgejo", "https://forge.example");
+    assert_eq!(router.thread_for("forgejo:o/r#4"), None);
+    let view = Arc::clone(&router)
+        .port_for("old-thread".to_owned())
+        .await
+        .unwrap();
+    finish_turn(&view).await;
+    assert!(posted.lock().unwrap().is_empty());
+}
+
+async fn finish_turn(view: &Arc<dyn SessionView>) {
+    for event in [
+        SessionEvent::Post {
+            text: "done".to_owned(),
+        },
+        SessionEvent::Busy { busy: false },
+    ] {
+        view.observe(&event).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn writing_a_new_link_preserves_other_instances_and_legacy_github_links() {
+    let state = tempfile::tempdir().unwrap();
+    let links = state.path().join("issue-threads.json");
+    std::fs::write(
+        &links,
+        r#"{"github:o/r#4":"github-thread","https://first.example|forgejo:o/r#4":"first-thread"}"#,
+    )
+    .unwrap();
+    let (second, _, _) = routed_at(links.clone(), "Forgejo", "https://second.example");
+    Arc::clone(&second)
+        .create(said("forgejo:o/r#4"), "second".to_owned())
+        .await
+        .unwrap();
+
+    let (github, _, _) = routed(links.clone());
+    assert_eq!(
+        github.thread_for("github:o/r#4").as_deref(),
+        Some("github-thread")
+    );
+    let (first, _, _) = routed_at(links.clone(), "Forgejo", "https://first.example");
+    assert_eq!(
+        first.thread_for("forgejo:o/r#4").as_deref(),
+        Some("first-thread")
+    );
+    let (second, _, _) = routed_at(links, "Forgejo", "https://second.example");
+    assert_eq!(second.thread_for("forgejo:o/r#4").as_deref(), Some("t1"));
+}
+
+#[tokio::test]
+async fn a_new_issue_from_another_forge_is_refused_before_opening_a_thread() {
+    let state = tempfile::tempdir().unwrap();
+    let (router, chat, posted) = routed(state.path().join("issue-threads.json"));
+    assert!(
+        Arc::clone(&router)
+            .create(said("forgejo:o/r#4"), "wrong forge".to_owned())
+            .await
+            .is_err()
+    );
     assert!(chat.opened.lock().unwrap().is_empty());
     assert!(posted.lock().unwrap().is_empty());
 }

@@ -17,12 +17,24 @@
           "description": "The single channel the daemon serves. Everything else is ignored."
         },
         "allowedUserIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Accounts permitted to drive sessions. Must not be empty."
         },
         "blockedUserIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Accounts refused before anything else is considered."
         },
         "operatorUserIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Accounts that may control any session, not only their own."
         },
         "startOnMention": {
@@ -102,15 +114,31 @@
           "description": "Kage plugins handed to every session."
         },
         "aliases": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
           "description": "Short names for models, so a session is started without spelling one."
         },
         "fallback": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Models to start a session on instead, in order, when the provider it would start on has spent its usage window. Named as `!model` names them, aliases included. The first whose provider has room is used; a session is turned away only when every one is spent too."
         },
         "deny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Commands the agent may not run, whatever else is permitted.  Sessions run with every tool allowed, since the chat cannot serve a prompt the agent waits on and a permission ask nobody sees is a session that stalls. This is what stands in for that prompt: glob patterns matched against the command line, the same patterns kage's own rules use. A match is refused by the agent itself and the reason reaches the thread, so a refusal is visible rather than silent.  Patterns are checked against the whole command line, so `rm -rf *` covers the form that is actually typed. To refuse one tool outright whatever it is asked to do, use `deniedTools`."
         },
         "deniedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Tools the agent may not call at all.  Named by the tool kage calls it, such as `shell` or `write`. Refused whatever their input carries, which is the blunt end: `deny` refuses particular commands, this refuses a whole capability."
         }
       },
@@ -124,14 +152,27 @@
         "deniedTools"
       ]
     },
-    "github": {
+    "forge": {
       "type": "object",
-      "description": "How a session reaches GitHub, or none when unconfigured.",
+      "description": "How a session reaches its forge, GitHub or a Forgejo instance, or none when unconfigured.",
       "additionalProperties": false,
       "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "github",
+            "forgejo"
+          ],
+          "default": "github",
+          "description": "Which forge this is. GitHub unless `type` says otherwise, so the section reads the same as the `github` spelling it replaces."
+        },
+        "url": {
+          "type": "string",
+          "description": "The instance's address, such as `https://forge.example.com`. Forgejo is the only forge configured by one: GitHub is always github.com, and naming a `url` there is refused."
+        },
         "token": {
           "type": "string",
-          "description": "The daemon's token, a classic one, which it reads notifications, composes pull requests and pushes with. A session holds it too unless `app` is set. Secret, and at least 8 bytes, so it can be scrubbed from what is posted."
+          "description": "The daemon's token, which it reads notifications, composes pull requests and pushes with. A session holds it too unless `app` is set, which only GitHub has. Secret, and at least 8 bytes, so it can be scrubbed from what is posted."
         },
         "userName": {
           "type": "string",
@@ -142,11 +183,50 @@
           "description": "Email commits are authored with."
         },
         "trigger": {
-          "description": "Who may start a session from GitHub, by mentioning the bot's account on an issue or pull request or assigning one to it. Absent means GitHub is only where work is sent, never where it is asked for."
+          "type": "object",
+          "description": "Who may start a session from the forge, by mentioning the bot's account on an issue or pull request or assigning one to it. Absent means the forge is only where work is sent, never where it is asked for.",
+          "additionalProperties": false,
+          "properties": {
+            "allowedUsers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "description": "The forge logins whose mentions and assignments start a session, and whose comments continue one. Nobody else is heard: on a public repository anyone can comment, and every session runs code. Required and non-empty. A wildcard `*` is refused."
+            },
+            "repositories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "description": "The repositories listened to, as `owner/repo`, or `owner/*` for every one an account or organisation holds. Absent means wherever the bot is mentioned or assigned."
+            },
+            "on": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "mention",
+                  "assign"
+                ]
+              },
+              "minItems": 1,
+              "default": [
+                "mention",
+                "assign"
+              ],
+              "description": "Events that start a session: `mention`, `assign`, or both. Must not be empty. Omitted means both events."
+            }
+          },
+          "required": [
+            "allowedUsers"
+          ]
         },
         "app": {
           "type": "object",
-          "description": "A GitHub App each session's credential is minted from, so a session holds a short-lived installation token in place of `token`. `appId` and `installationId` name the App and its installation, `privateKeyPath` is the absolute path of the App's private key as GitHub gave it, read again at every mint, `permissions` maps a permission to `read` or `write` for each token to ask for, and `repositories` names the repositories each token covers. Left out, either of the last two asks for everything the installation was granted. Absent means a session holds `token` itself.",
+          "description": "A GitHub App each session's credential is minted from, so a session holds a short-lived installation token in place of `token`. `appId` and `installationId` name the App and its installation, `privateKeyPath` is the absolute path of the App's private key as GitHub gave it, read again at every mint, `permissions` maps a permission to `read` or `write` for each token to ask for, and `repositories` names the repositories each token covers. Left out, either of the last two asks for everything the installation was granted. GitHub only, since Forgejo has no App mechanism to mint from: naming one there is refused. Absent means a session holds `token` itself.",
           "additionalProperties": false,
           "properties": {
             "appId": {
@@ -162,9 +242,17 @@
               "description": "The absolute path of the App's private key, as GitHub gave it."
             },
             "permissions": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
               "description": "What each token may do, by permission, as `read` or `write`. Empty asks for everything the installation was granted."
             },
             "repositories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
               "description": "The repositories each token covers, by name without their owner. Empty covers every repository of the installation."
             }
           },
@@ -173,30 +261,12 @@
             "installationId",
             "privateKeyPath"
           ]
-        },
-        "allowedUsers": {
-          "description": "The GitHub logins whose mentions and assignments start a session, and whose comments continue one. Nobody else is heard: on a public repository anyone can comment, and every session runs code."
-        },
-        "repositories": {
-          "description": "The repositories listened to, as `owner/repo`, or `owner/*` for every one an account or organisation holds. Absent means wherever the bot is mentioned or assigned."
-        },
-        "onMention": {
-          "type": "boolean",
-          "description": "Whether a mention of the bot starts a session. On unless `on` leaves `mention` out."
-        },
-        "onAssign": {
-          "type": "boolean",
-          "description": "Whether assigning an issue or pull request to the bot starts one. On unless `on` leaves `assign` out."
         }
       },
       "required": [
         "token",
         "userName",
-        "userEmail",
-        "allowedUsers",
-        "repositories",
-        "onMention",
-        "onAssign"
+        "userEmail"
       ]
     },
     "projectRoot": {
@@ -234,6 +304,10 @@
           "description": "Network exposure granted to a session."
         },
         "egressPorts": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
           "description": "Ports a session may open outbound, when the network is not `none`."
         },
         "egress": {
@@ -245,6 +319,10 @@
               "description": "Whether egress is port-only or forced through the broker."
             },
             "allow": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
               "description": "Hosts the broker permits, on top of the provider. A leading `*.` matches subdomains, and a lone `*` admits any host. A host not named here is refused, and a thread's owner can grant it with `!grant`."
             },
             "allowInternal": {
@@ -334,12 +412,24 @@
           "additionalProperties": false,
           "properties": {
             "read": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
               "description": "Directories or files a session may read."
             },
             "write": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
               "description": "Directories or files a session may write."
             },
             "execute": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
               "description": "Directories a session may execute from."
             }
           },
@@ -350,9 +440,17 @@
           ]
         },
         "pathExtra": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Directories added to a session's PATH, or none."
         },
         "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
           "description": "Variables set in every session's environment, or none."
         }
       },
@@ -408,6 +506,10 @@
       "additionalProperties": false,
       "properties": {
         "allowedUserIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Account ids permitted to power off the host."
         }
       },
@@ -527,8 +629,110 @@
         }
       }
     },
-    "problems": {
-      "description": "Every problem found, in the order the checks ran."
+    "github": {
+      "type": "object",
+      "description": "Deprecated GitHub configuration. Use `forge` instead; setting both is refused.",
+      "additionalProperties": false,
+      "deprecated": true,
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "The daemon's token, which it reads notifications, composes pull requests and pushes with. A session holds it too unless `app` is set, which only GitHub has. Secret, and at least 8 bytes, so it can be scrubbed from what is posted."
+        },
+        "userName": {
+          "type": "string",
+          "description": "Name commits are authored with."
+        },
+        "userEmail": {
+          "type": "string",
+          "description": "Email commits are authored with."
+        },
+        "trigger": {
+          "type": "object",
+          "description": "Who may start a session from the forge, by mentioning the bot's account on an issue or pull request or assigning one to it. Absent means the forge is only where work is sent, never where it is asked for.",
+          "additionalProperties": false,
+          "properties": {
+            "allowedUsers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "description": "The forge logins whose mentions and assignments start a session, and whose comments continue one. Nobody else is heard: on a public repository anyone can comment, and every session runs code. Required and non-empty. A wildcard `*` is refused."
+            },
+            "repositories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "description": "The repositories listened to, as `owner/repo`, or `owner/*` for every one an account or organisation holds. Absent means wherever the bot is mentioned or assigned."
+            },
+            "on": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "mention",
+                  "assign"
+                ]
+              },
+              "minItems": 1,
+              "default": [
+                "mention",
+                "assign"
+              ],
+              "description": "Events that start a session: `mention`, `assign`, or both. Must not be empty. Omitted means both events."
+            }
+          },
+          "required": [
+            "allowedUsers"
+          ]
+        },
+        "app": {
+          "type": "object",
+          "description": "A GitHub App each session's credential is minted from, so a session holds a short-lived installation token in place of `token`. `appId` and `installationId` name the App and its installation, `privateKeyPath` is the absolute path of the App's private key as GitHub gave it, read again at every mint, `permissions` maps a permission to `read` or `write` for each token to ask for, and `repositories` names the repositories each token covers. Left out, either of the last two asks for everything the installation was granted. GitHub only, since Forgejo has no App mechanism to mint from: naming one there is refused. Absent means a session holds `token` itself.",
+          "additionalProperties": false,
+          "properties": {
+            "appId": {
+              "type": "number",
+              "description": "The App's id."
+            },
+            "installationId": {
+              "type": "number",
+              "description": "The installation tokens are minted for."
+            },
+            "privateKeyPath": {
+              "type": "string",
+              "description": "The absolute path of the App's private key, as GitHub gave it."
+            },
+            "permissions": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "What each token may do, by permission, as `read` or `write`. Empty asks for everything the installation was granted."
+            },
+            "repositories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The repositories each token covers, by name without their owner. Empty covers every repository of the installation."
+            }
+          },
+          "required": [
+            "appId",
+            "installationId",
+            "privateKeyPath"
+          ]
+        }
+      },
+      "required": [
+        "token",
+        "userName",
+        "userEmail"
+      ]
     },
     "$schema": {
       "type": "string",
@@ -545,10 +749,15 @@
     "shutdown",
     "limits",
     "timeouts",
-    "retention",
-    "problems"
+    "retention"
   ],
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/QaidVoid/errand/main/config.schema.json",
-  "title": "errand configuration"
+  "title": "errand configuration",
+  "not": {
+    "required": [
+      "forge",
+      "github"
+    ]
+  }
 }

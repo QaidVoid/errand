@@ -427,26 +427,56 @@ pub fn definition_is_brokered(definition: Option<&serde_json::Value>) -> bool {
     }
 }
 
-/// The GitHub identity a session works with, when one is configured.
+/// Which forge the daemon works with. One at a time: everything a forge
+/// drives, from where notifications are read to where a pull request is
+/// opened, belongs to the one configured forge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ForgeKind {
+    /// GitHub, which is always github.com.
+    Github,
+    /// A Forgejo or Gitea instance, at the address `url` names.
+    Forgejo,
+}
+
+impl std::fmt::Display for ForgeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ForgeKind::Github => write!(f, "github"),
+            ForgeKind::Forgejo => write!(f, "forgejo"),
+        }
+    }
+}
+
+/// The forge identity a session works with, when one is configured.
 ///
-/// A session with no GitHub configuration still runs, and simply has no
+/// A session with no forge configuration still runs, and simply has no
 /// credential to reach a repository with.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GithubConfig {
-    /// The daemon's token, a classic one, which it reads notifications,
-    /// composes pull requests and pushes with. A session holds it too unless
-    /// `app` is set. Secret, and at least 8 bytes, so it can be scrubbed from
-    /// what is posted.
+pub struct ForgeConfig {
+    /// Which forge this is. GitHub unless `type` says otherwise, so the
+    /// section reads the same as the `github` spelling it replaces.
+    #[serde(rename = "type")]
+    pub kind: ForgeKind,
+    /// The instance's address, such as `https://forge.example.com`. Forgejo
+    /// is the only forge configured by one: GitHub is always github.com, and
+    /// naming a `url` there is refused.
+    pub url: Option<String>,
+    /// The daemon's token, which it reads notifications, composes pull
+    /// requests and pushes with. A session holds it too unless `app` is set,
+    /// which only GitHub has. Secret, and at least 8 bytes, so it can be
+    /// scrubbed from what is posted.
     pub token: String,
     /// Name commits are authored with.
     pub user_name: String,
     /// Email commits are authored with.
     pub user_email: String,
-    /// Who may start a session from GitHub, by mentioning the bot's account
-    /// on an issue or pull request or assigning one to it. Absent means GitHub
-    /// is only where work is sent, never where it is asked for.
-    pub trigger: Option<GithubTrigger>,
+    /// Who may start a session from the forge, by mentioning the bot's
+    /// account on an issue or pull request or assigning one to it. Absent
+    /// means the forge is only where work is sent, never where it is asked
+    /// for.
+    pub trigger: Option<ForgeTrigger>,
     /// A GitHub App each session's credential is minted from, so a session
     /// holds a short-lived installation token in place of `token`. `appId`
     /// and `installationId` name the App and its installation,
@@ -455,15 +485,17 @@ pub struct GithubConfig {
     /// permission to `read` or `write` for each token to ask for, and
     /// `repositories` names the repositories each token covers. Left out,
     /// either of the last two asks for everything the installation was
-    /// granted. Absent means a session holds `token` itself.
-    pub app: Option<GithubAppConfig>,
+    /// granted. GitHub only, since Forgejo has no App mechanism to mint
+    /// from: naming one there is refused. Absent means a session holds
+    /// `token` itself.
+    pub app: Option<ForgeAppConfig>,
 }
 
-/// Who may ask for work from GitHub.
+/// Who may ask for work from the forge.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GithubTrigger {
-    /// The GitHub logins whose mentions and assignments start a session, and
+pub struct ForgeTrigger {
+    /// The forge logins whose mentions and assignments start a session, and
     /// whose comments continue one. Nobody else is heard: on a public
     /// repository anyone can comment, and every session runs code.
     pub allowed_users: Vec<String>,
@@ -482,7 +514,7 @@ pub struct GithubTrigger {
 /// The GitHub App a session's credential is minted from.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GithubAppConfig {
+pub struct ForgeAppConfig {
     /// The App's id.
     pub app_id: u64,
     /// The installation tokens are minted for.
@@ -752,8 +784,9 @@ pub struct Config {
     pub chat: ChatConfig,
     /// Which model the agent talks to, and the credential it reaches it with.
     pub agent: AgentConfig,
-    /// How a session reaches GitHub, or none when unconfigured.
-    pub github: Option<GithubConfig>,
+    /// How a session reaches its forge, GitHub or a Forgejo instance, or none
+    /// when unconfigured.
+    pub forge: Option<ForgeConfig>,
     /// Absolute path under which every session's project directory lives.
     pub project_root: String,
     /// Where per-session state directories are created on the host.
@@ -785,7 +818,7 @@ pub struct Config {
 pub const ALLOW_EVERY_USER: &str = "*";
 
 /// Field paths whose values must never be logged, posted, or reported.
-pub const SECRET_PATHS: [&str; 3] = ["chat.token", "github.token", "web.login.clientSecret"];
+pub const SECRET_PATHS: [&str; 3] = ["chat.token", "forge.token", "web.login.clientSecret"];
 
 /// Values used for any optional field the configuration file omits.
 pub mod defaults {

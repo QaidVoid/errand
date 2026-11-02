@@ -9,18 +9,28 @@ use super::{
     find_repository, open_pull_request, origin_remote, parse_remote, pull_request_body,
     refuse_borrowed_store, run_command, snapshot_git_directory,
 };
-use crate::config::schema::GithubConfig;
+use crate::config::schema::ForgeConfig;
 use crate::session::github::SessionLinks;
 
 type Answer = (u16, serde_json::Value);
 
-fn github() -> GithubConfig {
-    GithubConfig {
+fn github() -> ForgeConfig {
+    ForgeConfig {
+        kind: crate::config::schema::ForgeKind::Github,
+        url: None,
         token: "ghp-value".to_owned(),
         user_name: "errand-bot".to_owned(),
         user_email: "bot@example.com".to_owned(),
         trigger: None,
         app: None,
+    }
+}
+
+fn forgejo(url: &str) -> ForgeConfig {
+    ForgeConfig {
+        kind: crate::config::schema::ForgeKind::Forgejo,
+        url: Some(url.to_owned()),
+        ..github()
     }
 }
 
@@ -213,7 +223,7 @@ fn immediate_sleep() -> Sleep {
 
 fn request(project: &str, title: &str, asked: &str) -> Request {
     Request {
-        github: github(),
+        forge: github(),
         project_path: project.to_owned(),
         repository: None,
         title: title.to_owned(),
@@ -225,21 +235,24 @@ fn request(project: &str, title: &str, asked: &str) -> Request {
 #[test]
 fn a_remote_is_read_in_either_form_it_was_cloned_in() {
     assert_eq!(
-        parse_remote("https://github.com/owner/repo.git"),
+        parse_remote("https://github.com/owner/repo.git", &github()),
         Some(Repo {
             owner: "owner".to_owned(),
             name: "repo".to_owned()
         })
     );
     assert_eq!(
-        parse_remote("git@github.com:owner/repo.git"),
+        parse_remote("git@github.com:owner/repo.git", &github()),
         Some(Repo {
             owner: "owner".to_owned(),
             name: "repo".to_owned()
         })
     );
     assert_eq!(
-        parse_remote("https://x-access-token:tok@github.com/owner/repo"),
+        parse_remote(
+            "https://x-access-token:tok@github.com/owner/repo",
+            &github()
+        ),
         Some(Repo {
             owner: "owner".to_owned(),
             name: "repo".to_owned()
@@ -249,9 +262,173 @@ fn a_remote_is_read_in_either_form_it_was_cloned_in() {
 
 #[test]
 fn a_remote_that_is_not_github_is_not_a_repository_this_can_open() {
-    assert_eq!(parse_remote("https://gitlab.com/owner/repo.git"), None);
-    assert_eq!(parse_remote("/srv/git/local.git"), None);
-    assert_eq!(parse_remote(""), None);
+    assert_eq!(
+        parse_remote("https://gitlab.com/owner/repo.git", &github()),
+        None
+    );
+    assert_eq!(parse_remote("/srv/git/local.git", &github()), None);
+    assert_eq!(parse_remote("", &github()), None);
+}
+
+#[test]
+fn http_remotes_are_scoped_to_the_forgejo_installation_path() {
+    let forge = forgejo("https://code.example/services/forge/");
+    assert_eq!(
+        parse_remote(
+            "https://token:secret@code.example/services/forge/owner/repo.git",
+            &forge,
+        ),
+        Some(Repo {
+            owner: "owner".to_owned(),
+            name: "repo".to_owned(),
+        })
+    );
+    for remote in [
+        "https://code.example/owner/repo.git",
+        "https://code.example/services/repo.git",
+        "https://code.example/services/forge-extra/repo.git",
+        "https://code.example/services/forge/repo.git",
+    ] {
+        assert_eq!(parse_remote(remote, &forge), None, "{remote}");
+    }
+
+    let forge = forgejo("https://code.example/forge");
+    for remote in [
+        "https://code.example/forge-extra/repo.git",
+        "https://code.example/forge/repo.git",
+    ] {
+        assert_eq!(parse_remote(remote, &forge), None, "{remote}");
+    }
+}
+
+#[test]
+fn http_remote_hosts_and_default_ports_are_normalized() {
+    let expected = Some(Repo {
+        owner: "owner".to_owned(),
+        name: "repo".to_owned(),
+    });
+    for (base, remote) in [
+        (
+            "https://CODE.example:443",
+            "https://code.EXAMPLE/owner/repo.git",
+        ),
+        (
+            "https://code.example",
+            "https://CODE.example:443/owner/repo.git",
+        ),
+        (
+            "http://code.example:80",
+            "http://code.example/owner/repo.git",
+        ),
+        (
+            "http://code.example",
+            "http://code.example:80/owner/repo.git",
+        ),
+        (
+            "https://code.example:8443",
+            "https://CODE.example:8443/owner/repo.git",
+        ),
+    ] {
+        assert_eq!(parse_remote(remote, &forgejo(base)), expected, "{base}");
+    }
+    for remote in [
+        "https://code.example/owner/repo.git",
+        "https://code.example:9443/owner/repo.git",
+        "https://code.example.other:8443/owner/repo.git",
+    ] {
+        assert_eq!(
+            parse_remote(remote, &forgejo("https://code.example:8443")),
+            None,
+            "{remote}",
+        );
+    }
+    assert_eq!(
+        parse_remote("http://github.com/owner/repo.git", &github()),
+        expected,
+    );
+}
+
+#[test]
+fn http_remote_transports_must_match_the_forgejo_installation() {
+    for (base, remote) in [
+        ("https://code.example", "http://code.example/owner/repo.git"),
+        ("http://code.example", "https://code.example/owner/repo.git"),
+        (
+            "https://code.example:8443",
+            "http://code.example:8443/owner/repo.git",
+        ),
+        (
+            "http://code.example:8443",
+            "https://code.example:8443/owner/repo.git",
+        ),
+    ] {
+        assert_eq!(parse_remote(remote, &forgejo(base)), None, "{base}");
+    }
+}
+
+#[test]
+fn remote_queries_and_fragments_are_not_repository_addresses() {
+    for remote in [
+        "https://github.com/owner/repo.git?query=value",
+        "https://github.com/owner/repo.git#fragment",
+        "ssh://git@github.com/owner/repo.git?query=value",
+        "ssh://git@github.com/owner/repo.git#fragment",
+        "git@github.com:owner/repo.git?query=value",
+        "git@github.com:owner/repo.git#fragment",
+    ] {
+        assert_eq!(parse_remote(remote, &github()), None, "{remote}");
+    }
+}
+
+#[test]
+fn ssh_remotes_use_the_hostname_not_the_web_port_or_subpath() {
+    let forge = forgejo("https://code.example:8443/forge");
+    let expected = Some(Repo {
+        owner: "owner".to_owned(),
+        name: "repo".to_owned(),
+    });
+    for remote in [
+        "git@code.example:owner/repo.git",
+        "git@CODE.example:owner/repo.git",
+        "ssh://git@code.example/owner/repo.git",
+        "ssh://git@code.example:2222/owner/repo.git",
+        "ssh://git@CODE.example:22/owner/repo.git",
+    ] {
+        assert_eq!(parse_remote(remote, &forge), expected, "{remote}");
+    }
+    for remote in [
+        "git@code.example.other:owner/repo.git",
+        "git@other-code.example:owner/repo.git",
+        "ssh://git@code.example.other:2222/owner/repo.git",
+        "ssh://git@other-code.example:2222/owner/repo.git",
+        "ssh://git@code.example:2222/forge/owner/repo.git",
+    ] {
+        assert_eq!(parse_remote(remote, &forge), None, "{remote}");
+    }
+    assert_eq!(
+        parse_remote("ssh://git@github.com:2222/owner/repo.git", &github()),
+        expected,
+    );
+}
+
+#[test]
+fn ipv6_remote_hosts_are_compared_without_confusing_their_ports() {
+    let forge = forgejo("https://[2001:db8::1]:8443/forge");
+    let expected = Some(Repo {
+        owner: "owner".to_owned(),
+        name: "repo".to_owned(),
+    });
+    for remote in [
+        "https://[2001:db8::1]:8443/forge/owner/repo.git",
+        "ssh://git@[2001:db8::1]:2222/owner/repo.git",
+        "git@[2001:db8::1]:owner/repo.git",
+    ] {
+        assert_eq!(parse_remote(remote, &forge), expected, "{remote}");
+    }
+    assert_eq!(
+        parse_remote("ssh://git@[2001:db8::2]:2222/owner/repo.git", &forge),
+        None,
+    );
 }
 
 /// The session directory is not the repository: whatever was asked for is
@@ -431,7 +608,7 @@ async fn a_project_with_no_origin_cannot_say_what_to_open_against() {
         },
     )]));
 
-    let error = origin_remote(&run, "/p").await.unwrap_err();
+    let error = origin_remote(&run, "/p", &github()).await.unwrap_err();
     assert!(error.to_string().contains("no origin remote"));
 }
 
@@ -898,7 +1075,7 @@ async fn every_call_to_github_names_the_daemon() {
         axum::serve(listener, app).await.expect("the server serves");
     });
 
-    let sent = super::github_client()
+    let sent = super::forge_client()
         .get(format!("http://127.0.0.1:{port}/repos/someone/theirs"))
         .send()
         .await;

@@ -5,6 +5,8 @@
 //! lifecycle. Everything here is pure, so the access rule can be tested
 //! against every command without a session, a sandbox, or a connection.
 
+use crate::config::schema::ForgeKind;
+use crate::forge;
 use crate::session::model::{LEVELS, split_level};
 
 use CommandAccess::{Anyone, Guest, Host, Owner};
@@ -617,25 +619,27 @@ pub fn asks_for_pull_request(content: &str) -> bool {
 /// Reads an account id from a mention or a bare id.
 ///
 /// A client sends a mention as `<@id>`, and somebody typing by hand will paste
-/// the id on its own, so both are accepted. A GitHub account, which a comment
-/// names as `@login`, arrives as `<@github:login>`. Anything else is not an account,
-/// and is refused rather than guessed at: `!deny` acting on the wrong id
-/// removes the wrong person.
+/// the id on its own, so both are accepted. A forge account, which a comment
+/// names as `@login`, arrives as `<@forge:login>` with the forge's own
+/// prefix. Anything else is not an account, and is refused rather than
+/// guessed at: `!deny` acting on the wrong id removes the wrong person.
 pub fn parse_user_id(text: &str) -> Option<String> {
     fn is_id(digits: &str) -> bool {
         (5..=25).contains(&digits.len()) && digits.bytes().all(|byte| byte.is_ascii_digit())
     }
 
     let trimmed = text.trim();
-    if let Some(login) = trimmed
-        .strip_prefix("<@github:")
-        .and_then(|rest| rest.strip_suffix('>'))
-    {
-        let is_login = (1..=39).contains(&login.len())
-            && login
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
-        return is_login.then(|| format!("github:{}", login.to_ascii_lowercase()));
+    for kind in [ForgeKind::Github, ForgeKind::Forgejo] {
+        let prefix = forge::thread_prefix(kind);
+        let marker = format!("<@{prefix}");
+        let Some(inside) = trimmed.strip_prefix(&marker) else {
+            continue;
+        };
+        let Some(login) = inside.strip_suffix('>') else {
+            continue;
+        };
+        return forge::valid_login(kind, login)
+            .then(|| format!("{prefix}{}", login.to_ascii_lowercase()));
     }
     if let Some(rest) = trimmed.strip_prefix("<@") {
         let rest = rest.strip_prefix('!').unwrap_or(rest);

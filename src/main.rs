@@ -13,11 +13,11 @@ use crate::cli::threads::Deps;
 use crate::cli::threads::Project;
 use crate::cli::threads::run_threads;
 use crate::cli::verbosity::take_verbosity;
-use crate::config::load::{config_path, file_exists, load_config};
+use crate::config::load::{config_path, file_exists, load_config_with_warnings};
 use crate::config::schema::Config;
 use crate::config::schema::ConfigError;
 use crate::log::now_ms;
-use crate::log::{LogLevel, logger};
+use crate::log::{LogLevel, Logger, logger};
 use crate::log::{LogValue, fields};
 use crate::sandbox::policy::POLICY_FILENAME;
 use crate::serve::serve;
@@ -31,6 +31,7 @@ mod chat;
 mod cli;
 mod config;
 mod daemon;
+mod forge;
 mod issues;
 mod lock;
 mod log;
@@ -80,16 +81,24 @@ fn usage(env: &Vars) -> String {
 ///
 /// The path comes back with the configuration, because the daemon watches
 /// that file for the rest of its life and must not have to search for it
-/// again to find the same place.
-fn load(env: &Vars) -> Result<(String, Config), ConfigError> {
+/// again to find the same place. The warnings come back because they are
+/// said where the file was read, by whichever command is running.
+fn load(env: &Vars) -> Result<(String, Config, Vec<String>), ConfigError> {
     let path = config_path(env, file_exists);
-    let config = load_config(
+    let (config, warnings) = load_config_with_warnings(
         &path,
         |read| std::fs::read_to_string(read),
         env,
         file_exists,
     )?;
-    Ok((path, config))
+    Ok((path, config, warnings))
+}
+
+/// Says what a configuration should be told anyway, in the log.
+fn say_warnings(warnings: &[String], log: &Logger) {
+    for warning in warnings {
+        log.warn(warning, &fields([]));
+    }
 }
 
 /// Pulls a `name = "value"` pair off the front of a grant body, leaving the
@@ -162,8 +171,9 @@ fn project_of(state_dir: &str, root: &str) -> Option<Project> {
 }
 
 async fn threads(args: &[String], env: &Vars, level: LogLevel) -> Result<i32, ConfigError> {
-    let (_path, config) = load(env)?;
     let log = logger(level);
+    let (_path, config, warnings) = load(env)?;
+    say_warnings(&warnings, &log);
     let registry = Arc::new(Mutex::new(ThreadRegistry::new(
         ThreadRegistry::path_for(&config.state_dir),
         log,
@@ -241,7 +251,7 @@ async fn threads(args: &[String], env: &Vars, level: LogLevel) -> Result<i32, Co
 /// resolve later is not, and the watcher carries on.
 async fn run(env: &Vars, level: LogLevel) -> i32 {
     let log = logger(level);
-    let (path, config) = match load(env) {
+    let (path, config, warnings) = match load(env) {
         Ok(loaded) => loaded,
         Err(error) => {
             log.error(
@@ -251,6 +261,7 @@ async fn run(env: &Vars, level: LogLevel) -> i32 {
             return 1;
         }
     };
+    say_warnings(&warnings, &log);
     serve(config, path, env.clone(), log).await.code()
 }
 

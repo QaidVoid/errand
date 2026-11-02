@@ -1,4 +1,4 @@
-//! The GitHub identity a session pushes with.
+//! The forge identity a session pushes with.
 //!
 //! The agent gets a credential, because reading issues, leaving comments and
 //! checking a build are most of working on somebody's repository and none of
@@ -14,7 +14,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::config::schema::GithubConfig;
+use crate::config::schema::{ForgeConfig, ForgeKind};
+use crate::forge;
 use crate::sandbox::backend::{AGENT_BIN, STATE_PATH, WORKSPACE_PATH};
 
 /// The environment variable `gh` and the credential helper both read.
@@ -22,6 +23,10 @@ pub const TOKEN_VARIABLE: &str = "GH_TOKEN";
 
 /// Where the git configuration is written, relative to the agent's home.
 pub const GITCONFIG_FILENAME: &str = ".gitconfig";
+
+/// Where the credential helper for a forge without a `gh` to route through
+/// is written, relative to the agent's home.
+pub const FORGE_CREDENTIAL_FILENAME: &str = "forge-credential";
 
 /// Where the agent asks for a pull request, inside its state directory.
 ///
@@ -89,6 +94,25 @@ if [ -r "@STATE@/@TOKEN_FILE@" ]; then
   export GH_TOKEN
 fi
 "#;
+
+/// The `gh` a Forgejo session finds, which refuses.
+///
+/// The agent reaches for `gh` the way it does anywhere, and without a stub
+/// the reflex dies on a missing command or, worse, runs a real `gh` at
+/// GitHub, where the session holds neither business nor credential. The
+/// refusal says where git does reach and who opens the pull request, so the
+/// first miss teaches the way this forge works.
+pub fn forge_gh_shim_contents() -> String {
+    r#"#!/bin/sh
+# Generated per session by errand. Do not edit.
+echo "errand: gh speaks to GitHub, and this session works with Forgejo." >&2
+echo "Git alone reaches the forge: clone, branch, commit and push with the credential errand set up." >&2
+echo "Pull requests, and forks for them, are opened by the daemon: write the title to @STATE@/@REQUEST@ and it opens when your turn ends." >&2
+exit 1
+"#
+    .replace("@STATE@", STATE_PATH)
+    .replace("@REQUEST@", REQUEST_FILENAME)
+}
 
 /// The wrapper, with its paths left as `@NAME@` for [`gh_shim_contents`].
 ///
@@ -167,18 +191,47 @@ exit 127
 
 /// The git configuration a session runs with.
 ///
-/// The credential helper is `gh` itself, through the wrapper, so git presents
-/// whatever `gh` holds: the daemon's token in the environment, or the App
+/// The credential helper answers with whatever credential the session holds:
+/// the daemon's token in the environment, or, on GitHub with an App, the App
 /// token the wrapper reads from the state directory. No copy is written here.
-pub fn git_config_contents(github: &GithubConfig) -> String {
+/// GitHub routes through `gh` itself; a Forgejo forge has no `gh`, so a
+/// helper of the daemon's own answers in its place.
+pub fn git_config_contents(forge: &ForgeConfig) -> String {
+    let helper = match forge.kind {
+        ForgeKind::Github => "!gh auth git-credential".to_owned(),
+        ForgeKind::Forgejo => format!("!{AGENT_BIN}/{FORGE_CREDENTIAL_FILENAME}"),
+    };
     [
         "# Generated per session by errand. Do not edit.",
         "[user]",
-        &format!("\tname = {}", github.user_name),
-        &format!("\temail = {}", github.user_email),
+        &format!("\tname = {}", forge.user_name),
+        &format!("\temail = {}", forge.user_email),
         "",
-        "[credential \"https://github.com\"]",
-        "\thelper = !gh auth git-credential",
+        &format!("[credential \"{}\"]", forge::site_base(forge)),
+        &format!("\thelper = {helper}"),
+        "",
+    ]
+    .join("\n")
+}
+
+/// The credential helper a Forgejo session runs git through, where there is
+/// no `gh` to route the question through itself.
+///
+/// Git asks with `get` and reads a username and a password; the forge
+/// authenticates the token in the password and pays no attention to the
+/// name beside it, which only has to be there. The header says as much for
+/// the agent that finds the name in its git configuration and comes
+/// looking, as one did.
+pub fn forge_credential_contents() -> String {
+    [
+        "#!/bin/sh",
+        "# Generated per session by errand. Do not edit.",
+        "# Git runs this itself when it needs the forge's credential. It is",
+        "# not a tool for you: called any other way, it answers nothing.",
+        "if [ \"$1\" = get ]; then",
+        "  echo \"username=errand\"",
+        &format!(r#"  echo "password=${TOKEN_VARIABLE}""#),
+        "fi",
         "",
     ]
     .join("\n")
@@ -189,12 +242,12 @@ pub fn git_config_contents(github: &GithubConfig) -> String {
 /// The file alone is not enough. An agent passing its own name at commit time
 /// authors as itself, and these beat the file, so anything short of a
 /// deliberate override is attributed to the bot.
-pub fn git_identity_env(github: &GithubConfig) -> BTreeMap<String, String> {
+pub fn git_identity_env(forge: &ForgeConfig) -> BTreeMap<String, String> {
     BTreeMap::from([
-        ("GIT_AUTHOR_NAME".to_owned(), github.user_name.clone()),
-        ("GIT_AUTHOR_EMAIL".to_owned(), github.user_email.clone()),
-        ("GIT_COMMITTER_NAME".to_owned(), github.user_name.clone()),
-        ("GIT_COMMITTER_EMAIL".to_owned(), github.user_email.clone()),
+        ("GIT_AUTHOR_NAME".to_owned(), forge.user_name.clone()),
+        ("GIT_AUTHOR_EMAIL".to_owned(), forge.user_email.clone()),
+        ("GIT_COMMITTER_NAME".to_owned(), forge.user_name.clone()),
+        ("GIT_COMMITTER_EMAIL".to_owned(), forge.user_email.clone()),
     ])
 }
 
@@ -262,35 +315,48 @@ fn urlencoding_escape(text: &str) -> String {
 /// request nobody asked for, which spends somebody else's review time.
 /// Announcing one before it exists, since the file is a request the daemon
 /// acts on after the turn. And, when it opened one itself anyway, inventing a
-/// footer that `@` mentioned the GitHub account matching a chat name.
+/// footer that `@` mentioned the forge account matching a chat name.
 ///
 /// The last is why the exact footer is here. The agent holds a token that can
 /// open a pull request, so "do not" is the preference and not the guarantee,
 /// and a bypass that still attributes the work correctly is much the smaller
 /// failure.
 pub fn review_instructions(
-    github: &GithubConfig,
+    forge: &ForgeConfig,
     requested_by: &str,
     links: &SessionLinks,
 ) -> String {
+    let gh_line = match forge.kind {
+        ForgeKind::Github => {
+            if forge.app.is_some() {
+                "`gh` is authenticated for the repositories listed for this session's GitHub App, \
+                 or every one it was installed on when none are listed, so read issues, leave \
+                 comments and check builds there as you would anywhere. GitHub refuses anything \
+                 outside them, and a fork or a pull request on another repository is opened by \
+                 the daemon, as below. Two things are different."
+            } else {
+                "`gh` is authenticated, so read issues, leave comments and check builds as you \
+                 would anywhere. Two things are different."
+            }
+        }
+        ForgeKind::Forgejo => {
+            "Git reaches the forge on its own: cloning, pushing and pulling authenticate \
+             through `forge-credential`, a helper script errand installs that git runs itself \
+             when it needs the credential, so push branches as you would anywhere and leave \
+             the helper to git. There is no `gh`: the one on your path refuses and says so, \
+             since reading issues, leaving comments and pull requests are the daemon's work, \
+             as below. Two things are different."
+        }
+    };
     [
         "",
         "## Opening a pull request",
         "",
-        if github.app.is_some() {
-            "`gh` is authenticated for the repositories listed for this session's GitHub App, \
-             or every one it was installed on when none are listed, so read issues, leave \
-             comments and check builds there as you would anywhere. GitHub refuses anything \
-             outside them, and a fork or a pull request on another repository is opened by \
-             the daemon, as below. Two things are different."
-        } else {
-            "`gh` is authenticated, so read issues, leave comments and check builds as you \
-             would anywhere. Two things are different."
-        },
+        gh_line,
         "",
         &format!(
             "Commit as `{} <{}>`, which is already set up.",
-            github.user_name, github.user_email
+            forge.user_name, forge.user_email
         ),
         "Do not pass `-c user.name`, `-c user.email` or `--author`, and do not set",
         "`GIT_AUTHOR_NAME` or `GIT_COMMITTER_NAME`. The commits belong to the bot",
@@ -307,7 +373,7 @@ pub fn review_instructions(
             "into {WORKSPACE_PATH}, add a line of `repository: <directory>` naming the clone's"
         ),
         &format!(
-            "directory under {WORKSPACE_PATH}, not its name on GitHub: a clone at \
+            "directory under {WORKSPACE_PATH}, not its name on the forge: a clone at \
              `{WORKSPACE_PATH}/tools/parser`"
         ),
         "is `repository: tools/parser`. Nothing else in the file is read: the branch is",
@@ -323,7 +389,7 @@ pub fn review_instructions(
         "are how a repository receiving work from a bot can tell where it came",
         "from. If you ever open one yourself despite the above, end the description",
         "with exactly these lines, after a `---` rule. Copy them literally. Never",
-        "write an `@` mention: the name is a chat name, and the GitHub account that",
+        "write an `@` mention: the name is a chat name, and the forge account that",
         "happens to match it belongs to somebody who asked for nothing.",
         "",
         "```",

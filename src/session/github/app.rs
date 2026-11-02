@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use base64::Engine as _;
 use serde_json::{Value, json};
 
-use crate::config::schema::GithubAppConfig;
+use crate::config::schema::ForgeAppConfig;
 use crate::session::pr::{Api, ApiCall};
 
 /// Where in a session's state directory the token is kept, for the `gh`
@@ -45,7 +45,7 @@ pub struct SessionToken {
 
 /// Mints an installation token for `app`, reading its private key afresh so
 /// a rotated key takes effect at the next mint.
-pub async fn mint(app: &GithubAppConfig, api: &Api, now_ms: i64) -> Result<SessionToken, String> {
+pub async fn mint(app: &ForgeAppConfig, api: &Api, now_ms: i64) -> Result<SessionToken, String> {
     let pem = std::fs::read_to_string(&app.private_key_path).map_err(|error| {
         format!(
             "the GitHub App's private key at {} could not be read: {error}",

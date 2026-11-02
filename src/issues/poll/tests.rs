@@ -1,4 +1,4 @@
-//! Tests for reading what was said to the bot on GitHub.
+//! Tests for reading what was said to the bot on a forge.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -7,11 +7,13 @@ use serde_json::{Value, json};
 
 use super::{Heard, Poller, as_said, decide, mentions};
 use crate::chat::inbound::InboundDecision;
+use crate::config::schema::ForgeKind;
 use crate::log::{LogFields, Logger};
 use crate::session::pr::{Api, ApiReply};
 
 const BOT: &str = "talaria0101";
 const REPO: &str = "QaidVoid/edu";
+const GITHUB: ForgeKind = ForgeKind::Github;
 
 /// Answers each `METHOD path` from a table, and records every call made.
 /// Anything not in the table is a 404, so a call nobody expected shows.
@@ -43,6 +45,7 @@ fn api(answers: BTreeMap<String, Value>) -> (Api, Arc<Mutex<Vec<String>>>) {
 fn poller(api: Api) -> Poller {
     Poller {
         api,
+        kind: GITHUB,
         token: "ghp".to_owned(),
         bot: BOT.to_owned(),
         allowed: vec!["QaidVoid".to_owned()],
@@ -50,6 +53,7 @@ fn poller(api: Api) -> Poller {
         on_mention: true,
         on_assign: true,
         since: "2026-09-24T10:00:00Z".parse().unwrap(),
+        floors: BTreeMap::new(),
         log: Logger::new(LogFields::new(), Arc::new(|_level, _line| {})),
     }
 }
@@ -109,7 +113,8 @@ async fn a_new_issue_naming_the_bot_is_heard_and_marked_read() {
         "2026-09-24T10:00:00Z",
     ));
 
-    let heard = poller(api).poll().await.expect("read");
+    let mut poller = poller(api);
+    let heard = poller.poll().await.expect("read");
 
     assert_eq!(heard.len(), 1);
     assert!(heard[0].mentions);
@@ -153,7 +158,8 @@ async fn only_new_words_from_somebody_heard_are_heard() {
         "2026-09-24T12:00:00Z",
     ));
 
-    let heard = poller(api).poll().await.expect("read");
+    let mut poller = poller(api);
+    let heard = poller.poll().await.expect("read");
 
     assert_eq!(heard.len(), 1, "{heard:?}");
     assert_eq!(heard[0].message.id, "github-comment:4");
@@ -176,7 +182,8 @@ async fn a_comment_naming_the_bot_carries_the_issue_with_it() {
         "2026-09-24T10:00:00Z",
     ));
 
-    let heard = poller(api).poll().await.expect("read");
+    let mut poller = poller(api);
+    let heard = poller.poll().await.expect("read");
 
     assert_eq!(heard.len(), 1);
     assert!(heard[0].mentions);
@@ -211,9 +218,11 @@ async fn an_assignment_counts_only_from_somebody_heard() {
         );
         let (api, _) = api(table);
 
-        let heard = poller(api).poll().await.expect("read");
+        let mut poller = poller(api);
+        let heard = poller.poll().await.expect("read");
 
         assert_eq!(heard.len(), expected, "assigned by {actor}");
+        assert!(poller.floors.is_empty(), "GitHub uses last_read_at instead");
         if let Some(heard) = heard.first() {
             assert!(heard.mentions);
             assert_eq!(heard.message.content, "Make the parser stream.");
@@ -234,7 +243,10 @@ async fn an_unreadable_notification_is_left_unread() {
     table.remove(&format!("GET /repos/{REPO}/issues/7"));
     let (api, calls) = api(table);
 
-    assert!(poller(api).poll().await.expect("read").is_empty());
+    {
+        let mut poller = poller(api);
+        assert!(poller.poll().await.expect("read").is_empty());
+    }
     assert!(
         !calls
             .lock()
@@ -246,15 +258,20 @@ async fn an_unreadable_notification_is_left_unread() {
 
 #[test]
 fn a_mention_is_the_login_standing_on_its_own() {
-    assert!(mentions(&format!("@{BOT} please"), BOT));
-    assert!(mentions(&format!("thanks, @{}!", BOT.to_uppercase()), BOT));
-    assert!(!mentions(&format!("@{BOT}1 please"), BOT));
-    assert!(!mentions(&format!("mail me at me@{BOT}.dev"), BOT));
-    assert!(!mentions(&format!("x@{BOT} not a mention"), BOT));
+    assert!(mentions(&format!("@{BOT} please"), BOT, GITHUB));
+    assert!(mentions(
+        &format!("thanks, @{}!", BOT.to_uppercase()),
+        BOT,
+        GITHUB
+    ));
+    assert!(!mentions(&format!("@{BOT}1 please"), BOT, GITHUB));
+    assert!(!mentions(&format!("mail me at me@{BOT}.dev"), BOT, GITHUB));
+    assert!(!mentions(&format!("x@{BOT} not a mention"), BOT, GITHUB));
     assert_eq!(
         as_said(
             &format!("@{BOT} fix the\n```\nparser\n```\nwith @Alice-B, me@x.dev"),
-            BOT
+            BOT,
+            GITHUB
         ),
         "fix the\n```\nparser\n```\nwith <@github:alice-b>, me@x.dev"
     );
@@ -311,7 +328,10 @@ async fn a_notification_quiet_since_the_start_is_not_asked_about() {
         json!([quiet]),
     )]));
 
-    assert!(poller(api).poll().await.expect("read").is_empty());
+    {
+        let mut poller = poller(api);
+        assert!(poller.poll().await.expect("read").is_empty());
+    }
     assert_eq!(
         *calls.lock().unwrap(),
         [
@@ -387,4 +407,299 @@ async fn only_what_on_names_starts_a_session() {
             .iter()
             .any(|call| call.contains("/events"))
     );
+}
+
+/// A Forgejo instance asks its notifications without `participating`, names
+/// a subject `issue` in the lower case, numbers its threads, and lists its
+/// comments without pagination. An assignment is read off the timeline, whose
+/// entry names the assignee and who made it.
+#[tokio::test]
+async fn a_forgejo_notification_is_heard_by_its_own_vocabulary() {
+    let forgejo_notification = json!({
+        "id": 900_i64,
+        "unread": true,
+        "updated_at": "2026-09-24T12:30:00Z",
+        "subject": {
+            "type": "issue",
+            "title": "The parser drops the last line",
+            "url": format!("http://forge.example.com/api/v1/repos/{REPO}/issues/7"),
+        },
+        "repository": { "full_name": REPO },
+    });
+    let forgejo_issue = json!({
+        "title": "The parser drops the last line",
+        "body": format!("@{BOT} fix the parser"),
+        "html_url": format!("http://forge.example.com/{REPO}/issues/7"),
+        "created_at": "2026-09-24T11:00:00Z",
+        "user": { "login": "QaidVoid" },
+    });
+    let timeline = json!([{
+        "type": "assignees",
+        "assignee": { "login": BOT },
+        "user": { "login": "QaidVoid" },
+        "created_at": "2026-09-24T11:30:00Z",
+        "id": 7_i64,
+    }]);
+    let (answering, calls) = api(BTreeMap::from([
+        (
+            "GET /notifications?limit=50&status-types=unread".to_owned(),
+            json!([forgejo_notification]),
+        ),
+        (format!("GET /repos/{REPO}/issues/7"), forgejo_issue),
+        (
+            format!("GET /repos/{REPO}/issues/7/comments?since=2026-09-24T10:00:00Z"),
+            json!([]),
+        ),
+        (
+            format!(
+                "GET /repos/{REPO}/issues/7/timeline?since=2026-09-24T10:00:00Z&limit=100&page=1"
+            ),
+            timeline,
+        ),
+        (
+            format!(
+                "GET /repos/{REPO}/issues/7/timeline?since=2026-09-24T10:00:00Z&limit=100&page=2"
+            ),
+            json!([]),
+        ),
+    ]));
+    let mut forgejo = poller(answering);
+    forgejo.kind = ForgeKind::Forgejo;
+
+    let heard = forgejo.poll().await.expect("read");
+
+    // No `reason` field exists to say why the instance notified, so the
+    // mention on the issue and the assignment on the timeline are both read.
+    assert_eq!(heard.len(), 2);
+    assert!(
+        heard
+            .iter()
+            .all(|heard| heard.thread_id == "forgejo:QaidVoid/edu#7")
+    );
+    let mention = heard
+        .iter()
+        .find(|heard| heard.message.id == "forgejo-issue:QaidVoid/edu#7")
+        .expect("the mention");
+    assert_eq!(mention.message.author_id, "forgejo:qaidvoid");
+    assert!(
+        mention
+            .opening
+            .contains("http://forge.example.com/QaidVoid/edu/issues/7")
+    );
+    let assigned = heard
+        .iter()
+        .find(|heard| heard.message.id == "forgejo-assign:7")
+        .expect("the assignment");
+    assert_eq!(assigned.message.author_id, "forgejo:qaidvoid");
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .contains(&"PATCH /notifications/threads/900".to_owned()),
+        "a numbered thread is marked read"
+    );
+}
+
+/// The timeline is oldest first, so an assignment beyond its first page
+/// must be read before the notification's floor moves forward.
+#[tokio::test]
+async fn a_forgejo_assignment_after_the_first_hundred_events_is_heard() {
+    for page_size in [50, 100] {
+        let floor = "2026-09-24T10:00:00Z";
+        let mut first_page = vec![json!({ "type": "comment" }); page_size];
+        first_page[0] = json!({
+            "id": 1,
+            "type": "assignees",
+            "assignee": { "login": BOT },
+            "user": { "login": "stranger" },
+            "created_at": "2026-09-24T11:00:00Z",
+        });
+        let (answering, calls) = api(BTreeMap::from([
+            (
+                "GET /notifications?limit=50&status-types=unread".to_owned(),
+                json!([notification("", None)]),
+            ),
+            (
+                format!("GET /repos/{REPO}/issues/7"),
+                issue("2026-09-24T09:00:00Z", "Fix the parser."),
+            ),
+            (
+                format!("GET /repos/{REPO}/issues/7/comments?since={floor}"),
+                json!([]),
+            ),
+            (
+                format!("GET /repos/{REPO}/issues/7/timeline?since={floor}&limit=100&page=1"),
+                json!(first_page),
+            ),
+            (
+                format!("GET /repos/{REPO}/issues/7/timeline?since={floor}&limit=100&page=2"),
+                json!([{
+                    "id": 101,
+                    "type": "assignees",
+                    "assignee": { "login": BOT },
+                    "user": { "login": "QaidVoid" },
+                    "created_at": "2026-09-24T12:00:00Z",
+                }]),
+            ),
+            (
+                format!("GET /repos/{REPO}/issues/7/timeline?since={floor}&limit=100&page=3"),
+                json!([]),
+            ),
+        ]));
+        let mut forgejo = poller(answering);
+        forgejo.kind = ForgeKind::Forgejo;
+
+        let heard = forgejo.poll().await.expect("read every timeline page");
+
+        assert_eq!(heard.len(), 1);
+        assert_eq!(heard[0].message.id, "forgejo-assign:101");
+        assert!(heard[0].mentions);
+        assert_eq!(
+            forgejo.floors[&format!("{REPO}#7")],
+            "2026-09-24T12:30:00Z".parse::<jiff::Timestamp>().unwrap()
+        );
+        let calls = calls.lock().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.contains("/timeline?"))
+                .count(),
+            3
+        );
+        assert!(calls.contains(&"PATCH /notifications/threads/900".to_owned()));
+    }
+}
+
+/// A later page failing must not acknowledge an earlier assignment or
+/// comment, or move the floor past the events that still need a retry.
+#[tokio::test]
+async fn a_failed_forgejo_timeline_page_leaves_the_notification_and_floor_unread() {
+    let floor = "2026-09-24T11:00:00Z";
+    let assignment = json!({
+        "id": 1,
+        "type": "assignees",
+        "assignee": { "login": BOT },
+        "user": { "login": "QaidVoid" },
+        "created_at": "2026-09-24T12:00:00Z",
+    });
+    let (answering, calls) = api(BTreeMap::from([
+        (
+            "GET /notifications?limit=50&status-types=unread".to_owned(),
+            json!([notification("", None)]),
+        ),
+        (
+            format!("GET /repos/{REPO}/issues/7"),
+            issue("2026-09-24T11:30:00Z", &format!("@{BOT} fix it")),
+        ),
+        (
+            format!("GET /repos/{REPO}/issues/7/comments?since={floor}"),
+            json!([comment(
+                2,
+                "QaidVoid",
+                "And its tests",
+                "2026-09-24T12:00:00Z"
+            )]),
+        ),
+        (
+            format!("GET /repos/{REPO}/issues/7/timeline?since={floor}&limit=100&page=1"),
+            json!(vec![assignment; 100]),
+        ),
+    ]));
+    let mut forgejo = poller(answering);
+    forgejo.kind = ForgeKind::Forgejo;
+    let remembered = floor.parse::<jiff::Timestamp>().unwrap();
+    forgejo.floors.insert(format!("{REPO}#7"), remembered);
+
+    for _ in 0..2 {
+        assert!(forgejo.poll().await.expect("retry failed page").is_empty());
+        assert_eq!(forgejo.floors[&format!("{REPO}#7")], remembered);
+    }
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| call.ends_with("&page=2"))
+            .count(),
+        2
+    );
+    assert!(!calls.iter().any(|call| call.starts_with("PATCH")));
+}
+
+#[test]
+fn forge_mentions_follow_their_own_login_grammar_without_prefix_matches() {
+    let forgejo = ForgeKind::Forgejo;
+    for login in ["Bot_Name", "Bot.Name", &"a".repeat(40)] {
+        assert!(mentions(&format!("@{login} please"), login, forgejo));
+        assert_eq!(
+            as_said(&format!("@{login} please"), login, forgejo),
+            "please"
+        );
+        assert_eq!(
+            as_said(&format!("ask @{login}"), BOT, forgejo),
+            format!("ask <@forgejo:{}>", login.to_ascii_lowercase())
+        );
+    }
+    for kind in [GITHUB, forgejo] {
+        assert!(!mentions("@bot_name please", "bot", kind));
+        assert!(!mentions("mail me@bot_name.example", "bot_name", kind));
+    }
+    assert_eq!(
+        as_said("@bot_name please", "bot", GITHUB),
+        "@bot_name please"
+    );
+    assert_eq!(
+        as_said("@bot_name please", "bot", forgejo),
+        "<@forgejo:bot_name> please"
+    );
+    assert!(mentions("thanks, @bot_name.", "bot_name", forgejo));
+    assert!(!mentions("@bot_name.other", "bot_name", forgejo));
+    assert!(mentions("thanks, @bot.", "bot", GITHUB));
+    assert!(!mentions(
+        &format!("@{}", "a".repeat(40)),
+        &"a".repeat(39),
+        GITHUB
+    ));
+    assert!(!mentions(
+        &format!("@{}", "a".repeat(41)),
+        &"a".repeat(40),
+        forgejo
+    ));
+}
+
+#[tokio::test]
+async fn forgejo_issue_and_comment_mentions_keep_complete_account_names() {
+    let bot = "bot_name";
+    let login = "a".repeat(40);
+    let floor = "2026-09-24T10:00:00Z";
+    let (answering, _) = api(BTreeMap::from([
+        (
+            "GET /notifications?limit=50&status-types=unread".to_owned(),
+            json!([notification("", None)]),
+        ),
+        (
+            format!("GET /repos/{REPO}/issues/7"),
+            issue("2026-09-24T11:00:00Z", &format!("@{bot} ask @Alice_B")),
+        ),
+        (
+            format!("GET /repos/{REPO}/issues/7/comments?since={floor}"),
+            json!([comment(
+                3,
+                "QaidVoid",
+                &format!("@{bot} ask @{login}"),
+                "2026-09-24T12:00:00Z"
+            )]),
+        ),
+    ]));
+    let mut forgejo = poller(answering);
+    forgejo.kind = ForgeKind::Forgejo;
+    forgejo.bot = bot.to_owned();
+    forgejo.on_assign = false;
+
+    let heard = forgejo.poll().await.expect("read");
+
+    assert_eq!(heard.len(), 2);
+    assert!(heard.iter().all(|heard| heard.mentions));
+    assert_eq!(heard[0].message.content, "ask <@forgejo:alice_b>");
+    assert_eq!(heard[1].message.content, format!("ask <@forgejo:{login}>"));
 }

@@ -97,7 +97,7 @@ fn what_a_running_session_must_scrub_is_every_secret_it_holds() {
 #[test]
 fn a_secret_in_a_section_that_was_omitted_is_simply_not_there() {
     let mut without_github = config();
-    without_github.github = None;
+    without_github.forge = None;
 
     let mut held = secret_values(&without_github);
     held.sort();
@@ -111,7 +111,7 @@ fn a_secret_in_a_section_that_was_omitted_is_simply_not_there() {
     expected.sort();
     assert_eq!(held, expected);
     assert_eq!(
-        redact_config(&without_github).get("github"),
+        redact_config(&without_github).get("forge"),
         Some(&Value::Null)
     );
 }

@@ -1,4 +1,5 @@
-//! Opens a chat thread for work asked for on GitHub, and keeps the two linked.
+//! Opens a chat thread for work asked for on a forge, and keeps the two
+//! linked.
 //!
 //! A session asked for on an issue runs in a chat thread like any other, so
 //! it is watched and steered where every other session is. The issue is told
@@ -12,8 +13,9 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use super::thread::{is_github_thread, issue_of};
+use super::thread::{is_forge_thread, issue_of};
 use super::view::IssueThreads;
+use crate::forge;
 use crate::log::{LogValue, Logger, fields};
 use crate::session::event::SessionEvent;
 use crate::session::manager::{CreatedThread, FoundView, MadeThread, ThreadFactory};
@@ -28,7 +30,12 @@ pub const LINKS_FILENAME: &str = "issue-threads.json";
 pub struct ByThread {
     chat: Arc<dyn ThreadFactory>,
     issues: Arc<IssueThreads>,
-    /// The chat thread answering each issue, by the issue's thread name.
+    /// What the forge is called where a person reads about it.
+    name: &'static str,
+    /// Where the forge keeps the pages a person reads, for the opener a
+    /// thread starts with.
+    site_base: String,
+    /// The chat thread answering each issue, scoped by its instance URL.
     links: Mutex<BTreeMap<String, String>>,
     path: PathBuf,
     log: Logger,
@@ -39,16 +46,40 @@ impl ByThread {
     pub fn new(
         chat: Arc<dyn ThreadFactory>,
         issues: Arc<IssueThreads>,
+        name: &'static str,
+        site_base: &str,
         path: PathBuf,
         log: Logger,
     ) -> Self {
-        let links = std::fs::read_to_string(&path)
+        let mut links: BTreeMap<String, String> = std::fs::read_to_string(&path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default();
+        // Legacy GitHub links have a known origin. An unscoped Forgejo link
+        // cannot identify its original instance, so it must stay detached.
+        let legacy: Vec<String> = links
+            .keys()
+            .filter(|key| key.starts_with("github:"))
+            .cloned()
+            .collect();
+        for issue in legacy {
+            if let Some(thread) = links.remove(&issue) {
+                links
+                    .entry(format!("https://github.com|{issue}"))
+                    .or_insert(thread);
+            }
+        }
+        if links.keys().any(|key| key.starts_with("forgejo:")) {
+            log.warn(
+                "legacy Forgejo issue links have no instance URL and remain detached; mention the bot on the issue to start a newly scoped thread",
+                &fields([]),
+            );
+        }
         Self {
             chat,
             issues,
+            name,
+            site_base: site_base.trim_end_matches('/').to_owned(),
             links: Mutex::new(links),
             path,
             log,
@@ -57,10 +88,13 @@ impl ByThread {
 
     /// The chat thread that answers an issue, when one does.
     pub fn thread_for(&self, issue: &str) -> Option<String> {
+        if !issue.starts_with(forge::thread_prefix(self.issues.kind)) {
+            return None;
+        }
         self.links
             .lock()
             .expect("the issue links lock")
-            .get(issue)
+            .get(&self.scoped_key(issue))
             .cloned()
     }
 
@@ -69,15 +103,22 @@ impl ByThread {
             .lock()
             .expect("the issue links lock")
             .iter()
-            .find(|(_, thread)| *thread == thread_id)
-            .map(|(issue, _)| issue.clone())
+            .find_map(|(key, thread)| {
+                let issue = key.strip_prefix(&format!("{}|", self.site_base))?;
+                (thread == thread_id && issue.starts_with(forge::thread_prefix(self.issues.kind)))
+                    .then(|| issue.to_owned())
+            })
+    }
+
+    fn scoped_key(&self, issue: &str) -> String {
+        format!("{}|{issue}", self.site_base)
     }
 
     /// Writes down that a thread answers an issue, replacing whichever did.
     fn link(&self, issue: &str, thread_id: &str) {
         let written = {
             let mut links = self.links.lock().expect("the issue links lock");
-            links.insert(issue.to_owned(), thread_id.to_owned());
+            links.insert(self.scoped_key(issue), thread_id.to_owned());
             serde_json::to_string_pretty(&*links).unwrap_or_default()
         };
         if let Err(error) = std::fs::write(&self.path, written) {
@@ -105,16 +146,22 @@ impl ThreadFactory for ByThread {
     /// A message said on an issue opens a chat thread of its own, since it
     /// has no chat message to hang one off, and the thread answers the issue.
     fn create(self: Arc<Self>, message: IncomingMessage, name: String) -> MadeThread {
-        if !is_github_thread(&message.channel_id) {
+        if !is_forge_thread(&message.channel_id) {
             return Arc::clone(&self.chat).create(message, name);
         }
         Box::pin(async move {
             let issue = message.channel_id.clone();
+            if !issue.starts_with(forge::thread_prefix(self.issues.kind)) {
+                return Err(format!("{issue} does not belong to the configured forge"));
+            }
             let (repository, number) =
                 issue_of(&issue).ok_or_else(|| format!("{issue} is not an issue"))?;
             let opener = format!(
-                "{} asked on GitHub, on {repository}#{number}: https://github.com/{repository}/issues/{number}",
+                "{} asked on {}, on {repository}#{number}: {}/{}/issues/{number}",
                 message.author_name.as_deref().unwrap_or("somebody"),
+                self.name,
+                self.site_base.trim_end_matches('/'),
+                repository,
             );
             let made = Arc::clone(&self.chat).open(name, opener).await?;
             self.link(&issue, &made.id);

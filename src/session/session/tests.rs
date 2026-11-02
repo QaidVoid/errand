@@ -2241,7 +2241,7 @@ async fn a_session_with_no_github_identity_says_so_rather_than_failing() {
                 harness
                     .thread
                     .everything()
-                    .contains("no GitHub identity is configured")
+                    .contains("no forge identity is configured")
             );
             assert_eq!(
                 harness.thread.final_reaction("m2"),
@@ -5709,6 +5709,43 @@ fn app_case(key: &std::path::Path, api: crate::session::pr::Api) -> SessionTestC
         github_api: Some(api),
         ..Default::default()
     }
+}
+
+/// A Forgejo session's bin directory carries the refusing `gh` beside the
+/// credential: the agent's reflex must land on the reminder, not on GitHub,
+/// wherever an image happens to carry a real `gh`.
+#[tokio::test(start_paused = true)]
+async fn a_forgejo_session_writes_a_gh_that_refuses_and_a_credential_git_can_ask() {
+    with_session(
+        SessionTestCase {
+            config: Some(config_with(&json!({
+                "forge": {
+                    "type": "forgejo",
+                    "url": "https://forge.example.com",
+                    "token": "forge-daemon-token",
+                    "userName": "errand-bot",
+                    "userEmail": "bot@example.com",
+                },
+            }))),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                let bin = std::path::Path::new(&harness.state_dir).join("home/bin");
+                let gh = std::fs::read_to_string(bin.join("gh")).unwrap();
+                assert!(gh.contains("works with Forgejo"));
+                assert!(gh.contains("opened by the daemon"));
+                assert!(
+                    !gh.contains("GH_TOKEN"),
+                    "a Forgejo session holds no token file to read"
+                );
+
+                let credential = std::fs::read_to_string(bin.join("forge-credential")).unwrap();
+                assert!(credential.contains("password=$GH_TOKEN"));
+            })
+        },
+    )
+    .await;
 }
 
 /// An `Api` that answers every mint with `token`, or with `status` alone

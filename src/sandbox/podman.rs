@@ -163,7 +163,7 @@ pub fn podman_args(
     }
     env.extend(launch.env.clone());
     // Only a secret crosses by name: a provider key or its stand-in, the
-    // GitHub token, and a proxy URL with its credential. A bare name is
+    // forge token, and a proxy URL with its credential. A bare name is
     // resolved from podman's own environment, which is then podman's too, so
     // anything else, a session's XDG directories above all, would move where
     // podman keeps its own storage.
@@ -374,7 +374,7 @@ impl PodmanSandbox {
         let gaps = if config.egress.mode == EgressMode::Proxy && !Self::brokers(&settings) {
             vec![
                 "egress.mode is proxy but no broker is wired for this backend: provider keys \
-                 and the GitHub token cross whole into the container, and its connections go \
+                 and the forge token cross whole into the container, and its connections go \
                  anywhere"
                     .to_owned(),
             ]

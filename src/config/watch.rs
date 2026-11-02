@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use crate::config::live::{LiveConfig, Reloaded};
-use crate::config::load::{Environment, file_exists, load_config};
+use crate::config::load::{Environment, file_exists, load_config_with_warnings};
 use crate::config::schema::ConfigError;
 use crate::log::{LogValue, Logger, fields};
 use crate::sandbox::kage_providers::KageProviders;
@@ -75,15 +75,19 @@ pub fn reload(
     kage: &KageProviders,
     log: &Logger,
 ) -> Reloaded {
-    let incoming = load_config(path, |path| std::fs::read_to_string(path), env, file_exists)
-        .and_then(|config| {
-            let problems = kage.refuses(&config.agent.providers);
-            if problems.is_empty() {
-                Ok(config)
-            } else {
-                Err(ConfigError { problems })
-            }
-        });
+    let incoming =
+        load_config_with_warnings(path, |path| std::fs::read_to_string(path), env, file_exists)
+            .and_then(|(config, warnings)| {
+                for warning in warnings {
+                    log.warn(warning.as_str(), &fields([]));
+                }
+                let problems = kage.refuses(&config.agent.providers);
+                if problems.is_empty() {
+                    Ok(config)
+                } else {
+                    Err(ConfigError { problems })
+                }
+            });
     let outcome = live.reload(incoming);
     report(&outcome, path, log);
     outcome

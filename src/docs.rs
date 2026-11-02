@@ -50,7 +50,7 @@ fn bracket_depth(line: &str) -> i32 {
         - i32::try_from(line.matches(']').count()).unwrap_or(0)
 }
 
-/// Reads the interfaces out of the schema.
+/// Reads the configuration input sections from the resolved schema.
 ///
 /// A scanner rather than a parser: the file is written to one shape, every
 /// field carries a doc comment, and anything it cannot read is a failure
@@ -59,6 +59,10 @@ pub fn read_schema(source: &str) -> Vec<Section> {
     let mut sections: Vec<Section> = Vec::new();
     let mut comment: Vec<String> = Vec::new();
     let mut attribute_depth = 0_i32;
+    // A field the schema renames for the file's sake, such as `kind` being
+    // spelled `type` there. The next field takes the name; anything else
+    // lets it go.
+    let mut rename: Option<String> = None;
 
     for line in source.lines() {
         let trimmed = line.trim();
@@ -76,6 +80,10 @@ pub fn read_schema(source: &str) -> Vec<Section> {
         }
         if trimmed.starts_with("#[") {
             attribute_depth = bracket_depth(trimmed);
+            rename = trimmed
+                .split("rename = \"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next().map(str::to_owned));
             continue;
         }
         if trimmed.starts_with("//") || trimmed.is_empty() {
@@ -89,21 +97,21 @@ pub fn read_schema(source: &str) -> Vec<Section> {
         if let Some(name) = named {
             // The TypeScript interfaces are named for their key (`ChatConfig`),
             // and the pages follow the key rather than the whole name. The
-            // bare `Config` is the root, documented as the top level. Any
-            // other struct is not a section of the configuration at all.
+            // bare `Config` is the root, documented as the top level. A struct
+            // named for nothing else, such as `ForgeTrigger`, is a sub-section
+            // documented under whichever key names it.
             let says = std::mem::take(&mut comment).join(" ");
-            if name == "Config" || name.ends_with("Config") {
-                let key = match name.strip_suffix("Config") {
-                    Some("") => "Root",
-                    Some(key) => key,
-                    None => name.as_str(),
-                };
-                sections.push(Section {
-                    name: key.to_owned(),
-                    says,
-                    fields: Vec::new(),
-                });
-            }
+            let key = match name.strip_suffix("Config") {
+                Some("") => "Root",
+                Some(key) => key,
+                None => name.as_str(),
+            };
+            rename = None;
+            sections.push(Section {
+                name: key.to_owned(),
+                says,
+                fields: Vec::new(),
+            });
             continue;
         }
 
@@ -131,7 +139,7 @@ pub fn read_schema(source: &str) -> Vec<Section> {
             }
         };
         if let Some((name, type_)) = body.split_once(':') {
-            let name = name.trim().to_owned();
+            let name = rename.take().unwrap_or_else(|| to_camel(name.trim()));
             let type_ = type_
                 .trim()
                 .trim_end_matches(',')
@@ -150,6 +158,8 @@ pub fn read_schema(source: &str) -> Vec<Section> {
         }
     }
 
+    project_forge_input(&mut sections);
+
     assert!(
         !sections.is_empty(),
         "no interfaces were found in the schema"
@@ -162,6 +172,52 @@ pub fn read_schema(source: &str) -> Vec<Section> {
         );
     }
     sections
+}
+
+/// Projects the forge's resolved fields back to the keys accepted on disk.
+fn project_forge_input(sections: &mut Vec<Section>) {
+    if let Some(trigger) = sections
+        .iter_mut()
+        .find(|section| section.name == "ForgeTrigger")
+    {
+        trigger
+            .fields
+            .retain(|field| !matches!(field.name.as_str(), "onMention" | "onAssign"));
+        trigger.fields.push(Field {
+            name: "on".to_owned(),
+            type_: "Option<Vec<String>>".to_owned(),
+            says: "Events that start a session: `mention`, `assign`, or both. Must not be empty. Omitted means both events.".to_owned(),
+        });
+        if let Some(allowed) = trigger
+            .fields
+            .iter_mut()
+            .find(|field| field.name == "allowedUsers")
+        {
+            allowed
+                .says
+                .push_str(" Required and non-empty. A wildcard `*` is refused.");
+        }
+    }
+    let Some(forge) = sections.iter().find(|section| section.name == "Forge") else {
+        return;
+    };
+    let legacy = Section {
+        name: "Github".to_owned(),
+        says: "Deprecated but still supported: the legacy GitHub identity. Rename `github` to `forge`; `forge.type` defaults to `github`. Do not set both sections. Only `token`, `userName`, `userEmail`, `trigger`, and `app` are accepted here, not `type` or `url`. The optional `trigger` and `app` objects use the fields documented under `forge.trigger` and `forge.app`.".to_owned(),
+        fields: forge.fields.iter()
+            .filter(|field| !matches!(field.name.as_str(), "type" | "url"))
+            .cloned()
+            .collect(),
+    };
+    sections.push(legacy);
+    if let Some(root) = sections.iter_mut().find(|section| section.name == "Root") {
+        root.fields.push(Field {
+            name: "github".to_owned(),
+            type_: "Option<GithubConfig>".to_owned(),
+            says: "Deprecated GitHub configuration. Use `forge` instead; setting both is refused."
+                .to_owned(),
+        });
+    }
 }
 
 /// Turns a `snake_case` field name into the camelCase key the file uses.
@@ -183,11 +239,16 @@ fn to_camel(name: &str) -> String {
 
 /// Spells a Rust type the way the configuration file and the pages name it.
 fn shown_type(type_: &str) -> String {
-    let bare = type_
-        .trim_start_matches("Option<")
-        .trim_end_matches('>')
-        .trim();
-    let optional = type_.starts_with("Option<") && type_.ends_with('>');
+    let trimmed = type_.trim();
+    // One `Option<...>` wrapper comes off whole, so a generic inside one
+    // keeps its own closing bracket.
+    let (bare, optional) = match trimmed.strip_prefix("Option<") {
+        Some(inner) => match inner.strip_suffix('>') {
+            Some(inner) => (inner.trim(), true),
+            None => (trimmed, false),
+        },
+        None => (trimmed, false),
+    };
     let named = match bare {
         "String" => "string".to_owned(),
         "bool" => "boolean".to_owned(),
@@ -231,7 +292,8 @@ pub fn required_fields() -> std::collections::BTreeSet<String> {
     };
 
     collect(&serde_json::json!({}));
-    collect(&serde_json::json!({ "github": {}, "agent": { "delegate": {} } }));
+    collect(&serde_json::json!({ "forge": {}, "agent": { "delegate": {} } }));
+    collect(&serde_json::json!({ "github": {} }));
     named
 }
 
@@ -315,8 +377,13 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
         ),
         ("retention/every", Value::from(defaults::RETENTION_EVERY)),
         // Left out, a token asks for everything its installation was granted.
-        ("githubapp/permissions", serde_json::json!({})),
-        ("githubapp/repositories", serde_json::json!([])),
+        ("forgeapp/permissions", serde_json::json!({})),
+        ("forgeapp/repositories", serde_json::json!([])),
+        ("forge/type", Value::from("github")),
+        // Left out, a trigger hears both a mention and an assignment, and
+        // wherever it is mentioned or assigned.
+        ("forgetrigger/on", serde_json::json!(["mention", "assign"])),
+        ("forgetrigger/repositories", serde_json::json!([])),
         (
             "sandbox/hidehostaddress",
             Value::Bool(defaults::HIDE_HOST_ADDRESS),
@@ -385,13 +452,15 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
 ///
 /// Ordered here rather than taken from the file, because what a reader needs
 /// first is not the order the types happen to be declared in.
-const KEYS: [(&str, &str); 17] = [
+const KEYS: [(&str, &str); 19] = [
     ("Root", "top level"),
     ("Chat", "chat"),
     ("Agent", "agent"),
     ("Delegate", "agent.delegate"),
+    ("Forge", "forge"),
+    ("ForgeTrigger", "forge.trigger"),
+    ("ForgeApp", "forge.app"),
     ("Github", "github"),
-    ("GithubApp", "github.app"),
     ("Sandbox", "sandbox"),
     ("Egress", "sandbox.egress"),
     ("Incus", "sandbox.incus"),
@@ -415,7 +484,7 @@ pub fn configuration_page(
          \n\
          # Configuration\n\
          \n\
-         Every field the daemon reads, taken from `src/config/schema.rs`. A key that\n\
+         Every field the daemon accepts, projected from `src/config/schema.rs`. A key that\n\
          is not one of these is a refusal to start rather than a setting quietly\n\
          ignored, so a misspelling says so. Inside a provider definition, which may\n\
          carry keys of the operator's own, only a misspelling of a route key is\n\
@@ -439,11 +508,20 @@ pub fn configuration_page(
         let Some(section) = sections.iter().find(|found| found.name == name) else {
             continue;
         };
-        // A field whose type is another section is documented as that section.
+        // A field whose type is another section is documented as that
+        // section, under the section's own key.
         let fields: Vec<&Field> = section
             .fields
             .iter()
-            .filter(|field| !shown_type(&field.type_).ends_with("Config | undefined"))
+            .filter(|field| {
+                let bare = shown_type(&field.type_)
+                    .trim_end_matches(" | undefined")
+                    .trim()
+                    .to_owned();
+                !sections
+                    .iter()
+                    .any(|other| bare == other.name || bare == format!("{}Config", other.name))
+            })
             .collect();
         if fields.is_empty() {
             continue;
@@ -459,7 +537,8 @@ pub fn configuration_page(
             let fallback = default_of(name, &field.name);
             let stands = if !fallback.is_empty() {
                 fallback
-            } else if required.contains(&format!("{key}.{}", field.name))
+            } else if (name == "ForgeTrigger" && field.name == "allowedUsers")
+                || required.contains(&format!("{key}.{}", field.name))
                 || required.contains(&field.name)
             {
                 "required".to_owned()
@@ -494,9 +573,12 @@ fn json_type(type_: &str, sections: &[Section]) -> Value {
         }),
         "SandboxBackend" => json!({ "type": "string", "enum": ["podman", "bailey", "incus"] }),
         "NetworkMode" => json!({ "type": "string", "enum": ["restricted", "none"] }),
+        "ForgeKind" => json!({ "type": "string", "enum": ["github", "forgejo"] }),
         _ => {
             let section = sections.iter().find(|section| {
-                shown.trim_end_matches(" | undefined").trim() == format!("{}Config", section.name)
+                let bare = shown.trim_end_matches(" | undefined").trim();
+                bare == format!("{}Config", section.name)
+                    || (bare == section.name && section.name != "Root")
             });
             match section {
                 Some(section) => object_for(section, sections),
@@ -523,6 +605,28 @@ fn object_for(section: &Section, sections: &[Section]) -> Value {
                 map
             }
         };
+        match (section.name.as_str(), field.name.as_str()) {
+            ("Forge", "type") => {
+                described.insert("default".to_owned(), json!("github"));
+            }
+            ("ForgeTrigger", "on") => {
+                described.insert(
+                    "items".to_owned(),
+                    json!({
+                        "type": "string", "enum": ["mention", "assign"],
+                    }),
+                );
+                described.insert("minItems".to_owned(), json!(1));
+                described.insert("default".to_owned(), json!(["mention", "assign"]));
+            }
+            ("ForgeTrigger", "allowedUsers") => {
+                described.insert("minItems".to_owned(), json!(1));
+            }
+            ("ForgeTrigger", "repositories") => {
+                described.insert("default".to_owned(), json!([]));
+            }
+            _ => {}
+        }
         described.insert("description".to_owned(), Value::String(field.says.clone()));
         properties.insert(field.name.clone(), Value::Object(described));
         let optional = shown_type(&field.type_).contains("undefined");
@@ -538,6 +642,9 @@ fn object_for(section: &Section, sections: &[Section]) -> Value {
         Value::String(section.says.clone()),
     );
     object.insert("additionalProperties".to_owned(), Value::Bool(false));
+    if section.name == "Github" {
+        object.insert("deprecated".to_owned(), Value::Bool(true));
+    }
     object.insert("properties".to_owned(), Value::Object(properties));
     if !required.is_empty() {
         object.insert("required".to_owned(), Value::Array(required));
@@ -557,6 +664,7 @@ pub fn config_schema(sections: &[Section]) -> String {
     schema["$id"] =
         Value::from("https://raw.githubusercontent.com/QaidVoid/errand/main/config.schema.json");
     schema["title"] = Value::from("errand configuration");
+    schema["not"] = json!({ "required": ["forge", "github"] });
     if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
         properties.insert(
             "$schema".to_owned(),

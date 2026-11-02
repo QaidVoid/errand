@@ -25,8 +25,9 @@
       "deadlineMs": 60000
     }
   },
-  "github": {
-    "token": "PUT A GITHUB TOKEN HERE, OR REMOVE THIS SECTION",
+  "forge": {
+    "type": "github",
+    "token": "PUT A FORGE TOKEN HERE, OR REMOVE THIS SECTION",
     "userName": "the name commits are authored with",
     "userEmail": "the email commits are authored with"
   },

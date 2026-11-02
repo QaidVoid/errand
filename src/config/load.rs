@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::config::resolve;
 use crate::config::schema::{Config, ConfigError};
-use crate::config::validate::validate_config;
+use crate::config::validate::{forge_deprecations, validate_config};
 
 /// What the process sees of its environment, by variable name.
 pub type Environment = BTreeMap<String, String>;
@@ -92,16 +92,35 @@ pub fn config_path(env: &Environment, exists: impl Fn(&str) -> bool) -> String {
         .unwrap_or_else(|| candidates[0].clone())
 }
 
-/// Reads and validates the configuration.
+/// Reads and validates the configuration, saying nothing about how it was
+/// spelled.
 ///
-/// Returns a [`ConfigError`] with something actionable: where it looked, the
-/// place the file could not be parsed, or every field that was wrong.
+/// Tests want a configuration and nothing else; the daemon itself reads
+/// [`load_config_with_warnings`], since a warning belongs where the file was
+/// read, on a log somebody is watching.
+#[cfg(test)]
 pub fn load_config(
     path: &str,
     read: impl Fn(&str) -> std::io::Result<String>,
     env: &Environment,
     exists: impl Fn(&str) -> bool,
 ) -> Result<Config, ConfigError> {
+    load_config_with_warnings(path, read, env, exists).map(|(config, _)| config)
+}
+
+/// Reads and validates the configuration, and says what the daemon should
+/// warn about anyway.
+///
+/// Warnings are read off the file rather than carried on the configuration,
+/// because they describe how it was spelled, which is not a setting: a
+/// deprecated section name is told to whoever is reading the log, and
+/// nothing downstream needs to know the file once said `github`.
+pub fn load_config_with_warnings(
+    path: &str,
+    read: impl Fn(&str) -> std::io::Result<String>,
+    env: &Environment,
+    exists: impl Fn(&str) -> bool,
+) -> Result<(Config, Vec<String>), ConfigError> {
     let text = match read(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -153,9 +172,10 @@ pub fn load_config(
     };
 
     let config = validate_config(&parsed)?;
+    let warnings = forge_deprecations(&parsed);
     match config.agent.rules_path {
-        Some(_) => Ok(config),
-        None => Ok(with_rules_beside(config, path, &exists)),
+        Some(_) => Ok((config, warnings)),
+        None => Ok((with_rules_beside(config, path, &exists), warnings)),
     }
 }
 

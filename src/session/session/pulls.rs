@@ -150,8 +150,8 @@ impl Running {
         message: &IncomingMessage,
     ) {
         let (repository, title) = pull_request_args(rest);
-        if self.options.config.github.is_none() {
-            self.say("no GitHub identity is configured, so there is nowhere to open one")
+        if self.options.config.forge.is_none() {
+            self.say("no forge identity is configured, so there is nowhere to open one")
                 .await;
             self.react(&message.id, ReactionOutcome::Failed).await;
             return;
@@ -182,17 +182,17 @@ impl Running {
         title: &str,
         repository: Option<&str>,
     ) -> bool {
-        let (Some(github), Some(open)) = (
-            self.options.config.github.clone(),
+        let (Some(forge), Some(open)) = (
+            self.options.config.forge.clone(),
             self.options.open_pull_request.clone(),
         ) else {
-            self.say("no GitHub identity is configured, so there is nowhere to open one")
+            self.say("no forge identity is configured, so there is nowhere to open one")
                 .await;
             return false;
         };
 
         match open(pr::Request {
-            github,
+            forge,
             project_path: self.options.project.path.clone(),
             repository: repository.map(str::to_owned),
             title: title.to_owned(),

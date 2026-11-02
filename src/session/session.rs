@@ -34,7 +34,7 @@ use crate::chat::render::{
     bytes as byte_count, connection_line, dialog_lines, marker, question_line, tool_line, truncate,
     warning_line,
 };
-use crate::config::schema::{Config, GithubConfig};
+use crate::config::schema::{Config, ForgeConfig, ForgeKind};
 use crate::config::size::parse_size;
 use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
@@ -59,7 +59,8 @@ use crate::session::event::{
 };
 use crate::session::github::app::SessionToken;
 use crate::session::github::{
-    GH_SHIM_FILENAME, GITCONFIG_FILENAME, TOKEN_VARIABLE, gh_shim_contents, git_config_contents,
+    FORGE_CREDENTIAL_FILENAME, GH_SHIM_FILENAME, GITCONFIG_FILENAME, TOKEN_VARIABLE,
+    forge_credential_contents, forge_gh_shim_contents, gh_shim_contents, git_config_contents,
     git_identity_env,
 };
 use crate::session::model::ChosenModel;
@@ -1351,12 +1352,12 @@ impl Running {
     }
 
     async fn start(&mut self, first: IncomingMessage) -> bool {
-        let github = self.options.config.github.clone();
-        self.write_git_config(github.as_ref());
-        self.write_agent_bin(github.as_ref());
+        let forge = self.options.config.forge.clone();
+        self.write_git_config(forge.as_ref());
+        self.write_agent_bin(forge.as_ref());
         let system_prompt_path = self.write_memory_block();
 
-        let (env, credential_names) = self.launch_env(github.as_ref());
+        let (env, credential_names) = self.launch_env(forge.as_ref());
         self.open_grants().await;
         if !self.mint_github_token().await {
             self.finish(EndReason::StartupFailed).await;
@@ -2451,8 +2452,8 @@ impl Running {
     /// Into the home rather than the project: a configuration in the working
     /// tree is one the agent could commit by accident, and it would follow
     /// the code into whatever it opens a pull request against.
-    fn write_git_config(&self, github: Option<&GithubConfig>) {
-        let Some(github) = github else { return };
+    fn write_git_config(&self, forge: Option<&ForgeConfig>) {
+        let Some(forge) = forge else { return };
         let home = std::path::Path::new(&self.options.state_dir).join("home");
         // Through the state directory, which a session also writes: a link
         // planted at one of these names would otherwise have the daemon
@@ -2461,7 +2462,7 @@ impl Running {
             paths::write_beneath(
                 &self.options.state_dir,
                 &format!("home/{GITCONFIG_FILENAME}"),
-                git_config_contents(github).as_bytes(),
+                git_config_contents(forge).as_bytes(),
             )
         });
         if let Err(error) = written {
@@ -2473,7 +2474,7 @@ impl Running {
     }
 
     /// Puts the wrappers a session runs in place of the real program.
-    fn write_agent_bin(&self, github: Option<&GithubConfig>) {
+    fn write_agent_bin(&self, forge: Option<&ForgeConfig>) {
         let bin = std::path::Path::new(&self.options.state_dir)
             .join("home")
             .join("bin");
@@ -2491,15 +2492,39 @@ impl Running {
                 )?;
                 file.write_all(delegate_command_contents(delegate.deadline_ms).as_bytes())?;
             }
-            if github.is_some() {
-                let mut file = paths::open_beneath(
-                    &self.options.state_dir,
-                    &format!("home/bin/{GH_SHIM_FILENAME}"),
-                    &executable,
-                )?;
-                file.write_all(
-                    gh_shim_contents(github.is_some_and(|github| github.app.is_some())).as_bytes(),
-                )?;
+            match forge.map(|forge| forge.kind) {
+                Some(ForgeKind::Github) => {
+                    let mut file = paths::open_beneath(
+                        &self.options.state_dir,
+                        &format!("home/bin/{GH_SHIM_FILENAME}"),
+                        &executable,
+                    )?;
+                    file.write_all(
+                        gh_shim_contents(forge.is_some_and(|forge| forge.app.is_some())).as_bytes(),
+                    )?;
+                }
+                // A forge without a `gh` to stand in for still needs
+                // something git can ask its credential of, and a `gh` that
+                // refuses, since the agent reaches for it the same as any
+                // other session and a real one, where an image happens to
+                // carry it, would take the call to GitHub.
+                Some(ForgeKind::Forgejo) => {
+                    for (name, contents) in [
+                        (
+                            format!("home/bin/{FORGE_CREDENTIAL_FILENAME}"),
+                            forge_credential_contents(),
+                        ),
+                        (
+                            format!("home/bin/{GH_SHIM_FILENAME}"),
+                            forge_gh_shim_contents(),
+                        ),
+                    ] {
+                        let mut file =
+                            paths::open_beneath(&self.options.state_dir, &name, &executable)?;
+                        file.write_all(contents.as_bytes())?;
+                    }
+                }
+                None => {}
             }
             if self.options.memory.is_some() {
                 let mut file = paths::open_beneath(
@@ -2785,11 +2810,11 @@ impl Running {
     /// Every defined provider's key crosses, so the agent can switch to any
     /// of them. Under `egress.mode = proxy` the session's broker swaps each
     /// for its nonce on the way in, under either backend, and drops the ones
-    /// it has no route to, so no real provider key crosses there. The GitHub
+    /// it has no route to, so no real provider key crosses there. The forge
     /// token crosses whole.
     fn launch_env(
         &self,
-        github: Option<&GithubConfig>,
+        forge: Option<&ForgeConfig>,
     ) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
         let mut env = BTreeMap::new();
         let agent = &self.options.config.agent;
@@ -2801,16 +2826,16 @@ impl Running {
                 .expect("a provider given a variable has a key");
             env.insert(name.clone(), credential.to_owned());
         }
-        if let Some(github) = github {
-            // A GitHub credential crosses too. Reading issues and leaving
+        if let Some(forge) = forge {
+            // A forge credential crosses too. Reading issues and leaving
             // comments is most of working on somebody's repository, and none
             // of it is possible without one. Pull requests are still composed
             // by the daemon. With an App the credential is a minted token the
             // wrapper reads from a file, so the daemon's own never crosses.
-            if github.app.is_none() {
-                env.insert(TOKEN_VARIABLE.to_owned(), github.token.clone());
+            if forge.app.is_none() {
+                env.insert(TOKEN_VARIABLE.to_owned(), forge.token.clone());
             }
-            for (name, value) in git_identity_env(github) {
+            for (name, value) in git_identity_env(forge) {
                 env.insert(name, value);
             }
         }

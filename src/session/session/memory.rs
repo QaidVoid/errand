@@ -44,9 +44,9 @@ impl Running {
         let attribution = self
             .options
             .config
-            .github
+            .forge
             .as_ref()
-            .map(|github| review_instructions(github, &self.requested_by(), &self.session_links()))
+            .map(|forge| review_instructions(forge, &self.requested_by(), &self.session_links()))
             .unwrap_or_default();
 
         let delegating = self

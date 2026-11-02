@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use super::validate_config;
 use crate::config::schema::EgressMode;
-use crate::config::schema::{ConfigError, defaults};
+use crate::config::schema::{ConfigError, ForgeKind, defaults};
 
 fn valid(overrides: Value) -> Value {
     let mut base = json!({
@@ -247,7 +247,7 @@ fn the_container_image_defaults_and_is_refused_when_it_is_not_a_name() {
 #[test]
 fn a_daemon_with_no_github_identity_is_configured_not_broken() {
     let config = validate_config(&valid(json!({}))).expect("resolves");
-    assert_eq!(config.github, None);
+    assert_eq!(config.forge, None);
 }
 
 #[test]
@@ -256,7 +256,7 @@ fn a_github_identity_is_taken_whole() {
         "github": { "token": "ghp-value", "userName": "errand-bot", "userEmail": "bot@example.com" },
     })))
     .expect("resolves")
-    .github;
+    .forge;
 
     assert_eq!(
         github.as_ref().map(|github| github.user_name.as_str()),
@@ -275,6 +275,123 @@ fn a_github_section_missing_a_field_is_refused_not_half_filled() {
 
     assert!(problems.contains("github.userName is required"));
     assert!(problems.contains("github.userEmail is required"));
+}
+
+/// The generic spelling is read into the same identity, and says which forge
+/// it is. Naming no forge leaves GitHub, since the section was named for it
+/// before `forge` existed.
+#[test]
+fn a_forge_section_is_read_whole_and_says_its_kind() {
+    let github = validate_config(&valid(json!({
+        "forge": { "type": "github", "token": "ghp-value", "userName": "n", "userEmail": "e" },
+    })))
+    .expect("resolves")
+    .forge
+    .expect("a forge");
+    assert_eq!(github.kind, ForgeKind::Github);
+    assert_eq!(github.url, None);
+
+    let left_unnamed = validate_config(&valid(json!({
+        "forge": { "token": "ghp-value", "userName": "n", "userEmail": "e" },
+    })))
+    .expect("resolves")
+    .forge
+    .expect("a forge");
+    assert_eq!(left_unnamed.kind, ForgeKind::Github);
+
+    let forgejo = validate_config(&valid(json!({
+        "forge": {
+            "type": "forgejo",
+            "url": "https://forge.example.com",
+            "token": "forge-value",
+            "userName": "n",
+            "userEmail": "e",
+        },
+    })))
+    .expect("resolves")
+    .forge
+    .expect("a forge");
+    assert_eq!(forgejo.kind, ForgeKind::Forgejo);
+    assert_eq!(forgejo.url.as_deref(), Some("https://forge.example.com"));
+}
+
+/// A Forgejo forge exists at an address, which the daemon reaches the API and
+/// clones through, so it refuses a forge of that kind that names none, or a
+/// trailing query a clone address could never carry.
+#[test]
+fn a_forgejo_forge_names_a_plausible_instance() {
+    let problems = |extra: Value| {
+        problems_of(&valid(json!({
+            "forge": json!({ "type": "forgejo", "userName": "n", "userEmail": "e", "token": "forge-value" }).as_object().map(|fields| {
+                let mut all = fields.clone();
+                if let Some(extra) = extra.as_object() {
+                    all.extend(extra.clone());
+                }
+                all
+            }).unwrap_or_default(),
+        })))
+        .join("\n")
+    };
+
+    assert!(problems(json!({})).contains("forge.url is required for a Forgejo forge"));
+    assert!(problems(json!({ "url": "forge.example.com" })).contains("must start with its scheme"));
+    assert!(
+        problems(json!({ "url": "ftp://forge.example.com" })).contains("must be an http or https")
+    );
+    assert!(
+        problems(json!({ "url": "https://forge.example.com/?page=1" }))
+            .contains("a query or a fragment has no place")
+    );
+    assert!(problems(json!({ "url": 7 })).contains("forge.url must be the instance's address"));
+}
+
+/// A GitHub App is minted from, not configured onto, a Forgejo forge: the
+/// section is refused whole rather than read and quietly ignored.
+#[test]
+fn a_forgejo_forge_takes_no_app() {
+    let problems = problems_of(&valid(json!({
+        "forge": {
+            "type": "forgejo",
+            "url": "https://forge.example.com",
+            "token": "forge-value",
+            "userName": "n",
+            "userEmail": "e",
+            "app": { "appId": 1, "installationId": 2, "privateKeyPath": "/p.pem" },
+        },
+    })))
+    .join("\n");
+
+    assert!(problems.contains("forge.app"), "{problems}");
+}
+
+/// The forge is configured once: both spellings together is a contradiction,
+/// whichever order they were written in.
+#[test]
+fn the_forge_is_named_once_under_one_spelling() {
+    let problems = problems_of(&valid(json!({
+        "github": { "token": "ghp-value", "userName": "n", "userEmail": "e" },
+        "forge": { "type": "github", "token": "ghp-value", "userName": "n", "userEmail": "e" },
+    })))
+    .join("\n");
+
+    assert!(problems.contains("forge and github cannot both be set"));
+}
+
+/// The deprecated spelling still works, and says so where an operator reads.
+#[test]
+fn the_github_spelling_is_warned_as_deprecated() {
+    let warnings = crate::config::validate::forge_deprecations(&valid(json!({
+        "github": { "token": "ghp-value", "userName": "n", "userEmail": "e" },
+    })));
+    assert_eq!(warnings.len(), 1, "{}", warnings.join("\n"));
+
+    let renamed = crate::config::validate::forge_deprecations(&valid(json!({
+        "forge": { "type": "github", "token": "ghp-value", "userName": "n", "userEmail": "e" },
+    })));
+    assert!(renamed.is_empty());
+
+    let unconfigured = crate::config::validate::forge_deprecations(&valid(json!({})));
+    assert!(unconfigured.is_empty());
 }
 
 #[test]
@@ -1360,14 +1477,14 @@ fn a_github_trigger_names_who_may_ask_and_never_everybody() {
     let config = validate_config(&github(json!({ "allowedUsers": ["QaidVoid"] }))).expect("valid");
     assert_eq!(
         config
-            .github
+            .forge
             .and_then(|github| github.trigger)
             .map(|trigger| trigger.allowed_users),
         Some(vec!["QaidVoid".to_owned()])
     );
     assert!(problems_contain(
         &github(json!({ "allowedUsers": [] })),
-        "must name the GitHub logins"
+        "must name the logins"
     ));
     assert!(problems_contain(
         &github(json!({ "allowedUsers": ["*"] })),
@@ -1376,7 +1493,7 @@ fn a_github_trigger_names_who_may_ask_and_never_everybody() {
     let trigger = |extra: Value| {
         validate_config(&github(extra))
             .expect("valid")
-            .github
+            .forge
             .and_then(|github| github.trigger)
             .expect("a trigger")
     };
@@ -2018,7 +2135,7 @@ fn a_github_app_is_read_whole_and_checked() {
         "repositories": ["errand"],
     })))
     .expect("resolves");
-    let app = config.github.unwrap().app.expect("the app");
+    let app = config.forge.unwrap().app.expect("the app");
     assert_eq!((app.app_id, app.installation_id), (42, 7));
     assert_eq!(app.permissions["issues"], "read");
 
