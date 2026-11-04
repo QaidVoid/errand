@@ -122,7 +122,7 @@ pub struct DelegateConfig {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginConfig {
-    /// Host path of the plugin file. Must name a `.lua` file.
+    /// Host path of the plugin file. Must be an absolute path to a `.lua` file.
     pub path: String,
     /// Capabilities granted to the plugin, by kage's capability names.
     pub capabilities: Vec<String>,

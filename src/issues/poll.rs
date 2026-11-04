@@ -300,21 +300,18 @@ impl Poller {
         floor: jiff::Timestamp,
         prefix: &str,
     ) -> Result<Vec<Said>, String> {
-        // Only GitHub pages this listing; a Forgejo instance takes no size
-        // there and answers every comment at once.
-        let paging = match self.kind {
-            ForgeKind::Github => "&per_page=100",
-            ForgeKind::Forgejo => "",
+        let path = format!("/repos/{repository}/issues/{number}/comments?since={floor}");
+        let comments = match self.kind {
+            ForgeKind::Github => self.github_pages(&format!("{path}&per_page=100")).await?,
+            ForgeKind::Forgejo => {
+                let answer = self.get(&path).await?;
+                answer
+                    .as_array()
+                    .ok_or("Forgejo answered the comments with something that is not a list")?
+                    .clone()
+            }
         };
-        let comments = self
-            .get(&format!(
-                "/repos/{repository}/issues/{number}/comments?since={floor}{paging}"
-            ))
-            .await?;
         comments
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default()
             .iter()
             .map(|comment| {
                 let text = comment["body"].as_str().unwrap_or_default().to_owned();
@@ -363,14 +360,11 @@ impl Poller {
         let listed = match self.kind {
             ForgeKind::Github => {
                 let events = self
-                    .get(&format!(
+                    .github_pages(&format!(
                         "/repos/{repository}/issues/{number}/events?per_page=100"
                     ))
                     .await?;
                 events
-                    .as_array()
-                    .map(Vec::as_slice)
-                    .unwrap_or_default()
                     .iter()
                     .filter_map(|event| {
                         let is_assign = event["event"].as_str() == Some("assigned")
@@ -454,6 +448,28 @@ impl Poller {
             at,
             mentions: true,
         }))
+    }
+
+    async fn github_pages(&self, path: &str) -> Result<Vec<Value>, String> {
+        const PAGE_SIZE: usize = 100;
+        const MAX_PAGES: u32 = 100;
+        let mut items = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let page_path = if page == 1 {
+                path.to_owned()
+            } else {
+                format!("{path}&page={page}")
+            };
+            let answer = self.get(&page_path).await?;
+            let entries = answer.as_array().ok_or_else(|| {
+                format!("GitHub answered {page_path} with something that is not a list")
+            })?;
+            items.extend(entries.iter().cloned());
+            if entries.len() < PAGE_SIZE {
+                return Ok(items);
+            }
+        }
+        Err(format!("GitHub listing {path} exceeded the page limit"))
     }
 
     async fn mark_read(&self, notification: &Value) {

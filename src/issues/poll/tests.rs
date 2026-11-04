@@ -1038,3 +1038,146 @@ async fn failed_mark_read_delivers_activity_and_forgejo_floor_prevents_repeat() 
         );
     }
 }
+
+#[tokio::test]
+async fn github_comments_across_pages_are_filtered_and_sorted() {
+    let mut table = answers(
+        &notification("comment", Some("2026-09-24T12:00:00Z")),
+        &issue("2026-09-24T09:00:00Z", "old"),
+        &json!(vec![
+            comment(
+                1,
+                "stranger",
+                "ignored",
+                "2026-09-24T12:01:00Z"
+            );
+            100
+        ]),
+        "2026-09-24T12:00:00Z",
+    );
+    table.insert(
+        format!(
+            "GET /repos/{REPO}/issues/7/comments?since=2026-09-24T12:00:00Z&per_page=100&page=2"
+        ),
+        json!([
+            comment(2, "QaidVoid", "later", "2026-09-24T12:20:00Z"),
+            comment(3, "QaidVoid", "at floor", "2026-09-24T12:00:00Z"),
+            comment(4, "QaidVoid", "earlier", "2026-09-24T12:10:00Z")
+        ]),
+    );
+    let (api, calls) = api(table);
+    let heard = poller(api).poll().await.unwrap();
+    assert_eq!(
+        heard
+            .iter()
+            .map(|h| h.message.id.as_str())
+            .collect::<Vec<_>>(),
+        ["github-comment:4", "github-comment:2"]
+    );
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .contains(&"PATCH /notifications/threads/900".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn github_latest_assignment_is_selected_across_pages_before_actor_filter() {
+    for (actor, expected) in [("QaidVoid", 1), ("stranger", 0)] {
+        let mut table = answers(
+            &notification("assign", None),
+            &issue("2026-09-24T09:00:00Z", "body"),
+            &json!([]),
+            "2026-09-24T10:00:00Z",
+        );
+        let event = |id, actor, at| json!({"id": id, "event": "assigned", "assignee": {"login": BOT}, "actor": {"login": actor}, "created_at": at});
+        table.insert(
+            format!("GET /repos/{REPO}/issues/7/events?per_page=100"),
+            json!(vec![event(1, "QaidVoid", "2026-09-24T11:00:00Z"); 100]),
+        );
+        table.insert(
+            format!("GET /repos/{REPO}/issues/7/events?per_page=100&page=2"),
+            json!([event(2, actor, "2026-09-24T12:00:00Z")]),
+        );
+        let (api, _) = api(table);
+        let heard = poller(api).poll().await.unwrap();
+        assert_eq!(heard.len(), expected);
+        if expected == 1 {
+            assert_eq!(heard[0].message.id, "github-assign:2");
+        }
+    }
+}
+
+#[tokio::test]
+async fn github_page_failures_and_invalid_lists_do_not_deliver_or_mark_read() {
+    for events in [false, true] {
+        for invalid in [false, true] {
+            let mut table = answers(
+                &notification(if events { "assign" } else { "comment" }, None),
+                &issue("2026-09-24T11:00:00Z", "new issue"),
+                &json!([]),
+                "2026-09-24T10:00:00Z",
+            );
+            let path = if events {
+                format!("/repos/{REPO}/issues/7/events?per_page=100")
+            } else {
+                format!("/repos/{REPO}/issues/7/comments?since=2026-09-24T10:00:00Z&per_page=100")
+            };
+            table.insert(format!("GET {path}"), json!(vec![json!({}); 100]));
+            // Comments require valid timestamps even on the first page.
+            if !events {
+                table.insert(
+                    format!("GET {path}"),
+                    json!(vec![
+                        comment(1, "QaidVoid", "first", "2026-09-24T11:00:00Z");
+                        100
+                    ]),
+                );
+            }
+            if invalid {
+                table.insert(format!("GET {path}&page=2"), json!({"unexpected": true}));
+            }
+            let (api, calls) = api(table);
+            assert!(poller(api).poll().await.unwrap().is_empty());
+            let calls = calls.lock().unwrap();
+            assert!(calls.contains(&format!("GET {path}&page=2")));
+            assert!(!calls.iter().any(|call| call.starts_with("PATCH")));
+        }
+    }
+}
+
+#[tokio::test]
+async fn github_full_pages_are_bounded_and_left_unread() {
+    for events in [false, true] {
+        let mut table = answers(
+            &notification(if events { "assign" } else { "comment" }, None),
+            &issue("2026-09-24T09:00:00Z", "old"),
+            &json!([]),
+            "2026-09-24T10:00:00Z",
+        );
+        let path = if events {
+            format!("/repos/{REPO}/issues/7/events?per_page=100")
+        } else {
+            format!("/repos/{REPO}/issues/7/comments?since=2026-09-24T10:00:00Z&per_page=100")
+        };
+        let entries = if events {
+            json!(vec![json!({}); 100])
+        } else {
+            json!(vec![
+                comment(1, "QaidVoid", "text", "2026-09-24T11:00:00Z");
+                100
+            ])
+        };
+        table.insert(format!("GET {path}"), entries.clone());
+        for page in 2..=100 {
+            table.insert(format!("GET {path}&page={page}"), entries.clone());
+        }
+        let (api, calls) = api(table);
+        assert!(poller(api).poll().await.unwrap().is_empty());
+        let calls = calls.lock().unwrap();
+        assert!(calls.contains(&format!("GET {path}&page=100")));
+        assert!(!calls.contains(&format!("GET {path}&page=101")));
+        assert!(!calls.iter().any(|call| call.starts_with("PATCH")));
+    }
+}

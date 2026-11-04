@@ -191,6 +191,61 @@ fn the_egress_defaults_show_in_the_page_and_the_schema() {
 }
 
 #[test]
+fn plugins_are_documented_as_optional_entries_with_a_required_path() {
+    let generated = pages(&schema());
+    let page = &generated["docs/reference/configuration.md"];
+    let agent = page
+        .split("## agent\n")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    assert!(
+        agent.contains("| `plugins` | `Plugin[]` | `[]` |"),
+        "{agent}"
+    );
+    let plugin = page
+        .split("## agent.plugins[]\n")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    assert!(
+        plugin.contains("| `path` | `string` | required |"),
+        "{plugin}"
+    );
+    assert!(plugin.contains("absolute path"), "{plugin}");
+    assert!(
+        plugin.contains("| `capabilities` | `string[]` | `[]` |"),
+        "{plugin}"
+    );
+
+    let schema: serde_json::Value = serde_json::from_str(&generated["config.schema.json"]).unwrap();
+    let agent = &schema["properties"]["agent"];
+    let plugins = &agent["properties"]["plugins"];
+    assert!(
+        !agent["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("plugins"))
+    );
+    assert_eq!(plugins["type"], "array");
+    assert_eq!(plugins["default"], serde_json::json!([]));
+    let item = &plugins["items"];
+    assert_eq!(item["type"], "object");
+    assert_eq!(item["additionalProperties"], false);
+    assert_eq!(item["required"], serde_json::json!(["path"]));
+    assert_eq!(item["properties"].as_object().unwrap().len(), 2);
+    assert_eq!(item["properties"]["path"]["type"], "string");
+    let caps = &item["properties"]["capabilities"];
+    assert_eq!(caps["type"], "array");
+    assert_eq!(caps["items"]["type"], "string");
+    assert_eq!(caps["default"], serde_json::json!([]));
+}
+
+#[test]
 fn trigger_schemas_describe_input_events_instead_of_resolved_flags() {
     let sections = read_schema(&schema());
     let schema: serde_json::Value = serde_json::from_str(&config_schema(&sections)).expect("JSON");

@@ -251,6 +251,7 @@ fn shown_type(type_: &str) -> String {
         "f64" | "u16" | "u32" | "u64" | "usize" => "number".to_owned(),
         "Vec<String>" => "string[]".to_owned(),
         "Vec<u16>" => "number[]".to_owned(),
+        "Vec<PluginConfig>" => "Plugin[]".to_owned(),
         "HashMap<String, String>" | "BTreeMap<String, String>" => {
             "Record<string, string>".to_owned()
         }
@@ -351,6 +352,8 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
             "sandbox/requirefullenforcement",
             Value::Bool(defaults::REQUIRE_FULL_ENFORCEMENT),
         ),
+        ("agent/plugins", json!([])),
+        ("plugin/capabilities", json!([])),
         ("sandbox/network", Value::from("restricted")),
         (
             "sandbox/egressports",
@@ -454,11 +457,12 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
 ///
 /// Ordered here rather than taken from the file, because what a reader needs
 /// first is not the order the types happen to be declared in.
-const KEYS: [(&str, &str); 19] = [
+const KEYS: [(&str, &str); 20] = [
     ("Root", "top level"),
     ("Chat", "chat"),
     ("Agent", "agent"),
     ("Delegate", "agent.delegate"),
+    ("Plugin", "agent.plugins[]"),
     ("Forge", "forge"),
     ("ForgeTrigger", "forge.trigger"),
     ("ForgeApp", "forge.app"),
@@ -560,7 +564,8 @@ pub fn configuration_page(
             let fallback = default_of(name, &field.name);
             let stands = if !fallback.is_empty() {
                 fallback
-            } else if (name == "ForgeTrigger" && field.name == "allowedUsers")
+            } else if (name == "Plugin" && field.name == "path")
+                || (name == "ForgeTrigger" && field.name == "allowedUsers")
                 || required.contains(&format!("{key}.{}", field.name))
                 || required.contains(&field.name)
             {
@@ -590,6 +595,9 @@ fn json_type(type_: &str, sections: &[Section]) -> Value {
         "boolean" => json!({ "type": "boolean" }),
         "string[]" => json!({ "type": "array", "items": { "type": "string" } }),
         "number[]" => json!({ "type": "array", "items": { "type": "number" } }),
+        "Plugin[]" => {
+            json!({ "type": "array", "items": json_type("PluginConfig", sections) })
+        }
         "Record<string, string>" => json!({
             "type": "object",
             "additionalProperties": { "type": "string" },
@@ -645,7 +653,9 @@ fn object_for(section: &Section, sections: &[Section]) -> Value {
             ("ForgeTrigger", "allowedUsers") => {
                 described.insert("minItems".to_owned(), json!(1));
             }
-            ("ForgeTrigger", "repositories") => {
+            ("Agent", "plugins")
+            | ("Plugin", "capabilities")
+            | ("ForgeTrigger", "repositories") => {
                 described.insert("default".to_owned(), json!([]));
             }
             _ => {}
