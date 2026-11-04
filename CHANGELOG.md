@@ -1,6 +1,17 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.4.2] - 2026-11-04
+
+
+### Features
+- (forge) Support Forgejo as a second forge ([32ea760](https://github.com/QaidVoid/errand/commit/32ea760914ac44d53d2065430b1bf4b316c51e86))
+- (sandbox) Add the incus backend and guest image ([#115](https://github.com/QaidVoid/errand/pull/115)) ([d2a4fac](https://github.com/QaidVoid/errand/commit/d2a4fac6e78c94ecee82ca218b7a6789a70548cb))
+
+### Fixes
+- (forge) Harden validation, polling, and reloads ([a3df1b7](https://github.com/QaidVoid/errand/commit/a3df1b7f7d3a246fa485ed0901d0f534992ade17))
+- Paginate GitHub activity and document plugins ([9f883b7](https://github.com/QaidVoid/errand/commit/9f883b7bc4cea63933a85cf1c3ab0edd7d9e2615))
+
 ## [0.4.1] - 2026-10-31
 
 
