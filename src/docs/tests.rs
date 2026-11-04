@@ -289,3 +289,45 @@ fn the_reference_explains_forge_input_defaults_and_legacy_support() {
     assert!(page.contains("Do not set both sections."));
     assert!(page.contains("not `type` or `url`"));
 }
+
+#[test]
+fn forge_app_required_fields_and_forgejo_example_are_documented() {
+    let sections = read_schema(&schema());
+    let page = super::configuration_page(&sections, &required_fields());
+    let app = page
+        .split("## forge.app\n")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    for (field, kind) in [
+        ("appId", "number"),
+        ("installationId", "number"),
+        ("privateKeyPath", "string"),
+    ] {
+        assert!(app.contains(&format!("| `{field}` | `{kind}` | required |")));
+    }
+    assert!(page.contains("\"type\": \"forgejo\""));
+    assert!(page.contains("forge token and repository traffic in cleartext"));
+}
+
+#[test]
+fn web_login_credentials_are_required_when_login_is_configured() {
+    let required = required_fields();
+    let page = super::configuration_page(&read_schema(&schema()), &required);
+    let login = page
+        .split("## web.login\n")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    for field in ["clientId", "clientSecret"] {
+        assert!(required.contains(&format!("web.login.{field}")));
+        assert!(
+            login.contains(&format!("| `{field}` | `string` | required |")),
+            "{login}"
+        );
+    }
+}

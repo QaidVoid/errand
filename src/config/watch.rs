@@ -163,23 +163,60 @@ pub fn watch(
             // Off the runtime's threads, since the read is blocking and the
             // other tasks here are answering messages. The handle is a clone
             // of a shared configuration, not a copy of it.
-            let (live, path, env, kage, log) = (
+            let (reload_live, reload_path, reload_env, reload_kage, reload_log) = (
                 live.clone(),
                 path.clone(),
                 env.clone(),
                 kage.clone(),
                 log.clone(),
             );
-            let applied =
-                tokio::task::spawn_blocking(move || reload(&live, &path, &env, &kage, &log)).await;
-            // Only a change that was actually applied reaches what is derived
-            // from the configuration. A refused one left the same
-            // configuration in force, so there is nothing new to derive from.
-            if matches!(applied, Ok(Reloaded::Changed)) {
-                after().await;
+            let applied = tokio::task::spawn_blocking(move || {
+                reload(
+                    &reload_live,
+                    &reload_path,
+                    &reload_env,
+                    &reload_kage,
+                    &reload_log,
+                )
+            })
+            .await;
+            if finish_reload(applied, &path, &log, &after).await {
+                last = None;
             }
         }
     })
+}
+
+async fn finish_reload(
+    applied: Result<Reloaded, tokio::task::JoinError>,
+    path: &str,
+    log: &Logger,
+    after: &AfterReload,
+) -> bool {
+    match applied {
+        Ok(Reloaded::Changed) => after().await,
+        Ok(_) => {}
+        Err(error) => {
+            log.error(
+                "the configuration reload task failed; retrying on the next poll",
+                &fields([
+                    ("path", LogValue::from(path)),
+                    (
+                        "reason",
+                        LogValue::from(if error.is_panic() {
+                            "panic"
+                        } else {
+                            "cancelled"
+                        }),
+                    ),
+                ]),
+            );
+            // The task may have applied the configuration before it failed.
+            after().await;
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

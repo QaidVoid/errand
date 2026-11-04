@@ -714,6 +714,7 @@ async fn fork_of(
     api: &Api,
     token: &str,
     target: &Repo,
+    kind: crate::config::schema::ForgeKind,
     sleep: &Sleep,
 ) -> Result<Repo, PullRequestError> {
     let made = api(
@@ -725,7 +726,7 @@ async fn fork_of(
         },
     )
     .await;
-    if made.status == 409 {
+    if kind == crate::config::schema::ForgeKind::Forgejo && made.status == 409 {
         return existing_fork(api, token, target, &made).await;
     }
     if made.status >= 400 {
@@ -985,7 +986,14 @@ pub async fn open_pull_request(
             origin.clone(),
         )
     } else {
-        let fork = fork_of(api, &request.forge.token, &origin, sleep).await?;
+        let fork = fork_of(
+            api,
+            &request.forge.token,
+            &origin,
+            request.forge.kind,
+            sleep,
+        )
+        .await?;
         (origin.clone(), fork)
     };
 
@@ -1151,23 +1159,17 @@ fn forge_client() -> reqwest::Client {
 pub fn api_for(forge: &ForgeConfig) -> Api {
     let kind = forge.kind;
     let base = forge::api_base(forge);
+    let client = forge_client();
     Arc::new(move |path: String, init: ApiCall| {
         let base = base.clone();
+        let client = client.clone();
         Box::pin(async move {
-            let client = forge_client();
             let method =
                 reqwest::Method::from_bytes(init.method.as_bytes()).unwrap_or(reqwest::Method::GET);
             let mut request = client
                 .request(method, format!("{base}{path}"))
                 .header("Authorization", forge::auth_header(kind, &init.token));
-            request = match kind {
-                crate::config::schema::ForgeKind::Github => request
-                    .header("Accept", "application/vnd.github+json")
-                    .header("X-GitHub-Api-Version", "2022-11-28"),
-                crate::config::schema::ForgeKind::Forgejo => {
-                    request.header("Accept", "application/json")
-                }
-            };
+            request = forge::api_headers(kind, request);
             if let Some(body) = &init.body {
                 request = request
                     .header("Content-Type", "application/json")

@@ -76,6 +76,22 @@ A cheaper model the session's model may ask about one artefact.  Absent means no
 
 The forge identity a session works with, when one is configured.  A session with no forge configuration still runs, and simply has no credential to reach a repository with.
 
+For Forgejo, set `type` to `forgejo` and `url` to the instance address. Use HTTPS: HTTP sends the forge token and repository traffic in cleartext, exposing them to anyone who can observe or alter the connection.
+
+Forgejo assignment triggers only cover direct assignments to the bot, not team assignments. Its notification floor is kept in memory only. On restart, unread activity from before the restart is skipped, including activity from failed reads.
+
+```json
+{
+  "forge": {
+    "type": "forgejo",
+    "url": "https://forge.example.com",
+    "token": "PUT A FORGE TOKEN HERE",
+    "userName": "Commit Author",
+    "userEmail": "author@example.com"
+  }
+}
+```
+
 | field | type | default | what it does |
 | --- | --- | --- | --- |
 | `type` | `ForgeKind` | `"github"` | Which forge this is. GitHub unless `type` says otherwise, so the section reads the same as the `github` spelling it replaces. |
@@ -100,9 +116,9 @@ The GitHub App a session's credential is minted from.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `appId` | `number` | none | The App's id. |
-| `installationId` | `number` | none | The installation tokens are minted for. |
-| `privateKeyPath` | `string` | none | The absolute path of the App's private key, as GitHub gave it. |
+| `appId` | `number` | required | The App's id. |
+| `installationId` | `number` | required | The installation tokens are minted for. |
+| `privateKeyPath` | `string` | required | The absolute path of the App's private key, as GitHub gave it. |
 | `permissions` | `Record<string, string>` | `{}` | What each token may do, by permission, as `read` or `write`. Empty asks for everything the installation was granted. |
 | `repositories` | `string[]` | `[]` | The repositories each token covers, by name without their owner. Empty covers every repository of the installation. |
 
@@ -205,8 +221,8 @@ The Discord application a visitor logs in through.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `clientId` | `string` | none | The application's `OAuth2` client id. |
-| `clientSecret` | `string` | none | The application's `OAuth2` client secret. Secret, and at least 8 bytes, so it can be scrubbed from what is posted. |
+| `clientId` | `string` | required | The application's `OAuth2` client id. |
+| `clientSecret` | `string` | required | The application's `OAuth2` client secret. Secret, and at least 8 bytes, so it can be scrubbed from what is posted. |
 
 ## shutdown
 

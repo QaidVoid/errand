@@ -404,3 +404,24 @@ async fn a_refused_change_does_not_reach_what_is_derived_from_it() {
         "the daemon stopped using a configuration it had already accepted"
     );
 }
+
+#[tokio::test]
+async fn a_failed_reload_task_is_reported_and_retried() {
+    let (log, lines) = recording();
+    let derived = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&derived);
+    let after: AfterReload = Arc::new(move || {
+        let counted = Arc::clone(&counted);
+        Box::pin(async move {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+    });
+    let failed = tokio::task::spawn_blocking(|| -> Reloaded { panic!("sensitive panic") }).await;
+
+    assert!(super::finish_reload(failed, "config.json", &log, &after).await);
+    let logged = said(&lines);
+    assert!(logged.contains("retrying"));
+    assert!(logged.contains("panic"));
+    assert!(!logged.contains("sensitive panic"));
+    assert_eq!(derived.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

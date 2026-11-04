@@ -228,6 +228,35 @@ async fn a_legacy_github_link_never_posts_to_forgejo() {
 }
 
 #[tokio::test]
+async fn scoped_github_link_wins_over_legacy_and_migration_is_written_on_next_link() {
+    let state = tempfile::tempdir().unwrap();
+    let links = state.path().join("issue-threads.json");
+    let original = r#"{"github:o/r#4":"old-thread","https://github.com|github:o/r#4":"scoped-thread","forgejo:o/r#9":"detached-thread"}"#;
+    std::fs::write(&links, original).unwrap();
+    let (router, _, posted) = routed(links.clone());
+    assert_eq!(
+        router.thread_for("github:o/r#4").as_deref(),
+        Some("scoped-thread")
+    );
+    assert_eq!(std::fs::read_to_string(&links).unwrap(), original);
+    let old = Arc::clone(&router)
+        .port_for("old-thread".to_owned())
+        .await
+        .unwrap();
+    finish_turn(&old).await;
+    assert!(posted.lock().unwrap().is_empty());
+    Arc::clone(&router)
+        .create(said("github:o/r#5"), "new".to_owned())
+        .await
+        .unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&links).unwrap()).unwrap();
+    assert!(saved.get("github:o/r#4").is_none());
+    assert_eq!(saved["https://github.com|github:o/r#4"], "scoped-thread");
+    assert_eq!(saved["forgejo:o/r#9"], "detached-thread");
+}
+
+#[tokio::test]
 async fn a_saved_link_belongs_to_one_forgejo_instance() {
     let state = tempfile::tempdir().unwrap();
     let links = state.path().join("issue-threads.json");
@@ -325,4 +354,26 @@ async fn a_new_issue_from_another_forge_is_refused_before_opening_a_thread() {
     );
     assert!(chat.opened.lock().unwrap().is_empty());
     assert!(posted.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn forgejo_issue_opener_uses_configured_site_and_avoids_double_slash() {
+    let state = tempfile::tempdir().unwrap();
+    let (router, chat, _) = routed_at(
+        state.path().join("issue-threads.json"),
+        "Forgejo",
+        "https://forge.example/forge/",
+    );
+    Arc::clone(&router)
+        .create(said("forgejo:o/r#4"), "fix it".to_owned())
+        .await
+        .expect("open Forgejo thread");
+    assert_eq!(
+        *chat.opened.lock().unwrap(),
+        [(
+            "fix it".to_owned(),
+            "QaidVoid asked on Forgejo, on o/r#4: https://forge.example/forge/o/r/issues/4"
+                .to_owned()
+        )]
+    );
 }

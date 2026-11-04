@@ -6,10 +6,6 @@
 //! they mean, so the pages are made from them and the check fails when what
 //! is committed no longer matches.
 //!
-//! Until the cutover, the committed pages are the TypeScript generator's: the
-//! Rust schema carries condensed doc comments, so this module's output differs
-//! in prose. The byte check against the committed files activates at the
-//! cutover, when these pages become the ones that are committed.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -95,7 +91,7 @@ pub fn read_schema(source: &str) -> Vec<Section> {
             .and_then(|rest| rest.strip_suffix(" {"))
             .map(|name| name.trim().to_owned());
         if let Some(name) = named {
-            // The TypeScript interfaces are named for their key (`ChatConfig`),
+            // Schema structs are named for their key (`ChatConfig`),
             // and the pages follow the key rather than the whole name. The
             // bare `Config` is the root, documented as the top level. A struct
             // named for nothing else, such as `ForgeTrigger`, is a sub-section
@@ -213,7 +209,7 @@ fn project_forge_input(sections: &mut Vec<Section>) {
     if let Some(root) = sections.iter_mut().find(|section| section.name == "Root") {
         root.fields.push(Field {
             name: "github".to_owned(),
-            type_: "Option<GithubConfig>".to_owned(),
+            type_: "Option<Github>".to_owned(),
             says: "Deprecated GitHub configuration. Use `forge` instead; setting both is refused."
                 .to_owned(),
         });
@@ -279,7 +275,10 @@ pub fn required_fields() -> std::collections::BTreeSet<String> {
     let mut collect = |raw: &Value| {
         if let Err(error) = validate_config(raw) {
             for problem in &error.problems {
-                let at = problem.find(" is required").unwrap_or(problem.len());
+                let at = problem
+                    .find(" is required")
+                    .or_else(|| problem.find(" must be the number GitHub shows for it"))
+                    .unwrap_or(problem.len());
                 let subject = problem[..at].trim();
                 if subject
                     .chars()
@@ -294,6 +293,9 @@ pub fn required_fields() -> std::collections::BTreeSet<String> {
     collect(&serde_json::json!({}));
     collect(&serde_json::json!({ "forge": {}, "agent": { "delegate": {} } }));
     collect(&serde_json::json!({ "github": {} }));
+    collect(&serde_json::json!({ "forge": { "app": {} } }));
+    collect(&serde_json::json!({ "github": { "app": {} } }));
+    collect(&serde_json::json!({ "web": { "login": {} } }));
     named
 }
 
@@ -530,6 +532,27 @@ pub fn configuration_page(
         let _ = writeln!(out, "## {key}\n");
         if !section.says.is_empty() {
             let _ = writeln!(out, "{}\n", section.says);
+        }
+        if name == "Forge" {
+            out.push_str(
+                "For Forgejo, set `type` to `forgejo` and `url` to the instance address. \
+                 Use HTTPS: HTTP sends the forge token and repository traffic in cleartext, \
+                 exposing them to anyone who can observe or alter the connection.\n\n\
+                 Forgejo assignment triggers only cover direct assignments to the bot, not team \
+                 assignments. Its notification floor is kept in memory only. On restart, unread \
+                 activity from before the restart is skipped, including activity from failed reads.\n\n\
+                 ```json\n\
+                 {\n\
+                 \x20 \"forge\": {\n\
+                 \x20   \"type\": \"forgejo\",\n\
+                 \x20   \"url\": \"https://forge.example.com\",\n\
+                 \x20   \"token\": \"PUT A FORGE TOKEN HERE\",\n\
+                 \x20   \"userName\": \"Commit Author\",\n\
+                 \x20   \"userEmail\": \"author@example.com\"\n\
+                 \x20 }\n\
+                 }\n\
+                 ```\n\n",
+            );
         }
         out.push_str("| field | type | default | what it does |\n| --- | --- | --- | --- |\n");
         for field in fields {

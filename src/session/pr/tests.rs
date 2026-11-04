@@ -1690,3 +1690,295 @@ async fn a_planted_alternates_after_the_copy_does_not_reach_the_push() {
         "{alternates}"
     );
 }
+
+fn forgejo_git() -> (Arc<FakeGit>, Run) {
+    fake_git(BTreeMap::from([
+        ("rev-parse".to_owned(), ok("feature/thing\n")),
+        (
+            "remote".to_owned(),
+            ok("https://code.example/forge/upstream/project.git\n"),
+        ),
+        ("log".to_owned(), ok("what changed and why\n")),
+    ]))
+}
+
+fn forgejo_request(project: &str) -> Request {
+    let mut request = request(project, "Do the thing", "amelia");
+    request.forge = forgejo("https://code.example/forge/");
+    request
+}
+
+#[tokio::test]
+async fn forgejo_opens_a_pull_request_from_a_new_fork() {
+    let kept = with_repo();
+    let (git, run) = forgejo_git();
+    let (fake, api) = fake_api(BTreeMap::from([
+        ("POST /repos/upstream/project/forks".into(), forked()),
+        (
+            "GET /repos/upstream/project".into(),
+            (200, serde_json::json!({"default_branch": "trunk"})),
+        ),
+        (
+            "POST /repos/upstream/project/pulls".into(),
+            (
+                201,
+                serde_json::json!({"html_url": "https://code.example/forge/upstream/project/pulls/7"}),
+            ),
+        ),
+    ]));
+    let url = open_pull_request(
+        &forgejo_request(&kept.project),
+        &run,
+        &api,
+        &immediate_sleep(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(url, "https://code.example/forge/upstream/project/pulls/7");
+    let push = git.call_pushing().unwrap().args.join(" ");
+    assert!(push.contains("https://code.example/forge/errand-bot-login/project-1.git"));
+    let paths = fake.paths.lock().unwrap();
+    assert!(paths.contains(&"GET /repos/errand-bot-login/project-1".to_owned()));
+    assert!(paths.contains(&"POST /repos/upstream/project/pulls".to_owned()));
+    let bodies = fake.bodies.lock().unwrap();
+    let body = bodies.last().unwrap();
+    assert_eq!(body["head"], "errand-bot-login:feature/thing");
+    assert_eq!(body["base"], "trunk");
+    assert_eq!(body["title"], "Do the thing");
+    assert!(body.get("maintainer_can_modify").is_none());
+}
+
+#[tokio::test]
+async fn forgejo_collision_reuses_only_the_existing_fork_of_the_target() {
+    let kept = with_repo();
+    let (git, run) = forgejo_git();
+    let (fake, api) = fake_api(BTreeMap::from([
+        (
+            "POST /repos/upstream/project/forks".into(),
+            (
+                409,
+                serde_json::json!({"message": "repository already exists"}),
+            ),
+        ),
+        (
+            "GET /user".into(),
+            (200, serde_json::json!({"login": "actual-bot"})),
+        ),
+        (
+            "GET /repos/actual-bot/project".into(),
+            (
+                200,
+                serde_json::json!({"name": "project", "owner": {"login": "actual-bot"}, "fork": true, "parent": {"name": "project", "owner": {"login": "upstream"}}}),
+            ),
+        ),
+        (
+            "GET /repos/upstream/project".into(),
+            (200, serde_json::json!({"default_branch": "main"})),
+        ),
+        (
+            "POST /repos/upstream/project/pulls".into(),
+            (
+                201,
+                serde_json::json!({"html_url": "https://code.example/forge/upstream/project/pulls/8"}),
+            ),
+        ),
+    ]));
+    let url = open_pull_request(
+        &forgejo_request(&kept.project),
+        &run,
+        &api,
+        &immediate_sleep(),
+    )
+    .await
+    .unwrap();
+    assert!(url.ends_with("/pulls/8"));
+    assert!(
+        git.call_pushing()
+            .unwrap()
+            .args
+            .join(" ")
+            .contains("https://code.example/forge/actual-bot/project.git")
+    );
+    let paths = fake.paths.lock().unwrap();
+    assert!(paths.contains(&"GET /user".to_owned()));
+    assert!(paths.contains(&"GET /repos/actual-bot/project".to_owned()));
+    assert_eq!(
+        fake.bodies.lock().unwrap().last().unwrap()["head"],
+        "actual-bot:feature/thing"
+    );
+}
+
+#[tokio::test]
+async fn forgejo_collision_never_pushes_to_an_unrelated_repository() {
+    for (fork, parent) in [(false, "upstream"), (true, "someone-else")] {
+        let kept = with_repo();
+        let (git, run) = forgejo_git();
+        let (fake, api) = fake_api(BTreeMap::from([
+            (
+                "POST /repos/upstream/project/forks".into(),
+                (
+                    409,
+                    serde_json::json!({"message": "repository already exists"}),
+                ),
+            ),
+            (
+                "GET /user".into(),
+                (200, serde_json::json!({"login": "actual-bot"})),
+            ),
+            (
+                "GET /repos/actual-bot/project".into(),
+                (
+                    200,
+                    serde_json::json!({"name": "project", "owner": {"login": "actual-bot"}, "fork": fork, "parent": {"name": "project", "owner": {"login": parent}}}),
+                ),
+            ),
+        ]));
+        let error = open_pull_request(
+            &forgejo_request(&kept.project),
+            &run,
+            &api,
+            &immediate_sleep(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("not its fork"), "{error}");
+        assert!(git.call_pushing().is_none());
+        assert!(
+            !fake
+                .paths
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|path| path.ends_with("/pulls"))
+        );
+    }
+}
+
+#[tokio::test]
+async fn forgejo_api_for_sends_the_expected_http_request() {
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        extract::Request as HttpRequest,
+        response::IntoResponse,
+        routing::any,
+    };
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let sender = Arc::new(Mutex::new(Some(tx)));
+    let app = Router::new().fallback(any(move |request: HttpRequest<Body>| {
+        let sender = Arc::clone(&sender);
+        async move {
+            let (parts, body) = request.into_parts();
+            let body = to_bytes(body, 4096).await.unwrap();
+            sender
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .send((parts, body))
+                .unwrap();
+            (
+                axum::http::StatusCode::CREATED,
+                axum::Json(serde_json::json!({"html_url": "https://example/pulls/1"})),
+            )
+                .into_response()
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let api = super::api_for(&forgejo(&format!("http://{address}/forge/")));
+    let reply = api(
+        "/repos/upstream/project/pulls".into(),
+        ApiCall {
+            method: "POST".into(),
+            token: "wire-token".into(),
+            body: Some(serde_json::json!({"head": "bot:branch"})),
+        },
+    )
+    .await;
+    let (parts, body) = rx.await.unwrap();
+    server.abort();
+    assert_eq!(reply.status, 201);
+    assert_eq!(reply.body["html_url"], "https://example/pulls/1");
+    assert_eq!(parts.method, "POST");
+    assert_eq!(
+        parts.uri.path(),
+        "/forge/api/v1/repos/upstream/project/pulls"
+    );
+    assert_eq!(parts.headers["authorization"], "token wire-token");
+    assert_eq!(parts.headers["accept"], "application/json");
+    assert_eq!(parts.headers["content-type"], "application/json");
+    assert!(parts.headers.get("x-github-api-version").is_none());
+    assert!(
+        parts.headers["user-agent"]
+            .to_str()
+            .unwrap()
+            .starts_with("errand/")
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({"head": "bot:branch"})
+    );
+}
+
+#[tokio::test]
+async fn github_conflict_is_not_treated_as_a_forgejo_fork_collision() {
+    let kept = with_repo();
+    let (git, run) = repo_git();
+    let (fake, api) = fake_api(BTreeMap::from([(
+        "POST /repos/upstream/project/forks".into(),
+        (409, serde_json::json!({"message": "conflict"})),
+    )]));
+    let error = open_pull_request(
+        &request(&kept.project, "Work", "amelia"),
+        &run,
+        &api,
+        &immediate_sleep(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("conflict"));
+    assert!(!fake.paths.lock().unwrap().contains(&"GET /user".to_owned()));
+    assert!(git.call_pushing().is_none());
+}
+
+#[tokio::test]
+async fn forge_api_reuses_a_connection_between_calls() {
+    use axum::{Router, extract::ConnectInfo, routing::get};
+    use std::net::SocketAddr;
+
+    let app = Router::new().route(
+        "/forge/api/v1/user",
+        get(|ConnectInfo(peer): ConnectInfo<SocketAddr>| async move {
+            axum::Json(serde_json::json!({"peer": peer.to_string()}))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let api = super::api_for(&forgejo(&format!("http://{address}/forge")));
+    let mut peers = Vec::new();
+    for _ in 0..2 {
+        let reply = api(
+            "/user".into(),
+            ApiCall {
+                method: "GET".into(),
+                token: "token".into(),
+                body: None,
+            },
+        )
+        .await;
+        assert_eq!(reply.status, 200);
+        peers.push(reply.body["peer"].as_str().unwrap().to_owned());
+    }
+    server.abort();
+    assert_eq!(peers[0], peers[1]);
+}

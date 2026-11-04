@@ -476,6 +476,7 @@ fn fixed_until_restart(started: &Config, now: &Config) -> Vec<&'static str> {
             started.chat.channel_id != now.chat.channel_id,
         ),
         ("web", started.web != now.web),
+        ("forge", started.forge != now.forge),
         ("stateDir", started.state_dir != now.state_dir),
         (
             "sandbox.backend",
@@ -1559,8 +1560,8 @@ async fn run(
                 let config = live.get();
                 for setting in fixed_until_restart(&started, &config) {
                     log.warn(
-                        "a setting changed that the daemon reads only at startup, and it keeps \
-                         the old one until it restarts",
+                        "a setting used by startup components changed, and those components keep \
+                         their original settings until the daemon restarts",
                         &fields([("setting", LogValue::from(setting))]),
                     );
                 }
@@ -1804,7 +1805,7 @@ struct PostedFile<'a> {
 /// quote marker renders only at the start of one.
 fn addressed(author_id: &str, caption: &str) -> String {
     let gap = if caption.starts_with('>') { "\n" } else { " " };
-    match crate::issues::thread::PREFIXES
+    match crate::issues::thread::prefixes()
         .iter()
         .find_map(|prefix| author_id.strip_prefix(prefix))
     {

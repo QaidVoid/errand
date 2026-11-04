@@ -644,3 +644,39 @@ async fn a_reload_replaces_the_routes_and_keeps_the_probed_backend() {
         ["sandbox.backend", "sandbox.image"]
     );
 }
+
+#[test]
+fn forge_changes_are_reported_as_affecting_startup_components() {
+    let state = tempfile::tempdir().expect("a temporary directory");
+    let started = reloadable(
+        state.path(),
+        &json!({ "first": { "baseUrl": "http://127.0.0.1:8080", "credential": "k" } }),
+    );
+    let mut now = started.clone();
+    let forge = crate::config::schema::ForgeConfig {
+        kind: crate::config::schema::ForgeKind::Github,
+        url: None,
+        token: "secret-token".to_owned(),
+        user_name: "user".to_owned(),
+        user_email: "user@example.com".to_owned(),
+        trigger: None,
+        app: None,
+    };
+    assert!(fixed_until_restart(&started, &now).is_empty());
+    now.forge = Some(forge);
+    assert_eq!(fixed_until_restart(&started, &now), ["forge"]);
+    let with_forge = now.clone();
+    now.forge.as_mut().unwrap().token = "another-secret".to_owned();
+    assert_eq!(fixed_until_restart(&with_forge, &now), ["forge"]);
+    now.forge = with_forge.forge.clone();
+    now.forge.as_mut().unwrap().trigger = Some(crate::config::schema::ForgeTrigger {
+        allowed_users: vec!["operator".to_owned()],
+        repositories: vec![],
+        on_mention: true,
+        on_assign: true,
+    });
+    assert_eq!(fixed_until_restart(&with_forge, &now), ["forge"]);
+    now.forge = None;
+    assert_eq!(fixed_until_restart(&with_forge, &now), ["forge"]);
+    assert!(fixed_until_restart(&started, &now).is_empty());
+}

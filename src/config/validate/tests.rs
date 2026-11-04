@@ -2253,3 +2253,105 @@ fn an_app_key_reached_through_a_link_into_the_state_is_refused() {
         );
     }
 }
+
+#[test]
+fn forge_urls_validate_authority_and_preserve_valid_addresses() {
+    let config = |url: &str| {
+        valid(json!({"forge": {
+            "type": "forgejo", "url": url, "token": "forge-value",
+            "userName": "Bot Name", "userEmail": "bot@example.com"
+        }}))
+    };
+    for (url, expected) in [
+        ("https://forge.example.com/", "https://forge.example.com"),
+        (
+            "http://localhost:3000/forge/",
+            "http://localhost:3000/forge",
+        ),
+        ("https://[::1]:8443/forge", "https://[::1]:8443/forge"),
+    ] {
+        let forge = validate_config(&config(url)).unwrap().forge.unwrap();
+        assert_eq!(forge.url.as_deref(), Some(expected));
+    }
+    for url in ["https://example.com/a b", "https://exa mple.com"] {
+        let errors = problems_of(&config(url)).join("\n");
+        assert!(
+            errors.contains("forge.url must not contain whitespace"),
+            "{url:?}: {errors}"
+        );
+    }
+    for url in [
+        "https://example.com:\u{0a}443",
+        "https://example.com/path\u{0a}[credential]",
+        "https://example.com:abc",
+        "https://example.com:65536",
+        "https://example.com:0",
+        "https://example.com:",
+        "https:///example.com",
+        "https://[::1",
+        "https://::1/",
+        "https://user@example.com",
+        "https://example.com/\"evil",
+        "https://example.com/\\evil",
+    ] {
+        let errors = problems_of(&config(url)).join("\n");
+        assert!(errors.contains("forge.url"), "{url:?}: {errors}");
+    }
+}
+
+#[test]
+fn forge_identity_cannot_inject_git_config() {
+    for section in ["forge", "github"] {
+        for field in ["userName", "userEmail"] {
+            for value in [
+                "name\n[core]\neditor = evil",
+                "name\rvalue",
+                "name\0value",
+                "name\\n",
+                "name\"",
+                "name#comment",
+                "name;comment",
+            ] {
+                let mut identity = json!({"token":"forge-value", "userName":"Bot Name", "userEmail":"bot@example.com"});
+                identity[field] = json!(value);
+                let mut raw = json!({});
+                raw[section] = identity;
+                let errors = problems_of(&valid(raw)).join("\n");
+                assert!(
+                    errors.contains(&format!("{section}.{field}")),
+                    "{value:?}: {errors}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn invalid_forge_type_does_not_cascade_to_type_specific_errors() {
+    let errors = problems_of(&valid(json!({"forge": {
+        "type": "unknown", "url": "https://forge.example.com", "app": {},
+        "token": "forge-value", "userName": "Bot", "userEmail": "bot@example.com"
+    }})))
+    .join("\n");
+    assert!(errors.contains("forge.type"));
+    assert!(!errors.contains("forge.url"), "{errors}");
+    assert!(!errors.contains("forge.app"), "{errors}");
+}
+
+#[test]
+fn web_login_requires_both_credentials_only_when_configured() {
+    assert!(validate_config(&valid(json!({ "web": {} }))).is_ok());
+    let errors = problems_of(&valid(json!({ "web": { "login": {} } }))).join("\n");
+    for field in ["clientId", "clientSecret"] {
+        assert!(
+            errors.contains(&format!("web.login.{field} is required")),
+            "{errors}"
+        );
+    }
+    assert!(
+        validate_config(&valid(json!({ "web": { "login": {
+        "clientId": "app", "clientSecret": "client-secret"
+    } } })))
+        .is_ok()
+    );
+}

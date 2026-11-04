@@ -43,6 +43,16 @@ pub fn auth_header(kind: ForgeKind, token: &str) -> String {
     }
 }
 
+/// Adds the response format and API version headers required by a forge.
+pub fn api_headers(kind: ForgeKind, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    match kind {
+        ForgeKind::Github => request
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28"),
+        ForgeKind::Forgejo => request.header("Accept", "application/json"),
+    }
+}
+
 /// Whether a byte can occur within a login on this forge.
 pub fn login_character(kind: ForgeKind, byte: u8) -> bool {
     byte.is_ascii_alphanumeric()
@@ -50,8 +60,9 @@ pub fn login_character(kind: ForgeKind, byte: u8) -> bool {
         || (kind == ForgeKind::Forgejo && matches!(byte, b'_' | b'.'))
 }
 
-/// Whether a login fits this forge's account identifier syntax.
+/// Whether a login has the length and characters supported for this forge.
 ///
+/// This is a permissive filter, not a complete account identifier validator.
 /// Dotted Forgejo names are accepted because an instance can enable them.
 pub fn valid_login(kind: ForgeKind, login: &str) -> bool {
     let maximum = match kind {
@@ -85,4 +96,25 @@ fn instance_of(forge: &ForgeConfig) -> &str {
         .url
         .as_deref()
         .expect("validated: a Forgejo forge carries its instance's address")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ForgeKind, api_headers};
+
+    #[test]
+    fn api_headers_follow_the_forges_protocol() {
+        let client = reqwest::Client::new();
+        let github = api_headers(ForgeKind::Github, client.get("https://example.com"))
+            .build()
+            .unwrap();
+        assert_eq!(github.headers()["accept"], "application/vnd.github+json");
+        assert_eq!(github.headers()["x-github-api-version"], "2022-11-28");
+
+        let forgejo = api_headers(ForgeKind::Forgejo, client.get("https://example.com"))
+            .build()
+            .unwrap();
+        assert_eq!(forgejo.headers()["accept"], "application/json");
+        assert!(!forgejo.headers().contains_key("x-github-api-version"));
+    }
 }

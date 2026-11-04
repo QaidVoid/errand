@@ -55,8 +55,10 @@ impl ByThread {
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default();
-        // Legacy GitHub links have a known origin. An unscoped Forgejo link
-        // cannot identify its original instance, so it must stay detached.
+        // Legacy GitHub links have a known origin. A scoped link wins if both
+        // forms exist. Migration is held in memory until the next link write.
+        // An unscoped Forgejo link cannot identify its original instance, so
+        // it remains in the file but stays detached.
         let legacy: Vec<String> = links
             .keys()
             .filter(|key| key.starts_with("github:"))
@@ -119,9 +121,12 @@ impl ByThread {
         let written = {
             let mut links = self.links.lock().expect("the issue links lock");
             links.insert(self.scoped_key(issue), thread_id.to_owned());
-            serde_json::to_string_pretty(&*links).unwrap_or_default()
+            serde_json::to_string_pretty(&*links)
         };
-        if let Err(error) = std::fs::write(&self.path, written) {
+        let saved = written
+            .map_err(std::io::Error::other)
+            .and_then(|written| std::fs::write(&self.path, written));
+        if let Err(error) = saved {
             self.log.warn(
                 "the link between an issue and its thread could not be written, so a restart \
                  will not find it",

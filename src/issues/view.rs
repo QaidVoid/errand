@@ -82,9 +82,16 @@ impl IssueView {
     }
 
     async fn post(&self, text: &str) -> Result<(), ViewError> {
-        let mut body: String = for_forge(text).chars().take(COMMENT_LIMIT).collect();
-        if body.chars().count() == COMMENT_LIMIT {
-            body.push_str("\n\n(cut short; the rest is in the session's transcript)");
+        const CUT_SHORT: &str = "\n\n(cut short; the rest is in the session's transcript)";
+        let translated = for_forge(text);
+        let mut chars = translated.chars();
+        let mut body: String = chars.by_ref().take(COMMENT_LIMIT).collect();
+        if chars.next().is_some() {
+            body = translated
+                .chars()
+                .take(COMMENT_LIMIT - CUT_SHORT.chars().count())
+                .collect();
+            body.push_str(CUT_SHORT);
         }
         let answer = (self.api)(
             format!("/repos/{}/issues/{}/comments", self.repository, self.number),
@@ -169,7 +176,7 @@ pub fn for_forge(text: &str) -> String {
 /// One chat markup token in the forge's terms, or nothing to leave it alone.
 fn translated(inside: &str) -> Option<String> {
     if let Some(named) = inside.strip_prefix('@') {
-        for prefix in super::thread::PREFIXES {
+        for prefix in super::thread::prefixes() {
             if let Some(login) = named.strip_prefix(prefix) {
                 return Some(format!("@{login}"));
             }

@@ -1181,36 +1181,64 @@ fn validate_forge(raw: &Map<String, Value>, problems: &mut Problems) -> Option<F
     }
 
     let kind = read_forge_kind(&source, key, problems);
-    let url = read_forge_url(&source, key, kind, problems);
+    let url = kind.and_then(|kind| read_forge_url(&source, key, kind, problems));
+    let app = kind.and_then(|kind| validate_forge_app(&source, key, kind, problems));
 
     Some(ForgeConfig {
-        kind,
+        kind: kind.unwrap_or(ForgeKind::Github),
         url,
         token: required_token(&source, key, problems),
-        user_name: required_string(&source, "userName", key, problems),
-        user_email: required_string(&source, "userEmail", key, problems),
+        user_name: forge_identity(&source, "userName", key, problems),
+        user_email: forge_identity(&source, "userEmail", key, problems),
         trigger: validate_forge_trigger(&source, key, problems),
-        app: validate_forge_app(&source, key, kind, problems),
+        app,
     })
 }
 
+fn forge_identity(
+    source: &Map<String, Value>,
+    field: &str,
+    key: &str,
+    problems: &mut Problems,
+) -> String {
+    let value = required_string(source, field, key, problems);
+    // These values are written unquoted into a git configuration file.
+    if source
+        .get(field)
+        .and_then(Value::as_str)
+        .is_some_and(|raw| {
+            raw.chars()
+                .any(|c| c.is_control() || matches!(c, '"' | '\\' | '#' | ';'))
+        })
+    {
+        problems.add(format!(
+            "{key}.{field} contains characters that cannot safely be written to git configuration"
+        ));
+    }
+    value
+}
+
 /// Reads which forge the section names, GitHub when it names none.
-fn read_forge_kind(source: &Map<String, Value>, key: &str, problems: &mut Problems) -> ForgeKind {
+fn read_forge_kind(
+    source: &Map<String, Value>,
+    key: &str,
+    problems: &mut Problems,
+) -> Option<ForgeKind> {
     match source.get("type") {
-        None => ForgeKind::Github,
+        None => Some(ForgeKind::Github),
         Some(Value::String(kind)) => match kind.as_str() {
-            "github" => ForgeKind::Github,
-            "forgejo" => ForgeKind::Forgejo,
+            "github" => Some(ForgeKind::Github),
+            "forgejo" => Some(ForgeKind::Forgejo),
             other => {
                 problems.add(format!(
                     "{key}.type is `{other}`; a forge is `github` or `forgejo`"
                 ));
-                ForgeKind::Github
+                None
             }
         },
         Some(_) => {
             problems.add(format!("{key}.type must be \"github\" or \"forgejo\""));
-            ForgeKind::Github
+            None
         }
     }
 }
@@ -1251,7 +1279,20 @@ fn read_forge_url(
             return None;
         }
     };
+    if written
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '"' | '\\'))
+    {
+        problems.add(format!(
+            "{key}.url contains characters that cannot safely be used in a URL or git configuration"
+        ));
+        return None;
+    }
     let written = written.trim();
+    if written.chars().any(char::is_whitespace) {
+        problems.add(format!("{key}.url must not contain whitespace"));
+        return None;
+    }
     let Some((scheme, rest)) = written.split_once("://") else {
         problems.add(format!(
             "{key}.url must start with its scheme, as \"https://forge.example.com\""
@@ -1272,26 +1313,20 @@ fn read_forge_url(
         return None;
     }
     let authority = rest.split('/').next().unwrap_or("");
-    if authority.is_empty()
-        || authority.contains('@')
-        || authority.contains(' ')
-        || host_of(authority).is_empty()
-    {
+    let parsed = reqwest::Url::parse(written);
+    let valid = parsed.as_ref().is_ok_and(|url| {
+        url.host().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.port() != Some(0)
+    });
+    if !valid || authority.is_empty() || authority.contains('@') || authority.ends_with(':') {
         problems.add(format!(
-            "{key}.url must name the instance's host, as \"https://forge.example.com\""
+            "{key}.url must name a valid instance host and port, as \"https://forge.example.com\""
         ));
         return None;
     }
     Some(format!("{scheme}://{rest}"))
-}
-
-/// The host of a URL's authority, with any port and IPv6 brackets off it.
-fn host_of(authority: &str) -> &str {
-    let without_port = match authority.rsplit_once(':') {
-        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
-        _ => authority,
-    };
-    without_port.trim_start_matches('[').trim_end_matches(']')
 }
 
 /// Reads the forge App a session's credential is minted from, if one is

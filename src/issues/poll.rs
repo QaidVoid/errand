@@ -57,7 +57,12 @@ pub struct Poller {
     /// chat message sent while the daemon was down is not either.
     pub since: jiff::Timestamp,
     /// Where each issue's reading stopped, for a forge whose notifications
-    /// do not say so themselves.
+    /// do not say so themselves. Forgejo floors are in memory only and are
+    /// bounded below by `since`, including after a restart. An unread
+    /// notification left by a failed read before restart is therefore not a
+    /// durable retry: activity at or before the new start is skipped. If its
+    /// notification was not updated after the start, it is marked read without
+    /// fetching the issue. A later update only allows newer activity through.
     pub floors: BTreeMap<String, jiff::Timestamp>,
     /// Where what could not be read is reported.
     pub log: Logger,
@@ -345,6 +350,8 @@ impl Poller {
     /// does not say, and an assignment is only as good as who made it. GitHub
     /// keeps that history as events; Forgejo keeps it as a timeline, whose
     /// entries name the assignee directly and say whether one was removed.
+    /// Forgejo team assignments are not expanded into their members, so they
+    /// do not trigger a session even when the bot belongs to the team.
     async fn assignment(
         &self,
         repository: &str,
@@ -380,13 +387,16 @@ impl Poller {
                                 .unwrap_or_default()
                                 .to_owned(),
                             event["id"].as_i64().unwrap_or_default().to_string(),
+                            false,
                         ))
                     })
                     .collect::<Vec<_>>()
             }
             ForgeKind::Forgejo => {
-                let mut timeline = Vec::new();
-                for page in 1.. {
+                const MAX_TIMELINE_PAGES: u32 = 100;
+                let mut listed = Vec::new();
+                let mut complete = false;
+                for page in 1..=MAX_TIMELINE_PAGES {
                     let answer = self
                         .get(&format!(
                             "/repos/{repository}/issues/{number}/timeline?since={floor}&limit=100&page={page}"
@@ -397,17 +407,13 @@ impl Poller {
                         .ok_or("Forgejo answered the timeline with something that is not a list")?;
                     // An instance may cap the page size below the requested limit.
                     if entries.is_empty() {
+                        complete = true;
                         break;
                     }
-                    timeline.extend(entries.iter().cloned());
-                }
-                timeline
-                    .iter()
-                    .filter_map(|entry| {
+                    listed.extend(entries.iter().filter_map(|entry| {
                         // Forgejo names this event after the comment kind it
                         // stores it as, which is `assignees`, not `assign`.
                         let is_assign = entry["type"].as_str() == Some("assignees")
-                            && entry["removed_assignee"].as_bool() != Some(true)
                             && entry["assignee"]["login"]
                                 .as_str()
                                 .is_some_and(|login| login.eq_ignore_ascii_case(&self.bot));
@@ -421,17 +427,24 @@ impl Poller {
                                 .unwrap_or_default()
                                 .to_owned(),
                             entry["id"].as_i64().unwrap_or_default().to_string(),
+                            entry["removed_assignee"].as_bool() == Some(true),
                         ))
-                    })
-                    .collect::<Vec<_>>()
+                    }));
+                }
+                if !complete {
+                    return Err("Forgejo timeline exceeded the page limit".to_owned());
+                }
+                listed
             }
         };
-        // The assignment that matters is the one that stands, so the latest
-        // of them is the one read, whoever made it.
-        let Some((at, actor, id)) = listed.into_iter().max_by_key(|(at, _, _)| *at) else {
+        // Forgejo removals cancel earlier additions. Judge the latest change
+        // before checking who made it, so an untrusted actor cannot revive an
+        // earlier trusted assignment.
+        let Some((at, actor, id, removed)) = listed.into_iter().max_by_key(|(at, _, _, _)| *at)
+        else {
             return Ok(None);
         };
-        if at <= floor {
+        if removed || at <= floor {
             return Ok(None);
         }
         Ok(Some(Said {

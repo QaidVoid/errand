@@ -12,7 +12,9 @@ use crate::forge;
 /// Every prefix a thread or account may have been named with, past and
 /// present, so a name from an earlier configuration is still read as what
 /// it is rather than as a chat id that looks like one.
-pub const PREFIXES: [&str; 2] = ["github:", "forgejo:"];
+pub fn prefixes() -> [&'static str; 2] {
+    [ForgeKind::Github, ForgeKind::Forgejo].map(forge::thread_prefix)
+}
 
 /// The thread an issue or pull request is.
 pub fn thread_id(repository: &str, number: u64, kind: ForgeKind) -> String {
@@ -21,7 +23,9 @@ pub fn thread_id(repository: &str, number: u64, kind: ForgeKind) -> String {
 
 /// Whether a thread lives on a forge rather than in the chat service.
 pub fn is_forge_thread(thread_id: &str) -> bool {
-    PREFIXES.iter().any(|prefix| thread_id.starts_with(prefix))
+    prefixes()
+        .iter()
+        .any(|prefix| thread_id.starts_with(prefix))
 }
 
 /// The repository, as `owner/repo`, and the number a thread names.
@@ -29,7 +33,8 @@ pub fn is_forge_thread(thread_id: &str) -> bool {
 /// Either forge's spelling is accepted, since the links written down last
 /// run outlive a change of forge, and an old name still names one issue.
 pub fn issue_of(thread_id: &str) -> Option<(&str, u64)> {
-    let prefix = PREFIXES
+    let prefixes = prefixes();
+    let prefix = prefixes
         .iter()
         .find(|prefix| thread_id.starts_with(**prefix))?;
     let (repository, number) = thread_id[prefix.len()..].rsplit_once('#')?;
@@ -52,7 +57,8 @@ pub fn account_id(login: &str, kind: ForgeKind) -> String {
 pub fn logins_plainly(text: &str) -> String {
     let mut plain = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some((start, prefix)) = PREFIXES
+    let prefixes = prefixes();
+    while let Some((start, prefix)) = prefixes
         .iter()
         .filter_map(|prefix| {
             let marker = format!("<@{prefix}");

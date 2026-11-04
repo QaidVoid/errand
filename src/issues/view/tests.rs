@@ -142,3 +142,90 @@ fn a_view_never_crosses_forge_kinds() {
     assert!(views.view_for("github:o/r#4").is_none());
     assert!(views.view_for("forgejo:o/r#4").is_some());
 }
+
+#[tokio::test]
+async fn comments_are_cut_short_only_when_the_translated_text_exceeds_the_limit() {
+    let (api, posted) = api();
+    let view = threads(api).view_for("github:o/r#2").unwrap();
+    let limit = super::COMMENT_LIMIT;
+    let suffix = "\n\n(cut short; the rest is in the session's transcript)";
+
+    for text in [
+        "\u{e9}".repeat(limit - 1),
+        "\u{e9}".repeat(limit),
+        "\u{e9}".repeat(limit + 1),
+        format!("{}<@github:x>", "\u{e9}".repeat(limit - 2)),
+    ] {
+        view.observe(&SessionEvent::Post { text }).await.unwrap();
+        view.observe(&SessionEvent::Busy { busy: false })
+            .await
+            .unwrap();
+    }
+
+    let posted = posted.lock().unwrap();
+    assert_eq!(posted[0].1["body"], "\u{e9}".repeat(limit - 1));
+    assert_eq!(posted[1].1["body"], "\u{e9}".repeat(limit));
+    let cut = posted[2].1["body"].as_str().unwrap();
+    assert_eq!(cut.chars().count(), limit);
+    assert_eq!(
+        cut,
+        format!(
+            "{}{suffix}",
+            "\u{e9}".repeat(limit - suffix.chars().count())
+        )
+    );
+    assert_eq!(
+        posted[3].1["body"],
+        format!("{}@x", "\u{e9}".repeat(limit - 2))
+    );
+}
+
+#[tokio::test]
+async fn comment_body_survives_json_serialization() {
+    let (api, posted) = api();
+    let view = threads(api).view_for("github:o/r#2").unwrap();
+    let text = "Quotes \" and backslash \\, newline\n, null \0, and \u{96ea}";
+    view.observe(&SessionEvent::Post {
+        text: text.to_owned(),
+    })
+    .await
+    .unwrap();
+    view.observe(&SessionEvent::Busy { busy: false })
+        .await
+        .unwrap();
+    let posted = posted.lock().unwrap();
+    let wire = serde_json::to_string(&posted[0].1).unwrap();
+    let decoded: Value = serde_json::from_str(&wire).unwrap();
+    assert_eq!(decoded["body"], text);
+}
+
+#[tokio::test]
+async fn failed_comment_is_reported_and_not_posted_again() {
+    let calls = Arc::new(Mutex::new(0));
+    let seen = Arc::clone(&calls);
+    let api: Api = Arc::new(move |_, _| {
+        *seen.lock().unwrap() += 1;
+        Box::pin(async {
+            ApiReply {
+                status: 422,
+                body: json!({"message": "invalid"}),
+            }
+        })
+    });
+    let view = threads(api).view_for("github:o/r#2").unwrap();
+    view.observe(&SessionEvent::Post {
+        text: "answer".to_owned(),
+    })
+    .await
+    .unwrap();
+    let error = view
+        .observe(&SessionEvent::Busy { busy: false })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("422"));
+    assert!(error.to_string().contains("invalid"));
+    view.observe(&SessionEvent::Busy { busy: false })
+        .await
+        .unwrap();
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
