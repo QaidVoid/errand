@@ -28,7 +28,7 @@ use tokio::sync::watch;
 use crate::chat::chars::reaction;
 use crate::chat::diff::FileDiff;
 use crate::chat::diff::render_diff;
-use crate::chat::outbox::{DEFAULT_MAX_BUFFERED, Outbox, TaskError};
+use crate::chat::outbox::{DEFAULT_MAX_BUFFERED, Outbox, PermanentFailure, TaskError};
 use crate::chat::render::{MESSAGE_LIMIT, delegation_line, split_message};
 use crate::issues::thread::logins_plainly;
 use crate::log::{LogValue, Logger, fields};
@@ -50,6 +50,31 @@ pub struct MessageHandle {
 
 /// Why a call to the chat service failed.
 pub type ServiceError = Box<dyn std::error::Error + Send + Sync>;
+
+/// Marks a service failure that running the task again cannot fix, which is
+/// a response [`a_service_decision`] accepts. Anything else is worth another
+/// try.
+fn classified(error: ServiceError) -> TaskError {
+    let permanent = matches!(
+        error.downcast_ref::<serenity::Error>(),
+        Some(serenity::Error::Http(
+            serenity::http::HttpError::UnsuccessfulRequest(response),
+        )) if a_service_decision(response.status_code.as_u16())
+    );
+    if permanent {
+        return Box::new(PermanentFailure(error.to_string()));
+    }
+    error
+}
+
+/// Whether that status is the service deciding about the request itself,
+/// rather than reporting that it could not get to it.
+///
+/// A 4xx is a decision, save for the two that name a wait: a request timeout
+/// and a rate limit the chat library already queues behind.
+fn a_service_decision(status: u16) -> bool {
+    (400..500).contains(&status) && !matches!(status, 408 | 429)
+}
 
 /// A call to the chat service, as a boxed future.
 pub type ServiceCall<T> = Pin<Box<dyn Future<Output = Result<T, ServiceError>> + Send>>;
@@ -270,6 +295,10 @@ impl ThreadTransport for SerenityThread {
 pub type Announce =
     dyn Fn(usize) -> Pin<Box<dyn Future<Output = Result<(), TaskError>> + Send>> + Send + Sync;
 
+/// One notice that a piece of output was dropped for good, as a boxed future.
+pub type AnnounceFailure =
+    dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<(), TaskError>> + Send>> + Send + Sync;
+
 /// The thread's mutable side: what it is showing and holding.
 struct ThreadState {
     waiting_message_id: Option<String>,
@@ -306,12 +335,33 @@ impl<T: ThreadTransport> ChatThread<T> {
                         )
                         .await
                         .map(|_| ())
+                        .map_err(classified)
+                })
+            })
+        };
+        let failure_reporter: Arc<AnnounceFailure> = {
+            let transport = transport.clone();
+            Arc::new(move |detail| {
+                let transport = transport.clone();
+                Box::pin(async move {
+                    transport
+                        .send(
+                            format!("[a message could not be delivered: {detail}]"),
+                            None,
+                        )
+                        .await
+                        .map(|_| ())
                 })
             })
         };
         Self {
             transport,
-            outbox: Outbox::new(log.clone(), announcer, DEFAULT_MAX_BUFFERED),
+            outbox: Outbox::new(
+                log.clone(),
+                announcer,
+                failure_reporter,
+                DEFAULT_MAX_BUFFERED,
+            ),
             log,
             forward_tool_output,
             state: Arc::new(Mutex::new(ThreadState {
@@ -389,8 +439,13 @@ impl<T: ThreadTransport> ChatThread<T> {
             self.outbox.enqueue(Box::new(move || {
                 let transport = Arc::clone(&transport);
                 let chunk = chunk.clone();
-                Box::pin(async move { transport.send(chunk, None).await.map(|_| ()) })
-                    as Pin<Box<dyn Future<Output = Result<(), TaskError>> + Send>>
+                Box::pin(async move {
+                    transport
+                        .send(chunk, None)
+                        .await
+                        .map(|_| ())
+                        .map_err(classified)
+                }) as Pin<Box<dyn Future<Output = Result<(), TaskError>> + Send>>
             }));
         }
     }
@@ -451,50 +506,50 @@ impl<T: ThreadTransport> ChatThread<T> {
             let state = Arc::clone(&state);
             let line = line.clone();
             Box::pin(async move {
-                let extended = {
-                    let state = state.lock().expect("the thread state lock");
-                    if state.activity_text.is_empty() {
-                        line.clone()
-                    } else {
-                        format!("{}\n{line}", state.activity_text)
-                    }
-                };
+                let run = async {
+                    let (editable, extended) = {
+                        let state = state.lock().expect("the thread state lock");
+                        let extended = if state.activity_text.is_empty() {
+                            line.clone()
+                        } else {
+                            format!("{}\n{line}", state.activity_text)
+                        };
+                        let editable = state
+                            .activity_message_id
+                            .clone()
+                            .filter(|_| extended.chars().count() <= MESSAGE_LIMIT);
+                        (editable, extended)
+                    };
 
-                let fresh = {
+                    if let Some(id) = editable {
+                        if let Err(error) = transport.edit(id, extended.clone()).await {
+                            // The block is left behind, so a retry or the next
+                            // line starts a fresh one rather than repeating
+                            // this line or failing on the same message again.
+                            let mut state = state.lock().expect("the thread state lock");
+                            state.activity_message_id = None;
+                            state.activity_text.clear();
+                            return Err(error);
+                        }
+                        state.lock().expect("the thread state lock").activity_text = extended;
+                        return Ok(());
+                    }
+
+                    // One entry can exceed a whole message on its own. Nothing is
+                    // dropped: it is split, and the block continues from the
+                    // final piece.
+                    let pieces = split_message(&line, MESSAGE_LIMIT);
+                    let mut last: Option<MessageHandle> = None;
+                    for piece in &pieces {
+                        let sent = transport.send(piece.clone(), None).await?;
+                        last = Some(sent);
+                    }
                     let mut state = state.lock().expect("the thread state lock");
-                    let fresh = state.activity_message_id.is_none()
-                        || extended.chars().count() > MESSAGE_LIMIT;
-                    if !fresh {
-                        state.activity_text.clear();
-                        state.activity_text.push_str(&extended);
-                    }
-                    fresh
+                    state.activity_message_id = last.map(|sent| sent.id);
+                    state.activity_text = pieces.last().cloned().unwrap_or_default();
+                    Ok(())
                 };
-
-                if !fresh {
-                    let id = state
-                        .lock()
-                        .expect("the thread state lock")
-                        .activity_message_id
-                        .clone()
-                        .unwrap_or_default();
-                    transport.edit(id, extended).await?;
-                    return Ok(());
-                }
-
-                // One entry can exceed a whole message on its own. Nothing is
-                // dropped: it is split, and the block continues from the
-                // final piece.
-                let pieces = split_message(&line, MESSAGE_LIMIT);
-                let mut last: Option<MessageHandle> = None;
-                for piece in &pieces {
-                    let sent = transport.send(piece.clone(), None).await?;
-                    last = Some(sent);
-                }
-                let mut state = state.lock().expect("the thread state lock");
-                state.activity_message_id = last.map(|sent| sent.id);
-                state.activity_text = pieces.last().cloned().unwrap_or_default();
-                Ok(())
+                run.await.map_err(classified)
             })
         }));
     }
@@ -634,6 +689,7 @@ impl<T: ThreadTransport> ChatThread<T> {
                     .send(caption, Some((name, bytes)))
                     .await
                     .map(|_| ())
+                    .map_err(classified)
             })
         }));
     }

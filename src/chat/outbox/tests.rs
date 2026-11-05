@@ -23,9 +23,13 @@ fn logger(lines: &Lines) -> Logger {
 
 type Gaps = Arc<Mutex<Vec<usize>>>;
 
-fn outbox(max_buffered: usize) -> (Outbox, Gaps, Lines) {
+/// What the outbox said to the thread about work dropped for good.
+type FailedNotes = Arc<Mutex<Vec<String>>>;
+
+fn outbox(max_buffered: usize) -> (Outbox, Gaps, FailedNotes, Lines) {
     let lines: Lines = Arc::new(Mutex::new(Vec::new()));
     let gaps: Gaps = Arc::new(Mutex::new(Vec::new()));
+    let notes: FailedNotes = Arc::new(Mutex::new(Vec::new()));
     let gaps_for_announce = Arc::clone(&gaps);
     let announce: super::AnnounceDrops = Arc::new(move |count| {
         let gaps = Arc::clone(&gaps_for_announce);
@@ -34,9 +38,17 @@ fn outbox(max_buffered: usize) -> (Outbox, Gaps, Lines) {
             Ok(())
         })
     });
+    let notes_for_announce = Arc::clone(&notes);
+    let announce_failure: super::AnnounceFailed = Arc::new(move |detail| {
+        let notes = Arc::clone(&notes_for_announce);
+        Box::pin(async move {
+            notes.lock().unwrap().push(detail);
+            Ok(())
+        })
+    });
     let logged = Arc::clone(&lines);
-    let box_ = Outbox::new(logger(&logged), announce, max_buffered);
-    (box_, gaps, lines)
+    let box_ = Outbox::new(logger(&logged), announce, announce_failure, max_buffered);
+    (box_, gaps, notes, lines)
 }
 
 /// Builds a task from a factory, because a task that fails is run again in
@@ -91,7 +103,7 @@ fn recording_slow(ran: &Arc<Mutex<Vec<String>>>, release: &Arc<Notify>) -> Outbo
 
 #[tokio::test]
 async fn what_is_queued_runs_in_the_order_it_was_queued() {
-    let (box_, _gaps, _lines) = outbox(DEFAULT_MAX_BUFFERED);
+    let (box_, _gaps, _notes, _lines) = outbox(DEFAULT_MAX_BUFFERED);
     let ran = Arc::new(Mutex::new(Vec::new()));
 
     for index in 1..=3 {
@@ -113,7 +125,7 @@ async fn what_is_queued_runs_in_the_order_it_was_queued() {
 /// Two overlapping actions on one thread would otherwise interleave.
 #[tokio::test]
 async fn a_slow_task_holds_the_ones_behind_it_until_it_finishes() {
-    let (box_, _gaps, _lines) = outbox(DEFAULT_MAX_BUFFERED);
+    let (box_, _gaps, _notes, _lines) = outbox(DEFAULT_MAX_BUFFERED);
     let ran = Arc::new(Mutex::new(Vec::new()));
     let release = Arc::new(Notify::new());
 
@@ -129,7 +141,7 @@ async fn a_slow_task_holds_the_ones_behind_it_until_it_finishes() {
 /// Output posted into a closed connection is lost, so it waits instead.
 #[tokio::test]
 async fn nothing_is_attempted_while_the_connection_is_down() {
-    let (box_, _gaps, _lines) = outbox(DEFAULT_MAX_BUFFERED);
+    let (box_, _gaps, _notes, _lines) = outbox(DEFAULT_MAX_BUFFERED);
     let ran = Arc::new(Mutex::new(Vec::new()));
 
     box_.set_connected(false);
@@ -145,7 +157,7 @@ async fn nothing_is_attempted_while_the_connection_is_down() {
 /// A failed action stays at the head, or a reconnect reorders the thread.
 #[tokio::test]
 async fn a_task_that_fails_is_retried_in_place_when_the_connection_returns() {
-    let (box_, _gaps, lines) = outbox(DEFAULT_MAX_BUFFERED);
+    let (box_, _gaps, _notes, lines) = outbox(DEFAULT_MAX_BUFFERED);
     let attempts = Arc::new(Mutex::new(Vec::new()));
     let failing = Arc::new(Mutex::new(true));
 
@@ -184,10 +196,101 @@ async fn a_task_that_fails_is_retried_in_place_when_the_connection_returns() {
     );
 }
 
+/// A task the service has refused for good is dropped, not left to hold up
+/// every task behind it: an edit to a message that is gone stays impossible
+/// however long the connection waits.
+#[tokio::test]
+async fn a_permanent_failure_is_dropped_and_the_rest_go_on() {
+    let (box_, _gaps, notes, lines) = outbox(DEFAULT_MAX_BUFFERED);
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+
+    let first_attempts = Arc::clone(&attempts);
+    box_.enqueue(task(move || {
+        let attempts = Arc::clone(&first_attempts);
+        async move {
+            attempts.lock().unwrap().push("first".to_owned());
+            Err(Box::new(super::PermanentFailure(
+                "404: the message is gone".to_owned(),
+            )) as TaskError)
+        }
+    }));
+    box_.enqueue(recording(&attempts, "second"));
+    box_.flush().await;
+
+    assert_eq!(
+        *attempts.lock().unwrap(),
+        ["first".to_owned(), "second".to_owned()],
+        "the task behind the dead one still ran"
+    );
+    assert_eq!(
+        *notes.lock().unwrap(),
+        ["404: the message is gone".to_owned()]
+    );
+    let said = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, line)| line.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(said.contains("cannot succeed"));
+    assert!(said.contains("404: the message is gone"));
+
+    // The outbox is not paused: work enqueued now runs without a reconnect.
+    box_.enqueue(recording(&attempts, "third"));
+    box_.flush().await;
+    assert_eq!(
+        *attempts.lock().unwrap(),
+        ["first".to_owned(), "second".to_owned(), "third".to_owned()]
+    );
+}
+
+/// A permanent failure in announcing a gap is given up on rather than
+/// attempted again on every drain after it, and the tasks behind the failed
+/// announcement still run: giving up is not the outbox pausing.
+#[tokio::test]
+async fn a_gap_that_cannot_be_announced_is_not_retried_forever() {
+    let lines: Lines = Arc::new(Mutex::new(Vec::new()));
+    let logged = Arc::clone(&lines);
+    let announce: super::AnnounceDrops = Arc::new(|_count| {
+        Box::pin(async {
+            Err(Box::new(super::PermanentFailure(
+                "the thread is gone for good".to_owned(),
+            )) as TaskError)
+        })
+    });
+    let reporter: super::AnnounceFailed = Arc::new(|_detail| Box::pin(async { Ok(()) }));
+    let box_ = Outbox::new(logger(&logged), announce, reporter, 1);
+    let ran = Arc::new(Mutex::new(Vec::new()));
+
+    box_.set_connected(false);
+    // The buffer bound drops the first; the second is what must still run.
+    box_.enqueue(recording(&ran, "first"));
+    box_.enqueue(recording(&ran, "second"));
+    box_.set_connected(true);
+    box_.flush().await;
+    box_.flush().await;
+
+    assert_eq!(
+        *ran.lock().unwrap(),
+        ["second".to_owned()],
+        "the task behind the failed announcement ran"
+    );
+    let said = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(level, line)| {
+            *level == LogLevel::Warn && line.contains("reporting dropped messages")
+        })
+        .count();
+    assert_eq!(said, 1, "the failed announcement is not attempted again");
+}
+
 /// A disconnected daemon must not grow without limit.
 #[tokio::test]
 async fn a_full_buffer_drops_the_oldest_and_keeps_the_newest() {
-    let (box_, gaps, _lines) = outbox(3);
+    let (box_, gaps, _notes, _lines) = outbox(3);
     let ran = Arc::new(Mutex::new(Vec::new()));
 
     box_.set_connected(false);
@@ -214,7 +317,7 @@ async fn a_full_buffer_drops_the_oldest_and_keeps_the_newest() {
 
 #[tokio::test]
 async fn a_gap_is_announced_once_not_on_every_drain_after_it() {
-    let (box_, gaps, _lines) = outbox(1);
+    let (box_, gaps, _notes, _lines) = outbox(1);
 
     box_.set_connected(false);
     for _ in 0..3 {
@@ -231,7 +334,7 @@ async fn a_gap_is_announced_once_not_on_every_drain_after_it() {
 
 #[tokio::test]
 async fn closing_discards_what_is_queued_and_takes_nothing_more() {
-    let (box_, _gaps, _lines) = outbox(DEFAULT_MAX_BUFFERED);
+    let (box_, _gaps, _notes, _lines) = outbox(DEFAULT_MAX_BUFFERED);
     let ran = Arc::new(Mutex::new(Vec::new()));
 
     box_.set_connected(false);
@@ -250,7 +353,7 @@ async fn closing_discards_what_is_queued_and_takes_nothing_more() {
 /// A caller must not see an empty-looking outbox while a drain is in flight.
 #[tokio::test]
 async fn flushing_waits_for_a_drain_already_running() {
-    let (box_, _gaps, _lines) = outbox(DEFAULT_MAX_BUFFERED);
+    let (box_, _gaps, _notes, _lines) = outbox(DEFAULT_MAX_BUFFERED);
     let ran = Arc::new(Mutex::new(Vec::new()));
     let release = Arc::new(Notify::new());
 
@@ -268,7 +371,8 @@ async fn a_failure_to_announce_a_gap_is_reported_and_not_lost() {
     let logged = Arc::clone(&lines);
     let announce: super::AnnounceDrops =
         Arc::new(|_count| Box::pin(async { failed("the thread is gone") }));
-    let box_ = Outbox::new(logger(&logged), announce, 1);
+    let reporter: super::AnnounceFailed = Arc::new(|_detail| Box::pin(async { Ok(()) }));
+    let box_ = Outbox::new(logger(&logged), announce, reporter, 1);
 
     box_.set_connected(false);
     box_.enqueue(task(|| async { Ok(()) }));
@@ -291,7 +395,7 @@ async fn a_followed_outbox_picks_back_up_when_the_connection_returns() {
     // A failed task turns the outbox off on its own. Without something to
     // turn it back on, the thread stops posting for the rest of the session.
     let (connection, watching) = tokio::sync::watch::channel(true);
-    let (box_, _gaps, _lines) = outbox(8);
+    let (box_, _gaps, _notes, _lines) = outbox(8);
     box_.follow(watching);
     let attempts = Arc::new(Mutex::new(0_usize));
     box_.enqueue(task(move || {
@@ -324,7 +428,7 @@ async fn a_followed_outbox_picks_back_up_when_the_connection_returns() {
 #[tokio::test]
 async fn a_closed_outbox_stops_following() {
     let (connection, watching) = tokio::sync::watch::channel(true);
-    let (box_, _gaps, _lines) = outbox(8);
+    let (box_, _gaps, _notes, _lines) = outbox(8);
     box_.follow(watching);
     box_.close();
     settle().await;
