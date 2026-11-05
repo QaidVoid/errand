@@ -54,6 +54,7 @@ log it again.
 
 | Code | Meaning                                                          |
 | ---- | ---------------------------------------------------------------- |
+| 1    | something failed while it ran; both definitions restart it       |
 | 2    | the configuration, the sandbox backend, or the token was refused |
 | 3    | the backend cannot enforce a guarantee the configuration demands |
 | 4    | another daemon already holds this state directory                |

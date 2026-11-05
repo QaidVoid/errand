@@ -74,9 +74,14 @@ refusal from a crash.
 
 | code | what happened                                                    |
 | ---- | ---------------------------------------------------------------- |
+| 1    | something failed while it ran, such as the chat connection being gone too long; sessions and sandboxes are shut down first, and a service may restart it |
 | 2    | the configuration, the sandbox backend, or the token was refused |
 | 3    | the backend cannot enforce a guarantee the configuration demands |
 | 4    | another daemon already holds this state directory                |
 
 Two daemons on one bot token both act on every message, which is what 4
 prevents. A lock left by a process that is gone is taken over.
+
+The chat connection is given up on when it has been away too long. That is
+an exit of 1, not a refusal: nothing was refused, and a restart has nothing
+to answer for.

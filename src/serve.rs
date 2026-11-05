@@ -19,7 +19,7 @@ use serenity::model::id::ChannelId;
 use crate::agent::protocol::AgentImage;
 use crate::chat::commands::TranslatedCommand;
 use crate::chat::commands::register_commands;
-use crate::chat::gateway::{Gateway, GatewayHandlers};
+use crate::chat::gateway::{GIVE_UP_AFTER_MS, GIVE_UP_POLL_MS, Gateway, GatewayHandlers};
 use crate::chat::render::{
     MESSAGE_LIMIT, models_refreshed, split_message, usage_table, when_relative, when_relative_plain,
 };
@@ -943,6 +943,12 @@ async fn run(
     let (connection, watching) = tokio::sync::watch::channel(true);
     let connection = Arc::new(connection);
 
+    // How something inside says the run is over. A give-up must end the run
+    // by unwinding, not by leaving the process where it stands: the shutdown
+    // below is what stops the web server, ends the sessions, and frees the
+    // sandboxes, and a process that vanishes skips all of it.
+    let (stopped_tx, stopped_rx) = tokio::sync::mpsc::unbounded_channel::<&'static str>();
+
     let gateway = Gateway::new(
         config.chat.clone(),
         GatewayHandlers {
@@ -1027,13 +1033,13 @@ async fn run(
                 })
             },
             on_gave_up: {
-                let log = log.clone();
-                Arc::new(move |attempts| {
-                    log.error(
-                        "reconnection failed for good; the daemon gives up",
-                        &fields([("attempts", LogValue::from(i64::from(attempts)))]),
-                    );
-                    std::process::exit(2);
+                let stopped = stopped_tx.clone();
+                Arc::new(move || {
+                    // The gateway has already said what it waited through;
+                    // what is left is ending the run by unwinding, so the
+                    // shutdown below stops the web server, ends the
+                    // sessions, and frees the sandboxes.
+                    let _ = stopped.send("the chat connection gave up");
                 })
             },
         },
@@ -1062,11 +1068,30 @@ async fn run(
         }
     };
     let http = Arc::clone(&client.http);
+    let stopped_for_connection = stopped_tx.clone();
+    let connection_log = log.clone();
     tokio::spawn(async move {
         if let Err(error) = client.start().await {
-            eprintln!("the chat connection ended: {error}");
-            std::process::exit(2);
+            connection_log.error(
+                "the chat connection ended",
+                &fields([("detail", LogValue::from(error.to_string()))]),
+            );
+            let _ = stopped_for_connection.send("the chat connection ended");
         }
+    });
+    // Started beside the connection: the give-up is timed, and the library
+    // works a drop silently, so nothing else would notice an outage that
+    // lasts. The window is long enough for the library's own retrying to
+    // have its chance, and shorter than a session left running unattended
+    // is worth.
+    let watchdog = Arc::clone(&gateway);
+    tokio::spawn(async move {
+        watchdog
+            .watch_connection(
+                std::time::Duration::from_millis(GIVE_UP_AFTER_MS),
+                std::time::Duration::from_millis(GIVE_UP_POLL_MS),
+            )
+            .await;
     });
     if let Err(error) = gateway.wait_ready(READY_TIMEOUT_MS).await {
         log.error(
@@ -1582,18 +1607,18 @@ async fn run(
         after,
     );
 
-    wait_for_signal().await;
+    let stopped = stop_request(stopped_rx).await;
 
     log.info(
         "shutting down",
-        &fields([("reason", LogValue::from("signal"))]),
+        &fields([("reason", LogValue::from(stopped.reason()))]),
     );
     if let Some(web) = &web {
         web.stop();
     }
     daemon.shutdown().await;
     lock.release();
-    Exit::Served
+    stopped.exit()
 }
 
 /// Runs what the interface's home page sends as a command the way a slash
@@ -1892,13 +1917,51 @@ async fn send_file_in_channel(
     !refused && sent.is_ok()
 }
 
-/// Waits for the signals that stop the daemon.
-async fn wait_for_signal() {
+/// Why the run ended, which is also the exit it earns.
+///
+/// A signal is the daemon having done its job. The chat connection ending
+/// for good is a failure while running, not a refusal, so it leaves by the
+/// code a service is free to restart: the sessions are already shut down
+/// and the sandboxes freed, so a restart starts clean.
+#[derive(Debug)]
+enum Stopped {
+    /// A signal asked the daemon to stop.
+    Signal,
+    /// Something inside gave up; the string says what, for the log.
+    GaveUp(&'static str),
+}
+
+impl Stopped {
+    /// What the shutdown log names as the reason.
+    fn reason(&self) -> &'static str {
+        match self {
+            Stopped::Signal => "signal",
+            Stopped::GaveUp(reason) => reason,
+        }
+    }
+
+    /// The exit code the run earns.
+    fn exit(self) -> Exit {
+        match self {
+            Stopped::Signal => Exit::Served,
+            Stopped::GaveUp(_) => Exit::Failed,
+        }
+    }
+}
+
+/// Waits for the daemon to be told to stop: by a signal, or from inside.
+async fn stop_request(mut stopped: tokio::sync::mpsc::UnboundedReceiver<&'static str>) -> Stopped {
     use tokio::signal::unix::{SignalKind, signal};
     let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM is supported");
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
-        _ = sigterm.recv() => {}
+        _ = tokio::signal::ctrl_c() => Stopped::Signal,
+        _ = sigterm.recv() => Stopped::Signal,
+        reason = stopped.recv() => {
+            // Every sender sits in a handler of the connection, and the
+            // connection lives as long as the run; a gone channel still
+            // means the connection is over.
+            Stopped::GaveUp(reason.unwrap_or("the chat connection ended"))
+        }
     }
 }
 
