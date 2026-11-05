@@ -584,6 +584,37 @@ fn an_interface_port_that_is_not_a_port_is_refused() {
     ));
 }
 
+/// A count that does not fit the width it is carried in is refused, not
+/// clipped: a port of 70000 must not become 65535 and bind a different port.
+#[test]
+fn a_count_past_its_ceiling_is_refused_not_clipped() {
+    assert!(problems_contain(
+        &valid(json!({ "web": { "port": 70000 } })),
+        "web.port must be a whole number between 1 and 65535"
+    ));
+    assert!(problems_contain(
+        &valid(json!({ "web": { "port": 65536 } })),
+        "web.port must be a whole number between 1 and 65535"
+    ));
+    let edge = validate_config(&valid(json!({ "web": { "port": 65535 } })))
+        .expect("the largest port resolves");
+    assert_eq!(edge.web.as_ref().map(|web| web.port), Some(65535));
+}
+
+/// A fraction would be cut to a smaller whole number by a cast: 0.5 of a
+/// port becomes none, which the socket layer reads as "pick one at random".
+#[test]
+fn a_fractional_count_is_refused_not_cut() {
+    assert!(problems_contain(
+        &valid(json!({ "web": { "port": 0.5 } })),
+        "web.port must be a whole number between 1 and 65535"
+    ));
+    assert!(problems_contain(
+        &valid(json!({ "agent": { "maxProviderRetries": 2.5 } })),
+        "agent.maxProviderRetries must be a whole number"
+    ));
+}
+
 #[test]
 fn no_extra_grant_is_the_same_as_no_policy_extra_section() {
     let config = validate_config(&valid(json!({}))).expect("resolves");
