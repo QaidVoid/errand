@@ -89,21 +89,28 @@ fn wait_ms() -> i64 {
     i64::try_from(limits().max_queue_wait_ms).expect("a configured wait fits an i64")
 }
 
-/// A submitted prompt whose progress is recorded in the words a test reads.
-fn entry(session_id: &str, seen: &Arc<Mutex<Vec<String>>>) -> QueueEntry {
+/// A submitted prompt whose progress is recorded in the words a test reads,
+/// whose slot stays held in `held` until the test gives it back.
+fn entry(
+    session_id: &str,
+    seen: &Arc<Mutex<Vec<String>>>,
+    held: &Arc<Mutex<Vec<Ticket>>>,
+) -> QueueEntry {
     let admitted = session_id.to_owned();
     let expired = session_id.to_owned();
     let moved = session_id.to_owned();
     let admitted_seen = Arc::clone(seen);
     let expired_seen = Arc::clone(seen);
     let position_seen = Arc::clone(seen);
+    let admitted_held = Arc::clone(held);
     QueueEntry {
         session_id: session_id.to_owned(),
-        on_admitted: Box::new(move |_ticket: Ticket| {
+        on_admitted: Box::new(move |ticket: Ticket| {
             admitted_seen
                 .lock()
                 .unwrap()
                 .push(format!("admitted:{admitted}"));
+            admitted_held.lock().unwrap().push(ticket);
         }),
         on_expired: Box::new(move || {
             expired_seen
@@ -133,13 +140,14 @@ fn admits_up_to_the_cap_and_queues_the_rest() {
     let clock = TestClock::new();
     let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
     let seen = Arc::new(Mutex::new(Vec::new()));
+    let held = Arc::new(Mutex::new(Vec::new()));
 
-    let first = scheduler.submit(entry("a", &seen));
-    let second = scheduler.submit(entry("b", &seen));
+    let first = scheduler.submit(entry("a", &seen, &held));
+    let second = scheduler.submit(entry("b", &seen, &held));
     assert_eq!(status_of(&first), "admitted");
     assert_eq!(status_of(&second), "admitted");
 
-    let third = scheduler.submit(entry("c", &seen));
+    let third = scheduler.submit(entry("c", &seen, &held));
     match &third {
         SubmitOutcome::Queued { position } => assert_eq!(*position, 1),
         other => panic!("expected queued, got {other:?}"),
@@ -152,11 +160,14 @@ fn a_full_queue_refuses_rather_than_growing_without_bound() {
     let clock = TestClock::new();
     let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
     let seen = Arc::new(Mutex::new(Vec::new()));
-    for index in 0..2 + limits().max_queue_length {
-        scheduler.submit(entry(&format!("s{index}"), &seen));
-    }
+    let held = Arc::new(Mutex::new(Vec::new()));
+    // Held for the test's duration: an admitted outcome carries the ticket,
+    // and dropping it would give the slot straight back.
+    let _admitted: Vec<SubmitOutcome> = (0..2 + limits().max_queue_length)
+        .map(|index| scheduler.submit(entry(&format!("s{index}"), &seen, &held)))
+        .collect();
 
-    let refused = scheduler.submit(entry("over", &seen));
+    let refused = scheduler.submit(entry("over", &seen, &held));
     match &refused {
         SubmitOutcome::Rejected { reason } => assert!(reason.contains("queue is full")),
         other => panic!("expected rejected, got {other:?}"),
@@ -168,9 +179,10 @@ fn releasing_a_slot_admits_the_next_in_line() {
     let clock = TestClock::new();
     let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let first = scheduler.submit(entry("a", &seen));
-    scheduler.submit(entry("b", &seen));
-    scheduler.submit(entry("c", &seen));
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let first = scheduler.submit(entry("a", &seen, &held));
+    let _held_b = scheduler.submit(entry("b", &seen, &held));
+    scheduler.submit(entry("c", &seen, &held));
 
     let SubmitOutcome::Admitted { ticket } = first else {
         panic!("expected the first to be admitted");
@@ -188,7 +200,8 @@ fn a_ticket_released_twice_is_refused_the_second_time() {
     let clock = TestClock::new();
     let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let outcome = scheduler.submit(entry("a", &seen));
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let outcome = scheduler.submit(entry("a", &seen, &held));
     let SubmitOutcome::Admitted { ticket } = outcome else {
         panic!("expected admission");
     };
@@ -203,10 +216,11 @@ fn a_session_that_ends_takes_its_queued_prompts_with_it() {
     let clock = TestClock::new();
     let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
     let seen = Arc::new(Mutex::new(Vec::new()));
-    scheduler.submit(entry("a", &seen));
-    scheduler.submit(entry("b", &seen));
-    scheduler.submit(entry("gone", &seen));
-    scheduler.submit(entry("stays", &seen));
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let _held_a = scheduler.submit(entry("a", &seen, &held));
+    let _held_b = scheduler.submit(entry("b", &seen, &held));
+    scheduler.submit(entry("gone", &seen, &held));
+    scheduler.submit(entry("stays", &seen, &held));
 
     assert_eq!(scheduler.cancel_session("gone"), 1);
     assert_eq!(scheduler.queue_length(), 1);
@@ -223,9 +237,10 @@ fn a_prompt_that_waited_too_long_expires_instead_of_being_sent() {
     let scheduler = Scheduler::start(limits(), clock.clone(), 5_000, 300_000, 750);
     clock.bind(Arc::clone(&scheduler));
     let seen = Arc::new(Mutex::new(Vec::new()));
-    scheduler.submit(entry("a", &seen));
-    scheduler.submit(entry("b", &seen));
-    scheduler.submit(entry("late", &seen));
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let _held_a = scheduler.submit(entry("a", &seen, &held));
+    let _held_b = scheduler.submit(entry("b", &seen, &held));
+    scheduler.submit(entry("late", &seen, &held));
 
     clock.advance(wait_ms() + 1);
 
@@ -241,12 +256,13 @@ fn rate_limiting_pauses_admission_for_every_session_then_lifts() {
     let scheduler = Scheduler::start(limits(), clock.clone(), 5_000, 300_000, 750);
     clock.bind(Arc::clone(&scheduler));
     let seen = Arc::new(Mutex::new(Vec::new()));
+    let held = Arc::new(Mutex::new(Vec::new()));
 
     scheduler.note_rate_limit();
     assert_eq!(scheduler.paused_because(), Some("provider backoff"));
 
-    let held = scheduler.submit(entry("a", &seen));
-    assert_eq!(status_of(&held), "queued");
+    let outcome = scheduler.submit(entry("a", &seen, &held));
+    assert_eq!(status_of(&outcome), "queued");
 
     clock.advance(5_001);
     assert_eq!(scheduler.paused_because(), None);
@@ -290,9 +306,10 @@ fn shutdown_stops_the_timers_so_the_daemon_can_exit() {
     let scheduler = Scheduler::start(limits(), clock.clone(), 5_000, 300_000, 750);
     clock.bind(Arc::clone(&scheduler));
     let seen = Arc::new(Mutex::new(Vec::new()));
-    scheduler.submit(entry("a", &seen));
-    scheduler.submit(entry("b", &seen));
-    scheduler.submit(entry("c", &seen));
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let _held_a = scheduler.submit(entry("a", &seen, &held));
+    let _held_b = scheduler.submit(entry("b", &seen, &held));
+    scheduler.submit(entry("c", &seen, &held));
 
     scheduler.shutdown();
     clock.advance(wait_ms() * 10);
@@ -306,7 +323,7 @@ fn a_slot_can_be_taken_without_queueing_or_refused_outright() {
     let clock = TestClock::new();
     let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
 
-    assert!(scheduler.try_admit().is_some());
+    let first = scheduler.try_admit().expect("a free slot");
     let second = scheduler.try_admit();
     assert!(second.is_some());
     assert!(scheduler.try_admit().is_none(), "the cap is reached");
@@ -314,7 +331,96 @@ fn a_slot_can_be_taken_without_queueing_or_refused_outright() {
     if let Some(ticket) = second {
         scheduler.release(&ticket);
     }
-    assert!(scheduler.try_admit().is_some());
+    drop(first);
+    assert!(
+        scheduler.try_admit().is_some(),
+        "a released slot comes back"
+    );
+}
+
+/// A ticket nobody released would shrink the cap for good; dropping it is
+/// the release of last resort.
+#[test]
+fn a_ticket_dropped_without_release_gives_its_slot_back() {
+    let clock = TestClock::new();
+    let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
+
+    {
+        let ticket = scheduler.try_admit().expect("a free slot");
+        assert_eq!(scheduler.turns_in_flight(), 1);
+        drop(ticket);
+    }
+
+    assert_eq!(scheduler.turns_in_flight(), 0);
+    assert!(scheduler.try_admit().is_some(), "the slot came back");
+}
+
+/// A hand-off that never arrives (a full or closed session channel drops the
+/// ticket) returns its slot, and the queue keeps moving behind it.
+#[test]
+fn an_admission_nobody_takes_keeps_pumping_the_queue() {
+    let clock = TestClock::new();
+    let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let first = scheduler.submit(entry("a", &seen, &held));
+    let _held_b = scheduler.submit(entry("b", &seen, &held));
+    // A hand-off that fails: the admission fires and the ticket is dropped
+    // at once, the way a try_send that found nowhere to put it would.
+    let lost_seen = Arc::clone(&seen);
+    scheduler.submit(QueueEntry {
+        session_id: "lost".to_owned(),
+        on_admitted: Box::new(move |_ticket: Ticket| {
+            lost_seen.lock().unwrap().push("admitted:lost".to_owned());
+        }),
+        on_expired: Box::new(|| {}),
+        on_position_changed: None,
+    });
+    scheduler.submit(entry("next", &seen, &held));
+
+    let SubmitOutcome::Admitted { ticket } = first else {
+        panic!("expected the first to be admitted");
+    };
+    scheduler.release(&ticket);
+
+    let taken = seen.lock().unwrap();
+    assert!(taken.contains(&"admitted:lost".to_owned()));
+    assert!(taken.contains(&"admitted:next".to_owned()));
+    assert_eq!(scheduler.queue_length(), 0);
+    assert_eq!(
+        scheduler.turns_in_flight(),
+        2,
+        "b and next hold their slots"
+    );
+}
+
+/// Two callers racing for the last slot cannot both take it: the check and
+/// the reservation happen under one lock.
+#[test]
+fn concurrent_try_admits_never_exceed_the_cap() {
+    let clock = TestClock::new();
+    let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
+    let held = Arc::new(Mutex::new(Vec::new()));
+
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let scheduler = Arc::clone(&scheduler);
+            let held = Arc::clone(&held);
+            scope.spawn(move || {
+                for _ in 0..50 {
+                    if let Some(ticket) = scheduler.try_admit() {
+                        held.lock().unwrap().push(ticket);
+                    }
+                }
+            });
+        }
+    });
+
+    assert_eq!(
+        held.lock().unwrap().len(),
+        limits().max_concurrent_turns as usize,
+        "exactly the cap was given out, never more"
+    );
 }
 
 #[test]

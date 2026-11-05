@@ -76,12 +76,23 @@ impl Clock for SystemClock {
 }
 
 /// Held for the duration of one turn, and released exactly once.
-#[derive(Debug)]
+///
+/// Released by the holder calling [`Scheduler::release`], or on drop, so a
+/// hand-off that never arrives, a session that ends mid-turn, or any exit
+/// path a caller forgot returns its slot rather than shrinking the cap.
 pub struct Ticket {
+    scheduler: Arc<Scheduler>,
     released_at: Mutex<Option<i64>>,
 }
 
 impl Ticket {
+    fn new(scheduler: &Arc<Scheduler>) -> Self {
+        Self {
+            scheduler: Arc::clone(scheduler),
+            released_at: Mutex::new(None),
+        }
+    }
+
     /// Marks the ticket spent. Returns false on a second release.
     fn mark_released(&self, at: i64) -> bool {
         let mut released = self.released_at.lock().expect("a ticket lock");
@@ -90,6 +101,25 @@ impl Ticket {
         }
         *released = Some(at);
         true
+    }
+}
+
+impl std::fmt::Debug for Ticket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let released = self.released_at.lock().expect("a ticket lock").is_some();
+        f.debug_struct("Ticket")
+            .field("released", &released)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        // An explicitly released ticket is already stamped; a dropped one
+        // was never given back, and its slot returns here.
+        if self.mark_released(self.scheduler.clock.now()) {
+            self.scheduler.give_back();
+        }
     }
 }
 
@@ -250,13 +280,17 @@ impl Scheduler {
     /// waiting behind a queue would stall the turn it was meant to make
     /// cheaper, so it is given up on instead.
     pub fn try_admit(self: &Arc<Self>) -> Option<Ticket> {
-        if !self.can_admit_now() {
-            return None;
+        // One lock: the check and the reservation happen together, so two
+        // callers cannot both take the last slot.
+        {
+            let mut state = self.state.lock().expect("the scheduler lock");
+            let backoff_over = self.clock.now() >= state.backoff_until;
+            if state.in_flight >= self.limits.max_concurrent_turns as usize || !backoff_over {
+                return None;
+            }
+            state.in_flight += 1;
         }
-        self.state.lock().expect("the scheduler lock").in_flight += 1;
-        Some(Ticket {
-            released_at: Mutex::new(None),
-        })
+        Some(Ticket::new(self))
     }
 
     /// Submits a prompt, admitting it now or queueing it behind the cap.
@@ -295,6 +329,12 @@ impl Scheduler {
         if !ticket.mark_released(self.clock.now()) {
             return false;
         }
+        self.give_back();
+        true
+    }
+
+    /// Takes one slot back and starts whatever waited for it.
+    fn give_back(self: &Arc<Self>) {
         {
             let mut state = self.state.lock().expect("the scheduler lock");
             if state.in_flight > 0 {
@@ -302,7 +342,6 @@ impl Scheduler {
             }
         }
         self.pump();
-        true
     }
 
     /// Drops a session's queued prompts when the session ends.
@@ -426,13 +465,6 @@ impl Scheduler {
         }
     }
 
-    fn can_admit_now(&self) -> bool {
-        // One lock: the backoff check reads the same state the cap reads.
-        let state = self.state.lock().expect("the scheduler lock");
-        state.in_flight < self.limits.max_concurrent_turns as usize
-            && self.clock.now() >= state.backoff_until
-    }
-
     fn pump(self: &Arc<Self>) {
         loop {
             let next = {
@@ -448,9 +480,7 @@ impl Scheduler {
                 state.in_flight += 1;
                 next
             };
-            (next.entry.on_admitted)(Ticket {
-                released_at: Mutex::new(None),
-            });
+            (next.entry.on_admitted)(Ticket::new(self));
         }
         self.report_positions();
     }
