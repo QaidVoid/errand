@@ -462,6 +462,30 @@ pub async fn current_branch(run: &Run, project_path: &str) -> Result<String, Pul
     Ok(branch.to_owned())
 }
 
+/// A remote URL with any embedded userinfo stripped, so it is safe to quote.
+///
+/// An origin URL can carry `user:token@`, and quoting one whole leaked the
+/// credential to the thread, the transcript, and the log. The host and path
+/// are what name a misconfiguration, so they stay; the query and fragment
+/// name nothing and can carry a credential of their own. A remote with no
+/// `://` is left alone: git carries no password in scp-style syntax, and the
+/// string may be a path, whose parts are not credentials.
+fn redact_remote(url: &str) -> String {
+    let trimmed = url.trim();
+    let Some((scheme, rest)) = trimmed.split_once("://") else {
+        return trimmed.to_owned();
+    };
+    let rest = rest.split(['?', '#']).next().unwrap_or("");
+    let (authority, after) = match rest.find('/') {
+        Some(end) => (&rest[..end], &rest[end..]),
+        None => (rest, ""),
+    };
+    match authority.rfind('@') {
+        Some(at) => format!("{scheme}://{}{after}", &authority[at + 1..]),
+        None => format!("{scheme}://{rest}"),
+    }
+}
+
 /// The repository the work was cloned from, which origin names.
 ///
 /// Not always where a pull request from it belongs: a session that cloned its
@@ -483,7 +507,7 @@ pub async fn origin_remote(
         PullRequestError(format!(
             "origin is not a {} remote: {}",
             forge::display(forge.kind),
-            remote.stdout.trim()
+            redact_remote(&remote.stdout)
         ))
     })
 }

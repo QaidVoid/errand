@@ -613,6 +613,62 @@ async fn a_project_with_no_origin_cannot_say_what_to_open_against() {
 }
 
 #[test]
+fn a_remote_url_is_quoted_without_its_userinfo() {
+    for (url, want) in [
+        (
+            "https://user:token@example.com/owner/repo",
+            "https://example.com/owner/repo",
+        ),
+        (
+            "https://user:token@example.com:8443/owner/repo",
+            "https://example.com:8443/owner/repo",
+        ),
+        (
+            "https://token@example.com/owner/repo",
+            "https://example.com/owner/repo",
+        ),
+        (
+            "https://example.com/owner/repo",
+            "https://example.com/owner/repo",
+        ),
+        ("https://example.com", "https://example.com"),
+        ("ssh://user:pass@host:22/path", "ssh://host:22/path"),
+        ("http://user:pass@[::1]:8080/path", "http://[::1]:8080/path"),
+        ("HTTPS://User:Pass@Host/Path", "HTTPS://Host/Path"),
+        ("https://user:p@ss@host/x", "https://host/x"),
+        ("https://host?token=hunter2", "https://host"),
+        ("https://u@h/p?x=1#frag", "https://h/p"),
+        // scp-style remotes carry no password in git, and a scheme-less
+        // remote may be a path whose parts are not credentials.
+        (
+            "git@github.com:owner/repo.git",
+            "git@github.com:owner/repo.git",
+        ),
+        ("/home/ops/user@old/repo", "/home/ops/user@old/repo"),
+    ] {
+        assert_eq!(super::redact_remote(url), want);
+    }
+}
+
+#[tokio::test]
+async fn an_origin_refusal_names_the_remote_without_its_credentials() {
+    let (_fake, run) = fake_git(BTreeMap::from([(
+        "remote".to_owned(),
+        Ran {
+            code: 0,
+            stdout: "  https://ops:hunter2@example.com/owner/repo\n".to_owned(),
+            stderr: String::new(),
+        },
+    )]));
+
+    let error = origin_remote(&run, "/p", &github()).await.unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("example.com/owner/repo"));
+    assert!(!message.contains("hunter2"));
+    assert!(!message.contains("ops:"));
+}
+
+#[test]
 fn the_body_carries_the_summary_and_ends_with_the_attribution() {
     let body = pull_request_body(
         "  it does the thing  ",
