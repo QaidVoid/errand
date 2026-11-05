@@ -12,18 +12,25 @@
   host's PATH under bailey, or in the image under podman and incus. errand asks
   it which providers it knows (`kage providers --json`) and refuses to start
   when it cannot say.
+- [bun](https://bun.sh), to build the interface that the binary embeds.
 
 ## Build it
 
 ```sh
 git clone https://github.com/QaidVoid/errand
 cd errand
+
+# The interface first: the binary embeds it while it compiles.
+(cd web && bun install && bun run build)
+
 cargo build --release
+install -Dm 0755 target/release/errand ~/.local/bin/errand
 ```
 
-That produces `dist/errand`: one binary carrying the web interface and its own
-runtime, with what it may do compiled into it. A host that runs it needs neither
-a checkout nor a toolchain.
+That produces `target/release/errand`: one binary carrying the web interface and
+its own runtime, with what it may do compiled into it. A host that runs it needs
+neither a checkout nor a toolchain. The install line puts it on your PATH as
+`errand`; point it wherever your PATH looks.
 
 ## Configure it
 
