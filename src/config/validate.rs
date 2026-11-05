@@ -53,7 +53,7 @@ const KNOWN_CHAT: [&str; 6] = [
     "operatorUserIds",
     "startOnMention",
 ];
-const KNOWN_AGENT: [&str; 16] = [
+const KNOWN_AGENT: [&str; 17] = [
     "provider",
     "model",
     "visionModel",
@@ -61,6 +61,7 @@ const KNOWN_AGENT: [&str; 16] = [
     "speechGen",
     "delegate",
     "rulesPath",
+    "maxProviderRetries",
     "providers",
     "plugins",
     "aliases",
@@ -1077,6 +1078,13 @@ fn validate_agent(raw: &Map<String, Value>, problems: &mut Problems) -> AgentCon
         speech_gen: optional_string(&source, "speechGen", "agent", problems),
         delegate: validate_delegate(&source, problems),
         rules_path: optional_absolute_path(&source, "rulesPath", "agent", problems),
+        max_provider_retries: positive_as(
+            &source,
+            "maxProviderRetries",
+            schema::defaults::MAX_PROVIDER_RETRIES,
+            "agent",
+            problems,
+        ),
         providers: validate_providers(&source, problems),
         plugins: validate_plugins(&source, problems),
         aliases: validate_aliases(&source, problems),

@@ -9,7 +9,7 @@ use std::sync::{Arc, RwLock};
 
 use serde_json::{Map, Value};
 
-use crate::config::schema::{PluginConfig, SandboxBackend, SandboxConfig};
+use crate::config::schema::{PluginConfig, SandboxBackend, SandboxConfig, defaults};
 use crate::memory::store::BLOCK_FILENAME;
 use crate::sandbox::broker::BrokerTemplate;
 use crate::sandbox::kage_providers::KageProviders;
@@ -84,7 +84,7 @@ impl LiveSettings {
 }
 
 /// Everything a backend needs to start one session.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SandboxLaunch {
     /// Stable identifier for this session.
     pub session_id: String,
@@ -121,11 +121,35 @@ pub struct SandboxLaunch {
     /// the agent waits on, and a permission ask nobody answers is a session
     /// that stalls until it times out. These are what the prompt was for.
     pub denied: Denials,
+    /// How many times a transient provider failure is retried before the
+    /// agent gives up, written into the agent's `[loop]` table.
+    pub max_provider_retries: u32,
     /// Continue the conversation already stored in the state directory.
     pub resume: bool,
     /// What the session's owner granted its broker beyond the allowlist,
     /// shared with the thread that grants it.
     pub grants: Option<std::sync::Arc<crate::sandbox::broker::grants::GrantStore>>,
+}
+
+impl Default for SandboxLaunch {
+    fn default() -> Self {
+        Self {
+            session_id: String::new(),
+            project_path: String::new(),
+            state_dir: String::new(),
+            env: BTreeMap::new(),
+            system_prompt_path: None,
+            provider: String::new(),
+            model: None,
+            providers: Map::new(),
+            credential_names: BTreeMap::new(),
+            plugins: Vec::new(),
+            denied: Denials::default(),
+            max_provider_retries: defaults::MAX_PROVIDER_RETRIES,
+            resume: false,
+            grants: None,
+        }
+    }
 }
 
 /// What the agent may not run, in the two shapes the agent refuses it in.

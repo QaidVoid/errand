@@ -74,6 +74,7 @@ fn launch() -> SandboxLaunch {
         credential_names: BTreeMap::new(),
         plugins: Vec::new(),
         denied: Denials::default(),
+        max_provider_retries: defaults::MAX_PROVIDER_RETRIES,
         resume: false,
         grants: None,
     }

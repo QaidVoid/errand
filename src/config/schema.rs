@@ -293,6 +293,11 @@ pub struct AgentConfig {
     /// whatever their input carries, which is the blunt end: `deny` refuses
     /// particular commands, this refuses a whole capability.
     pub denied_tools: Vec<String>,
+    /// How many times a transient provider failure is retried before the
+    /// agent gives up on it.
+    ///
+    /// Written into the agent's `[loop]` table as `max_provider_retries`.
+    pub max_provider_retries: u32,
 }
 
 impl AgentConfig {
@@ -910,6 +915,9 @@ pub mod defaults {
     pub const DELEGATE_PER_TURN: u32 = 8;
     /// How long one delegation may take before it is abandoned.
     pub const DELEGATE_DEADLINE_MS: u64 = 60_000;
+    /// How many times a transient provider failure is retried before the
+    /// agent gives up.
+    pub const MAX_PROVIDER_RETRIES: u32 = 10;
     /// The wire protocols a custom provider may speak, as kage names them.
     pub const CUSTOM_PROVIDER_KINDS: [&str; 2] = ["openai", "anthropic"];
     /// The wire protocol a custom provider speaks when it names none.

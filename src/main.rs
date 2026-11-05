@@ -321,6 +321,7 @@ mod tests {
     use super::project_of;
     use super::workspace_grant;
     use crate::config::schema::NetworkMode;
+    use crate::config::schema::defaults;
     use crate::sandbox::backend::{Denials, SandboxLaunch};
     use crate::sandbox::policy::{PolicyOptions, policy_contents};
     use crate::sandbox::runtime::AgentRuntime;
@@ -344,6 +345,7 @@ mod tests {
             credential_names: BTreeMap::new(),
             plugins: Vec::new(),
             denied: Denials::default(),
+            max_provider_retries: defaults::MAX_PROVIDER_RETRIES,
             resume: false,
             grants: None,
         };

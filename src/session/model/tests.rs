@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::config::schema::defaults;
+
 use super::{expand_alias, resolve_model, select_model};
 
 fn aliases(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -179,6 +181,7 @@ fn the_configured_model_may_name_its_provider_too() {
         speech_gen: None,
         delegate: None,
         rules_path: None,
+        max_provider_retries: defaults::MAX_PROVIDER_RETRIES,
         providers: serde_json::Map::from_iter([
             ("zai-coding-cn".to_owned(), serde_json::json!({})),
             ("ajamxhacker".to_owned(), serde_json::json!({})),

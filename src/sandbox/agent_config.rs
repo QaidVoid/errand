@@ -289,6 +289,10 @@ fn custom_models(
 /// brings its own endpoint, and writing errand's would only disagree with
 /// it. The providers carrying `images`, `speech` and `music` also give the
 /// agent those tools, and an `editModel` on `images` gives it `edit_image`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the caller has the session's whole launch in scope"
+)]
 pub fn kage_config(
     defined: &Map<String, Value>,
     brokered: &BTreeMap<String, BrokeredProvider>,
@@ -296,13 +300,16 @@ pub fn kage_config(
     credential_names: &BTreeMap<String, String>,
     plugins: &[PluginConfig],
     denied: &Denials,
+    max_provider_retries: u32,
     kage: &KageProviders,
 ) -> KageConfig {
     let mut dropped = Vec::new();
     let mut out = String::from(
         "# Written by the daemon for one session. Endpoints only: credentials\n\
-         # travel in the environment, with a broker's nonces swapped in.\n",
+         # travel in the environment, with a broker's nonces swapped in.\n\
+         \n[loop]\n",
     );
+    let _ = writeln!(out, "max_provider_retries = {max_provider_retries}");
     let names: Vec<&String> = defined
         .keys()
         .chain(brokered.keys())
@@ -623,6 +630,7 @@ pub async fn write_agent_config(
         credential_names,
         &launch.plugins,
         &launch.denied,
+        launch.max_provider_retries,
         kage,
     );
     for provider in &body.dropped {

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde_json::json;
 
 use super::{BrokeredProvider, kage_config, kage_model, write_agent_config};
-use crate::config::schema::PluginConfig;
+use crate::config::schema::{PluginConfig, defaults};
 use crate::log::{LogFields, Logger};
 use crate::sandbox::backend::{Denials, SandboxLaunch};
 use crate::sandbox::kage_providers::as_installed;
@@ -13,6 +13,28 @@ use crate::sandbox::kage_providers::as_installed;
 /// A logger that drops every line, for tests that do not read the log.
 fn silent() -> Logger {
     Logger::new(LogFields::new(), std::sync::Arc::new(|_, _| {}))
+}
+
+#[test]
+fn sessions_retry_transient_provider_failures_with_the_configured_count() {
+    for configured in [1, 7] {
+        let config = kage_config(
+            &serde_json::Map::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &[],
+            &Denials::default(),
+            configured,
+            &as_installed(),
+        );
+
+        assert!(
+            config
+                .toml
+                .contains(&format!("[loop]\nmax_provider_retries = {configured}\n"))
+        );
+    }
 }
 
 /// A brokered provider kage knows is overridden in place: the broker's base
@@ -38,6 +60,7 @@ fn a_brokered_known_provider_is_overridden_with_the_brokers_url() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -68,6 +91,7 @@ fn a_known_provider_with_a_key_and_no_endpoint_is_written() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -102,6 +126,7 @@ fn a_brokered_unknown_provider_is_registered_custom_with_its_models() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -141,6 +166,7 @@ fn an_operator_base_url_passes_through_less_the_credential() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -182,6 +208,7 @@ fn a_model_entry_carries_its_sizes_inputs_and_levels() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -237,6 +264,7 @@ fn a_bare_model_entry_writes_no_sizes_inputs_or_levels() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -273,6 +301,7 @@ fn an_unusable_output_limit_is_left_out() {
             &BTreeMap::new(),
             &[],
             &Denials::default(),
+            10,
             &as_installed(),
         )
         .toml;
@@ -300,6 +329,7 @@ fn a_custom_provider_without_a_kind_speaks_openai() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -328,6 +358,7 @@ fn a_custom_provider_naming_anthropic_is_written_anthropic() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -357,6 +388,7 @@ fn a_kind_on_a_known_provider_is_left_out() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -388,6 +420,7 @@ fn a_kind_kage_does_not_speak_under_a_known_id_is_written_custom() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -411,6 +444,7 @@ fn a_provider_with_nothing_to_say_is_left_out() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -445,6 +479,7 @@ fn a_custom_provider_kage_could_not_load_is_left_out() {
             &names,
             &[],
             &Denials::default(),
+            10,
             &as_installed(),
         )
         .toml;
@@ -625,6 +660,7 @@ fn no_tool_is_written_twice_whatever_the_operator_denies() {
         &BTreeMap::new(),
         &[],
         &denied,
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -679,6 +715,7 @@ fn denying_the_shell_tool_takes_no_command_patterns_with_it() {
         &BTreeMap::new(),
         &[],
         &denied,
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -706,6 +743,7 @@ fn only_denials_are_written_beside_the_confinement_setting() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -726,6 +764,7 @@ fn only_denials_are_written_beside_the_confinement_setting() {
         &BTreeMap::new(),
         &[],
         &denied,
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -750,6 +789,7 @@ fn the_agent_runs_without_its_own_path_confinement() {
         &BTreeMap::new(),
         &[],
         &denied,
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -799,6 +839,7 @@ fn an_images_only_provider_is_written_for_the_image_tool_alone() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     );
     assert!(written.dropped.is_empty(), "{:?}", written.dropped);
@@ -839,6 +880,7 @@ fn an_unbrokered_images_provider_points_the_tool_at_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     );
     assert!(written.dropped.is_empty(), "{:?}", written.dropped);
@@ -881,6 +923,7 @@ fn a_chat_provider_carrying_images_lends_the_tool_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -907,6 +950,7 @@ fn a_chat_provider_carrying_images_lends_the_tool_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -935,6 +979,7 @@ fn no_image_tool_without_images_or_an_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -951,6 +996,7 @@ fn no_image_tool_without_images_or_an_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -983,6 +1029,7 @@ fn a_speech_only_provider_is_written_for_the_speech_tool_alone() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     );
     assert!(written.dropped.is_empty(), "{:?}", written.dropped);
@@ -1023,6 +1070,7 @@ fn an_unbrokered_speech_provider_points_the_tool_at_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     );
     assert!(written.dropped.is_empty(), "{:?}", written.dropped);
@@ -1065,6 +1113,7 @@ fn a_chat_provider_carrying_speech_lends_the_tool_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1092,6 +1141,7 @@ fn a_chat_provider_carrying_speech_lends_the_tool_its_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1126,6 +1176,7 @@ fn a_speech_voice_is_written_when_the_entry_names_one() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1167,6 +1218,7 @@ fn one_provider_carrying_images_and_speech_writes_both_tools() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1212,6 +1264,7 @@ fn no_speech_tool_without_speech_or_an_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1228,6 +1281,7 @@ fn no_speech_tool_without_speech_or_an_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1256,6 +1310,7 @@ fn a_speech_provider_is_dropped_only_when_nothing_can_be_written() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     );
     let reported: Vec<(&str, &super::Missing, bool)> = written
@@ -1324,6 +1379,7 @@ fn google_is_overridden_in_place_with_a_broker_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1350,6 +1406,7 @@ fn google_with_only_a_key_is_written() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1378,6 +1435,7 @@ fn gemini_with_only_a_key_is_not_written() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1402,6 +1460,7 @@ fn gemini_with_an_endpoint_and_models_is_registered_custom() {
         &BTreeMap::new(),
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1445,6 +1504,7 @@ fn dropped_provider_declarations_report_fixed_reasons_without_credentials() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     );
     let reported: Vec<(&str, &super::Missing, bool)> = config
@@ -1528,6 +1588,7 @@ fn blank_image_endpoints_use_builtin_credentials_or_report_missing_endpoints() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     );
     assert!(config.toml.contains("[providers.openai]"));
@@ -1552,6 +1613,7 @@ fn written_for(defined: &serde_json::Value) -> String {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml
@@ -1637,6 +1699,7 @@ fn an_edit_model_gives_the_edit_tool_the_images_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1669,6 +1732,7 @@ fn an_edit_model_gives_the_edit_tool_the_images_endpoint() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;
@@ -1699,6 +1763,7 @@ fn a_music_only_provider_is_written_for_the_music_tool_alone() {
         &names,
         &[],
         &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     );
     assert!(written.dropped.is_empty(), "{:?}", written.dropped);

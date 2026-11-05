@@ -60,6 +60,7 @@ Which model the agent talks to, and the credential it reaches it with.
 | `fallback` | `string[]` | none | Models to start a session on instead, in order, when the provider it would start on has spent its usage window. Named as `!model` names them, aliases included. The first whose provider has room is used; a session is turned away only when every one is spent too. |
 | `deny` | `string[]` | none | Commands the agent may not run, whatever else is permitted.  Sessions run with every tool allowed, since the chat cannot serve a prompt the agent waits on and a permission ask nobody sees is a session that stalls. This is what stands in for that prompt: glob patterns matched against the command line, the same patterns kage's own rules use. A match is refused by the agent itself and the reason reaches the thread, so a refusal is visible rather than silent.  Patterns are checked against the whole command line, so `rm -rf *` covers the form that is actually typed. To refuse one tool outright whatever it is asked to do, use `deniedTools`. |
 | `deniedTools` | `string[]` | none | Tools the agent may not call at all.  Named by the tool kage calls it, such as `shell` or `write`. Refused whatever their input carries, which is the blunt end: `deny` refuses particular commands, this refuses a whole capability. |
+| `maxProviderRetries` | `number` | `10` | How many times a transient provider failure is retried before the agent gives up on it.  Written into the agent's `[loop]` table as `max_provider_retries`. |
 
 ## agent.delegate
 

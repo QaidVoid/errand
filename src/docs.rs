@@ -353,6 +353,10 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
             Value::Bool(defaults::REQUIRE_FULL_ENFORCEMENT),
         ),
         ("agent/plugins", json!([])),
+        (
+            "agent/maxproviderretries",
+            serde_json::json!(defaults::MAX_PROVIDER_RETRIES),
+        ),
         ("plugin/capabilities", json!([])),
         ("sandbox/network", Value::from("restricted")),
         (
@@ -652,6 +656,9 @@ fn object_for(section: &Section, sections: &[Section]) -> Value {
             }
             ("ForgeTrigger", "allowedUsers") => {
                 described.insert("minItems".to_owned(), json!(1));
+            }
+            ("Agent", "maxProviderRetries") => {
+                described.insert("default".to_owned(), json!(defaults::MAX_PROVIDER_RETRIES));
             }
             ("Agent", "plugins")
             | ("Plugin", "capabilities")

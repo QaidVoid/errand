@@ -1378,6 +1378,7 @@ impl Running {
                 commands: self.options.config.agent.deny.clone(),
                 tools: self.options.config.agent.denied_tools.clone(),
             },
+            max_provider_retries: self.options.config.agent.max_provider_retries,
             system_prompt_path,
             resume: self.options.resume,
             grants: self.grants.clone(),

@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::{Post, PostRequest, PostResponse, describe_images, described_block, image_describer};
 use crate::agent::protocol::AgentImage;
 use crate::config::schema::AgentConfig;
+use crate::config::schema::defaults;
 use crate::provider::models::{
     agent_directory, read_models, read_store, sees_images, vision_model,
 };
@@ -45,6 +46,7 @@ fn agent() -> AgentConfig {
         speech_gen: None,
         delegate: None,
         rules_path: None,
+        max_provider_retries: defaults::MAX_PROVIDER_RETRIES,
         providers: serde_json::Map::from_iter([(
             "zai-coding-cn".to_owned(),
             json!({

@@ -164,6 +164,11 @@
             "type": "string"
           },
           "description": "Tools the agent may not call at all.  Named by the tool kage calls it, such as `shell` or `write`. Refused whatever their input carries, which is the blunt end: `deny` refuses particular commands, this refuses a whole capability."
+        },
+        "maxProviderRetries": {
+          "type": "number",
+          "default": 10,
+          "description": "How many times a transient provider failure is retried before the agent gives up on it.  Written into the agent's `[loop]` table as `max_provider_retries`."
         }
       },
       "required": [

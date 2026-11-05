@@ -60,6 +60,36 @@ fn a_minimal_file_resolves_with_the_documented_defaults_filled_in() {
     );
     assert_eq!(config.timeouts.idle_ms, defaults::IDLE_MS);
     assert_eq!(config.chat.blocked_user_ids, Vec::<String>::new());
+    assert_eq!(
+        config.agent.max_provider_retries,
+        defaults::MAX_PROVIDER_RETRIES
+    );
+}
+
+#[test]
+fn the_agent_retry_count_is_taken_from_the_file_and_checked() {
+    let agent = json!({
+        "provider": "anthropic",
+        "providers": {
+            "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+        },
+        "maxProviderRetries": 3,
+    });
+    let config =
+        validate_config(&valid(json!({ "agent": agent }))).expect("a retry count is accepted");
+    assert_eq!(config.agent.max_provider_retries, 3);
+
+    let refused = json!({
+        "provider": "anthropic",
+        "providers": {
+            "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret-value" },
+        },
+        "maxProviderRetries": 0,
+    });
+    assert!(problems_contain(
+        &valid(json!({ "agent": refused })),
+        "agent.maxProviderRetries must be a number greater than zero"
+    ));
 }
 
 #[test]
@@ -1646,6 +1676,7 @@ fn a_denied_command_reaches_the_agent_as_a_rule_it_can_match() {
             commands: vec!["rm -rf *".to_owned()],
             tools: vec!["web_search".to_owned()],
         },
+        defaults::MAX_PROVIDER_RETRIES,
         &as_installed(),
     )
     .toml;

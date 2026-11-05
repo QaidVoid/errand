@@ -72,6 +72,7 @@ fn launch() -> SandboxLaunch {
         credential_names: BTreeMap::from([("zai-coding-cn".to_owned(), "ZAI_API_KEY".to_owned())]),
         plugins: Vec::new(),
         denied: Denials::default(),
+        max_provider_retries: defaults::MAX_PROVIDER_RETRIES,
         resume: false,
         grants: None,
     }

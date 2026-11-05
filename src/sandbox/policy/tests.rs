@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::{PolicyOptions, RESOLV_CONF, policy_contents, policy_path};
+use crate::config::schema::defaults;
 use crate::config::schema::{NetworkMode, PolicyExtraConfig};
 use crate::sandbox::backend::{Denials, SandboxLaunch};
 use crate::sandbox::runtime::AgentRuntime;
@@ -28,6 +29,7 @@ fn launch() -> SandboxLaunch {
         credential_names: BTreeMap::new(),
         plugins: Vec::new(),
         denied: Denials::default(),
+        max_provider_retries: defaults::MAX_PROVIDER_RETRIES,
         resume: false,
         grants: None,
     }
