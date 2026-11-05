@@ -13,6 +13,7 @@ const GITHUB_TOKEN: &str = "ghp-4b1d90ff7ac2";
 const PROVIDER_KEY: &str = "zai-5c2e80bb41af";
 const SECOND_KEY: &str = "muse-77ad13e9f0b2";
 const LOGIN_SECRET: &str = "oauth-3e91c0d27b55";
+const ENV_SECRET: &str = "envvar-8c41d0e92b76";
 
 fn config() -> Config {
     load_config(
@@ -33,6 +34,7 @@ fn config() -> Config {
                 "github": { "token": GITHUB_TOKEN, "userName": "errand-bot",
                             "userEmail": "bot@example.com" },
                 "web": { "login": { "clientId": "app", "clientSecret": LOGIN_SECRET } },
+                "sandbox": { "env": { "MY_API_KEY": ENV_SECRET } },
                 "projectRoot": "/tmp/errand/projects",
                 "stateDir": "/tmp/errand/state",
             })
@@ -62,7 +64,14 @@ fn the_configuration_can_be_logged_with_every_secret_field_blanked() {
         !shown.contains(SECOND_KEY),
         "a second provider's key: {shown}"
     );
-    assert_eq!(shown.matches(REDACTION).count(), SECRET_PATHS.len() + 3);
+    assert!(
+        !shown.contains(ENV_SECRET),
+        "a session environment value: {shown}"
+    );
+    // The name of the variable stays, so the operator can still read what is
+    // set; only the value is gone.
+    assert!(shown.contains("MY_API_KEY"));
+    assert_eq!(shown.matches(REDACTION).count(), SECRET_PATHS.len() + 3 + 1);
     // What is not a secret is still there to read.
     assert!(shown.contains("https://api.example/v1"));
 }
@@ -87,6 +96,7 @@ fn what_a_running_session_must_scrub_is_every_secret_it_holds() {
         PROVIDER_KEY.to_owned(),
         SECOND_KEY.to_owned(),
         LOGIN_SECRET.to_owned(),
+        ENV_SECRET.to_owned(),
     ];
     expected.sort();
 
@@ -107,6 +117,7 @@ fn a_secret_in_a_section_that_was_omitted_is_simply_not_there() {
         PROVIDER_KEY.to_owned(),
         SECOND_KEY.to_owned(),
         LOGIN_SECRET.to_owned(),
+        ENV_SECRET.to_owned(),
     ];
     expected.sort();
     assert_eq!(held, expected);
@@ -147,6 +158,7 @@ fn a_value_too_short_to_be_a_credential_is_not_scrubbed_from_prose() {
         PROVIDER_KEY.to_owned(),
         SECOND_KEY.to_owned(),
         LOGIN_SECRET.to_owned(),
+        ENV_SECRET.to_owned(),
     ];
     expected.sort();
     assert_eq!(held, expected);
