@@ -37,14 +37,29 @@ fn a_long_text_is_split_at_line_boundaries_and_every_piece_fits() {
 
 /// A byte split would cut a character in half and post a broken glyph.
 #[test]
-fn splitting_counts_code_points_never_bytes() {
+fn splitting_counts_what_the_limit_counts_never_bytes() {
     let wide = "\u{1F50C}".repeat(1_500);
 
     let pieces = split_message(&wide, 100);
 
     for piece in &pieces {
-        assert!(piece.chars().count() <= 100);
+        assert!(piece.encode_utf16().count() <= 100);
         assert!(!piece.contains('\u{FFFD}'));
+    }
+    assert_eq!(pieces.concat(), wide);
+}
+
+/// The service counts UTF-16 units, so an astral character costs two: 1500
+/// of them is 1500 code points but 3000 units, and has to split.
+#[test]
+fn the_limit_counts_utf16_units_so_an_astral_character_costs_two() {
+    let wide = "\u{1F50C}".repeat(1_500);
+
+    let pieces = split_message(&wide, MESSAGE_LIMIT);
+
+    assert!(pieces.len() > 1, "1500 astral characters exceed the limit");
+    for piece in &pieces {
+        assert!(piece.encode_utf16().count() <= MESSAGE_LIMIT);
     }
     assert_eq!(pieces.concat(), wide);
 }
@@ -101,7 +116,7 @@ fn a_thread_is_named_after_what_was_asked() {
 fn a_very_long_ask_is_cut_to_the_limit_without_splitting_a_character() {
     let name = thread_name(&"\u{1F50C}".repeat(200));
 
-    assert!(name.chars().count() <= THREAD_NAME_LIMIT);
+    assert!(name.encode_utf16().count() <= THREAD_NAME_LIMIT);
     assert!(!name.contains('\u{FFFD}'));
 }
 

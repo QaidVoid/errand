@@ -1,7 +1,7 @@
 //! Splits and formats agent output into messages the chat service will take.
 //!
-//! Splitting is by code point, never by byte, so a multi-byte character is
-//! never cut in half. A split landing inside a fenced code block closes the
+//! Splitting counts what the service counts, UTF-16 units, and never cuts a
+//! character in half. A split landing inside a fenced code block closes the
 //! fence in the earlier message and reopens it with the same language in the
 //! next, so every message posted is independently well formed.
 
@@ -103,21 +103,46 @@ const FENCE_HEADROOM: usize = 16;
 /// Most entries listed in a thread before the rest is summarised.
 pub const MAX_LISTED_ENTRIES: usize = 200;
 
-/// Splits a string into pieces of at most `size` code points.
-fn split_by_code_points(text: &str, size: usize) -> Vec<String> {
-    let points: Vec<char> = text.chars().collect();
-    if points.len() <= size {
+/// Splits a string into pieces of at most `size` UTF-16 units, never between
+/// the two halves of a character the limit counts as two.
+fn split_by_utf16(text: &str, size: usize) -> Vec<String> {
+    if length(text) <= size {
         return vec![text.to_owned()];
     }
-    points
-        .chunks(size)
-        .map(|chunk| chunk.iter().collect())
-        .collect()
+    let mut pieces: Vec<String> = Vec::new();
+    let mut piece = String::new();
+    let mut piece_length = 0;
+    for character in text.chars() {
+        let units = character.len_utf16();
+        if piece_length + units > size {
+            pieces.push(std::mem::take(&mut piece));
+            piece_length = 0;
+        }
+        piece.push(character);
+        piece_length += units;
+    }
+    pieces.push(piece);
+    pieces
 }
 
-/// Length in code points, which is what the limit actually counts.
+/// Length in UTF-16 units, which is what the limit actually counts.
 fn length(text: &str) -> usize {
-    text.chars().count()
+    text.encode_utf16().count()
+}
+
+/// The first `limit` UTF-16 units of the text, ending on a whole character.
+fn take_units(text: &str, limit: usize) -> String {
+    let mut taken = String::new();
+    let mut units = 0;
+    for character in text.chars() {
+        let next = units + character.len_utf16();
+        if next > limit {
+            break;
+        }
+        units = next;
+        taken.push(character);
+    }
+    taken
 }
 
 /// Returns the fence language when the line opens or closes a fenced block,
@@ -143,7 +168,7 @@ pub fn split_message(text: &str, limit: usize) -> Vec<String> {
 
     let mut lines = Vec::new();
     for line in text.split('\n') {
-        lines.extend(split_by_code_points(line, limit - FENCE_HEADROOM));
+        lines.extend(split_by_utf16(line, limit - FENCE_HEADROOM));
     }
 
     let mut chunks: Vec<String> = Vec::new();
@@ -236,7 +261,7 @@ pub fn thread_name(prompt: &str) -> String {
         .find(|line| !line.trim().is_empty())
         .unwrap_or("session");
     let collapsed = collapse_spaces(first_line.trim());
-    let mut body: String = collapsed.chars().take(THREAD_NAME_LIMIT).collect();
+    let mut body: String = take_units(&collapsed, THREAD_NAME_LIMIT);
     while body.ends_with(|c: char| c.is_whitespace()) {
         body.pop();
     }
