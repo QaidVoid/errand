@@ -1,0 +1,47 @@
+# Dependency policy, checked by `cargo deny check` and enforced by the CI
+# step in .github/workflows/check.yml.
+
+[licenses]
+version = 2
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Zlib",
+]
+
+[advisories]
+version = 2
+# serenity 0.12 pins the rustls 0.22 line, which has stopped receiving fixes,
+# and every advisory ignored here is in that family. Delete these once
+# serenity is upgraded past it.
+ignore = [
+  "RUSTSEC-2026-0049",
+  "RUSTSEC-2026-0098",
+  "RUSTSEC-2026-0099",
+  "RUSTSEC-2026-0104",
+  "RUSTSEC-2026-0346",
+  "RUSTSEC-2026-0347",
+  "RUSTSEC-2026-0348",
+  "RUSTSEC-2026-0349",
+  "RUSTSEC-2026-0381",
+  "RUSTSEC-2026-0382",
+  "RUSTSEC-2026-0383",
+  "RUSTSEC-2026-0386",
+]
+
+[bans]
+# Duplicate crates are a fact of the current tree (two reqwest, two rand
+# stacks) and fixing that is tracked separately, so surface them without
+# failing the check.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
