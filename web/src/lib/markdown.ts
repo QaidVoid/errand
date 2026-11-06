@@ -40,6 +40,17 @@ marked.setOptions({
   gfm: true,
 });
 
+// A link in a message is written by the model or copied from a file, so where
+// it points is not this interface's business and following it must not
+// navigate the session away. The hook runs inside sanitising, so every anchor
+// that survives gets the attributes, however it was written.
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A") {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+});
+
 /** Tags worth keeping. Anything else is dropped rather than rendered. */
 export const ALLOWED_TAGS = [
   "span",
@@ -70,7 +81,6 @@ export const ALLOWED_TAGS = [
   "td",
 ];
 
-/** Escapes text so it can be shown without being interpreted as markup. */
 /**
  * Attributes worth keeping.
  *
@@ -79,6 +89,7 @@ export const ALLOWED_TAGS = [
  */
 export const ALLOWED_ATTR = ["href", "title", "class"];
 
+/** Escapes text so it can be shown without being interpreted as markup. */
 function escaped(text: string): string {
   return text
     .replace(/&/g, "&amp;")
