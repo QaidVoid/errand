@@ -278,17 +278,34 @@ trait Positive: Copy {
     /// The setting as the number the check runs on.
     fn amount(self) -> f64;
 
-    /// The checked amount as the whole number the configuration carries.
-    fn from_amount(amount: f64) -> Self;
+    /// The largest count the setting can hold, for naming in a refusal.
+    const LIMIT: u64;
+
+    /// The checked amount as the whole number the configuration carries, or
+    /// none when the type does not hold it exactly.
+    fn from_amount(amount: f64) -> Option<Self>;
+}
+
+/// The amount as a whole count of at least one, as the u64 it casts to, or
+/// none: a fraction is refused rather than cut, and what a u64 cannot hold
+/// is refused rather than saturated. The bound is strict because
+/// `u64::MAX as f64` rounds up to 2^64, past anything the cast keeps.
+#[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[expect(clippy::cast_precision_loss)]
+fn whole(amount: f64) -> Option<u64> {
+    if !(1.0..u64::MAX as f64).contains(&amount) || amount.fract() != 0.0 {
+        return None;
+    }
+    Some(amount as u64)
 }
 
 impl Positive for u16 {
     fn amount(self) -> f64 {
         f64::from(self)
     }
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn from_amount(amount: f64) -> Self {
-        amount as u16
+    const LIMIT: u64 = u16::MAX as u64;
+    fn from_amount(amount: f64) -> Option<Self> {
+        whole(amount).and_then(|counted| u16::try_from(counted).ok())
     }
 }
 
@@ -296,9 +313,9 @@ impl Positive for u32 {
     fn amount(self) -> f64 {
         f64::from(self)
     }
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn from_amount(amount: f64) -> Self {
-        amount as u32
+    const LIMIT: u64 = u32::MAX as u64;
+    fn from_amount(amount: f64) -> Option<Self> {
+        whole(amount).and_then(|counted| u32::try_from(counted).ok())
     }
 }
 
@@ -307,9 +324,9 @@ impl Positive for u64 {
     fn amount(self) -> f64 {
         self as f64
     }
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn from_amount(amount: f64) -> Self {
-        amount as u64
+    const LIMIT: u64 = u64::MAX;
+    fn from_amount(amount: f64) -> Option<Self> {
+        whole(amount)
     }
 }
 
@@ -318,14 +335,18 @@ impl Positive for usize {
     fn amount(self) -> f64 {
         self as f64
     }
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn from_amount(amount: f64) -> Self {
-        amount as usize
+    const LIMIT: u64 = usize::MAX as u64;
+    fn from_amount(amount: f64) -> Option<Self> {
+        whole(amount).and_then(|counted| usize::try_from(counted).ok())
     }
 }
 
 /// A positive setting that counts something, taken as the whole number the
 /// resolved configuration carries.
+///
+/// A count that does not fit the width it is carried in is refused rather
+/// than clipped or rounded: a port of 70000 must not quietly become 65535,
+/// and 0.5 of a retry must not quietly become none.
 fn positive_as<P: Positive>(
     source: &Map<String, Value>,
     key: &str,
@@ -333,7 +354,15 @@ fn positive_as<P: Positive>(
     place: &str,
     problems: &mut Problems,
 ) -> P {
-    P::from_amount(positive(source, key, fallback.amount(), place, problems))
+    let amount = positive(source, key, fallback.amount(), place, problems);
+    if let Some(counted) = P::from_amount(amount) {
+        return counted;
+    }
+    problems.add(format!(
+        "{place}.{key} must be a whole number between 1 and {}",
+        P::LIMIT
+    ));
+    fallback
 }
 
 fn size(
