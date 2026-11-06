@@ -18,8 +18,13 @@ echo 'root:1000:1' | sudo tee -a /etc/subuid
 echo 'root:1000:1' | sudo tee -a /etc/subgid
 
 git clone https://github.com/QaidVoid/errand
-cd errand && cargo build --release
-install -m 0755 dist/errand /usr/local/bin/errand
+cd errand
+
+# The interface first: the binary embeds it while it compiles.
+(cd web && bun install && bun run build)
+
+cargo build --release
+install -m 0755 target/release/errand /usr/local/bin/errand
 
 install -o errand -g errand -m 0700 -d /var/lib/errand/.config/errand
 install -o errand -g errand -m 0600 config.json \

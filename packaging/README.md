@@ -11,11 +11,17 @@ files an agent writes in a project belong to the person whose project it is.
 # The account the daemon runs as, with somewhere to keep its state.
 useradd --system --home-dir /var/lib/errand --create-home errand
 
-# The binary, built anywhere a Rust toolchain is installed. It carries the interface and
-# its own runtime, so the host that runs it needs neither.
+# The binary, built anywhere a Rust toolchain and bun are installed. It
+# carries the interface and its own runtime, so the host that runs it needs
+# neither.
 git clone https://github.com/QaidVoid/errand
-cd errand && cargo build --release
-install -m 0755 dist/errand /usr/local/bin/errand
+cd errand
+
+# The interface first: the binary embeds it while it compiles.
+(cd web && bun install && bun run build)
+
+cargo build --release
+install -m 0755 target/release/errand /usr/local/bin/errand
 
 # Its configuration, which holds the bot token, so it is readable by nobody
 # else.
