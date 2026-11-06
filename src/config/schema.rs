@@ -642,7 +642,9 @@ pub struct SandboxConfig {
     pub policy_extra: Option<PolicyExtraConfig>,
     /// Directories added to a session's PATH, or none.
     pub path_extra: Option<Vec<String>>,
-    /// Variables set in every session's environment, or none.
+    /// Variables set in every session's environment, or none. Every value is
+    /// blanked in the startup log. Values of eight bytes or more are also
+    /// scrubbed from what the session posts.
     pub env: Option<BTreeMap<String, String>>,
 }
 

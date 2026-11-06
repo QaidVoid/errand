@@ -62,6 +62,16 @@ pub fn redact_config(config: &Config) -> Value {
             }
         }
     }
+
+    // The names of the operator's session variables are safe to show, and an
+    // operator reading the report needs them; the values are whatever the
+    // operator considered secret enough to keep out of the session's config
+    // files, so every one is blanked.
+    if let Some(Value::Object(env)) = read_path_mut(&mut clone, "sandbox.env") {
+        for value in env.values_mut() {
+            *value = Value::String(REDACTION.to_owned());
+        }
+    }
     clone
 }
 
@@ -79,6 +89,14 @@ pub fn secret_values(config: &Config) -> Vec<String> {
     }
     if let Some(login) = config.web.as_ref().and_then(|web| web.login.as_ref()) {
         hold(Some(&login.client_secret));
+    }
+    // The operator put these values in the configuration to hand them to a
+    // session, not to the log; they are scrubbed like any other secret. The
+    // length floor still applies, as everywhere else.
+    if let Some(env) = config.sandbox.env.as_ref() {
+        for value in env.values() {
+            hold(Some(value));
+        }
     }
     // A defined provider carries its own credential, and there is no fixed
     // path to name it by: the operator chooses how many providers there are

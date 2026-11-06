@@ -165,7 +165,7 @@ What a session may consume, and what the backend enforces.
 | `gracePeriodMs` | `number` | `10000` | How long a sandbox may take to stop before it is killed. |
 | `hideHostAddress` | `boolean` | `false` | Hide the host's network identity from a session, when it has a network. |
 | `pathExtra` | `string[] or undefined` | none | Directories added to a session's PATH, or none. |
-| `env` | `Record<string, string> or undefined` | none | Variables set in every session's environment, or none. |
+| `env` | `Record<string, string> or undefined` | none | Variables set in every session's environment, or none. Every value is blanked in the startup log. Values of eight bytes or more are also scrubbed from what the session posts. |
 
 ## sandbox.egress
 
