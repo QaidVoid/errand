@@ -171,7 +171,7 @@ service definitions for both init systems.
 
 ```sh
 cargo fmt --check   # formatting
-cargo clippy        # lint, pedantic, warnings denied
+cargo clippy --all-targets -- -D warnings   # lint, as CI runs it
 cargo test          # the test suite
 cargo run -- run    # run the daemon from the checkout
 cargo build --release   # the daemon binary, into target/release/
