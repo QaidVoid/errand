@@ -29,6 +29,7 @@ struct FakeChannel {
     archived: Mutex<bool>,
     typing: Mutex<u32>,
     next: Mutex<u32>,
+    failing_edits: Mutex<bool>,
 }
 
 impl FakeChannel {
@@ -39,6 +40,7 @@ impl FakeChannel {
             archived: Mutex::new(false),
             typing: Mutex::new(0),
             next: Mutex::new(1),
+            failing_edits: Mutex::new(false),
         })
     }
 
@@ -79,6 +81,9 @@ impl ThreadTransport for FakeChannel {
     }
 
     fn edit(&self, message_id: String, content: String) -> ServiceCall<()> {
+        if *self.failing_edits.lock().unwrap() {
+            return Box::pin(async { Err("the edit was refused".into()) });
+        }
         if let Some(record) = self
             .records()
             .into_iter()
@@ -204,6 +209,37 @@ async fn consecutive_tool_activity_edits_one_message_instead_of_posting_more() {
     assert!(record.content.contains("ran `ls`"));
     assert!(record.content.contains("ran `grep`"));
     assert_eq!(record.edits.len(), 2);
+}
+
+/// An activity edit that failed is not retried against the same message, or
+/// a retry would repeat the line and a message that is gone would refuse
+/// every line after it.
+#[tokio::test]
+async fn a_failed_activity_edit_starts_a_fresh_block() {
+    let (port, channel) = thread(false);
+    let (connection, watching) = tokio::sync::watch::channel(true);
+    port.follow(watching);
+
+    port.append_activity("ran `ls`");
+    port.flush().await;
+    *channel.failing_edits.lock().unwrap() = true;
+    port.append_activity("ran `cat`");
+    port.flush().await;
+
+    *channel.failing_edits.lock().unwrap() = false;
+    let _ = connection.send(false);
+    let _ = connection.send(true);
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    port.append_activity("ran `grep`");
+    port.flush().await;
+
+    assert_eq!(
+        channel.contents(),
+        ["ran `ls`", "ran `cat`\nran `grep`"],
+        "the retried line is posted once, in a block of its own"
+    );
 }
 
 /// The agent speaking ends the block, or its words land under the tool calls.
@@ -491,4 +527,25 @@ async fn only_what_was_said_in_the_interface_is_posted_to_the_thread() {
             "**amelia** via the web:\nan aside on the web",
         ]
     );
+}
+
+/// The statuses that end the retrying are the service's own decisions, not
+/// the ones that only say to wait.
+#[test]
+fn a_status_the_service_decided_on_is_permanent_and_a_wait_is_not() {
+    use super::a_service_decision;
+
+    // A decision: the same request would fail the same way every time.
+    for status in [400, 401, 403, 404, 405, 413] {
+        assert!(a_service_decision(status), "{status} is a decision");
+    }
+    // A wait, though it shares the 4xx range with the decisions.
+    for status in [408, 429] {
+        assert!(!a_service_decision(status), "{status} names a wait");
+    }
+    // Not the service deciding: below the client-error range, an outage, or
+    // something in between the ranges.
+    for status in [399, 500, 502, 503, 599] {
+        assert!(!a_service_decision(status), "{status} is not a decision");
+    }
 }

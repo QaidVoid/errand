@@ -26,8 +26,28 @@ use crate::log::{LogValue, Logger, fields};
 /// Why a task gave up, in words worth a log line.
 pub type TaskError = Box<dyn std::error::Error + Send + Sync>;
 
+/// A task failure that running the task again cannot fix, carrying what
+/// happened for the log and the thread's notice.
+///
+/// The chat service answers some requests with a decision rather than an
+/// outage: a message that is gone stays gone, and text it refuses stays
+/// refused. The outbox drops a task that failed this way with a notice
+/// instead of waiting out a reconnect that cannot help.
+#[derive(Debug)]
+pub struct PermanentFailure(pub String);
+
+impl std::fmt::Display for PermanentFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PermanentFailure {}
+
 /// One unit of work against a thread. A task that fails is kept so it can be
-/// run again in place, so the closure is one that can be called many times.
+/// run again in place, so the closure is one that can be called many times,
+/// unless it fails with a [`PermanentFailure`], in which
+/// case it is dropped and the tasks behind it go on.
 pub type OutboxTask =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), TaskError>> + Send>> + Send>;
 
@@ -38,6 +58,16 @@ pub const DEFAULT_MAX_BUFFERED: usize = 500;
 /// off as a complete one.
 pub type AnnounceDrops =
     Arc<dyn Fn(usize) -> Pin<Box<dyn Future<Output = Result<(), TaskError>> + Send>> + Send + Sync>;
+
+/// Says, in the thread, that a piece of output was dropped for good, so the
+/// silence is not read as there having been nothing to say.
+///
+/// Best effort: a notice that cannot be delivered is logged, not retried,
+/// since the work it named is already gone and holding the queue open for
+/// it would hold back everything behind it.
+pub type AnnounceFailed = Arc<
+    dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<(), TaskError>> + Send>> + Send + Sync,
+>;
 
 struct Inner {
     buffer: VecDeque<OutboxTask>,
@@ -57,6 +87,7 @@ pub struct Outbox {
     draining: Arc<AsyncMutex<()>>,
     log: Logger,
     announce_drops: AnnounceDrops,
+    announce_failed: AnnounceFailed,
     max_buffered: usize,
 }
 
@@ -68,6 +99,7 @@ impl Clone for Outbox {
             draining: Arc::clone(&self.draining),
             log: self.log.clone(),
             announce_drops: Arc::clone(&self.announce_drops),
+            announce_failed: Arc::clone(&self.announce_failed),
             max_buffered: self.max_buffered,
         }
     }
@@ -75,7 +107,12 @@ impl Clone for Outbox {
 
 impl Outbox {
     /// An outbox for one thread.
-    pub fn new(log: Logger, announce_drops: AnnounceDrops, max_buffered: usize) -> Self {
+    pub fn new(
+        log: Logger,
+        announce_drops: AnnounceDrops,
+        announce_failed: AnnounceFailed,
+        max_buffered: usize,
+    ) -> Self {
         Self {
             state: Arc::new(Mutex::new(Inner {
                 buffer: VecDeque::new(),
@@ -88,6 +125,7 @@ impl Outbox {
             draining: Arc::new(AsyncMutex::new(())),
             log,
             announce_drops,
+            announce_failed,
             max_buffered,
         }
     }
@@ -237,11 +275,23 @@ impl Outbox {
                         state.announced = state.dropped;
                     }
                     Err(error) => {
-                        self.log.warn(
-                            "reporting dropped messages failed",
-                            &fields([("detail", LogValue::from(error.to_string()))]),
-                        );
-                        self.state.lock().expect("the outbox lock").connected = false;
+                        if error.is::<PermanentFailure>() {
+                            // Saying it will keep failing the same way, so
+                            // the gap is given up on rather than attempted
+                            // again on every drain.
+                            self.log.warn(
+                                "reporting dropped messages cannot succeed; the report is given up on",
+                                &fields([("detail", LogValue::from(error.to_string()))]),
+                            );
+                            let mut state = self.state.lock().expect("the outbox lock");
+                            state.announced = state.dropped;
+                        } else {
+                            self.log.warn(
+                                "reporting dropped messages failed",
+                                &fields([("detail", LogValue::from(error.to_string()))]),
+                            );
+                            self.state.lock().expect("the outbox lock").connected = false;
+                        }
                     }
                 }
                 continue;
@@ -254,17 +304,35 @@ impl Outbox {
                 .buffer
                 .pop_front();
             let Some(task) = head else { return };
-            if task().await.is_ok() {
-                continue;
+            if let Err(error) = task().await {
+                if error.is::<PermanentFailure>() {
+                    // Running it again would fail the same way, so it is
+                    // dropped rather than left to hold up every task behind
+                    // it, and the thread is told what went missing.
+                    self.log.warn(
+                        "a thread action cannot succeed, so it is dropped and the rest go on",
+                        &fields([("detail", LogValue::from(error.to_string()))]),
+                    );
+                    if let Err(notice) = (self.announce_failed)(error.to_string()).await {
+                        self.log.warn(
+                            "saying the dropped action failed could not be posted",
+                            &fields([("detail", LogValue::from(notice.to_string()))]),
+                        );
+                    }
+                    continue;
+                }
+                // Left at the head so ordering holds when the gateway returns.
+                self.log.warn(
+                    "a thread action failed",
+                    &fields([("detail", LogValue::from(error.to_string()))]),
+                );
+                {
+                    let mut state = self.state.lock().expect("the outbox lock");
+                    state.connected = false;
+                    state.buffer.push_front(task);
+                }
+                return;
             }
-            // Left at the head so ordering holds when the gateway returns.
-            self.log.warn("a thread action failed", &fields([]));
-            {
-                let mut state = self.state.lock().expect("the outbox lock");
-                state.connected = false;
-                state.buffer.push_front(task);
-            }
-            return;
         }
     }
 }
