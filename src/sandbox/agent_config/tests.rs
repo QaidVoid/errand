@@ -1624,12 +1624,12 @@ fn written_for(defined: &serde_json::Value) -> String {
 #[test]
 fn a_catalog_provider_kage_lists_is_overridden() {
     let config = written_for(&json!({
-        "kenari": { "credential": "k" },
-        "opencode-go": { "credential": "k", "baseUrl": "https://relay.example/v1" },
+        "openrouter": { "credential": "k" },
+        "groq": { "credential": "k", "baseUrl": "https://relay.example/v1" },
     }));
 
-    assert!(config.contains("[providers.kenari]"), "{config}");
-    assert!(config.contains("[providers.opencode-go]"), "{config}");
+    assert!(config.contains("[providers.openrouter]"), "{config}");
+    assert!(config.contains("[providers.groq]"), "{config}");
     assert!(!config.contains("custom"), "{config}");
 }
 

@@ -64,7 +64,7 @@ fn a_built_in_provider_is_brokered_from_the_store() {
                 "gateway": { "baseUrl": "https://gateway.example/v1", "credential": "g-key" },
                 "zai-coding-cn": { "credential": "z-key", "models": [{ "id": "glm-5.3-flash" }] },
                 "openrouter": { "credential": "o-key" },
-                "free": { "extension": true, "models": [{ "id": "big-pickle" }] },
+                "free": { "extension": true, "models": [{ "id": "free-model" }] },
             },
         },
         "projectRoot": "/tmp/p",

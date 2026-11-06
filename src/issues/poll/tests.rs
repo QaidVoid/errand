@@ -11,8 +11,8 @@ use crate::config::schema::ForgeKind;
 use crate::log::{LogFields, Logger};
 use crate::session::pr::{Api, ApiReply};
 
-const BOT: &str = "talaria0101";
-const REPO: &str = "QaidVoid/edu";
+const BOT: &str = "errand-bot";
+const REPO: &str = "Acme/widgets";
 const GITHUB: ForgeKind = ForgeKind::Github;
 
 /// Answers each `METHOD path` from a table, and records every call made.
@@ -48,7 +48,7 @@ fn poller(api: Api) -> Poller {
         kind: GITHUB,
         token: "ghp".to_owned(),
         bot: BOT.to_owned(),
-        allowed: vec!["QaidVoid".to_owned()],
+        allowed: vec!["OctoCat".to_owned()],
         repositories: Vec::new(),
         on_mention: true,
         on_assign: true,
@@ -75,7 +75,7 @@ fn issue(created_at: &str, body: &str) -> Value {
         "body": body,
         "html_url": format!("https://github.com/{REPO}/issues/7"),
         "created_at": created_at,
-        "user": { "login": "QaidVoid" },
+        "user": { "login": "OctoCat" },
     })
 }
 
@@ -118,13 +118,13 @@ async fn a_new_issue_naming_the_bot_is_heard_and_marked_read() {
 
     assert_eq!(heard.len(), 1);
     assert!(heard[0].mentions);
-    assert_eq!(heard[0].thread_id, "github:QaidVoid/edu#7");
+    assert_eq!(heard[0].thread_id, "github:Acme/widgets#7");
     assert_eq!(heard[0].message.content, "fix the parser");
-    assert_eq!(heard[0].message.author_id, "github:qaidvoid");
+    assert_eq!(heard[0].message.author_id, "github:octocat");
     assert!(
         heard[0].opening.starts_with(
-            "fix the parser\n\n(Asked on GitHub, on issue QaidVoid/edu#7, \
-             \"The parser drops the last line\": https://github.com/QaidVoid/edu/issues/7."
+            "fix the parser\n\n(Asked on GitHub, on issue Acme/widgets#7, \
+             \"The parser drops the last line\": https://github.com/Acme/widgets/issues/7."
         ),
         "{}",
         heard[0].opening
@@ -145,7 +145,7 @@ async fn only_new_words_from_somebody_heard_are_heard() {
         &notification("comment", Some("2026-09-24T12:00:00Z")),
         &issue("2026-09-24T09:00:00Z", "an old issue"),
         &json!([
-            comment(1, "QaidVoid", "read already", "2026-09-24T11:59:00Z"),
+            comment(1, "OctoCat", "read already", "2026-09-24T11:59:00Z"),
             comment(
                 2,
                 "stranger",
@@ -153,7 +153,7 @@ async fn only_new_words_from_somebody_heard_are_heard() {
                 "2026-09-24T12:01:00Z"
             ),
             comment(3, BOT, "my own answer", "2026-09-24T12:02:00Z"),
-            comment(4, "qaidvoid", "and also the tests", "2026-09-24T12:03:00Z"),
+            comment(4, "octocat", "and also the tests", "2026-09-24T12:03:00Z"),
         ]),
         "2026-09-24T12:00:00Z",
     ));
@@ -175,7 +175,7 @@ async fn a_comment_naming_the_bot_carries_the_issue_with_it() {
         &issue("2026-09-24T09:00:00Z", "Steps: run it on an empty file."),
         &json!([comment(
             5,
-            "QaidVoid",
+            "OctoCat",
             &format!("@{BOT} can you look?"),
             "2026-09-24T11:00:00Z"
         )]),
@@ -199,7 +199,7 @@ async fn a_comment_naming_the_bot_carries_the_issue_with_it() {
 /// An assignment is only as good as who made it.
 #[tokio::test]
 async fn an_assignment_counts_only_from_somebody_heard() {
-    for (actor, expected) in [("QaidVoid", 1), ("stranger", 0)] {
+    for (actor, expected) in [("OctoCat", 1), ("stranger", 0)] {
         let mut table = answers(
             &notification("assign", None),
             &issue("2026-09-24T09:00:00Z", "Make the parser stream."),
@@ -283,8 +283,8 @@ fn heard(mentions: bool) -> Heard {
         mentions,
         message: crate::chat::inbound::RawMessage {
             id: "github-comment:1".to_owned(),
-            author_id: "github:qaidvoid".to_owned(),
-            author_name: Some("QaidVoid".to_owned()),
+            author_id: "github:octocat".to_owned(),
+            author_name: Some("OctoCat".to_owned()),
             author_is_bot: false,
             channel_id: "github:o/r#1".to_owned(),
             parent_channel_id: None,
@@ -346,10 +346,10 @@ async fn a_notification_quiet_since_the_start_is_not_asked_about() {
 #[tokio::test]
 async fn a_repository_not_listened_in_is_not_asked_about() {
     for (listened, expected) in [
-        (vec!["QaidVoid/edu".to_owned()], 1),
-        (vec!["qaidvoid/*".to_owned()], 1),
+        (vec!["Acme/widgets".to_owned()], 1),
+        (vec!["acme/*".to_owned()], 1),
         (
-            vec!["somebody-else/*".to_owned(), "QaidVoid/other".to_owned()],
+            vec!["somebody-else/*".to_owned(), "Acme/other".to_owned()],
             0,
         ),
     ] {
@@ -431,12 +431,12 @@ async fn a_forgejo_notification_is_heard_by_its_own_vocabulary() {
         "body": format!("@{BOT} fix the parser"),
         "html_url": format!("http://forge.example.com/{REPO}/issues/7"),
         "created_at": "2026-09-24T11:00:00Z",
-        "user": { "login": "QaidVoid" },
+        "user": { "login": "OctoCat" },
     });
     let timeline = json!([{
         "type": "assignees",
         "assignee": { "login": BOT },
-        "user": { "login": "QaidVoid" },
+        "user": { "login": "OctoCat" },
         "created_at": "2026-09-24T11:30:00Z",
         "id": 7_i64,
     }]);
@@ -474,23 +474,23 @@ async fn a_forgejo_notification_is_heard_by_its_own_vocabulary() {
     assert!(
         heard
             .iter()
-            .all(|heard| heard.thread_id == "forgejo:QaidVoid/edu#7")
+            .all(|heard| heard.thread_id == "forgejo:Acme/widgets#7")
     );
     let mention = heard
         .iter()
-        .find(|heard| heard.message.id == "forgejo-issue:QaidVoid/edu#7")
+        .find(|heard| heard.message.id == "forgejo-issue:Acme/widgets#7")
         .expect("the mention");
-    assert_eq!(mention.message.author_id, "forgejo:qaidvoid");
+    assert_eq!(mention.message.author_id, "forgejo:octocat");
     assert!(
         mention
             .opening
-            .contains("http://forge.example.com/QaidVoid/edu/issues/7")
+            .contains("http://forge.example.com/Acme/widgets/issues/7")
     );
     let assigned = heard
         .iter()
         .find(|heard| heard.message.id == "forgejo-assign:7")
         .expect("the assignment");
-    assert_eq!(assigned.message.author_id, "forgejo:qaidvoid");
+    assert_eq!(assigned.message.author_id, "forgejo:octocat");
     assert!(
         calls
             .lock()
@@ -526,12 +526,12 @@ async fn forgejo_restart_does_not_retry_activity_before_the_new_start() {
                 json!([
                     comment(
                         1,
-                        "QaidVoid",
+                        "OctoCat",
                         "unread before restart",
                         "2026-09-24T09:30:00Z"
                     ),
-                    comment(2, "QaidVoid", "at restart", start),
-                    comment(3, "QaidVoid", "after restart", "2026-09-24T10:15:00Z"),
+                    comment(2, "OctoCat", "at restart", start),
+                    comment(3, "OctoCat", "after restart", "2026-09-24T10:15:00Z"),
                 ]),
             ),
         ]));
@@ -596,7 +596,7 @@ async fn a_forgejo_assignment_after_the_first_hundred_events_is_heard() {
                     "id": 101,
                     "type": "assignees",
                     "assignee": { "login": BOT },
-                    "user": { "login": "QaidVoid" },
+                    "user": { "login": "OctoCat" },
                     "created_at": "2026-09-24T12:00:00Z",
                 }]),
             ),
@@ -638,7 +638,7 @@ async fn a_failed_forgejo_timeline_page_leaves_the_notification_and_floor_unread
         "id": 1,
         "type": "assignees",
         "assignee": { "login": BOT },
-        "user": { "login": "QaidVoid" },
+        "user": { "login": "OctoCat" },
         "created_at": "2026-09-24T12:00:00Z",
     });
     let (answering, calls) = api(BTreeMap::from([
@@ -654,7 +654,7 @@ async fn a_failed_forgejo_timeline_page_leaves_the_notification_and_floor_unread
             format!("GET /repos/{REPO}/issues/7/comments?since={floor}"),
             json!([comment(
                 2,
-                "QaidVoid",
+                "OctoCat",
                 "And its tests",
                 "2026-09-24T12:00:00Z"
             )]),
@@ -736,20 +736,20 @@ async fn an_unending_forgejo_timeline_is_bounded_and_retried() {
 async fn forgejo_removal_cancels_an_earlier_assignment() {
     let floor = "2026-09-24T10:00:00Z";
     for (changes, expected) in [
-        (vec![(1, false, "QaidVoid"), (2, true, "stranger")], None),
-        (vec![(1, true, "QaidVoid")], None),
+        (vec![(1, false, "OctoCat"), (2, true, "stranger")], None),
+        (vec![(1, true, "OctoCat")], None),
         (
             vec![
-                (1, false, "QaidVoid"),
-                (2, true, "QaidVoid"),
-                (3, false, "QaidVoid"),
+                (1, false, "OctoCat"),
+                (2, true, "OctoCat"),
+                (3, false, "OctoCat"),
             ],
             Some("forgejo-assign:3"),
         ),
         (
             vec![
-                (1, false, "QaidVoid"),
-                (2, true, "QaidVoid"),
+                (1, false, "OctoCat"),
+                (2, true, "OctoCat"),
                 (3, false, "stranger"),
             ],
             None,
@@ -802,7 +802,7 @@ async fn forgejo_team_assignments_do_not_count_as_user_assignments() {
     for direct in [false, true] {
         let mut entries = vec![json!({
             "id": 2, "type": "assignees", "assignee_team": { "name": BOT },
-            "assignee": null, "user": { "login": "QaidVoid" },
+            "assignee": null, "user": { "login": "OctoCat" },
             "created_at": "2026-09-24T12:00:00Z"
         })];
         if direct {
@@ -810,7 +810,7 @@ async fn forgejo_team_assignments_do_not_count_as_user_assignments() {
                 0,
                 json!({
                     "id": 1, "type": "assignees", "assignee": { "login": BOT },
-                    "user": { "login": "QaidVoid" }, "created_at": "2026-09-24T11:00:00Z"
+                    "user": { "login": "OctoCat" }, "created_at": "2026-09-24T11:00:00Z"
                 }),
             );
         }
@@ -905,7 +905,7 @@ async fn forgejo_issue_and_comment_mentions_keep_complete_account_names() {
             format!("GET /repos/{REPO}/issues/7/comments?since={floor}"),
             json!([comment(
                 3,
-                "QaidVoid",
+                "OctoCat",
                 &format!("@{bot} ask @{login}"),
                 "2026-09-24T12:00:00Z"
             )]),
@@ -949,13 +949,13 @@ async fn forgejo_pull_notification_is_heard_and_marked_read() {
 
     let heard = forgejo.poll().await.expect("read pull notification");
     assert_eq!(heard.len(), 1);
-    assert_eq!(heard[0].thread_id, "forgejo:QaidVoid/edu#7");
+    assert_eq!(heard[0].thread_id, "forgejo:Acme/widgets#7");
     assert_eq!(heard[0].message.content, "review this");
     assert!(heard[0].mentions);
     assert!(
         heard[0]
             .opening
-            .contains("https://forge.example/QaidVoid/edu/pulls/7")
+            .contains("https://forge.example/Acme/widgets/pulls/7")
     );
     assert!(
         calls
@@ -1060,9 +1060,9 @@ async fn github_comments_across_pages_are_filtered_and_sorted() {
             "GET /repos/{REPO}/issues/7/comments?since=2026-09-24T12:00:00Z&per_page=100&page=2"
         ),
         json!([
-            comment(2, "QaidVoid", "later", "2026-09-24T12:20:00Z"),
-            comment(3, "QaidVoid", "at floor", "2026-09-24T12:00:00Z"),
-            comment(4, "QaidVoid", "earlier", "2026-09-24T12:10:00Z")
+            comment(2, "OctoCat", "later", "2026-09-24T12:20:00Z"),
+            comment(3, "OctoCat", "at floor", "2026-09-24T12:00:00Z"),
+            comment(4, "OctoCat", "earlier", "2026-09-24T12:10:00Z")
         ]),
     );
     let (api, calls) = api(table);
@@ -1084,7 +1084,7 @@ async fn github_comments_across_pages_are_filtered_and_sorted() {
 
 #[tokio::test]
 async fn github_latest_assignment_is_selected_across_pages_before_actor_filter() {
-    for (actor, expected) in [("QaidVoid", 1), ("stranger", 0)] {
+    for (actor, expected) in [("OctoCat", 1), ("stranger", 0)] {
         let mut table = answers(
             &notification("assign", None),
             &issue("2026-09-24T09:00:00Z", "body"),
@@ -1094,7 +1094,7 @@ async fn github_latest_assignment_is_selected_across_pages_before_actor_filter()
         let event = |id, actor, at| json!({"id": id, "event": "assigned", "assignee": {"login": BOT}, "actor": {"login": actor}, "created_at": at});
         table.insert(
             format!("GET /repos/{REPO}/issues/7/events?per_page=100"),
-            json!(vec![event(1, "QaidVoid", "2026-09-24T11:00:00Z"); 100]),
+            json!(vec![event(1, "OctoCat", "2026-09-24T11:00:00Z"); 100]),
         );
         table.insert(
             format!("GET /repos/{REPO}/issues/7/events?per_page=100&page=2"),
@@ -1130,7 +1130,7 @@ async fn github_page_failures_and_invalid_lists_do_not_deliver_or_mark_read() {
                 table.insert(
                     format!("GET {path}"),
                     json!(vec![
-                        comment(1, "QaidVoid", "first", "2026-09-24T11:00:00Z");
+                        comment(1, "OctoCat", "first", "2026-09-24T11:00:00Z");
                         100
                     ]),
                 );
@@ -1165,7 +1165,7 @@ async fn github_full_pages_are_bounded_and_left_unread() {
             json!(vec![json!({}); 100])
         } else {
             json!(vec![
-                comment(1, "QaidVoid", "text", "2026-09-24T11:00:00Z");
+                comment(1, "OctoCat", "text", "2026-09-24T11:00:00Z");
                 100
             ])
         };

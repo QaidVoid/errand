@@ -356,7 +356,7 @@ impl Running {
         // refusal for a name the file plainly defines.
         let expanded = expand_alias(rest.trim(), &self.options.catalog.aliases());
         // The level is taken off before the name is looked up and put back
-        // after: an alias may carry one, and `musecringe:max` is not the name
+        // after: an alias may carry one, and `muse-lite:max` is not the name
         // of anything the host lists.
         let (wanted, asked_level) = split_level(&expanded);
 

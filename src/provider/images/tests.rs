@@ -466,27 +466,27 @@ fn a_bare_name_is_served_by_the_configured_provider() {
 /// on, not by the provider a session runs on.
 ///
 /// This is the bug that made `!gen-image` reach a chat host: `imageGen` named
-/// `image:max` bare, the session ran on `pg-oc`, and the request went to that
+/// `image:max` bare, the session ran on `acme-free`, and the request went to that
 /// host's `/images/generations`, which it does not serve.
 #[test]
 fn a_bare_image_model_is_served_by_the_provider_that_lists_it() {
     let configured = agent(&json!({
-        "provider": "pg-oc",
+        "provider": "acme-free",
         "providers": {
-            "pg-oc": {
+            "acme-free": {
                 "credential": "chat-key",
-                "baseUrl": "https://oc-free.pg.ai.ajam.dev",
+                "baseUrl": "https://free.acme.example",
             },
             "pg-image": {
                 "credential": "image-key",
-                "baseUrl": "https://image.pg.ai.ajam.dev/v1",
+                "baseUrl": "https://images.acme.example/v1",
                 "images": { "model": "image" },
             },
         },
     }));
     let available = vec![
         AvailableModel {
-            provider: "pg-oc".to_owned(),
+            provider: "acme-free".to_owned(),
             id: "free".to_owned(),
             default_level: None,
         },
@@ -502,7 +502,7 @@ fn a_bare_image_model_is_served_by_the_provider_that_lists_it() {
             .expect("an endpoint");
 
     // The images host, with its own key, and the level kept on the model.
-    assert_eq!(endpoint.base_url, "https://image.pg.ai.ajam.dev/v1");
+    assert_eq!(endpoint.base_url, "https://images.acme.example/v1");
     assert_eq!(endpoint.model, "image:max");
     assert_eq!(endpoint.credential, "image-key");
 }
@@ -582,15 +582,15 @@ fn the_provider_the_session_runs_on_is_preferred_when_it_serves_the_name() {
 #[test]
 fn a_bare_image_name_resolves_through_the_catalog_the_daemon_builds() {
     let configured = agent(&json!({
-        "provider": "pg-oc",
+        "provider": "acme-free",
         "providers": {
-            "pg-oc": {
+            "acme-free": {
                 "credential": "chat-key",
-                "baseUrl": "https://oc-free.pg.ai.ajam.dev",
+                "baseUrl": "https://free.acme.example",
             },
             "pg-image": {
                 "credential": "image-key",
-                "baseUrl": "https://image.pg.ai.ajam.dev/v1",
+                "baseUrl": "https://images.acme.example/v1",
                 "images": { "model": "image" },
                 "models": [
                     { "id": "image", "input": ["text"], "produces": ["text", "image"] },
@@ -605,7 +605,7 @@ fn a_bare_image_name_resolves_through_the_catalog_the_daemon_builds() {
         endpoint_with_effort(&configured, &available, "image:max", &BTreeMap::new(), None)
             .expect("an endpoint");
 
-    assert_eq!(endpoint.base_url, "https://image.pg.ai.ajam.dev/v1");
+    assert_eq!(endpoint.base_url, "https://images.acme.example/v1");
     assert_eq!(endpoint.model, "image:max");
     assert_eq!(endpoint.credential, "image-key");
 }
@@ -615,12 +615,12 @@ fn a_bare_image_name_resolves_through_the_catalog_the_daemon_builds() {
 #[test]
 fn an_effort_asked_for_goes_on_the_model_id() {
     let configured = agent(&json!({
-        "provider": "pg-oc",
+        "provider": "acme-free",
         "providers": {
-            "pg-oc": { "credential": "k", "baseUrl": "https://oc.example" },
+            "acme-free": { "credential": "k", "baseUrl": "https://free.acme.example" },
             "pg-image": {
                 "credential": "k",
-                "baseUrl": "https://image.pg.ai.ajam.dev/v1",
+                "baseUrl": "https://images.acme.example/v1",
                 "models": [{ "id": "image", "produces": ["text", "image"] }],
             },
         },
@@ -648,12 +648,12 @@ fn an_effort_asked_for_goes_on_the_model_id() {
 #[test]
 fn an_effort_replaces_a_level_the_name_already_carries() {
     let configured = agent(&json!({
-        "provider": "pg-oc",
+        "provider": "acme-free",
         "providers": {
-            "pg-oc": { "credential": "k", "baseUrl": "https://oc.example" },
+            "acme-free": { "credential": "k", "baseUrl": "https://free.acme.example" },
             "pg-image": {
                 "credential": "k",
-                "baseUrl": "https://image.pg.ai.ajam.dev/v1",
+                "baseUrl": "https://images.acme.example/v1",
                 "models": [{ "id": "image:high", "produces": ["text", "image"] }],
             },
         },
@@ -681,12 +681,12 @@ fn an_effort_replaces_a_level_the_name_already_carries() {
 #[test]
 fn no_effort_keeps_the_level_the_name_carries() {
     let configured = agent(&json!({
-        "provider": "pg-oc",
+        "provider": "acme-free",
         "providers": {
-            "pg-oc": { "credential": "k", "baseUrl": "https://oc.example" },
+            "acme-free": { "credential": "k", "baseUrl": "https://free.acme.example" },
             "pg-image": {
                 "credential": "k",
-                "baseUrl": "https://image.pg.ai.ajam.dev/v1",
+                "baseUrl": "https://images.acme.example/v1",
                 "models": [{ "id": "image:max", "produces": ["text", "image"] }],
             },
         },

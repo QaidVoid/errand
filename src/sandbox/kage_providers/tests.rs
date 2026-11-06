@@ -16,12 +16,12 @@ fn answered(code: i32, stdout: &str, stderr: &str) -> Result<KageProviders, Stri
 fn a_listed_id_says_which_table_it_takes() {
     let kage = as_installed();
     assert!(kage.overrides("openai"));
-    assert!(kage.overrides("kenari"));
+    assert!(kage.overrides("openrouter"));
     assert!(!kage.reserves("openai"));
     assert!(kage.reserves("acp"));
     assert!(!kage.overrides("acp"));
     assert_eq!(
-        kage.get("kenari-claude").map(|p| p.api.as_str()),
+        kage.get("commandcode-claude").map(|p| p.api.as_str()),
         Some("anthropic")
     );
 }
@@ -103,7 +103,7 @@ fn a_provider_named_for_a_reserved_id_is_refused() {
 /// whatever it is called, including catalog ones a name list never caught.
 #[test]
 fn images_on_a_kage_provider_without_an_images_endpoint_are_refused() {
-    for name in ["anthropic", "kenari-claude", "commandcode-claude"] {
+    for name in ["anthropic", "commandcode-claude"] {
         let problems = as_installed().refuses(&defined(&serde_json::json!({
             name: { "credential": "k", "images": { "model": "i" } },
         })));
@@ -123,7 +123,7 @@ fn images_on_a_kage_provider_without_an_images_endpoint_are_refused() {
 /// never caught.
 #[test]
 fn speech_on_a_kage_provider_without_a_speech_endpoint_is_refused() {
-    for name in ["anthropic", "kenari-claude", "commandcode-claude"] {
+    for name in ["anthropic", "commandcode-claude"] {
         let problems = as_installed().refuses(&defined(&serde_json::json!({
             name: { "credential": "k", "speech": { "model": "tts" } },
         })));
@@ -145,7 +145,7 @@ fn speech_on_a_kage_provider_without_a_speech_endpoint_is_refused() {
 fn what_kage_takes_is_not_refused() {
     let problems = as_installed().refuses(&defined(&serde_json::json!({
         "openai": { "credential": "k", "images": { "model": "i" } },
-        "kenari": { "credential": "k" },
+        "openrouter": { "credential": "k" },
         "openai-responses": { "credential": "k", "baseUrl": "https://o.example/v1" },
         "pictures": { "credential": "k", "baseUrl": "https://p.example/v1" },
         "acp": { "extension": true },
@@ -163,7 +163,7 @@ fn a_kind_kage_does_not_speak_is_refused_only_without_a_custom_slot() {
         "anthropic": { "credential": "k", "kind": "openai" },
         "zai": { "credential": "k", "kind": "anthropic", "baseUrl": "http://p.example" },
         "openai": { "credential": "k", "kind": "openai" },
-        "kenari-claude": { "credential": "k", "kind": "anthropic" },
+        "commandcode-claude": { "credential": "k", "kind": "anthropic" },
     })));
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(

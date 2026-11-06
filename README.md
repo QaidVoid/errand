@@ -2,65 +2,57 @@
 
 Run a coding agent from a chat channel, in a sandbox it cannot escape.
 
-A message in one configured channel opens a thread and starts a session. The
-agent works in a project directory of its own and nowhere else. Replies
-in the thread are prompts; what the agent says, runs, and changes comes back
-to the same thread.
+A message in one Discord channel opens a thread and starts a session. The agent
+works in a project directory of its own and nowhere else. Replies in the thread
+are prompts, and what the agent says, runs, and changes comes back to the same
+thread.
 
 - One channel, one thread per session, several sessions at once.
-- The agent runs sandboxed. There is no unsandboxed mode.
-- A queue bounds how much work reaches the model provider at once, so a burst
-  of messages cannot get an account rate limited.
-- The chat token never enters a sandbox.
+- Every session is sandboxed under bailey, rootless podman, or Incus. There is
+  no unsandboxed mode.
+- A per-session egress broker holds the provider key, so the sandbox only ever
+  sees a stand-in, and limits which hosts a session reaches.
+- Switch models mid-conversation, start sessions from GitHub or Forgejo issues,
+  and follow everything in an optional web interface.
 
-Full documentation, including every configuration field, is in
-[docs](docs), built with VitePress from `docs`.
+The full documentation is in [`docs/`](docs).
 
-## What you need
+## Requirements
 
-- Linux, with [bailey](https://github.com/QaidVoid/bailey), rootless podman, or
-  Incus on the host. The sandbox is not optional, so one of them has to be
-  there: without a backend the daemon refuses to start rather than running a
-  session unconfined. `sandbox.backend` picks which, and defaults to `bailey`.
-- A chat bot token, and one channel for it to serve.
+- Linux with [bailey](https://github.com/QaidVoid/bailey), rootless podman, or
+  Incus. `sandbox.backend` picks one and defaults to `bailey`.
+- [kage](https://github.com/QaidVoid/kage) newer than 0.5.1, the agent that
+  runs inside each session. It must be on the host's PATH under bailey, or
+  inside the image under podman and Incus.
+- A Discord bot token and one channel for it to serve.
 - A credential for a model provider.
+- A Rust toolchain and [bun](https://bun.sh) to build.
 
-bailey confines a session as a host process, using Landlock for the filesystem
-and seccomp for the syscall surface, so sessions use the host's own tools and
-there is no image to build. podman runs the session in a container from an
-image you provide instead. incus runs it in an unprivileged system container
-with its own init, so Docker, rootless podman and FUSE work inside it, at the
-cost of sharing the host kernel. [Sandboxing](docs/sandboxing.md) covers what
-each one enforces, and what the daemon does when a host cannot enforce it.
-
-## Running it
+## Quick start
 
 ```sh
-errand run       # run the daemon until it is told to stop
-errand threads   # list, inspect, remove and collect what sessions left behind
-errand help
+git clone https://github.com/QaidVoid/errand
+cd errand
+(cd web && bun install && bun run build)   # the interface the binary embeds
+cargo build --release
+install -Dm 0755 target/release/errand ~/.local/bin/errand
 ```
 
-There is a file to copy in [config.example.json](config.example.json), and a
-schema beside it that gives an editor completion and checking.
-
-The configuration file is read from `~/.config/errand/config.json`, then
-`/etc/errand/config.json`, then `config.json` in the working directory.
-`ERRAND_CONFIG` names one outright and skips the search. A minimal one:
+Write `~/.config/errand/config.json`:
 
 ```json
 {
   "chat": {
-    "token": "the bot token",
-    "channelId": "the one channel to serve",
-    "allowedUserIds": ["accounts that may drive sessions"]
+    "token": "YOUR_BOT_TOKEN",
+    "channelId": "THE_CHANNEL_TO_SERVE",
+    "allowedUserIds": ["ACCOUNTS_THAT_MAY_START_SESSIONS"]
   },
   "agent": {
     "provider": "anthropic",
     "providers": {
       "anthropic": {
         "credentialName": "ANTHROPIC_API_KEY",
-        "credential": "the provider key"
+        "credential": "YOUR_PROVIDER_KEY"
       }
     }
   },
@@ -69,130 +61,40 @@ The configuration file is read from `~/.config/errand/config.json`, then
 }
 ```
 
-Everything else has a documented default. The daemon refuses to start rather
-than run with a guarantee it cannot keep: if the backend cannot enforce
-everything configured on this host, it says which and stops, unless
-`sandbox.requireFullEnforcement` is set to `false`.
+Then run it and post in the channel:
 
-## Two models, one session
-
-A session can ask a cheaper model of the same provider one question about one
-thing that already exists: a long log, a large file, a diff. It is shown that
-one thing and nothing else, has no way to run or read anything, and answers in
-text, so what comes back is a description to check rather than a decision to
-follow. The point is what it keeps out of the session's own context, which is
-paid for again on every later turn.
-
-```json
-{
-  "agent": {
-    "delegate": { "model": "glm-5.3-flash", "perTurn": 8, "deadlineMs": 60000 }
-  }
-}
+```sh
+errand run       # run the daemon until it is told to stop
+errand threads   # list, inspect, remove and collect what sessions left behind
+errand help
 ```
 
-Absent means no delegation at all. With it, the agent gets a `delegate` command
-and is told how to use it; `!status` reports what it cost and how much it kept
-out. To have the cheaper model do the work rather than describe it, use
-`!model` instead.
+The daemon probes the sandbox before connecting, and refuses to start when the
+host cannot enforce what the configuration asks for. See
+[Quick start](docs/guide/quick-start.md) and
+[Sandboxing](docs/operations/sandboxing.md).
 
-## The interface
-
-An optional local web interface reads a session as it happens, browses the
-project, and starts new ones. It has no login: the address it binds to is the
-access control, and a public bind is refused rather than warned about. Build it
-once (`cd web && bun install && bun run build`, then
-`cargo build --release`), then add a `web` section to the configuration:
-
-```json
-{ "web": { "host": "127.0.0.1", "port": 8787 } }
-```
-
-Set `"observer": true` to serve one that can watch and read but change nothing.
-
-## In a thread
-
-`!help` lists what can be typed, `!usage` says how much of the provider's usage
-window is left and when it resets, and `!model` moves the session to another
-model of the same provider, keeping the conversation. Plan on the capable one,
-switch to the cheap one to carry it out, switch back to review. The same commands are registered as slash
-commands, so they can be picked rather than remembered. A message starting
-`!!!` is an aside: the people in the thread see it and the agent is never told.
-
-`!help`, `!usage` and `!model` also work in the channel, where they are
-answered by the daemon rather than starting a session. `!model` lists the
-models there; switching one still belongs to a session, so it asks for a
-thread.
-
-## Changing the configuration
-
-The daemon reads its configuration file again when it changes, so most edits
-take effect without a restart. The next session, and the daemon's own answers
-to `!usage`, `!model` and the rest, use the new file.
-
-A file that cannot be read is not fatal. An edit caught half-written, a field
-left out, a path that does not resolve: each is refused whole, the log says
-every reason, and the daemon carries on serving under the configuration it
-already had. Only a configuration that cannot be read at startup stops it,
-since a daemon with nothing to run on cannot serve.
-
-What a reload does not reach, because it was committed to before the daemon
-was serving:
-
-- the connection and the chat token, so who may use the bot in the served
-  channel is fixed until a restart
-- the interface's address and login, and the state directory
-- the sandbox backend and, under podman or incus, its image, which the startup
-  probe checked
-- sessions already running, which keep what they were launched with
-
-The rest of the sandbox section, the egress broker, and the provider routes it
-holds are rebuilt after a reload, so the next session launches under them. The
-log names any setting a reload changed that waits for a restart.
-
-The model list is derived from the file again after a change, so an edited
-`models` list is what `!model` lists straight away. `!models refresh` is for
-asking the providers themselves again, over the network.
-
-Full documentation, including every configuration field, is in
-[docs](docs), built with VitePress from `docs`.
-
-## Running it as a service
-
-Definitions for OpenRC and systemd are in [packaging](packaging), along with
-what to prepare and what its exit codes mean.
-
-## Status
-
-Early, but complete enough to run: chat, sandboxed sessions, the interface, and
-service definitions for both init systems.
+[`config.example.json`](config.example.json) is a fuller file to copy, and
+`config.schema.json` gives an editor completion and checking. Service
+definitions for systemd and OpenRC are in [`packaging/`](packaging).
 
 ## Development
 
 ```sh
-cargo fmt --check   # formatting
-cargo clippy --all-targets -- -D warnings   # lint, as CI runs it
-cargo test          # the test suite
-cargo run -- run    # run the daemon from the checkout
-cargo build --release   # the daemon binary, into target/release/
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo run -- run
 ```
 
-`cargo build --release` produces `target/release/errand`. The web interface
-builds out of `web` into `dist/web`:
+The reference pages under `docs/reference/` are generated from the code, and
+`cargo test` fails when they drift. Regenerate them with
+`cargo test regenerate_the_reference_pages -- --ignored`.
+
+The documentation site is VitePress:
 
 ```sh
-cd web && bun install && bun run build
-```
-
-The reference pages are generated from the schema, the command table, and the
-character table; `cargo test` fails when what is committed no longer matches,
-and `cargo test regenerate_the_reference_pages -- --ignored` brings them back
-in step.
-
-The documentation site builds with VitePress from `docs`, with bun:
-
-```
-cd docs && bun install && bun run build
+cd docs && bun install && bun run dev
 ```
 
 Project rules are in [AGENTS.md](AGENTS.md).

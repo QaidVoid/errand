@@ -499,7 +499,7 @@ impl SessionManager {
     /// `!model` names them.
     ///
     /// The level is taken off before the lookup and put back after: an alias
-    /// may carry one, and `musecringe:max` is not the name of anything the
+    /// may carry one, and `muse-lite:max` is not the name of anything the
     /// host lists.
     fn resolve(&self, value: &str) -> Named {
         let agent = &self.options.config.get().agent;

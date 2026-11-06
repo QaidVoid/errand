@@ -443,11 +443,11 @@ fn the_models_offered_are_the_ones_the_agent_can_reach() {
     }));
     let mut agent = agent();
     agent.providers = serde_json::Map::from_iter([(
-        "ajamxhacker".to_owned(),
+        "acme".to_owned(),
         json!({
             "baseUrl": "https://meta.example/v1",
             "credential": "secret",
-            "models": [{ "id": "musecringe", "reasoning": true }],
+            "models": [{ "id": "muse-lite", "reasoning": true }],
         }),
     )]);
 
@@ -462,7 +462,7 @@ fn the_models_offered_are_the_ones_the_agent_can_reach() {
         [
             "zai-coding-cn/glm-5.3",
             "zai-coding-cn/glm-5.3-flash",
-            "ajamxhacker/musecringe",
+            "acme/muse-lite",
         ],
         "the defined provider's model is offered and the unreachable one is not"
     );
@@ -488,10 +488,10 @@ fn a_model_can_be_told_how_hard_to_think_by_default() {
             }),
         ),
         (
-            "ajamxhacker".to_owned(),
+            "acme".to_owned(),
             json!({
                 "credential": "secret",
-                "models": [{ "id": "musecringe" }],
+                "models": [{ "id": "muse-lite" }],
             }),
         ),
     ]);
@@ -501,7 +501,7 @@ fn a_model_can_be_told_how_hard_to_think_by_default() {
 
     assert_eq!(
         sent,
-        ["glm-5.3:high", "glm-5.3-flash:low", "musecringe"],
+        ["glm-5.3:high", "glm-5.3-flash:low", "muse-lite"],
         "the provider's level applies to its models, the model's own beats it, \
          and a provider that names no level leaves the id alone"
     );

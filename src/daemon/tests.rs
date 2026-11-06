@@ -693,8 +693,8 @@ fn image_case(image_gen: &str, draw: Option<DrawImage>) -> DaemonCase {
                 "provider": "anthropic",
                 "providers": {
                     "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
-                    "ajamxhacker": {
-                        "credentialName": "AJAM_KEY",
+                    "acme": {
+                        "credentialName": "ACME_KEY",
                         "credential": "other",
                         "baseUrl": "https://images.example/v1",
                     },
@@ -710,7 +710,7 @@ fn image_case(image_gen: &str, draw: Option<DrawImage>) -> DaemonCase {
 #[tokio::test]
 async fn an_image_generation_in_the_channel_draws_and_posts_it() {
     let (asked, draw) = drawing();
-    with_daemon(image_case("ajamxhacker/pic:max", Some(draw)), |harness| {
+    with_daemon(image_case("acme/pic:max", Some(draw)), |harness| {
         Box::pin(async move {
             harness
                 .daemon
@@ -741,7 +741,7 @@ async fn an_image_generation_in_the_channel_draws_and_posts_it() {
 #[tokio::test]
 async fn an_image_generation_in_the_channel_passes_the_effort_it_was_asked_for() {
     let (asked, draw) = drawing();
-    with_daemon(image_case("ajamxhacker/pic", Some(draw)), |harness| {
+    with_daemon(image_case("acme/pic", Some(draw)), |harness| {
         Box::pin(async move {
             harness
                 .daemon
@@ -766,7 +766,7 @@ async fn an_image_generation_in_the_channel_passes_the_effort_it_was_asked_for()
 #[tokio::test]
 async fn an_unknown_effort_in_the_channel_is_refused() {
     let (asked, draw) = drawing();
-    with_daemon(image_case("ajamxhacker/pic", Some(draw)), |harness| {
+    with_daemon(image_case("acme/pic", Some(draw)), |harness| {
         Box::pin(async move {
             harness
                 .daemon
@@ -792,7 +792,7 @@ async fn an_unknown_effort_in_the_channel_is_refused() {
 #[tokio::test]
 async fn a_slash_image_generation_passes_its_effort() {
     let (asked, draw) = drawing();
-    with_daemon(image_case("ajamxhacker/pic", Some(draw)), |harness| {
+    with_daemon(image_case("acme/pic", Some(draw)), |harness| {
         Box::pin(async move {
             let answer = harness
                 .daemon
@@ -879,7 +879,7 @@ async fn an_image_generation_on_a_provider_without_an_endpoint_is_refused() {
 /// A host that cannot draw says so rather than failing silently.
 #[tokio::test]
 async fn an_image_generation_on_a_host_that_cannot_draw_says_so() {
-    with_daemon(image_case("ajamxhacker/pic", None), |harness| {
+    with_daemon(image_case("acme/pic", None), |harness| {
         Box::pin(async move {
             harness
                 .daemon
@@ -1502,7 +1502,7 @@ async fn a_slash_command_outside_a_thread_says_where_to_use_it() {
 #[tokio::test]
 async fn a_slash_image_generation_outside_a_thread_draws_and_posts_it() {
     let (asked, draw) = drawing();
-    with_daemon(image_case("ajamxhacker/pic:max", Some(draw)), |harness| {
+    with_daemon(image_case("acme/pic:max", Some(draw)), |harness| {
         Box::pin(async move {
             let answer = harness
                 .daemon
@@ -1530,7 +1530,7 @@ async fn a_slash_image_generation_outside_a_thread_draws_and_posts_it() {
 #[tokio::test]
 async fn a_slash_image_generation_without_a_prompt_says_what_to_type() {
     let (asked, draw) = drawing();
-    with_daemon(image_case("ajamxhacker/pic:max", Some(draw)), |harness| {
+    with_daemon(image_case("acme/pic:max", Some(draw)), |harness| {
         Box::pin(async move {
             let answer = harness
                 .daemon

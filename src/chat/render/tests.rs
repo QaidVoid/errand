@@ -495,11 +495,11 @@ fn a_turn_summary_groups_what_it_answers() {
 
     assert_eq!(
         turn_summary(
-            Some("musecringe:max"),
+            Some("muse-lite:max"),
             "2.4s (1.6s to first word)",
             Some(&usage)
         ),
-        "`musecringe:max` | 2.4s (1.6s to first word) | \
+        "`muse-lite:max` | 2.4s (1.6s to first word) | \
          10.9k tokens, 30% cached, 3.3k/1.0M context (0%), $0.0003"
     );
     // A turn with no usage yet is still worth timing, and a session that was
@@ -517,7 +517,7 @@ fn usage_is_a_table_with_the_reset_in_utc() {
     let table = usage_table(
         &[
             (
-                "ajamxhacker".to_owned(),
+                "acme".to_owned(),
                 Some(Quota {
                     percentage: 42.4,
                     resets_at: Some(now + 2 * 3_600_000 + 13 * 60_000),
@@ -547,7 +547,7 @@ fn usage_is_a_table_with_the_reset_in_utc() {
         "```\n\
 | provider      | left    | resets in | at (UTC)         |\n\
 |---------------|---------|-----------|------------------|\n\
-| ajamxhacker   | 58%     | 2h 13m    | 2026-09-21 16:26 |\n\
+| acme          | 58%     | 2h 13m    | 2026-09-21 16:26 |\n\
 | zai-coding-cn | spent   | 3d 21h    | 2026-09-25 11:13 |\n\
 | fresh         | 100%    | -         | -                |\n\
 | quiet         | unknown | -         | -                |\n\

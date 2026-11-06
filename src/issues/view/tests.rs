@@ -47,7 +47,7 @@ fn threads(api: Api) -> Arc<IssueThreads> {
 async fn the_issue_is_told_only_what_the_turn_came_to() {
     let (api, posted) = api();
     let view = threads(api)
-        .view_for("github:QaidVoid/edu#7")
+        .view_for("github:Acme/widgets#7")
         .expect("an issue");
 
     for event in [
@@ -64,10 +64,10 @@ async fn the_issue_is_told_only_what_the_turn_came_to() {
             command: "!model".to_owned(),
         },
         SessionEvent::Post {
-            text: "Fixed for <@github:qaidvoid>, reset <t:1790273365:R>.".to_owned(),
+            text: "Fixed for <@github:octocat>, reset <t:1790273365:R>.".to_owned(),
         },
         SessionEvent::Notice {
-            text: "<@github:qaidvoid> [done] glm-5.3-flash | 16m27s".to_owned(),
+            text: "<@github:octocat> [done] glm-5.3-flash | 16m27s".to_owned(),
             level: NoticeLevel::Done,
         },
     ] {
@@ -87,10 +87,10 @@ async fn the_issue_is_told_only_what_the_turn_came_to() {
 
     let posted = posted.lock().unwrap();
     assert_eq!(posted.len(), 1);
-    assert_eq!(posted[0].0, "/repos/QaidVoid/edu/issues/7/comments");
+    assert_eq!(posted[0].0, "/repos/Acme/widgets/issues/7/comments");
     assert_eq!(
         posted[0].1["body"],
-        "Fixed for @qaidvoid, reset 2026-09-24 18:09 UTC."
+        "Fixed for @octocat, reset 2026-09-24 18:09 UTC."
     );
 }
 
@@ -119,7 +119,7 @@ async fn a_turn_that_said_nothing_tells_the_issue_why_it_failed() {
 
 #[test]
 fn chat_markup_is_said_in_githubs_terms_and_the_rest_is_left_alone() {
-    assert_eq!(for_forge("hi <@github:QaidVoid>"), "hi @QaidVoid");
+    assert_eq!(for_forge("hi <@github:OctoCat>"), "hi @OctoCat");
     assert_eq!(for_forge("at <t:0:R>"), "at 1970-01-01 00:00 UTC");
     assert_eq!(
         for_forge("<@123> kept, a < b > c, <t:x:R>, <open"),

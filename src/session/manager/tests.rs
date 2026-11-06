@@ -518,7 +518,7 @@ fn listed() -> Vec<AvailableModel> {
         ("zai", "glm-5.3"),
         ("zai", "glm-5.3-flash"),
         ("openrouter", "glm-5.3-air"),
-        ("muse", "musecringe"),
+        ("muse", "muse-lite"),
         ("meta", "muse-spark-1.3-contributor"),
         ("meta", "muse"),
         ("meta", "one"),
@@ -1900,7 +1900,7 @@ async fn a_thread_whose_provider_is_gone_resumes_on_the_configured_model() {
                 {
                     let mut registry = harness.registry.lock().unwrap();
                     let mut renamed = registry.get("thread-1").expect("remembered").clone();
-                    renamed.provider = Some("ajamxhacker".to_owned());
+                    renamed.provider = Some("acme".to_owned());
                     renamed.model = Some("muse-spark-1.3-contributor:max".to_owned());
                     registry.remember(renamed);
                 }
@@ -2122,11 +2122,11 @@ fn a_session_opened_from_the_interface_names_its_starter_and_links_to_it() {
         opened_from_interface(
             &starter,
             "fix the build",
-            Some("https://talaria.example/"),
+            Some("https://errand.example/"),
             "abc123"
         ),
         "<@100000000000000001> started a session from the interface: fix the build\n\
-         https://talaria.example/?session=abc123"
+         https://errand.example/?session=abc123"
     );
     assert_eq!(
         opened_from_interface(&starter, "fix the build", None, "abc123"),

@@ -4281,13 +4281,13 @@ fn a_model_carries_the_provider_that_serves_it() {
         },
         AvailableModel {
             provider: "muse".to_owned(),
-            id: "musecringe".to_owned(),
+            id: "muse-lite".to_owned(),
             default_level: None,
         },
     ];
 
     // Away from the configured provider.
-    let away = super::answering::choose(&available, "musecringe", "zai");
+    let away = super::answering::choose(&available, "muse-lite", "zai");
     assert!(matches!(&away, super::answering::Chosen::One(m) if m.provider == "muse"));
 
     // And back again, from the provider we switched to.
@@ -4407,31 +4407,26 @@ fn the_listing_says_what_somebody_can_type_back() {
     );
 }
 
-/// An alias may carry a level, and `musecringe:max` is not the name of
+/// An alias may carry a level, and `muse-lite:max` is not the name of
 /// anything the host lists. The level comes off before the lookup and goes
 /// back on after, or `!model muse` is refused for a model that is right there.
 #[test]
 fn an_alias_carrying_a_level_still_finds_its_model() {
-    let aliases = std::collections::BTreeMap::from([(
-        "muse".to_owned(),
-        "ajamxhacker/musecringe:max".to_owned(),
-    )]);
+    let aliases =
+        std::collections::BTreeMap::from([("muse".to_owned(), "acme/muse-lite:max".to_owned())]);
     let available = vec![AvailableModel {
-        provider: "ajamxhacker".to_owned(),
-        id: "musecringe".to_owned(),
+        provider: "acme".to_owned(),
+        id: "muse-lite".to_owned(),
         default_level: None,
     }];
 
     let expanded = crate::session::model::expand_alias("muse", &aliases);
     let (bare, level) = crate::session::model::split_level(&expanded);
-    assert_eq!(
-        (bare.as_str(), level.as_str()),
-        ("ajamxhacker/musecringe", ":max")
-    );
+    assert_eq!((bare.as_str(), level.as_str()), ("acme/muse-lite", ":max"));
 
     match super::answering::choose(&available, &bare, "zai") {
         super::answering::Chosen::One(model) => {
-            assert_eq!(model.with_level(&level), "musecringe:max");
+            assert_eq!(model.with_level(&level), "muse-lite:max");
         }
         _ => panic!("the alias must find its model"),
     }
@@ -4442,13 +4437,13 @@ fn an_alias_carrying_a_level_still_finds_its_model() {
 #[test]
 fn a_model_thinks_at_its_own_default_until_somebody_says_otherwise() {
     let model = AvailableModel {
-        provider: "ajamxhacker".to_owned(),
-        id: "musecringe".to_owned(),
+        provider: "acme".to_owned(),
+        id: "muse-lite".to_owned(),
         default_level: Some(":high".to_owned()),
     };
 
-    assert_eq!(model.with_level(""), "musecringe:high");
-    assert_eq!(model.with_level(":max"), "musecringe:max");
+    assert_eq!(model.with_level(""), "muse-lite:high");
+    assert_eq!(model.with_level(":max"), "muse-lite:max");
 
     let plain = AvailableModel {
         provider: "zai".to_owned(),
@@ -4470,14 +4465,14 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
                 "provider": "anthropic",
                 "providers": {
                     "anthropic": { "credential": "secret" },
-                    "ajamxhacker": { "credential": "secret" },
+                    "acme": { "credential": "secret" },
                 },
-                "aliases": { "muse": "ajamxhacker/musecringe:max" },
+                "aliases": { "muse": "acme/muse-lite:max" },
             },
         }))),
         available_models: vec![AvailableModel {
-            provider: "ajamxhacker".to_owned(),
-            id: "musecringe".to_owned(),
+            provider: "acme".to_owned(),
+            id: "muse-lite".to_owned(),
             default_level: None,
         }],
         ..SessionTestCase::default()
@@ -4506,7 +4501,7 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
                 .find(|line| line.contains("session/set_config_option"))
                 .expect("the switch is sent");
             assert!(
-                switch.contains("\"value\":\"ajamxhacker/musecringe\""),
+                switch.contains("\"value\":\"acme/muse-lite\""),
                 "the agent is given the qualified id, got {switch}"
             );
             assert!(
@@ -4521,7 +4516,7 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
                     .thread
                     .replies()
                     .iter()
-                    .any(|(text, _)| text.contains("musecringe:max")),
+                    .any(|(text, _)| text.contains("muse-lite:max")),
                 "the thread is still told the name with its level"
             );
 
@@ -4537,11 +4532,11 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
             let said = harness.thread.replies();
             let listing = &said.last().expect("a listing").0;
             assert!(
-                listing.contains("this session runs on `ajamxhacker/musecringe:max`"),
+                listing.contains("this session runs on `acme/muse-lite:max`"),
                 "got {listing}"
             );
             assert!(
-                listing.contains("`ajamxhacker/musecringe`  (running, `muse`)"),
+                listing.contains("`acme/muse-lite`  (running, `muse`)"),
                 "the model it was switched to is the one marked, got {listing}"
             );
         })
@@ -5254,10 +5249,10 @@ async fn a_configured_model_naming_a_provider_starts_the_session_there() {
         config: Some(config_with(&json!({
             "agent": {
                 "provider": "anthropic",
-                "model": "ajamxhacker/musecringe:max",
+                "model": "acme/muse-lite:max",
                 "providers": {
                     "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
-                    "ajamxhacker": { "credentialName": "AJAM_KEY", "credential": "other" },
+                    "acme": { "credentialName": "ACME_KEY", "credential": "other" },
                 },
             },
         }))),
@@ -5267,10 +5262,10 @@ async fn a_configured_model_naming_a_provider_starts_the_session_there() {
     with_session(case, |harness| {
         Box::pin(async move {
             let launched = harness.sandbox.launched.lock().unwrap();
-            assert_eq!(launched[0].provider, "ajamxhacker");
-            assert_eq!(launched[0].model.as_deref(), Some("musecringe:max"));
+            assert_eq!(launched[0].provider, "acme");
+            assert_eq!(launched[0].model.as_deref(), Some("muse-lite:max"));
             assert_eq!(
-                launched[0].env.get("AJAM_KEY"),
+                launched[0].env.get("ACME_KEY"),
                 Some(&"other".to_owned()),
                 "the credential is the one that provider is reached with"
             );
@@ -5287,12 +5282,12 @@ async fn a_provider_naming_no_variable_is_still_reached_with_its_key() {
     let case = SessionTestCase {
         config: Some(config_with(&json!({
             "agent": {
-                "provider": "pg-oc",
+                "provider": "acme-free",
                 "providers": {
-                    "pg-oc": {
+                    "acme-free": {
                         "credential": "secret",
-                        "baseUrl": "https://oc.example/v1",
-                        "models": [{ "id": "space-bunny-free" }],
+                        "baseUrl": "https://free.acme.example/v1",
+                        "models": [{ "id": "coder-free" }],
                     },
                 },
             },
@@ -5306,12 +5301,12 @@ async fn a_provider_naming_no_variable_is_still_reached_with_its_key() {
             assert_eq!(
                 launched[0]
                     .credential_names
-                    .get("pg-oc")
+                    .get("acme-free")
                     .map(String::as_str),
-                Some("ERRAND_PROVIDER_PG_OC_API_KEY")
+                Some("ERRAND_PROVIDER_ACME_FREE_API_KEY")
             );
             assert_eq!(
-                launched[0].env.get("ERRAND_PROVIDER_PG_OC_API_KEY"),
+                launched[0].env.get("ERRAND_PROVIDER_ACME_FREE_API_KEY"),
                 Some(&"secret".to_owned()),
                 "the credential crosses in the variable the configuration names"
             );
@@ -5329,7 +5324,7 @@ async fn the_thread_is_told_which_model_it_is_talking_to() {
         config: Some(config_with(&json!({
             "agent": {
                 "provider": "anthropic",
-                "model": "musecringe:max",
+                "model": "muse-lite:max",
                 "providers": {
                     "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
                 },
@@ -5343,7 +5338,7 @@ async fn the_thread_is_told_which_model_it_is_talking_to() {
             assert!(
                 harness.thread.notices()[0]
                     .0
-                    .contains("ready, working in demo on `musecringe:max`"),
+                    .contains("ready, working in demo on `muse-lite:max`"),
                 "got {:?}",
                 harness.thread.notices()[0].0
             );
@@ -5373,7 +5368,7 @@ async fn the_thread_is_told_which_model_it_is_talking_to() {
                 .find(|(_, level)| *level == NoticeLevel::Done)
                 .expect("the turn ends")
                 .0;
-            assert!(done.contains("`musecringe:max`"), "got {done}");
+            assert!(done.contains("`muse-lite:max`"), "got {done}");
         })
     })
     .await;
@@ -5476,8 +5471,8 @@ fn a_fetch_error_is_reported_with_its_whole_cause_chain() {
 #[tokio::test(start_paused = true)]
 async fn a_short_name_added_after_the_launch_is_known_to_a_running_session() {
     let model = AvailableModel {
-        provider: "ajamxhacker".to_owned(),
-        id: "musecringe".to_owned(),
+        provider: "acme".to_owned(),
+        id: "muse-lite".to_owned(),
         default_level: None,
     };
     // The catalog as it stands when the session is launched: the model is
@@ -5490,8 +5485,8 @@ async fn a_short_name_added_after_the_launch_is_known_to_a_running_session() {
     let case = SessionTestCase {
         config: Some(config_with(&json!({
             "agent": {
-                "provider": "ajamxhacker",
-                "providers": { "ajamxhacker": { "credential": "secret" } },
+                "provider": "acme",
+                "providers": { "acme": { "credential": "secret" } },
             },
         }))),
         available_models: vec![model],
@@ -5510,7 +5505,7 @@ async fn a_short_name_added_after_the_launch_is_known_to_a_running_session() {
                 catalog.models(),
                 std::collections::BTreeMap::from([(
                     "muse".to_owned(),
-                    "ajamxhacker/musecringe:max".to_owned(),
+                    "acme/muse-lite:max".to_owned(),
                 )]),
             );
 
@@ -6322,14 +6317,14 @@ async fn the_model_is_published_and_a_switch_during_a_turn_waits_for_it() {
                 "model": "claude-a",
                 "providers": {
                     "anthropic": { "credential": "secret" },
-                    "ajamxhacker": { "credential": "secret" },
+                    "acme": { "credential": "secret" },
                 },
-                "aliases": { "muse": "ajamxhacker/musecringe:max" },
+                "aliases": { "muse": "acme/muse-lite:max" },
             },
         }))),
         available_models: vec![AvailableModel {
-            provider: "ajamxhacker".to_owned(),
-            id: "musecringe".to_owned(),
+            provider: "acme".to_owned(),
+            id: "muse-lite".to_owned(),
             default_level: None,
         }],
         ..SessionTestCase::default()
@@ -6352,7 +6347,7 @@ async fn the_model_is_published_and_a_switch_during_a_turn_waits_for_it() {
                 harness
                     .thread
                     .everything()
-                    .contains("switching to `ajamxhacker/musecringe:max` once this turn ends"),
+                    .contains("switching to `acme/muse-lite:max` once this turn ends"),
                 "{}",
                 harness.thread.everything()
             );
@@ -6376,7 +6371,7 @@ async fn the_model_is_published_and_a_switch_during_a_turn_waits_for_it() {
             );
             assert_eq!(
                 harness.thread.usage().and_then(|usage| usage.model),
-                Some("ajamxhacker/musecringe:max".to_owned())
+                Some("acme/muse-lite:max".to_owned())
             );
         })
     })

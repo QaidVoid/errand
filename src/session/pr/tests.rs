@@ -493,7 +493,7 @@ fn a_directory_whose_git_is_a_redirect_file_is_not_a_repository() {
 #[test]
 fn a_repository_placed_the_way_its_url_reads_is_found() {
     let root = tempfile::tempdir().unwrap();
-    let repo = root.path().join("github.com/pkgforge-dev/polyfill-glibc");
+    let repo = root.path().join("github.com/acme-labs/polyfill");
     std::fs::create_dir_all(repo.join(".git")).unwrap();
     std::fs::create_dir_all(root.path().join(".cache/deep/.git")).unwrap();
     let project = root.path().display().to_string();
@@ -545,7 +545,7 @@ fn a_repository_named_as_on_github_is_refused_with_the_ones_here() {
     std::fs::create_dir_all(root.path().join("edu/playground/.git")).unwrap();
     let project = root.path().display().to_string();
 
-    let error = find_repository(&project, Some("github.com/talaria0101/edu-playground"))
+    let error = find_repository(&project, Some("github.com/acme/playground"))
         .unwrap_err()
         .to_string();
     assert!(error.contains("there is no repository at"), "{error}");

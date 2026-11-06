@@ -612,7 +612,7 @@ fn url_host(url: &reqwest::Url) -> Option<String> {
 /// What the daemon reports when it stops.
 ///
 /// These are a contract with whoever runs the daemon: the table in
-/// `docs/start.md` names them, so a service can tell a refusal from a crash.
+/// `docs/operations/service.md` names them, so a service can tell a refusal from a crash.
 /// The numbers are chosen rather than incidental.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
