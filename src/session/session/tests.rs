@@ -1843,6 +1843,295 @@ async fn a_spent_provider_window_refuses_a_prompt_before_it_takes_a_slot() {
     .await;
 }
 
+/// A turn admitted while another runs waits for that turn to settle and then
+/// runs, instead of replacing its ticket and leaving a slot behind.
+#[tokio::test(start_paused = true)]
+async fn a_turn_admitted_while_one_runs_waits_for_the_running_one_to_settle() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            // The start turn is still running: its ticket is held.
+            harness
+                .session
+                .handle(message_from("!then do the next thing", OWNER, "m2"))
+                .await;
+
+            assert_eq!(harness.thread.turns(), [1, 2]);
+            assert!(
+                !harness.written().contains("do the next thing"),
+                "the held turn has not started"
+            );
+            assert_eq!(harness.scheduler.turns_in_flight(), 2);
+
+            harness.run_turn().await;
+            settle().await;
+            assert!(
+                harness.written().contains("do the next thing"),
+                "the held turn ran once the running one settled"
+            );
+            assert_eq!(harness.scheduler.turns_in_flight(), 1);
+
+            harness.run_turn().await;
+            settle().await;
+            assert_eq!(
+                harness.scheduler.turns_in_flight(),
+                0,
+                "no slot was left behind"
+            );
+        })
+    })
+    .await;
+}
+
+/// A queued prompt admitted once the provider window is spent is refused
+/// before its turn is sent, and the slot it held comes back.
+#[tokio::test(start_paused = true)]
+async fn a_queued_prompt_admitted_into_a_spent_window_is_refused_unsent() {
+    // The window is open for the start prompt and the held prompt, and spent
+    // by the time the queue admits the held one.
+    let asked = Arc::new(Mutex::new(0_u32));
+    let window = Arc::clone(&asked);
+    with_session(
+        SessionTestCase {
+            config: Some(config_with(&json!({
+                "limits": { "maxConcurrentTurns": 1 },
+            }))),
+            unavailable: Some(Arc::new(move |_provider| {
+                let window = Arc::clone(&window);
+                Box::pin(async move {
+                    let mut calls = window.lock().unwrap();
+                    *calls += 1;
+                    if *calls < 3 {
+                        None
+                    } else {
+                        Some("come back at nine".to_owned())
+                    }
+                })
+            })),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                // The start turn holds the only slot; a held prompt queues.
+                harness
+                    .session
+                    .handle(message_from("!then do the next thing", OWNER, "m2"))
+                    .await;
+                assert_eq!(harness.scheduler.queue_length(), 1);
+
+                // The turn settles; the queue admits the held prompt, where
+                // the window has now been spent.
+                harness.run_turn().await;
+                settle().await;
+
+                assert!(harness.thread.everything().contains("come back at nine"));
+                assert_eq!(
+                    harness.thread.final_reaction("m2"),
+                    Some(ReactionOutcome::Failed)
+                );
+                assert!(
+                    !harness.written().contains("do the next thing"),
+                    "the refused prompt never reached the agent"
+                );
+                assert_eq!(
+                    harness.scheduler.turns_in_flight(),
+                    0,
+                    "the refused admission's slot came back"
+                );
+            })
+        },
+    )
+    .await;
+}
+
+/// A queued prompt admitted while a turn runs and the window has been spent
+/// is refused where it was asked, and the live turn keeps its own settle.
+#[tokio::test(start_paused = true)]
+async fn an_admission_refused_while_a_turn_runs_leaves_the_live_slot_alone() {
+    // The window is open for the start prompt and the held prompt, and spent
+    // by the time the queue admits the held one.
+    let asked = Arc::new(Mutex::new(0_u32));
+    let window = Arc::clone(&asked);
+    with_session(
+        SessionTestCase {
+            unavailable: Some(Arc::new(move |_provider| {
+                let window = Arc::clone(&window);
+                Box::pin(async move {
+                    let mut calls = window.lock().unwrap();
+                    *calls += 1;
+                    if *calls < 3 {
+                        None
+                    } else {
+                        Some("come back at nine".to_owned())
+                    }
+                })
+            })),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                // A turn from elsewhere holds the second slot, so a held
+                // prompt queues instead of being admitted at once.
+                let foreign = harness.scheduler.try_admit().expect("a free slot");
+                harness
+                    .session
+                    .handle(message_from("!then do the next thing", OWNER, "m2"))
+                    .await;
+                assert_eq!(harness.scheduler.queue_length(), 1);
+
+                // The foreign turn ends while this session's is still
+                // running; the queue lets the held prompt in, where the
+                // window has now been spent.
+                harness.scheduler.release(&foreign);
+                settle().await;
+
+                assert!(harness.thread.everything().contains("come back at nine"));
+                assert_eq!(
+                    harness.thread.final_reaction("m2"),
+                    Some(ReactionOutcome::Failed)
+                );
+                assert!(
+                    !harness.written().contains("do the next thing"),
+                    "the refused prompt never reached the agent"
+                );
+                assert_eq!(
+                    harness.scheduler.turns_in_flight(),
+                    1,
+                    "the live turn keeps its slot"
+                );
+
+                harness.run_turn().await;
+                settle().await;
+                assert_eq!(harness.scheduler.turns_in_flight(), 0);
+                assert_eq!(
+                    harness.thread.final_reaction("m1"),
+                    Some(ReactionOutcome::Succeeded),
+                    "the live turn's settle reacts on its own message"
+                );
+            })
+        },
+    )
+    .await;
+}
+
+/// A second admission arriving while one is already held is refused,
+/// however it reached the front of the queue.
+#[tokio::test(start_paused = true)]
+async fn a_second_admission_while_one_is_held_is_refused_at_the_stash() {
+    with_session(
+        SessionTestCase {
+            config: Some(config_with(&json!({
+                "limits": { "maxConcurrentTurns": 3 },
+            }))),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                // Two foreign turns fill the cap, so both held prompts queue
+                // rather than being admitted at once.
+                let first = harness.scheduler.try_admit().expect("a free slot");
+                let second = harness.scheduler.try_admit().expect("a free slot");
+                harness
+                    .session
+                    .handle(message_from("!then do the next thing", OWNER, "m2"))
+                    .await;
+                harness
+                    .session
+                    .handle(message_from("!then do the third thing", OWNER, "m3"))
+                    .await;
+                assert_eq!(harness.scheduler.queue_length(), 2);
+
+                // Both foreign turns end while this session's is still
+                // running: the first held prompt is taken, the second is
+                // refused rather than replacing it.
+                harness.scheduler.release(&first);
+                settle().await;
+                harness.scheduler.release(&second);
+                settle().await;
+
+                assert_eq!(
+                    harness.thread.final_reaction("m3"),
+                    Some(ReactionOutcome::Failed)
+                );
+                assert!(
+                    !harness.written().contains("do the third thing"),
+                    "the refused prompt never reached the agent"
+                );
+                assert!(
+                    !harness.written().contains("do the next thing"),
+                    "the held prompt waits for the running turn"
+                );
+
+                harness.run_turn().await;
+                settle().await;
+                assert!(
+                    harness.written().contains("do the next thing"),
+                    "the held prompt ran once the running turn settled"
+                );
+
+                harness.run_turn().await;
+                settle().await;
+                assert_eq!(harness.scheduler.turns_in_flight(), 0);
+            })
+        },
+    )
+    .await;
+}
+
+/// Only one prompt waits for the running turn: a second held one is refused
+/// rather than silently replacing the first.
+#[tokio::test(start_paused = true)]
+async fn a_second_held_prompt_is_refused_rather_than_replacing_the_first() {
+    with_session(
+        SessionTestCase {
+            config: Some(config_with(&json!({
+                "limits": { "maxConcurrentTurns": 3 },
+            }))),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .session
+                    .handle(message_from("!then do the next thing", OWNER, "m2"))
+                    .await;
+                harness
+                    .session
+                    .handle(message_from("!then do the third thing", OWNER, "m3"))
+                    .await;
+
+                assert_eq!(
+                    harness.thread.final_reaction("m3"),
+                    Some(ReactionOutcome::Failed)
+                );
+                assert!(
+                    harness
+                        .thread
+                        .everything()
+                        .contains("a prompt is already waiting"),
+                    "the refusal says why"
+                );
+                assert!(
+                    !harness.written().contains("do the third thing"),
+                    "the refused prompt never reached the agent"
+                );
+                assert_eq!(harness.scheduler.turns_in_flight(), 2);
+
+                harness.run_turn().await;
+                settle().await;
+                assert!(
+                    harness.written().contains("do the next thing"),
+                    "the first held prompt still ran"
+                );
+
+                harness.run_turn().await;
+                settle().await;
+                assert_eq!(harness.scheduler.turns_in_flight(), 0);
+            })
+        },
+    )
+    .await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn what_is_remembered_is_written_into_the_agents_own_prompt() {
     let memory = Arc::new(MemoryStore::open(":memory:").expect("the store opens"));

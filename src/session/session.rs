@@ -794,6 +794,20 @@ impl SessionHandle {
     }
 }
 
+/// A prompt the queue admitted while another turn was still running.
+///
+/// A session runs one turn at a time, so the admission keeps its scheduler
+/// slot and waits here until the running turn settles, rather than replacing
+/// its ticket and leaving that turn no way to give its own slot back. While
+/// it waits it is past the queue's expiry, which would be odd to apply
+/// mid-hand; the running turn's own deadlines bound the wait.
+struct PendingTurn {
+    ticket: Ticket,
+    content: String,
+    message: IncomingMessage,
+    images: Vec<Value>,
+}
+
 /// The session's whole state, owned by its one task.
 ///
 /// The flags mirror the original's fields one for one; gathering them into
@@ -821,6 +835,9 @@ struct Running {
     /// scrubbed until it is worthless and no longer.
     github_scrubbed: Vec<(String, i64)>,
     ticket: Option<Ticket>,
+    /// A turn admitted for this session while another ran, started once that
+    /// one settles.
+    pending_turn: Option<PendingTurn>,
     pending_withdrawals: Vec<String>,
     /// A `!model` asked for while a turn ran, applied once it settles: what
     /// followed the command, and the message that asked.
@@ -959,6 +976,7 @@ impl Running {
             github_scrubbed: Vec::new(),
             client: None,
             ticket: None,
+            pending_turn: None,
             pending_withdrawals: Vec::new(),
             pending_switch: None,
             reported_model: None,
@@ -1038,6 +1056,16 @@ impl Running {
                     if spent.is_none() {
                         self.send_prompt(Some(ticket), &content, &message, &images)
                             .await;
+                    } else if self.ticket.is_some() {
+                        // A turn already holds this session's slot: this
+                        // admission's slot goes back rather than replacing
+                        // the live ticket, and the prompt is answered where
+                        // it was asked. The live turn keeps its own message
+                        // as the one its settle reacts on.
+                        self.options.scheduler.release(&ticket);
+                        self.views.send(SessionEvent::Waiting { text: None }).await;
+                        self.say(&spent.unwrap_or_default()).await;
+                        self.react(&message.id, ReactionOutcome::Failed).await;
                     } else {
                         self.ticket = Some(ticket);
                         self.current_message_id = Some(message.id);
@@ -1154,6 +1182,7 @@ impl Running {
                     // leaking.
                     self.say(&line).await;
                     self.settle_turn(ReactionOutcome::Failed).await;
+                    self.start_pending_turn().await;
                 }
                 Signal::Retry(detail) => {
                     self.options.scheduler.note_rate_limit();
@@ -1741,6 +1770,17 @@ impl Running {
             return;
         }
 
+        // One held prompt at a time: the pending one starts the moment the
+        // running turn settles, so a second held one would never run at all.
+        if self.pending_turn.is_some() {
+            self.say(
+                "a prompt is already waiting for the running turn to settle, so this one was not taken",
+            )
+            .await;
+            self.react(&message.id, ReactionOutcome::Failed).await;
+            return;
+        }
+
         // Opened before the prompt is noted, so the prompt is the first thing
         // in the turn it starts rather than the last thing in the one before
         // it.
@@ -1820,7 +1860,39 @@ impl Running {
         message: &IncomingMessage,
         images: &[Value],
     ) {
-        self.ticket = ticket;
+        if let Some(ticket) = ticket {
+            if self.ticket.is_some() {
+                if self.pending_turn.is_some() {
+                    // One held prompt at a time, wherever the admission came
+                    // from: a second would replace the first and never run.
+                    self.options.scheduler.release(&ticket);
+                    self.views.send(SessionEvent::Waiting { text: None }).await;
+                    self.say(
+                        "a prompt is already waiting for the running turn to settle, so this one was not taken",
+                    )
+                    .await;
+                    self.react(&message.id, ReactionOutcome::Failed).await;
+                    return;
+                }
+                // One session runs one turn at a time: the admission keeps
+                // its slot and waits for the running turn to settle, rather
+                // than replacing its ticket and leaving that turn no way to
+                // give its own slot back.
+                self.pending_turn = Some(PendingTurn {
+                    ticket,
+                    content: content.to_owned(),
+                    message: message.clone(),
+                    images: images.to_vec(),
+                });
+                self.views
+                    .send(SessionEvent::Waiting {
+                        text: Some("waiting for the running turn to settle".to_owned()),
+                    })
+                    .await;
+                return;
+            }
+            self.ticket = Some(ticket);
+        }
         self.current_message_id = Some(message.id.clone());
         self.current_author_id = Some(message.author_id.clone());
         self.turn_started_at = Some(tokio::time::Instant::now());
@@ -1996,6 +2068,28 @@ impl Running {
         if let Some(message_id) = message_id {
             self.react(&message_id, outcome).await;
         }
+    }
+
+    /// Starts a prompt the queue admitted while a turn ran, once that turn
+    /// has settled.
+    ///
+    /// The admission kept its scheduler slot while it waited, so starting it
+    /// here needs nothing newly granted: the session runs it as its next
+    /// turn.
+    async fn start_pending_turn(&mut self) {
+        if self.ended {
+            return;
+        }
+        let Some(pending) = self.pending_turn.take() else {
+            return;
+        };
+        self.send_prompt(
+            Some(pending.ticket),
+            &pending.content,
+            &pending.message,
+            &pending.images,
+        )
+        .await;
     }
 
     /// Takes in the agent's latest report of what the session has spent.
@@ -2232,6 +2326,7 @@ impl Running {
         }
         self.abort_in_flight = false;
         self.reset_idle_timer();
+        self.start_pending_turn().await;
     }
 
     /// Shows where a running tool call has got to, or what an agent it
@@ -3076,6 +3171,14 @@ impl Running {
         })
         .await;
         self.options.scheduler.cancel_session(&self.options.id);
+        // A turn admitted while another ran never started; its slot goes
+        // back with the session rather than with the struct's drop, and the
+        // message it was asked in is marked rather than left accepted.
+        if let Some(pending) = self.pending_turn.take() {
+            self.react(&pending.message.id, ReactionOutcome::Failed)
+                .await;
+            self.options.scheduler.release(&pending.ticket);
+        }
 
         if let Some(sandbox) = &self.sandbox {
             let _ = (sandbox.stop)().await;
