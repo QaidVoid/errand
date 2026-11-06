@@ -80,3 +80,19 @@ fn something_that_only_looks_like_an_address_is_not_one() {
         assert!(!check_bind_address(host).allowed, "{host}");
     }
 }
+
+/// The resolver that binds reads a leading zero as octal, so an address that
+/// checks as one thing would be bound as another: refused, not interpreted.
+#[test]
+fn an_address_with_an_octal_part_is_refused_as_ambiguous() {
+    for host in ["010.0.0.1", "10.0.0.01", "010.0.0.010", "192.168.0.001"] {
+        let verdict = check_bind_address(host);
+        assert!(!verdict.allowed, "{host}");
+        assert!(verdict.reason.contains("octal"), "{}", verdict.reason);
+    }
+
+    // A lone zero is not octal, and the addresses around the rule still work.
+    for host in ["10.0.0.5", "127.0.0.1", "100.64.0.1"] {
+        assert!(check_bind_address(host).allowed, "{host}");
+    }
+}

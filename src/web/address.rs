@@ -30,7 +30,14 @@ fn parse_ipv4(host: &str) -> Option<[u8; 4]> {
 
     let mut octets = [0u8; 4];
     for (slot, part) in octets.iter_mut().zip(&parts) {
-        if part.is_empty() || part.len() > 3 || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+        // A leading zero is read as octal by the resolver that binds, so
+        // "010.0.0.1" names 8.0.0.1 to the machine and would check here as
+        // 10.0.0.1 unless it is refused outright.
+        if part.is_empty()
+            || part.len() > 3
+            || !part.bytes().all(|byte| byte.is_ascii_digit())
+            || (part.len() > 1 && part.starts_with('0'))
+        {
             return None;
         }
         // The range check above makes the truncation impossible.
@@ -44,6 +51,18 @@ fn parse_ipv4(host: &str) -> Option<[u8; 4]> {
         }
     }
     Some(octets)
+}
+
+/// Whether the host is dotted-quad shaped with a part the machine that binds
+/// would read as octal, so it names a different address than it looks like.
+fn has_octal_octet(host: &str) -> bool {
+    let parts: Vec<&str> = host.split('.').collect();
+    parts.len() == 4
+        && parts.iter().any(|part| {
+            part.len() > 1
+                && part.starts_with('0')
+                && part.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 fn is_private_ipv4(octets: [u8; 4]) -> bool {
@@ -108,6 +127,15 @@ pub fn check_bind_address(host: &str) -> AddressVerdict {
         return AddressVerdict {
             allowed: true,
             reason: "loopback".to_owned(),
+        };
+    }
+
+    if has_octal_octet(&trimmed) {
+        return AddressVerdict {
+            allowed: false,
+            reason: format!(
+                "{host} has a part with a leading zero, which the machine reads as octal and so as a different address than it looks. Write each part without a leading zero."
+            ),
         };
     }
 
