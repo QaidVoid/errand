@@ -17,13 +17,13 @@ fn model(provider: &str, id: &str) -> AvailableModel {
 fn a_bare_model_id_resolves_to_the_provider_that_serves_it() {
     let available = vec![
         model("zai-coding-cn", "glm-5.3"),
-        model("opencode", "free-fast"),
+        model("acme-free", "free-fast"),
     ];
 
     let Matched::One(found) = match_model(&available, "free-fast", "zai-coding-cn") else {
         panic!("another provider's model must resolve to that provider");
     };
-    assert_eq!(found.provider, "opencode");
+    assert_eq!(found.provider, "acme-free");
 
     let Matched::One(found) = match_model(&available, "glm-5.3", "zai-coding-cn") else {
         panic!("the starting provider's own model must stay with it");

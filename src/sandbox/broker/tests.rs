@@ -631,13 +631,13 @@ async fn a_name_that_does_not_resolve_is_not_called_internal() {
         Box::pin(async { Err("failed to lookup address information".to_owned()) })
     });
     assert_eq!(
-        public_addresses("opencode.ai", true, Some(&broken)).await,
+        public_addresses("provider.example", true, Some(&broken)).await,
         Err(NoAddress::Unresolved(
             "failed to lookup address information".to_owned()
         ))
     );
     assert!(matches!(
-        public_addresses("opencode.ai", false, Some(&resolver(&[]))).await,
+        public_addresses("provider.example", false, Some(&resolver(&[]))).await,
         Err(NoAddress::Unresolved(_))
     ));
 }

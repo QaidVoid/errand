@@ -128,9 +128,9 @@ fn only_a_real_level_is_split_off_the_end() {
 #[test]
 fn short_m_is_the_same_flag_as_the_long_one() {
     assert_eq!(
-        select_model("-m musecringe:xhigh build it"),
+        select_model("-m muse-lite:xhigh build it"),
         super::ModelSelection {
-            value: Some("musecringe:xhigh".to_owned()),
+            value: Some("muse-lite:xhigh".to_owned()),
             prompt: "build it".to_owned(),
         }
     );
@@ -175,7 +175,7 @@ fn short_m_is_the_same_flag_as_the_long_one() {
 fn the_configured_model_may_name_its_provider_too() {
     let mut agent = crate::config::schema::AgentConfig {
         provider: "zai-coding-cn".to_owned(),
-        model: Some("ajamxhacker/musecringe:max".to_owned()),
+        model: Some("acme/muse-lite:max".to_owned()),
         vision_model: None,
         image_gen: None,
         speech_gen: None,
@@ -184,7 +184,7 @@ fn the_configured_model_may_name_its_provider_too() {
         max_provider_retries: defaults::MAX_PROVIDER_RETRIES,
         providers: serde_json::Map::from_iter([
             ("zai-coding-cn".to_owned(), serde_json::json!({})),
-            ("ajamxhacker".to_owned(), serde_json::json!({})),
+            ("acme".to_owned(), serde_json::json!({})),
         ]),
         plugins: Vec::new(),
         deny: Vec::new(),
@@ -196,19 +196,19 @@ fn the_configured_model_may_name_its_provider_too() {
     assert_eq!(
         super::configured_model(&agent),
         Some(super::ChosenModel {
-            provider: Some("ajamxhacker".to_owned()),
-            model: "musecringe:max".to_owned(),
+            provider: Some("acme".to_owned()),
+            model: "muse-lite:max".to_owned(),
         })
     );
 
     // A short name stands for a model here as it does anywhere else.
-    agent.aliases = aliases(&[("muse", "ajamxhacker/musecringe")]);
+    agent.aliases = aliases(&[("muse", "acme/muse-lite")]);
     agent.model = Some("muse".to_owned());
     assert_eq!(
         super::configured_model(&agent),
         Some(super::ChosenModel {
-            provider: Some("ajamxhacker".to_owned()),
-            model: "musecringe".to_owned(),
+            provider: Some("acme".to_owned()),
+            model: "muse-lite".to_owned(),
         })
     );
 

@@ -1,6 +1,16 @@
-/** The theme: this project's own, rather than the one every site has. */
 import type { Theme } from "vitepress";
-import Layout from "./Layout.vue";
+import DefaultTheme from "vitepress/theme";
+
+import "@fontsource-variable/space-grotesk";
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import "./style.css";
 
-export default { Layout } satisfies Theme;
+import Home from "./components/Home.vue";
+
+export default {
+  extends: DefaultTheme,
+  enhanceApp({ app }) {
+    app.component("Home", Home);
+  },
+} satisfies Theme;

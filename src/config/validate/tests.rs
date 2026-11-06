@@ -1179,10 +1179,10 @@ fn a_starting_provider_nothing_describes_is_refused() {
 fn a_provider_naming_no_variable_still_gets_one() {
     let config = validate_config(&valid(json!({
         "agent": {
-            "provider": "pg-oc",
+            "provider": "acme-free",
             "providers": {
-                "pg-oc": { "credential": "a", "models": [{ "id": "free" }] },
-                "pg-zai": { "credential": "b" },
+                "acme-free": { "credential": "a", "models": [{ "id": "free" }] },
+                "acme-zai": { "credential": "b" },
             },
         },
     })))
@@ -1190,12 +1190,12 @@ fn a_provider_naming_no_variable_still_gets_one() {
 
     let vars = config.agent.credential_vars();
     assert_eq!(
-        vars.get("pg-oc").map(String::as_str),
-        Some("ERRAND_PROVIDER_PG_OC_API_KEY")
+        vars.get("acme-free").map(String::as_str),
+        Some("ERRAND_PROVIDER_ACME_FREE_API_KEY")
     );
     assert_eq!(
-        vars.get("pg-zai").map(String::as_str),
-        Some("ERRAND_PROVIDER_PG_ZAI_API_KEY")
+        vars.get("acme-zai").map(String::as_str),
+        Some("ERRAND_PROVIDER_ACME_ZAI_API_KEY")
     );
 }
 
@@ -1230,17 +1230,17 @@ fn a_named_variable_is_left_as_the_operator_wrote_it() {
 fn ids_that_cannot_differ_in_a_variable_are_kept_apart() {
     let config = validate_config(&valid(json!({
         "agent": {
-            "provider": "pg-oc",
+            "provider": "acme-free",
             "providers": {
-                "pg-oc": { "credential": "a" },
-                "pg.oc": { "credential": "b", "extension": true },
+                "acme-free": { "credential": "a" },
+                "acme.free": { "credential": "b", "extension": true },
             },
         },
     })))
     .expect("both providers describe themselves");
 
     let vars = config.agent.credential_vars();
-    assert_ne!(vars.get("pg-oc"), vars.get("pg.oc"));
+    assert_ne!(vars.get("acme-free"), vars.get("acme.free"));
 }
 
 /// A picked variable cannot be shadowed through sandbox.env, which would
@@ -1250,12 +1250,12 @@ fn a_picked_variable_is_refused_in_sandbox_env() {
     assert!(problems_contain(
         &valid(json!({
             "agent": {
-                "provider": "pg-oc",
-                "providers": { "pg-oc": { "credential": "a" } },
+                "provider": "acme-free",
+                "providers": { "acme-free": { "credential": "a" } },
             },
-            "sandbox": { "env": { "ERRAND_PROVIDER_PG_OC_API_KEY": "not-the-real-one" } },
+            "sandbox": { "env": { "ERRAND_PROVIDER_ACME_FREE_API_KEY": "not-the-real-one" } },
         })),
-        "sandbox.env must not set ERRAND_PROVIDER_PG_OC_API_KEY"
+        "sandbox.env must not set ERRAND_PROVIDER_ACME_FREE_API_KEY"
     ));
 }
 
@@ -1535,13 +1535,13 @@ fn a_github_trigger_names_who_may_ask_and_never_everybody() {
         } }))
     };
 
-    let config = validate_config(&github(json!({ "allowedUsers": ["QaidVoid"] }))).expect("valid");
+    let config = validate_config(&github(json!({ "allowedUsers": ["OctoCat"] }))).expect("valid");
     assert_eq!(
         config
             .forge
             .and_then(|github| github.trigger)
             .map(|trigger| trigger.allowed_users),
-        Some(vec!["QaidVoid".to_owned()])
+        Some(vec!["OctoCat".to_owned()])
     );
     assert!(problems_contain(
         &github(json!({ "allowedUsers": [] })),
@@ -1563,10 +1563,10 @@ fn a_github_trigger_names_who_may_ask_and_never_everybody() {
     let narrowed = trigger(json!({
         "allowedUsers": ["a"],
         "on": ["assign"],
-        "repositories": ["QaidVoid/errand", "pkgforge-dev/*"],
+        "repositories": ["QaidVoid/errand", "acme-labs/*"],
     }));
     assert!(!narrowed.on_mention && narrowed.on_assign);
-    assert_eq!(narrowed.repositories, ["QaidVoid/errand", "pkgforge-dev/*"]);
+    assert_eq!(narrowed.repositories, ["QaidVoid/errand", "acme-labs/*"]);
 
     assert!(problems_contain(
         &github(json!({ "allowedUsers": ["a"], "on": ["assigned"] })),

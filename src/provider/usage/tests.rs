@@ -50,9 +50,9 @@ fn several_providers_are_named_and_cut_to_what_is_left() {
     assert_eq!(
         usage_status(&[
             window("zai-coding-cn", 12.0, Some("in 2h")),
-            window("ajamxhacker", 0.0, Some("in 5h")),
+            window("acme", 0.0, Some("in 5h")),
         ]),
-        Some("zai-coding-cn 88% | ajamxhacker 100%".to_owned())
+        Some("zai-coding-cn 88% | acme 100%".to_owned())
     );
     // A spent one says when it is back, which is all that is left to know.
     assert_eq!(

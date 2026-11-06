@@ -111,9 +111,9 @@ fn routed_at(
 fn said(channel_id: &str) -> IncomingMessage {
     IncomingMessage {
         id: "github-comment:5".to_owned(),
-        author_id: "github:qaidvoid".to_owned(),
+        author_id: "github:octocat".to_owned(),
         channel_id: channel_id.to_owned(),
-        author_name: Some("QaidVoid".to_owned()),
+        author_name: Some("OctoCat".to_owned()),
         content: String::new(),
         attachments: Vec::new(),
         from_interface: false,
@@ -138,7 +138,7 @@ async fn an_issue_gets_a_chat_thread_that_answers_it_across_a_restart() {
         *chat.opened.lock().unwrap(),
         [(
             "fix it".to_owned(),
-            "QaidVoid asked on GitHub, on o/r#4: https://github.com/o/r/issues/4".to_owned()
+            "OctoCat asked on GitHub, on o/r#4: https://github.com/o/r/issues/4".to_owned()
         )]
     );
     assert_eq!(router.thread_for("github:o/r#4").as_deref(), Some("t1"));
@@ -372,7 +372,7 @@ async fn forgejo_issue_opener_uses_configured_site_and_avoids_double_slash() {
         *chat.opened.lock().unwrap(),
         [(
             "fix it".to_owned(),
-            "QaidVoid asked on Forgejo, on o/r#4: https://forge.example/forge/o/r/issues/4"
+            "OctoCat asked on Forgejo, on o/r#4: https://forge.example/forge/o/r/issues/4"
                 .to_owned()
         )]
     );

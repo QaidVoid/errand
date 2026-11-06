@@ -188,7 +188,7 @@ fn what_is_reported_is_otherwise_unchanged() {
 /// Everything else in the same output still goes through.
 #[test]
 fn the_operators_house_rules_are_scrubbed_out_of_tool_output() {
-    let rules = "You are Talaria, the errand-runner.\n\nNever push unless asked.";
+    let rules = "You are the errand-runner.\n\nNever push unless asked.";
     let secrets = [SECRET.to_owned(), rules.to_owned()];
 
     let reported = redact_event(
