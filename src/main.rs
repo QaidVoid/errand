@@ -20,6 +20,7 @@ use crate::log::now_ms;
 use crate::log::{LogLevel, Logger, logger};
 use crate::log::{LogValue, fields};
 use crate::sandbox::policy::POLICY_FILENAME;
+use crate::serve::Exit;
 use crate::serve::serve;
 use crate::session::disk::tree_bytes;
 use crate::session::record::record_dir;
@@ -258,7 +259,7 @@ async fn run(env: &Vars, level: LogLevel) -> i32 {
                 "the daemon failed to start",
                 &fields([("detail", LogValue::from(format!("ConfigError: {error}")))]),
             );
-            return 1;
+            return Exit::Refused.code();
         }
     };
     say_warnings(&warnings, &log);
@@ -285,9 +286,11 @@ fn main() -> std::process::ExitCode {
         Ok(code) => std::process::ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(error) => {
             // A configuration problem is the operator's to fix, so it is
-            // printed as itself rather than as a stack trace.
+            // printed as itself rather than as a stack trace, and it leaves
+            // by the code a service keys its restart policy on, not as a
+            // crash that would be restarted into the same refusal.
             eprintln!("ConfigError: {error}");
-            std::process::ExitCode::FAILURE
+            std::process::ExitCode::from(u8::try_from(Exit::Refused.code()).unwrap_or(1))
         }
     }
 }
@@ -322,9 +325,31 @@ mod tests {
     use super::workspace_grant;
     use crate::config::schema::NetworkMode;
     use crate::config::schema::defaults;
+    use crate::log::LogLevel;
     use crate::sandbox::backend::{Denials, SandboxLaunch};
     use crate::sandbox::policy::{PolicyOptions, policy_contents};
     use crate::sandbox::runtime::AgentRuntime;
+    use crate::serve::Exit;
+
+    /// A configuration the daemon refuses must leave by the refusal exit,
+    /// not a crash exit: a unit would restart a crash into the same refusal,
+    /// forever.
+    #[tokio::test]
+    async fn a_refused_configuration_leaves_by_the_exit_the_docs_name() {
+        let dir = tempfile::tempdir().expect("a temp directory");
+        let path = dir.path().join("errand.toml");
+        std::fs::write(&path, "[chat]\nchannelId = \"1\"\n").expect("the file");
+        let mut env = BTreeMap::new();
+        env.insert(
+            crate::config::load::CONFIG_VARIABLE.to_owned(),
+            path.to_str().expect("a UTF-8 path").to_owned(),
+        );
+
+        assert_eq!(
+            super::run(&env, LogLevel::Error).await,
+            Exit::Refused.code()
+        );
+    }
 
     /// The revive reader scans inline tables for the grant placed at the
     /// workspace. The generated policy grows new kinds of entries over time
