@@ -189,8 +189,25 @@ async fn a_long_message_is_split_into_ones_the_service_will_take() {
     let sent = channel.records();
     assert!(sent.len() > 1);
     for message in sent {
-        assert!(message.lock().unwrap().content.chars().count() <= 2_000);
+        assert!(message.lock().unwrap().content.encode_utf16().count() <= 2_000);
     }
+}
+
+/// The service counts UTF-16 units, so activity made of astral characters is
+/// over the edit limit at half the code points, and posts fresh instead.
+#[tokio::test]
+async fn activity_over_the_limit_in_utf16_units_is_not_edited() {
+    let (port, channel) = thread(false);
+
+    // 550 then 549 astral characters: 1100 code points between them, but
+    // 2199 UTF-16 units once they are joined, the newline costing one.
+    port.append_activity(&"\u{1F50C}".repeat(550));
+    port.append_activity(&"\u{1F50C}".repeat(549));
+    port.flush().await;
+
+    let sent = channel.records();
+    assert_eq!(sent.len(), 2, "the over-limit edit became a fresh message");
+    assert_eq!(sent[0].lock().unwrap().edits.len(), 0);
 }
 
 /// A run of tool calls is one thing the agent is doing, not ten messages.

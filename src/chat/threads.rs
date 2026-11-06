@@ -517,7 +517,7 @@ impl<T: ThreadTransport> ChatThread<T> {
                         let editable = state
                             .activity_message_id
                             .clone()
-                            .filter(|_| extended.chars().count() <= MESSAGE_LIMIT);
+                            .filter(|_| extended.encode_utf16().count() <= MESSAGE_LIMIT);
                         (editable, extended)
                     };
 
