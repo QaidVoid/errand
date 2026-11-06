@@ -3,17 +3,75 @@
 //! The TypeScript suite also carries the reconnection delay table and the
 //! string-matched error classes. Both are superseded by the chat library
 //! decision: serenity re-sits a dead shard on its own fixed pace, and the two
-//! permanent failures arrive as typed gateway errors. The give-up counter is
-//! what remains of the policy, and it is tested here.
+//! permanent failures arrive as typed gateway errors. The give-up is what
+//! remains of the policy, and it is tested with the stage machine driven
+//! directly: the stages the library reports mid-run are `Resuming` and
+//! `Connecting`, and the others are here because the gateway treats every
+//! non-`Connected` landing the same.
 //!
 //! Library objects are built by deserializing the shapes the gateway sends,
 //! which is as far from a live connection as the TypeScript fakes were.
 
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
+
 use serde_json::json;
+use serenity::gateway::ConnectionStage;
 use serenity::model::channel::Message;
 use serenity::model::id::ChannelId;
 
-use super::{GiveUp, is_permanent, to_raw};
+use super::{Gateway, GatewayHandlers, is_permanent, to_raw};
+use crate::config::schema::ChatConfig;
+use crate::log::LogLevel;
+use crate::log::logger;
+
+/// A gateway configuration, for building a gateway without a connection.
+fn config() -> ChatConfig {
+    ChatConfig {
+        token: "bot-token".to_owned(),
+        channel_id: "served-channel".to_owned(),
+        allowed_user_ids: vec!["u-1".to_owned()],
+        blocked_user_ids: Vec::new(),
+        operator_user_ids: Vec::new(),
+        start_on_mention: false,
+    }
+}
+
+/// What the connection callbacks did, for a test to assert on.
+#[derive(Default)]
+struct Calls {
+    connected: usize,
+    disconnected: usize,
+    gave_up: usize,
+}
+
+/// Handlers that record every connection callback into `calls`.
+fn recording_handlers(calls: &Arc<Mutex<Calls>>) -> GatewayHandlers {
+    let connected = Arc::clone(calls);
+    let disconnected = Arc::clone(calls);
+    let gave_up = Arc::clone(calls);
+    GatewayHandlers {
+        on_message: Arc::new(|_, _| {}),
+        on_command: Arc::new(|_, _| {}),
+        on_thread_closed: Arc::new(|_| {}),
+        on_withdrawn: Arc::new(|_, _| {}),
+        on_connected: Arc::new(move || {
+            connected.lock().expect("the calls lock").connected += 1;
+        }),
+        on_disconnected: Arc::new(move || {
+            disconnected.lock().expect("the calls lock").disconnected += 1;
+        }),
+        on_gave_up: Arc::new(move || {
+            gave_up.lock().expect("the calls lock").gave_up += 1;
+        }),
+    }
+}
+
+/// A gateway whose callbacks are recorded in `calls`.
+fn recorded_gateway(calls: &Arc<Mutex<Calls>>) -> Arc<Gateway> {
+    Gateway::new(config(), recording_handlers(calls), logger(LogLevel::Error))
+}
 
 /// Builds a library message from the wire shape it arrives in.
 fn library_message(value: serde_json::Value) -> Message {
@@ -55,32 +113,86 @@ fn wire_message() -> serde_json::Value {
     })
 }
 
-#[test]
-fn the_counter_gives_up_after_ten_unevenful_drops() {
-    let mut counter = GiveUp::new();
+/// A connection that never comes back is given up on, however the library
+/// spends the wait. The library reports no `Disconnected` stage at all, so
+/// the wait is timed from the last moment the connection was known to be
+/// away, and the stages it does report must not reset it.
+#[tokio::test]
+async fn a_connection_away_too_long_is_given_up_on() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let gateway = recorded_gateway(&calls);
 
-    for _ in 0..super::MAX_ATTEMPTS {
-        assert!(!counter.disconnected());
+    gateway.stage_changed(ConnectionStage::Connected);
+    gateway.stage_changed(ConnectionStage::Resuming);
+    // The library trying on, and the manager replacing the shard under it,
+    // are more of the same outage, not new ones.
+    for stage in [
+        ConnectionStage::Connecting,
+        ConnectionStage::Handshake,
+        ConnectionStage::Identifying,
+    ] {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        gateway.stage_changed(stage);
     }
-    assert!(
-        counter.disconnected(),
+
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        gateway.watch_connection(Duration::from_millis(20), Duration::from_millis(5)),
+    )
+    .await
+    .expect("the watchdog gives up on an absent connection");
+    let held = calls.lock().expect("the calls lock");
+    assert_eq!(
+        held.gave_up, 1,
         "the daemon gives up rather than hanging on"
     );
-    assert_eq!(counter.attempts(), super::MAX_ATTEMPTS + 1);
+    assert_eq!(held.disconnected, 1, "only the drop was announced");
 }
 
-/// A connection that comes back between drops is one outage, however long it
-/// ran.
-#[test]
-fn reaching_connected_again_resets_the_count() {
-    let mut counter = GiveUp::new();
+/// An outage that ends within the window is waited out: the connection
+/// coming back clears the wait, and the daemon does not give up.
+#[tokio::test]
+async fn a_connection_that_comes_back_is_waited_for() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let gateway = recorded_gateway(&calls);
 
-    for _ in 0..super::MAX_ATTEMPTS - 1 {
-        assert!(!counter.disconnected());
-    }
-    counter.connected();
-    assert_eq!(counter.attempts(), 0);
-    assert!(!counter.disconnected());
+    gateway.stage_changed(ConnectionStage::Connected);
+    gateway.stage_changed(ConnectionStage::Resuming);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    gateway.stage_changed(ConnectionStage::Connected);
+
+    let waited = tokio::time::timeout(
+        Duration::from_millis(60),
+        gateway.watch_connection(Duration::from_millis(50), Duration::from_millis(5)),
+    )
+    .await;
+    assert!(waited.is_err(), "the watchdog keeps waiting");
+    let held = calls.lock().expect("the calls lock");
+    assert_eq!(held.gave_up, 0);
+    assert_eq!(held.connected, 2, "the outage is over");
+    assert_eq!(held.disconnected, 1, "the drop was announced");
+}
+
+/// A connection that has never come up is given up on too: the wait runs
+/// from the moment the daemon began, so a service that cannot be reached at
+/// all cannot hold sessions open forever.
+#[tokio::test]
+async fn a_connection_that_never_rises_is_given_up_on() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let gateway = recorded_gateway(&calls);
+
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        gateway.watch_connection(Duration::from_millis(20), Duration::from_millis(5)),
+    )
+    .await
+    .expect("the watchdog gives up on a connection that never came up");
+    let held = calls.lock().expect("the calls lock");
+    assert_eq!(held.gave_up, 1);
+    assert_eq!(
+        held.disconnected, 0,
+        "there was no working connection to lose"
+    );
 }
 
 /// A service that is briefly down is waited out; a service that has already

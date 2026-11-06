@@ -8,11 +8,17 @@
 //! The chat library keeps the socket alive itself: it resumes after every
 //! drop and re-sits a dead shard on a fixed five second pace, so errand
 //! carries no backoff schedule of its own. What it still owns is the give-up:
-//! a connection that leaves `Connected` once too often ends the daemon,
-//! because sessions left running unattended are worse than none. That counter
-//! is [`GiveUp`].
+//! a connection that stays away too long ends the daemon, because sessions
+//! left running unattended are worse than none. The wait is timed rather
+//! than counted, and [`GIVE_UP_AFTER_MS`] is how long.
+//!
+//! The wait starts from what the library reports, and it does not report
+//! everything: a shard whose heartbeats go unanswered is replaced without a
+//! stage event, so an outage that begins that way is timed only from when
+//! the library next says where the shard is.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serenity::client::{Context, EventHandler};
 use serenity::model::application::Interaction;
@@ -30,48 +36,23 @@ use crate::chat::inbound::{
 use crate::config::schema::ChatConfig;
 use crate::log::{LogValue, Logger, fields};
 
-/// How many times the connection may fail to reach `Connected` again before
-/// the daemon gives up, because a sandbox nobody can reach or stop is worse
-/// than none.
-pub const MAX_ATTEMPTS: u32 = 10;
+/// How long the connection may be away before the daemon gives up, because a
+/// sandbox nobody can reach or stop is worse than none.
+pub const GIVE_UP_AFTER_MS: u64 = 60_000;
 
-/// Counts failures to connect, and says when the daemon should stop trying.
+/// How often the give-up timer is checked.
+pub const GIVE_UP_POLL_MS: u64 = 5_000;
+
+/// Whether the connection is up, and since when it has been what it is.
 ///
-/// Reaching `Connected` again resets the count: an outage of a hundred drops
-/// is one outage, not a hundred.
+/// The `since` is when the current stretch began: a connection that came up
+/// and stayed up is measured from when it came up, and one that went down
+/// and is being worked on is measured from when it went down, whatever the
+/// library does between its attempts.
 #[derive(Debug)]
-pub struct GiveUp {
-    attempts: u32,
-}
-
-impl GiveUp {
-    /// A counter that allows the daemon's own limit of attempts.
-    pub fn new() -> Self {
-        Self { attempts: 0 }
-    }
-
-    /// Records that the connection came up. Everything before it was one
-    /// outage.
-    pub fn connected(&mut self) {
-        self.attempts = 0;
-    }
-
-    /// Records a drop, and reports whether the daemon has now given up.
-    pub fn disconnected(&mut self) -> bool {
-        self.attempts += 1;
-        self.attempts > MAX_ATTEMPTS
-    }
-
-    /// How many drops have gone by without a connection in between.
-    pub fn attempts(&self) -> u32 {
-        self.attempts
-    }
-}
-
-impl Default for GiveUp {
-    fn default() -> Self {
-        Self::new()
-    }
+struct ConnectionState {
+    up: bool,
+    since: Instant,
 }
 
 /// Whether a failure to connect is one that serenity's own retrying could get
@@ -184,8 +165,8 @@ pub struct GatewayHandlers {
     pub on_connected: Arc<dyn Fn() + Send + Sync>,
     /// The connection went down; serenity is already re-sitting it.
     pub on_disconnected: Arc<dyn Fn() + Send + Sync>,
-    /// Reconnection has failed one time too many; sessions must be shut down.
-    pub on_gave_up: Arc<dyn Fn(u32) + Send + Sync>,
+    /// The connection has been away too long; the daemon gives up.
+    pub on_gave_up: Arc<dyn Fn() + Send + Sync>,
 }
 
 /// Owns the single connection and dispatches filtered messages.
@@ -193,7 +174,7 @@ pub struct Gateway {
     config: ChatConfig,
     handlers: Arc<GatewayHandlers>,
     log: Logger,
-    give_up: std::sync::Mutex<GiveUp>,
+    connection: std::sync::Mutex<ConnectionState>,
     /// The bot's own account id, once the service has said.
     bot_id: std::sync::Mutex<Option<String>>,
     /// The shard messenger, captured on ready, for presence updates.
@@ -212,12 +193,44 @@ impl Gateway {
             config,
             handlers: Arc::new(handlers),
             log,
-            give_up: std::sync::Mutex::new(GiveUp::new()),
+            connection: std::sync::Mutex::new(ConnectionState {
+                up: false,
+                since: Instant::now(),
+            }),
             bot_id: std::sync::Mutex::new(None),
             shard: std::sync::Mutex::new(None),
             ready,
             ready_sender,
         })
+    }
+
+    /// Gives up when the connection has been away too long, reporting it
+    /// once through the `on_gave_up` handler.
+    ///
+    /// The chat library works through a drop on its own and can go silent
+    /// for whole stretches of one outage, so the wait is timed rather than
+    /// counted: however many attempts it makes, what matters is how long
+    /// nobody has been home.
+    pub async fn watch_connection(&self, after: Duration, every: Duration) {
+        loop {
+            tokio::time::sleep(every).await;
+            let away = {
+                let state = self.connection.lock().expect("the connection lock");
+                if state.up {
+                    continue;
+                }
+                state.since.elapsed()
+            };
+            if away >= after {
+                let away_ms = u64::try_from(away.as_millis()).unwrap_or(u64::MAX);
+                self.log.error(
+                    "giving up on the connection",
+                    &fields([("awayMs", LogValue::from(away_ms))]),
+                );
+                (self.handlers.on_gave_up)();
+                return;
+            }
+        }
     }
 
     /// Waits for the connection to answer its handshake, no longer than the
@@ -425,40 +438,7 @@ impl EventHandler for Gateway {
         _ctx: Context,
         event: serenity::gateway::ShardStageUpdateEvent,
     ) {
-        use serenity::gateway::ConnectionStage;
-        if event.new == ConnectionStage::Connected {
-            self.give_up.lock().expect("the give-up lock").connected();
-            (self.handlers.on_connected)();
-            return;
-        }
-        if event.new == ConnectionStage::Disconnected {
-            if let Some(old) = Some(event.old)
-                && old != ConnectionStage::Connected
-            {
-                // Only a drop from a working connection counts as an attempt.
-                return;
-            }
-            (self.handlers.on_disconnected)();
-            if self
-                .give_up
-                .lock()
-                .expect("the give-up lock")
-                .disconnected()
-            {
-                self.log.error(
-                    "giving up on reconnecting",
-                    &fields([(
-                        "attempts",
-                        LogValue::from(i64::from(
-                            self.give_up.lock().expect("the give-up lock").attempts(),
-                        )),
-                    )]),
-                );
-                (self.handlers.on_gave_up)(
-                    self.give_up.lock().expect("the give-up lock").attempts(),
-                );
-            }
-        }
+        self.stage_changed(event.new);
     }
 
     async fn ready(&self, ctx: Context, ready: Ready) {
@@ -480,6 +460,39 @@ async fn parent_of(ctx: &Context, channel_id: ChannelId) -> Option<ChannelId> {
 }
 
 impl Gateway {
+    /// Applies a shard's stage transition to the connection's state.
+    ///
+    /// The library never reports the shard as `Disconnected`: it works a
+    /// drop through `Resuming` and `Connecting` and goes silent while the
+    /// manager replaces a hopeless shard, so every stage that is not
+    /// `Connected` means the connection is away. The stretch is measured
+    /// from the first such landing, and the notice rides on the fall from a
+    /// working connection alone, since a retry dying is the outage going on
+    /// rather than it starting.
+    fn stage_changed(&self, new: serenity::gateway::ConnectionStage) {
+        use serenity::gateway::ConnectionStage;
+        if new == ConnectionStage::Connected {
+            let mut state = self.connection.lock().expect("the connection lock");
+            state.up = true;
+            state.since = Instant::now();
+            drop(state);
+            (self.handlers.on_connected)();
+            return;
+        }
+        let fell = {
+            let mut state = self.connection.lock().expect("the connection lock");
+            let fell = state.up;
+            state.up = false;
+            if fell {
+                state.since = Instant::now();
+            }
+            fell
+        };
+        if fell {
+            (self.handlers.on_disconnected)();
+        }
+    }
+
     /// Sets the line under the bot's name, or clears it when given nothing.
     ///
     /// Custom is the only activity type that shows the text alone, with no
