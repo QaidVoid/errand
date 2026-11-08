@@ -69,14 +69,19 @@ Lengths are a number and a unit, `s`, `m`, `h`, `d`, `w`, `mo` or `y`, alone
 or combined, as `7d 12h`. A month is 30 days and a year 365. Retention
 settings are re-read at the next check, without a restart.
 
+Ending a session with `!stop` prevents it from resuming, but keeps its index
+entry so retention can still collect its data. Sessions stopped before this
+behavior was introduced remain unindexed and need manual cleanup with
+`errand threads gc --unindexed`. Preview with `--dry-run` first.
+
 Some things are never collected automatically:
 
 - A running session, however old.
 - A project named by hand in an older version of errand, or a session project
   such a name took over.
-- Anything the thread index does not name. A thread ended with `!stop`, evicted,
-  or reset leaves the index at once, and the daemon will not guess what such a
-  session left.
+- Anything the thread index does not name, including entries explicitly
+  forgotten, evicted, or lost when the index was reset. The daemon will not
+  guess what such a session left.
 
 ### Cleaning up by hand
 

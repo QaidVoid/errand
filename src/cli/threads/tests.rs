@@ -24,6 +24,7 @@ fn record_with(thread_id: &str, session_id: &str, state_dir: &str) -> ThreadReco
         guests: Vec::new(),
         provider: None,
         model: None,
+        stopped: false,
         updated_at: NOW - 3_600_000,
     }
 }
@@ -529,6 +530,40 @@ async fn reviving_puts_a_forgotten_thread_back_so_it_can_be_resumed() {
     let put = harness.registry.lock().unwrap().get("thread-zzzz").cloned();
     assert_eq!(put.expect("the thread is remembered").session_id, "s-9");
     assert!(harness.out().contains("post in the thread to resume it"));
+}
+
+#[tokio::test]
+async fn an_administrator_can_explicitly_revive_a_stopped_session() {
+    let mut stopped = record();
+    stopped.stopped = true;
+    let harness = harness(vec![stopped]);
+    harness.hold("/state/s-1", 4096);
+    harness.worked_in("/state/s-1", "demo", "/projects/demo");
+
+    let code = run_threads(
+        &[
+            "revive".to_owned(),
+            "s-1".to_owned(),
+            "--thread".to_owned(),
+            "thread-aaaa".to_owned(),
+            "--owner".to_owned(),
+            "u-1".to_owned(),
+        ],
+        &harness.deps,
+    )
+    .await;
+
+    assert_eq!(code, 0);
+    harness.registry.lock().unwrap().load();
+    let revived = harness
+        .registry
+        .lock()
+        .unwrap()
+        .get("thread-aaaa")
+        .cloned()
+        .unwrap();
+    assert_eq!(revived.session_id, "s-1");
+    assert!(!revived.stopped);
 }
 
 /// Neither is written down in the session, so neither is guessed at.

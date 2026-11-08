@@ -48,6 +48,7 @@ fn record(session_id: &str, project: &str, updated_at: i64) -> ThreadRecord {
         guests: Vec::new(),
         provider: None,
         model: None,
+        stopped: false,
         updated_at,
     }
 }

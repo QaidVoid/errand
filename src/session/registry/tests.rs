@@ -19,6 +19,7 @@ fn record(overrides: impl FnOnce(&mut ThreadRecord)) -> ThreadRecord {
         guests: Vec::new(),
         provider: None,
         model: None,
+        stopped: false,
         updated_at: 1_000,
     };
     overrides(&mut held);
@@ -70,6 +71,75 @@ fn what_is_remembered_comes_back_after_a_restart() {
     );
     assert_eq!(reopened.size(), 1);
     drop(lines);
+}
+
+#[test]
+fn stopped_sessions_remain_durable_after_a_restart() {
+    let (_root, mut registry, path, _lines) = with_registry();
+    let stopped = record(|held| held.stopped = true);
+    registry.remember(stopped.clone());
+
+    let (_lines, log) = collected();
+    let mut reopened = ThreadRegistry::new(path, log);
+    reopened.load();
+
+    assert_eq!(reopened.get("t-1"), Some(&stopped));
+    assert_eq!(reopened.all(), vec![stopped]);
+}
+
+#[test]
+fn records_without_a_stopped_flag_load_as_active() {
+    let (_root, mut registry, path, _lines) = with_registry();
+    let active = record(|_| {});
+    let mut older = serde_json::to_value(&active).expect("serialises");
+    older.as_object_mut().expect("an object").remove("stopped");
+    assert!(is_record(&older));
+    std::fs::write(
+        &path,
+        serde_json::to_string(&vec![older]).expect("serialises"),
+    )
+    .expect("written");
+
+    registry.load();
+
+    assert_eq!(registry.get("t-1"), Some(&active));
+}
+
+#[test]
+fn invalid_stopped_flags_are_dropped_without_losing_valid_records() {
+    let (_root, mut registry, path, lines) = with_registry();
+    let active = record(|_| {});
+    let stopped = record(|held| {
+        held.thread_id = "stopped".to_owned();
+        held.stopped = true;
+    });
+    let mut entries = vec![
+        serde_json::to_value(&active).expect("serialises"),
+        serde_json::to_value(&stopped).expect("serialises"),
+    ];
+    for (index, invalid) in [json!(null), json!(0), json!("true"), json!([]), json!({})]
+        .into_iter()
+        .enumerate()
+    {
+        let mut entry = serde_json::to_value(record(|held| {
+            held.thread_id = format!("invalid-{index}");
+        }))
+        .expect("serialises");
+        entry["stopped"] = invalid;
+        assert!(!is_record(&entry));
+        entries.push(entry);
+    }
+    std::fs::write(&path, serde_json::to_string(&entries).expect("serialises")).expect("written");
+
+    registry.load();
+
+    assert_eq!(registry.size(), 2);
+    assert_eq!(registry.get("t-1"), Some(&active));
+    assert_eq!(registry.get("stopped"), Some(&stopped));
+    let taken = lines.lock().unwrap();
+    assert_eq!(taken.len(), 1);
+    assert_eq!(taken[0].0, LogLevel::Warn);
+    assert!(taken[0].1.contains("skipped=5"));
 }
 
 #[test]

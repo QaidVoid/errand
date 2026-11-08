@@ -1272,6 +1272,80 @@ async fn a_message_in_a_thread_that_is_over_says_where_to_start_a_new_one() {
 }
 
 #[tokio::test]
+async fn a_stopped_session_is_collected_after_retention_even_after_reloading_the_index() {
+    with_daemon(
+        DaemonCase {
+            settings: Some(json!({ "retention": { "olderThan": "3d" } })),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("go"), InboundDecision::Start)
+                    .await;
+                let session = harness.daemon.sessions().for_thread("thread-1").unwrap();
+                let project = std::path::PathBuf::from(&session.project().path);
+                let state =
+                    std::path::Path::new(&harness.config.get().state_dir).join(session.id());
+                let record_dir = crate::session::record::record_dir(&state.display().to_string());
+
+                harness
+                    .daemon
+                    .sessions()
+                    .end_thread("thread-1", EndReason::Stopped)
+                    .await;
+                harness.daemon.registry.lock().unwrap().load();
+
+                assert!(!harness.daemon.sessions().can_resume("thread-1"));
+                assert!(harness.daemon.sessions().resumable().is_empty());
+                assert_eq!(harness.daemon.collect_cold(), 0);
+                assert!(project.exists());
+                assert!(state.exists());
+
+                let mut record = harness
+                    .daemon
+                    .registry
+                    .lock()
+                    .unwrap()
+                    .get("thread-1")
+                    .expect("stopped session stays indexed for retention")
+                    .clone();
+                let old = std::time::SystemTime::now() - Duration::from_hours(96);
+                record.updated_at = i64::try_from(
+                    old.duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis(),
+                )
+                .unwrap();
+                harness.daemon.registry.lock().unwrap().remember(record);
+                let transcript =
+                    crate::session::record::transcript_path(&state.display().to_string());
+                std::fs::File::open(transcript)
+                    .unwrap()
+                    .set_times(std::fs::FileTimes::new().set_modified(old))
+                    .unwrap();
+
+                assert_eq!(harness.daemon.collect_cold(), 1);
+                assert!(!state.exists());
+                assert!(!std::path::Path::new(&record_dir).exists());
+                assert!(!project.exists());
+                assert!(
+                    harness
+                        .daemon
+                        .registry
+                        .lock()
+                        .unwrap()
+                        .get("thread-1")
+                        .is_none()
+                );
+            })
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn a_thread_archived_from_outside_ends_its_session() {
     with_daemon(DaemonCase::default(), |harness| {
         Box::pin(async move {

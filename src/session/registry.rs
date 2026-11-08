@@ -2,8 +2,8 @@
 //!
 //! The agent keeps its own conversation history in the session state
 //! directory, so resuming a thread needs only enough to find that directory
-//! again. That is what is stored, and nothing else: no message content and no
-//! credential.
+//! again. Stopped sessions retain their metadata for cleanup rather than
+//! resumption. No message content or credential is stored.
 //!
 //! This is the daemon's only durable state, so it is written carefully. Losing
 //! it does not stop the daemon starting, but it does silently withdraw every
@@ -25,7 +25,7 @@ pub const REGISTRY_FILENAME: &str = "threads.json";
 /// How many threads are remembered before the oldest are dropped.
 pub const MAX_REMEMBERED: usize = 500;
 
-/// What is needed to put a thread back to work after a restart.
+/// Session metadata for resuming active threads and cleaning up stopped ones.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadRecord {
@@ -55,11 +55,14 @@ pub struct ThreadRecord {
     pub provider: Option<String>,
     /// The model the session was started on, when it was chosen.
     pub model: Option<String>,
+    /// Whether the session has stopped and must not be resumed.
+    #[serde(default)]
+    pub stopped: bool,
     /// Milliseconds since the epoch, for evicting the least recently used.
     pub updated_at: i64,
 }
 
-/// Whether a parsed entry is a record this daemon can resume.
+/// Whether a parsed entry contains valid session and cleanup metadata.
 pub fn is_record(value: &Value) -> bool {
     let Some(record) = value.as_object() else {
         return false;
@@ -83,10 +86,11 @@ pub fn is_record(value: &Value) -> bool {
         })
         && is_optional_string("provider")
         && is_optional_string("model")
+        && matches!(record.get("stopped"), None | Some(Value::Bool(_)))
         && record.get("updatedAt").is_some_and(Value::is_number)
 }
 
-/// A durable thread-to-session index.
+/// A durable thread-to-session index for resumption and cleanup.
 pub struct ThreadRegistry {
     path: String,
     log: Logger,
@@ -205,7 +209,7 @@ impl ThreadRegistry {
         self.save();
     }
 
-    /// Forgets a thread, so it is never resumed again.
+    /// Removes a thread and its durable session and cleanup metadata.
     pub fn forget(&mut self, thread_id: &str) {
         if self.records.remove(thread_id).is_some() {
             self.save();

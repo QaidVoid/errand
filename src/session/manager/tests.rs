@@ -821,9 +821,35 @@ async fn a_session_that_was_stopped_is_not_offered_for_resuming() {
                 .await;
             settle().await;
 
-            assert!(harness.registry.lock().unwrap().get("thread-1").is_none());
+            harness.registry.lock().unwrap().load();
+            assert!(
+                harness
+                    .registry
+                    .lock()
+                    .unwrap()
+                    .get("thread-1")
+                    .unwrap()
+                    .stopped
+            );
             assert!(!harness.manager.can_resume("thread-1"));
             assert!(harness.manager.resumable().is_empty());
+            assert!(harness.manager.state_dir_of("s1").is_none());
+            assert!(harness.manager.thread_id_for("s1").is_none());
+            assert!(
+                !harness
+                    .manager
+                    .resume("thread-1", message("carry on", "m2"))
+                    .await
+                    .is_started()
+            );
+            assert_eq!(
+                harness
+                    .manager
+                    .deliver_to_session("s1", message("carry on", "m3"))
+                    .await,
+                Delivery::NoSuchSession
+            );
+            assert_eq!(harness.sandbox.launched.lock().unwrap().len(), 1);
         })
     })
     .await;
@@ -1567,7 +1593,7 @@ async fn a_thread_force_stopped_for_not_answering_can_still_be_resumed() {
                 .await;
             settle().await;
 
-            // The record survives, unlike a deliberate stop.
+            // An unresponsive session stays resumable.
             assert!(harness.registry.lock().unwrap().get("thread-1").is_some());
             let outcome = harness
                 .manager
@@ -1591,7 +1617,15 @@ async fn a_deliberate_stop_still_ends_the_thread_for_good() {
                 .await;
             settle().await;
 
-            assert!(harness.registry.lock().unwrap().get("thread-1").is_none());
+            assert!(
+                harness
+                    .registry
+                    .lock()
+                    .unwrap()
+                    .get("thread-1")
+                    .unwrap()
+                    .stopped
+            );
             let outcome = harness
                 .manager
                 .resume("thread-1", message("carry on", "m2"))

@@ -128,7 +128,8 @@ fn ago(at: i64, now: i64) -> String {
 
 /// What looking for a thread found.
 pub enum Found {
-    One(ThreadRecord),
+    /// One thread matches the requested id or fragment.
+    One(Box<ThreadRecord>),
     /// Several thread ids match the fragment the caller gave.
     Ambiguous(Vec<ThreadRecord>),
 }
@@ -140,7 +141,7 @@ pub enum Found {
 /// head is matched too, since that is what people try first.
 pub fn find_thread(records: &[ThreadRecord], wanted: &str) -> Option<Found> {
     if let Some(exact) = records.iter().find(|record| record.thread_id == wanted) {
-        return Some(Found::One(exact.clone()));
+        return Some(Found::One(Box::new(exact.clone())));
     }
 
     for matches in [
@@ -153,7 +154,9 @@ pub fn find_thread(records: &[ThreadRecord], wanted: &str) -> Option<Found> {
             .cloned()
             .collect();
         if matching.len() == 1 {
-            return Some(Found::One(matching.into_iter().next().expect("one match")));
+            return Some(Found::One(Box::new(
+                matching.into_iter().next().expect("one match"),
+            )));
         }
         if matching.len() > 1 {
             return Some(Found::Ambiguous(matching));
@@ -655,7 +658,7 @@ async fn revive(deps: &Deps, session: Option<&str>, args: &[String]) -> i32 {
         .lock()
         .expect("the registry lock")
         .get(&thread_id)
-        .is_some()
+        .is_some_and(|record| !record.stopped || record.session_id != session)
     {
         (deps.write)(&format!(
             "thread {thread_id} is already remembered; nothing to put back"
@@ -694,6 +697,7 @@ async fn revive(deps: &Deps, session: Option<&str>, args: &[String]) -> i32 {
             guests: Vec::new(),
             provider: None,
             model: None,
+            stopped: false,
             updated_at: (deps.now)(),
         });
     (deps.write)(&format!(

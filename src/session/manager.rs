@@ -828,6 +828,7 @@ impl SessionManager {
                 guests: Vec::new(),
                 provider: chosen.as_ref().and_then(|chosen| chosen.provider.clone()),
                 model: chosen.as_ref().map(|chosen| chosen.model.clone()),
+                stopped: false,
                 updated_at: self.now_ms(),
             });
 
@@ -859,6 +860,7 @@ impl SessionManager {
             .lock()
             .expect("the registry lock")
             .get(thread_id)
+            .filter(|record| !record.stopped)
             .cloned();
         let Some(record) = record else {
             return self.refused("this thread is not one of mine to resume".to_owned());
@@ -1118,7 +1120,7 @@ impl SessionManager {
             .expect("the registry lock")
             .all()
             .into_iter()
-            .find(|record| record.session_id == session_id)
+            .find(|record| record.session_id == session_id && !record.stopped)
             .map(|record| record.thread_id)
     }
 
@@ -1137,6 +1139,7 @@ impl SessionManager {
             .lock()
             .expect("the registry lock")
             .get(thread_id)
+            .filter(|record| !record.stopped)
             .cloned();
         let Some(record) = record else { return false };
         match withdraw_from_record(&record.state_dir, message_id) {
@@ -1249,7 +1252,7 @@ impl SessionManager {
             .clear();
     }
 
-    /// True when a thread is one this daemon has seen before.
+    /// True when a thread has a dormant session that was not deliberately stopped.
     pub fn can_resume(&self, thread_id: &str) -> bool {
         !self
             .state
@@ -1263,7 +1266,7 @@ impl SessionManager {
                 .lock()
                 .expect("the registry lock")
                 .get(thread_id)
-                .is_some()
+                .is_some_and(|record| !record.stopped)
     }
 
     /// Where a session this daemon knows keeps its state, running or not.
@@ -1274,7 +1277,7 @@ impl SessionManager {
             .expect("the registry lock")
             .all()
             .into_iter()
-            .find(|record| record.session_id == session_id)
+            .find(|record| record.session_id == session_id && !record.stopped)
             .map(|record| record.state_dir)
     }
 
@@ -1290,7 +1293,7 @@ impl SessionManager {
             .expect("the registry lock")
             .all()
             .into_iter()
-            .filter(|record| !live.contains_key(&record.thread_id))
+            .filter(|record| !record.stopped && !live.contains_key(&record.thread_id))
             .collect()
     }
 }
@@ -1355,10 +1358,9 @@ fn on_guests_changed(registry: &Arc<Mutex<ThreadRegistry>>, thread_id: &str) -> 
 
 /// Lets go of a session that has ended.
 ///
-/// Only a deliberate stop drops the thread from the durable index: stopping
-/// is how somebody says they are finished with it. Everything else, including
-/// a crash, an idle timeout, and a daemon restart, leaves the thread
-/// resumable, which is the whole point of keeping the index.
+/// A deliberate stop makes the thread non-resumable but keeps its durable
+/// record for retention. Everything else, including a crash, an idle timeout,
+/// and a daemon restart, leaves the thread resumable.
 fn on_ended(
     state: Arc<ManagerState>,
     registry: Arc<Mutex<ThreadRegistry>>,
@@ -1389,10 +1391,12 @@ fn on_ended(
             .expect("the scrubbers lock")
             .remove(&session_id);
         if reason == EndReason::Stopped {
-            registry
-                .lock()
-                .expect("the registry lock")
-                .forget(&thread_id);
+            let mut registry = registry.lock().expect("the registry lock");
+            if let Some(current) = registry.get(&thread_id) {
+                let mut stopped = current.clone();
+                stopped.stopped = true;
+                registry.remember(stopped);
+            }
         }
         threads.release(&thread_id);
         log.info(
