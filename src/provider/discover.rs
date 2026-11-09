@@ -1,10 +1,11 @@
 //! Asks providers which models they serve, and holds what sessions read.
 //!
 //! A provider whose definition carries `discover` is asked at startup, after a
-//! change to the configuration file, and on `!models refresh`. What it lists
-//! goes underneath the models its definition names: an entry written for a
-//! model overrides what was fetched for it field by field, and keeps the rest.
-//! A provider that cannot be asked keeps the models its definition names, and
+//! change to the configuration file, on `!models refresh`, and, when its
+//! `discover` names `everyMs`, again whenever that interval runs out. What it
+//! lists goes underneath the models its definition names: an entry written
+//! for a model overrides what was fetched for it field by field, and keeps
+//! the rest. A provider that cannot be asked keeps what it listed last, and
 //! the reason is reported.
 
 use std::collections::BTreeMap;
@@ -119,21 +120,55 @@ pub fn with_discovered(definition: &Value, found: &[Value]) -> Value {
 /// could not be asked.
 pub type Outcome = (String, Result<usize, String>);
 
-/// Asks every provider whose definition says to.
+/// Asks the providers `ask` names, whose definitions say to.
 ///
 /// Returns the definitions with what was found folded in, the models a
 /// session can switch to among them, and what each provider asked answered.
 /// The short names are not asked for here: they name the models rather than
 /// being models, and the caller reads them from the configuration it holds.
+///
+/// `current` is what the catalog holds now, discoveries already folded in.
+/// The file decides which providers exist, the catalog decides what each
+/// listed last: a provider nobody asks this round keeps its last listing, a
+/// newly added one enters as the file wrote it, and one the file no longer
+/// names is gone. A provider that is asked keeps its last listing too when it
+/// cannot be reached, so a connection that blips does not empty the list its
+/// models come from; on the first round, when nothing was listed before, it
+/// keeps the models its definition names.
 pub async fn discover(
     agent: &AgentConfig,
+    current: &Map<String, Value>,
+    ask: impl Fn(&str) -> bool,
     store: Option<&str>,
     fetch: &impl Fetch,
     timeout_ms: u64,
 ) -> (Map<String, Value>, Vec<AvailableModel>, Vec<Outcome>) {
-    let mut providers = agent.providers.clone();
+    let mut providers = current
+        .iter()
+        .filter(|(name, _)| agent.providers.contains_key(*name))
+        .map(|(name, definition)| (name.clone(), definition.clone()))
+        .collect::<Map<_, _>>();
+    for (name, definition) in &agent.providers {
+        match Discovery::of(name, definition) {
+            // A provider that is not discovered has nothing to keep: the file
+            // is its whole truth, so an edit to it is in force at once.
+            Ok(None) | Err(_) => {
+                providers.insert(name.clone(), definition.clone());
+            }
+            // One that is keeps its last listing until it is asked again and
+            // answers, which the base map already holds.
+            Ok(Some(_)) => {
+                providers
+                    .entry(name.clone())
+                    .or_insert_with(|| definition.clone());
+            }
+        }
+    }
     let mut outcomes = Vec::new();
     for (name, definition) in &agent.providers {
+        if !ask(name) {
+            continue;
+        }
         let Ok(Some(discovery)) = Discovery::of(name, definition) else {
             continue;
         };

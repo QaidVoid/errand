@@ -1,17 +1,20 @@
 //! Tests for where the daemon's own answers are said.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::Duration;
 
 use serde_json::json;
 use serenity::model::id::ChannelId;
 
 use super::{
     BoxedGateRead, addressed, answer_in, brokerable_providers, brokering_credential_names,
-    check_provider_names, fixed_until_restart, host_of, provider_upstreams, read_usage,
-    rebuild_catalog, refusal, reload_launch_settings, reply_to, usage_sources,
+    check_provider_names, due_providers, fixed_until_restart, host_of, next_wake,
+    provider_upstreams, read_usage, rebuild_catalog, refusal, reload_launch_settings, reply_to,
+    usage_sources,
 };
 use crate::config::validate::validate_config;
 use crate::log::{LogFields, Logger};
@@ -394,19 +397,79 @@ async fn an_edited_models_list_reaches_the_catalog() {
     let log = Logger::new(LogFields::new(), std::sync::Arc::new(|_level, _line| {}));
     let catalog = Catalog::default();
 
-    rebuild_catalog(&named("glm-5.3"), None, &log, &catalog).await;
+    rebuild_catalog(&named("glm-5.3"), |_| true, None, &log, &catalog).await;
     assert_eq!(
         listed(&catalog),
         ["glm-5.3"],
         "the first list was not taken in"
     );
 
-    rebuild_catalog(&named("glm-5.3-air"), None, &log, &catalog).await;
+    rebuild_catalog(&named("glm-5.3-air"), |_| true, None, &log, &catalog).await;
     assert_eq!(
         listed(&catalog),
         ["glm-5.3-air"],
         "the edited list did not replace the one from before"
     );
+}
+
+/// A provider is due when the interval its `discover.everyMs` names has run
+/// out and not before, one the loop has never noted is due at once, and a
+/// provider without `everyMs` is never on a cadence. The next wake is the
+/// soonest interval that has yet to run out.
+#[test]
+fn a_provider_is_due_when_its_interval_runs_out() {
+    let agent = validate_config(&json!({
+        "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
+        "agent": {
+            "provider": "fast",
+            "providers": {
+                "fast": {
+                    "baseUrl": "https://fast.example/v1",
+                    "credential": "k",
+                    "discover": { "everyMs": 60_000 },
+                },
+                "slow": {
+                    "baseUrl": "https://slow.example/v1",
+                    "credential": "k",
+                    "discover": { "everyMs": 3_600_000 },
+                },
+                "manual": {
+                    "baseUrl": "https://manual.example/v1",
+                    "credential": "k",
+                    "discover": true,
+                },
+            },
+        },
+        "projectRoot": "/tmp/p",
+        "stateDir": "/tmp/s",
+    }))
+    .expect("resolves")
+    .agent;
+    let asked = BTreeMap::from([
+        ("fast".to_owned(), 1_000_000),
+        ("slow".to_owned(), 1_000_000),
+    ]);
+
+    assert_eq!(
+        due_providers(&agent, &asked, 1_000_000),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        due_providers(&agent, &asked, 1_059_999),
+        Vec::<String>::new()
+    );
+    assert_eq!(due_providers(&agent, &asked, 1_060_000), ["fast"]);
+    assert_eq!(
+        due_providers(&agent, &BTreeMap::new(), 0),
+        ["fast", "slow"],
+        "a provider the loop has never noted is due at once; manual is never on a cadence"
+    );
+
+    assert_eq!(
+        next_wake(&agent, &asked, 1_000_000),
+        Duration::from_secs(60)
+    );
+    assert_eq!(next_wake(&agent, &asked, 1_060_000), Duration::from_secs(1));
 }
 
 /// A picture posted in a shared channel is addressed to whoever asked for it,

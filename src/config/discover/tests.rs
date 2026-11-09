@@ -61,3 +61,25 @@ fn every_problem_is_named_for_the_provider() {
         "a word is not a setting"
     );
 }
+
+/// `everyMs` puts a provider on its own cadence; a shorter one than a minute
+/// is refused, since a mistyped interval would hammer the endpoint forever.
+#[test]
+fn every_ms_names_the_cadence_and_a_minute_is_the_shortest() {
+    let asked = Discovery::of("p", &json!({ "discover": { "everyMs": 3_600_000 } }))
+        .expect("valid")
+        .expect("asked");
+    assert_eq!(asked.every_ms, Some(3_600_000));
+
+    let plain = Discovery::of("p", &json!({ "discover": true }))
+        .expect("valid")
+        .expect("asked");
+    assert_eq!(plain.every_ms, None, "the bare form carries no cadence");
+
+    for every in [json!(59_999), json!(0), json!(-1), json!("hour")] {
+        assert!(
+            Discovery::of("p", &json!({ "discover": { "everyMs": every } })).is_err(),
+            "{every} must be refused"
+        );
+    }
+}

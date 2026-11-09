@@ -5,7 +5,7 @@
 //! then does the connection open. Nothing that could start an agent happens
 //! before the isolation contract has been checked and reported.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -25,6 +25,7 @@ use crate::chat::render::{
 };
 use crate::chat::threads::ChatThreadFactory;
 use crate::chat::threads::plain;
+use crate::config::discover::Discovery;
 use crate::config::live::LiveConfig;
 use crate::config::load::Environment;
 use crate::config::redact::{contains_secret, redact_text, secret_values};
@@ -183,25 +184,33 @@ async fn listen_on_forge(
 /// How long a provider may take to list its models.
 const DISCOVER_TIMEOUT_MS: u64 = 10_000;
 
-/// Asks every provider again and puts what it said into the catalog.
+/// Asks the providers `ask` names and puts what they said into the catalog.
 ///
-/// The one place the catalog is derived from the configuration, reached both
-/// by `!models refresh` and by the watcher after a change to the file. The
-/// configuration is read as it is in force rather than from a copy taken at
-/// startup, so a provider added or changed in the file is discovered rather
-/// than the definition that was there before, and a short name added in the
-/// file names a model straight away rather than after the next launch. The
-/// names go in beside the models they name, so the two cannot disagree.
-/// Returns what each provider answered, for the caller to report to whoever
-/// asked.
+/// The one place the catalog is derived from the configuration, reached by
+/// `!models refresh`, by the watcher after a change to the file, and by the
+/// auto refresh when a provider's interval runs out. The configuration is
+/// read as it is in force rather than from a copy taken at startup, so a
+/// provider added or changed in the file is discovered rather than the
+/// definition that was there before, and a short name added in the file names
+/// a model straight away rather than after the next launch. The names go in
+/// beside the models they name, so the two cannot disagree. Returns what each
+/// provider asked answered, for the caller to report to whoever asked.
 async fn rebuild_catalog(
     agent: &AgentConfig,
+    ask: impl Fn(&str) -> bool,
     store: Option<&str>,
     log: &Logger,
     catalog: &Catalog,
 ) -> Vec<Outcome> {
-    let (providers, switchable, outcomes) =
-        discover(agent, store, &HttpFetch, DISCOVER_TIMEOUT_MS).await;
+    let (providers, switchable, outcomes) = discover(
+        agent,
+        &catalog.providers(),
+        ask,
+        store,
+        &HttpFetch,
+        DISCOVER_TIMEOUT_MS,
+    )
+    .await;
     report_discovery(log, &outcomes);
     catalog.replace(providers, switchable, agent.aliases.clone());
     outcomes
@@ -219,7 +228,7 @@ fn report_discovery(log: &Logger, outcomes: &[Outcome]) {
                 ]),
             ),
             Err(why) => log.warn(
-                "a provider could not be asked for its models; keeping the ones it names",
+                "a provider could not be asked for its models; keeping what it listed last",
                 &fields([
                     ("provider", LogValue::from(provider.as_str())),
                     ("detail", LogValue::from(why.as_str())),
@@ -227,6 +236,103 @@ fn report_discovery(log: &Logger, outcomes: &[Outcome]) {
             ),
         }
     }
+}
+
+/// The longest the auto refresh sleeps before reading the configuration
+/// again, so a changed `everyMs` is in force by then at the latest.
+const AUTO_REFRESH_CAP: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Spawns the loop that asks providers again when their own interval runs out.
+///
+/// A provider is on the cadence its `discover.everyMs` names and is asked
+/// again only when it is due, so a slow one is not carried along by a fast
+/// one. The configuration is read afresh every wake: a provider added to the
+/// file joins without a restart, and one whose interval changed is honoured
+/// at the next wake at the latest. What a round came to is said in the log
+/// rather than in the channel, since nobody asked for it.
+fn auto_refresh(live: LiveConfig, catalog: Catalog, store: Option<String>, log: Logger) {
+    tokio::spawn(async move {
+        // Startup has just asked every provider there is, so each begins its
+        // interval now rather than being asked again at once.
+        let mut last_asked: BTreeMap<String, i64> = intervals(&live.get().agent)
+            .into_iter()
+            .map(|(name, _)| (name, now_ms()))
+            .collect();
+        loop {
+            let agent = live.get().agent;
+            let now = now_ms();
+            let due: BTreeSet<String> = due_providers(&agent, &last_asked, now)
+                .into_iter()
+                .collect();
+            if !due.is_empty() {
+                let outcomes = rebuild_catalog(
+                    &agent,
+                    |name| due.contains(name),
+                    store.as_deref(),
+                    &log,
+                    &catalog,
+                )
+                .await;
+                for (name, _) in &outcomes {
+                    last_asked.insert(name.clone(), now);
+                }
+            }
+            let wait = next_wake(&agent, &last_asked, now);
+            tokio::time::sleep(wait.min(AUTO_REFRESH_CAP)).await;
+        }
+    });
+}
+
+/// The providers that ask to be asked again, with the interval each names.
+fn intervals(agent: &AgentConfig) -> Vec<(String, u64)> {
+    agent
+        .providers
+        .iter()
+        .filter_map(|(name, definition)| {
+            let discovery = Discovery::of(name, definition).ok()??;
+            Some((name.clone(), discovery.every_ms?))
+        })
+        .collect()
+}
+
+/// The providers whose interval has run out, by name.
+///
+/// One the loop has never noted is due at once, which is how a provider
+/// added to the file after startup gets asked without a restart.
+fn due_providers(agent: &AgentConfig, last_asked: &BTreeMap<String, i64>, now: i64) -> Vec<String> {
+    intervals(agent)
+        .into_iter()
+        .filter(|(name, every)| {
+            let every = i64::try_from(*every).unwrap_or(i64::MAX);
+            now >= last_asked
+                .get(name)
+                .copied()
+                .unwrap_or(i64::MIN)
+                .saturating_add(every)
+        })
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// How long until some provider is next due, or the cap when none is.
+fn next_wake(
+    agent: &AgentConfig,
+    last_asked: &BTreeMap<String, i64>,
+    now: i64,
+) -> std::time::Duration {
+    intervals(agent)
+        .into_iter()
+        .map(|(name, every)| {
+            let every = i64::try_from(every).unwrap_or(i64::MAX);
+            let asked_at = last_asked.get(&name).copied().unwrap_or(now);
+            asked_at
+                .saturating_add(every)
+                .saturating_sub(now)
+                .max(1_000)
+                .unsigned_abs()
+        })
+        .min()
+        .map_or(AUTO_REFRESH_CAP, std::time::Duration::from_millis)
 }
 
 /// The one real fetch of a provider endpoint, over HTTPS.
@@ -1182,6 +1288,8 @@ async fn run(
 
     let (providers, switchable, outcomes) = discover(
         &config.agent,
+        &serde_json::Map::new(),
+        |_| true,
         store.as_deref(),
         &HttpFetch,
         DISCOVER_TIMEOUT_MS,
@@ -1434,7 +1542,8 @@ async fn run(
                     (live.clone(), store.clone(), log.clone(), catalog.clone());
                 Box::pin(async move {
                     let agent = live.get().agent;
-                    let outcomes = rebuild_catalog(&agent, store.as_deref(), &log, &catalog).await;
+                    let outcomes =
+                        rebuild_catalog(&agent, |_| true, store.as_deref(), &log, &catalog).await;
                     models_refreshed(&outcomes)
                 }) as Pin<Box<dyn Future<Output = String> + Send>>
             })
@@ -1557,6 +1666,8 @@ async fn run(
         &fields([("channel", LogValue::from(config.chat.channel_id.as_str()))]),
     );
 
+    auto_refresh(live.clone(), catalog.clone(), store.clone(), log.clone());
+
     // Started once the daemon is serving, so a change to the file is applied
     // to a daemon that is already answering. A session already running keeps
     // what it was launched with, and the next one launches under the new
@@ -1593,7 +1704,7 @@ async fn run(
                 reload_launch_settings(&config, &launch_settings, store.as_deref(), &log).await;
                 // What each provider answered is already in the log, from the
                 // reporting inside the one place the catalog is built.
-                rebuild_catalog(&config.agent, store.as_deref(), &log, &catalog).await;
+                rebuild_catalog(&config.agent, |_| true, store.as_deref(), &log, &catalog).await;
             }) as Pin<Box<dyn Future<Output = ()> + Send>>
         }) as AfterReload
     };

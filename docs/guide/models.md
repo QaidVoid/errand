@@ -131,12 +131,24 @@ are:
 
 Discovered models sit underneath your `models` list. An entry you wrote for a
 discovered model overrides only the fields it names. `defaults` fills fields
-the listing does not carry. A provider that cannot be reached keeps the models
-it lists, and the log says why.
+the listing does not carry. A provider that cannot be reached keeps what it
+listed last, and the log says why.
 
 `!models refresh` asks every provider again without a restart. Editing `models`
 in the configuration file needs no refresh, because the file is reloaded when
 it changes. A running sandbox keeps the models it was launched with.
+
+A provider whose listings change on their own can be asked again on its own
+cadence, with `everyMs` on `discover`:
+
+```json
+"discover": { "everyMs": 3600000 }
+```
+
+That provider is re-asked whenever the hour it names runs out, without anybody
+typing anything. It is said in the log, not in the channel. The shortest
+interval is a minute, and a provider without `everyMs` is asked only at
+startup, when the file changes, and on `!models refresh`.
 
 ## Usage windows
 

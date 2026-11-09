@@ -204,8 +204,11 @@ pub struct AgentConfig {
     /// `true` reads the usual
     /// `/models` listing. An object moves it: `path`, `list` for where the
     /// array sits, `fields` naming where `id`, `name`, `contextWindow`, and
-    /// `maxTokens` sit in an entry, and `defaults` for fields every model
-    /// found carries. An entry of `models` naming a model found overrides the
+    /// `maxTokens` sit in an entry, `defaults` for fields every model
+    /// found carries, and `everyMs` for how often in milliseconds to ask the
+    /// provider again without being told (a minute at the shortest). A
+    /// provider that cannot be asked keeps what it listed last. An entry of
+    /// `models` naming a model found overrides the
     /// fields it names and keeps the rest.
     ///
     /// `usage` says how to read what is left of the provider's usage window,

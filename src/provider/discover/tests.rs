@@ -161,7 +161,15 @@ async fn every_provider_that_says_to_is_asked_and_a_failure_keeps_its_own() {
         keys: Mutex::new(Vec::new()),
     };
 
-    let (providers, models, outcomes) = discover(&config.agent, None, &fetch, 1_000).await;
+    let (providers, models, outcomes) = discover(
+        &config.agent,
+        &serde_json::Map::new(),
+        |_| true,
+        None,
+        &fetch,
+        1_000,
+    )
+    .await;
 
     assert_eq!(
         providers["gateway"]["models"],
@@ -193,4 +201,181 @@ async fn every_provider_that_says_to_is_asked_and_a_failure_keeps_its_own() {
             ),
         ]
     );
+}
+
+/// A provider that answered before but cannot be reached now keeps what it
+/// listed last, so a connection that blips does not empty the list its models
+/// come from until it answers again.
+#[tokio::test]
+async fn a_provider_that_cannot_be_asked_again_keeps_what_it_listed_last() {
+    let config = validate_config(&json!({
+        "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
+        "agent": {
+            "provider": "gateway",
+            "providers": {
+                "gateway": {
+                    "baseUrl": "https://gateway.example/v1",
+                    "credential": "g-key",
+                    "discover": true,
+                },
+                "down": {
+                    "baseUrl": "https://down.example/v1",
+                    "credential": "d-key",
+                    "discover": true,
+                    "models": [{ "id": "kept" }],
+                },
+            },
+        },
+        "projectRoot": "/tmp/p",
+        "stateDir": "/tmp/s",
+    }))
+    .expect("resolves");
+    let answering = Fake {
+        answers: BTreeMap::from([
+            (
+                "https://gateway.example/v1/models".to_owned(),
+                HttpResponse {
+                    status: 200,
+                    body: Some(gateway_listing()),
+                },
+            ),
+            (
+                "https://down.example/v1/models".to_owned(),
+                HttpResponse {
+                    status: 200,
+                    body: Some(json!({ "data": [{ "id": "down-model" }] })),
+                },
+            ),
+        ]),
+        keys: Mutex::new(Vec::new()),
+    };
+    let refusing = Fake {
+        answers: BTreeMap::from([(
+            "https://gateway.example/v1/models".to_owned(),
+            HttpResponse {
+                status: 200,
+                body: Some(gateway_listing()),
+            },
+        )]),
+        keys: Mutex::new(Vec::new()),
+    };
+
+    let (listed, _, _) = discover(
+        &config.agent,
+        &serde_json::Map::new(),
+        |_| true,
+        None,
+        &answering,
+        1_000,
+    )
+    .await;
+    let (providers, switchable, outcomes) =
+        discover(&config.agent, &listed, |_| true, None, &refusing, 1_000).await;
+
+    assert_eq!(
+        providers["down"], listed["down"],
+        "down keeps its last listing"
+    );
+    let switchable: Vec<String> = switchable.iter().map(AvailableModel::qualified).collect();
+    assert!(
+        switchable.contains(&"down/down-model".to_owned()),
+        "the model down listed is still switchable"
+    );
+    assert!(
+        outcomes[1].1.is_err(),
+        "that it could not be asked is still said"
+    );
+}
+
+/// A round that asks one provider keeps what the others listed last, so a
+/// provider on a slow cadence is not carried along by a fast one, and one the
+/// file no longer names is gone.
+#[tokio::test]
+async fn a_round_that_asks_one_provider_keeps_the_rest_and_follows_the_file() {
+    let agent = |providers: Value| {
+        validate_config(&json!({
+            "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
+            "agent": { "provider": "gateway", "providers": providers },
+            "projectRoot": "/tmp/p",
+            "stateDir": "/tmp/s",
+        }))
+        .expect("resolves")
+        .agent
+    };
+    let config = agent(json!({
+        "gateway": {
+            "baseUrl": "https://gateway.example/v1",
+            "credential": "g-key",
+            "discover": true,
+        },
+        "quiet": {
+            "baseUrl": "https://quiet.example/v1",
+            "credential": "q-key",
+            "discover": true,
+            "models": [{ "id": "quiet-model" }],
+        },
+    }));
+    let fetch = Fake {
+        answers: BTreeMap::from([(
+            "https://gateway.example/v1/models".to_owned(),
+            HttpResponse {
+                status: 200,
+                body: Some(gateway_listing()),
+            },
+        )]),
+        keys: Mutex::new(Vec::new()),
+    };
+
+    let (listed, _, _) = discover(
+        &config,
+        &serde_json::Map::new(),
+        |_| true,
+        None,
+        &fetch,
+        1_000,
+    )
+    .await;
+
+    // The file still names quiet, but this round asks only gateway.
+    let (providers, switchable, outcomes) = discover(
+        &config,
+        &listed,
+        |name| name == "gateway",
+        None,
+        &fetch,
+        1_000,
+    )
+    .await;
+
+    assert_eq!(outcomes.len(), 1, "only the provider asked is reported");
+    assert_eq!(
+        providers["quiet"], listed["quiet"],
+        "quiet keeps what it listed last"
+    );
+    let switchable: Vec<String> = switchable.iter().map(AvailableModel::qualified).collect();
+    assert!(switchable.contains(&"quiet/quiet-model".to_owned()));
+    assert_eq!(
+        providers["gateway"]["models"],
+        json!([{ "id": "glm-5.3-flash", "contextWindow": 1_000_000, "maxTokens": 128_000 }]),
+        "the one asked is listed anew"
+    );
+
+    // And a provider the file no longer names does not linger.
+    let without_quiet = agent(json!({
+        "gateway": {
+            "baseUrl": "https://gateway.example/v1",
+            "credential": "g-key",
+            "discover": true,
+        },
+    }));
+    let (providers, _, _) = discover(
+        &without_quiet,
+        &listed,
+        |name| name == "gateway",
+        None,
+        &fetch,
+        1_000,
+    )
+    .await;
+    assert!(!providers.contains_key("quiet"));
 }
