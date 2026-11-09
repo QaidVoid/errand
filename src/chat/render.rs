@@ -552,21 +552,25 @@ pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
     format!("```\n{}\n```", lines.join("\n"))
 }
 
-/// Every model this host can run, one per line, named as `provider/model`.
+/// Every model this host can run, grouped under the provider that serves it.
 ///
-/// The qualified name is what is listed, because it is the name that always
-/// works: a bare id is unique only within its provider, so two providers
-/// listing the same one make it a name that has to be finished before it
-/// means anything. A list of ids is a list of names that fail.
+/// The provider heads its group and is written once, which is most of the
+/// characters this listing saves over naming `provider/model` on every line.
+/// A bare id two providers serve is the exception: it is shown qualified,
+/// because such a name has to be finished before it means anything, and a
+/// list of names that fail is no list at all. Every other name shown can be
+/// typed back as it stands.
 ///
-/// The session's own provider comes first, so the models it could switch to
-/// without qualifying are the ones at the top, and the one it is on is
-/// marked. A short name is shown beside the model it stands for, and a level
-/// that applies without being asked for is spelled out: a list that never
-/// says `muse` cannot be used without reading the configuration first.
+/// A level that applies without being asked for rides on the name as its
+/// `:level` suffix, which is the form `!model` takes: a list that never says
+/// `:high` cannot be used without reading the configuration first. The
+/// session's own provider comes first, so the models it could switch to
+/// without qualifying are the ones at the top, and the one it is on is bold.
+/// A short name is shown beside the model it stands for.
 ///
-/// Shared because a session lists from its own model and the daemon lists
-/// from the catalog, and the two must not drift apart.
+/// The first line is empty, so the intro the caller writes stands apart from
+/// the first header. Shared because a session lists from its own model and
+/// the daemon lists from the catalog, and the two must not drift apart.
 pub fn listed_models(
     available: &[AvailableModel],
     current_provider: &str,
@@ -577,25 +581,42 @@ pub fn listed_models(
     // Stable, so the order a provider lists its models in survives.
     ordered.sort_by_key(|model| (model.provider != current_provider, &model.provider));
 
-    ordered
-        .into_iter()
-        .map(|model| {
-            let mut notes = Vec::new();
-            if model.provider == current_provider && model.id == current_model {
-                notes.push("running".to_owned());
+    let mut served: BTreeMap<&str, usize> = BTreeMap::new();
+    for model in available {
+        *served.entry(model.id.as_str()).or_default() += 1;
+    }
+
+    let mut lines = vec![String::new()];
+    let mut group: Option<&str> = None;
+    for model in ordered {
+        if group != Some(model.provider.as_str()) {
+            if group.is_some() {
+                lines.push(String::new());
             }
-            notes.extend(short_names(aliases, model));
-            if let Some(level) = &model.default_level {
-                notes.push(format!("thinks {}", level.trim_start_matches(':')));
-            }
-            let said = if notes.is_empty() {
-                String::new()
-            } else {
-                format!("  ({})", notes.join(", "))
-            };
-            format!("  `{}`{said}", model.qualified())
-        })
-        .collect()
+            group = Some(model.provider.as_str());
+            lines.push(format!("**{}**", model.provider));
+        }
+
+        let mut name = if served[model.id.as_str()] > 1 {
+            model.qualified()
+        } else {
+            model.id.clone()
+        };
+        if let Some(level) = &model.default_level {
+            name.push_str(level);
+        }
+        let mut line = if model.provider == current_provider && model.id == current_model {
+            format!("- **`{name}`**")
+        } else {
+            format!("- `{name}`")
+        };
+        for short in short_names(aliases, model) {
+            line.push(' ');
+            line.push_str(&short);
+        }
+        lines.push(line);
+    }
+    lines
 }
 
 /// The short names that stand for one model, in the order they were written.

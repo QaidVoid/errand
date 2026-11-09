@@ -4373,7 +4373,8 @@ fn a_host_that_lists_nothing_refuses_a_name_rather_than_accepting_it() {
     ));
 }
 
-/// The listing names every model as `provider/model`, and the session's own
+/// The listing groups its models under the provider that serves them, and
+/// every name shown can be typed back as it stands. The session's own
 /// provider comes first so the models it could switch to without qualifying
 /// are the ones at the top.
 #[test]
@@ -4401,8 +4402,56 @@ fn the_listing_says_what_somebody_can_type_back() {
     assert_eq!(
         lines,
         [
-            "  `zai/glm-5.3`  (running, `glm`, thinks high)",
-            "  `openrouter/a`",
+            "",
+            "**zai**",
+            "- **`glm-5.3:high`** `glm`",
+            "",
+            "**openrouter**",
+            "- `a`",
+        ]
+    );
+}
+
+/// An id two providers serve is shown qualified, because the bare id would be
+/// refused as ambiguous; a unique one is shown bare, because the header above
+/// it already names its provider.
+#[test]
+fn an_id_two_providers_serve_is_shown_qualified() {
+    let available = vec![
+        AvailableModel {
+            provider: "acme".to_owned(),
+            id: "muse-lite".to_owned(),
+            default_level: None,
+        },
+        AvailableModel {
+            provider: "zai".to_owned(),
+            id: "muse-lite".to_owned(),
+            default_level: None,
+        },
+        AvailableModel {
+            provider: "zai".to_owned(),
+            id: "glm-5.3".to_owned(),
+            default_level: None,
+        },
+    ];
+
+    let lines = crate::chat::render::listed_models(
+        &available,
+        "zai",
+        "glm-5.3",
+        &std::collections::BTreeMap::new(),
+    );
+
+    assert_eq!(
+        lines,
+        [
+            "",
+            "**zai**",
+            "- `zai/muse-lite`",
+            "- **`glm-5.3`**",
+            "",
+            "**acme**",
+            "- `acme/muse-lite`",
         ]
     );
 }
@@ -4536,7 +4585,7 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
                 "got {listing}"
             );
             assert!(
-                listing.contains("`acme/muse-lite`  (running, `muse`)"),
+                listing.contains("- **`muse-lite`** `muse`"),
                 "the model it was switched to is the one marked, got {listing}"
             );
         })
