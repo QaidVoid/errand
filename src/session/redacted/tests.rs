@@ -1,8 +1,8 @@
 use super::redact_event;
 use crate::config::redact::{MINTED_PREFIX, REDACTION};
 use crate::session::event::{
-    Delegated, EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage, ToolActivity,
-    ToolResult,
+    Card, CardColor, Delegated, EndReason, NoticeLevel, ReactionOutcome, SessionEvent,
+    SessionUsage, ToolActivity, ToolResult,
 };
 
 const SECRET: &str = "sk-live-9f3c7a11d4e6";
@@ -33,6 +33,7 @@ fn calls() -> Vec<SessionEvent> {
     vec![
         SessionEvent::Post {
             text: with_secret("the key is "),
+            card: None,
         },
         SessionEvent::Notice {
             text: with_secret("starting with "),
@@ -41,6 +42,7 @@ fn calls() -> Vec<SessionEvent> {
         SessionEvent::Reply {
             text: with_secret("output "),
             command: with_secret("!cat "),
+            card: None,
         },
         SessionEvent::ToolResult {
             result: ToolResult {
@@ -169,18 +171,51 @@ fn what_is_reported_is_otherwise_unchanged() {
     let said = redact_event(
         SessionEvent::Post {
             text: "nothing secret here".to_owned(),
+            card: None,
         },
         &secrets,
     );
     assert_eq!(
         said,
         SessionEvent::Post {
-            text: "nothing secret here".to_owned()
+            text: "nothing secret here".to_owned(),
+            card: None,
         }
     );
 
     let busy = redact_event(SessionEvent::Busy { busy: true }, &secrets);
     assert_eq!(busy, SessionEvent::Busy { busy: true });
+}
+
+/// A card is drawn beside its words, so its body is scrubbed with them. The
+/// heading and the quiet line are the daemon's own, which never echo the
+/// agent, so they are left alone.
+#[test]
+fn a_cards_body_is_scrubbed_with_the_words_beside_it() {
+    let secrets = [SECRET.to_owned()];
+    let event = redact_event(
+        SessionEvent::Post {
+            text: format!("the key is {SECRET}"),
+            card: Some(Card {
+                color: CardColor::Ready,
+                title: "models on this host".to_owned(),
+                description: format!("a new session runs on nothing, the key is {SECRET}"),
+                footer: Some("switch with `!model <name>`".to_owned()),
+            }),
+        },
+        &secrets,
+    );
+    let SessionEvent::Post { text, card } = event else {
+        panic!("still a post");
+    };
+    assert_eq!(text, format!("the key is {REDACTION}"));
+    let card = card.expect("the card travelled");
+    assert_eq!(
+        card.description,
+        format!("a new session runs on nothing, the key is {REDACTION}")
+    );
+    assert_eq!(card.title, "models on this host");
+    assert_eq!(card.footer.as_deref(), Some("switch with `!model <name>`"));
 }
 
 /// The house rules reach the agent as a file it can read, so a session that
@@ -222,10 +257,11 @@ fn a_minted_stand_in_is_scrubbed_from_a_session_event() {
     let event = redact_event(
         SessionEvent::Post {
             text: format!("ANTHROPIC_API_KEY={minted}"),
+            card: None,
         },
         &[],
     );
-    let SessionEvent::Post { text } = event else {
+    let SessionEvent::Post { text, .. } = event else {
         panic!("still a post");
     };
     assert_eq!(text, format!("ANTHROPIC_API_KEY={REDACTION}"));

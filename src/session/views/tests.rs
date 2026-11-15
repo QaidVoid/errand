@@ -62,7 +62,7 @@ impl SessionView for FakeView {
 /// One line per event, the way the TypeScript fake wrote them.
 fn render(event: &SessionEvent) -> String {
     match event {
-        SessionEvent::Post { text } => format!("post:{text}"),
+        SessionEvent::Post { text, .. } => format!("post:{text}"),
         SessionEvent::Question { title, .. } => format!("question:{title}"),
         SessionEvent::Prompt { author, text, .. } => format!("prompt:{author}:{text}"),
         SessionEvent::Aside { author, text, .. } => format!("aside:{author}:{text}"),
@@ -70,7 +70,7 @@ fn render(event: &SessionEvent) -> String {
             format!("notice:{}:{text}", level.as_str())
         }
         SessionEvent::Thinking { text } => format!("thinking:{text}"),
-        SessionEvent::Reply { text, command } => format!("reply:{command}:{text}"),
+        SessionEvent::Reply { text, command, .. } => format!("reply:{command}:{text}"),
         SessionEvent::ToolResult { result } => {
             format!("result:{}:{}", result.id, result.failed)
         }
@@ -155,6 +155,7 @@ async fn everything_reported_reaches_every_attached_view() {
 
     fan.send(SessionEvent::Post {
         text: "hello".to_owned(),
+        card: None,
     })
     .await;
     fan.send(SessionEvent::Notice {
@@ -178,6 +179,7 @@ async fn a_view_that_fails_is_skipped_and_the_others_still_hear_it() {
     fan.clone().attach(good.clone()).await;
     fan.send(SessionEvent::Post {
         text: "still delivered".to_owned(),
+        card: None,
     })
     .await;
 
@@ -198,6 +200,7 @@ async fn a_view_that_fails_synchronously_is_skipped_too() {
     fan.send(SessionEvent::Busy { busy: true }).await;
     fan.send(SessionEvent::Post {
         text: "still delivered".to_owned(),
+        card: None,
     })
     .await;
 
@@ -209,6 +212,7 @@ async fn a_view_that_attaches_late_is_shown_what_it_missed() {
     let fan = fan_out();
     fan.send(SessionEvent::Post {
         text: "before it joined".to_owned(),
+        card: None,
     })
     .await;
     fan.send(SessionEvent::Activity {
@@ -237,6 +241,7 @@ async fn detaching_leaves_the_session_and_the_other_views_alone() {
     attached.detach();
     fan.send(SessionEvent::Post {
         text: "after one left".to_owned(),
+        card: None,
     })
     .await;
 
@@ -298,6 +303,7 @@ async fn the_record_is_bounded_and_a_replay_admits_what_it_dropped() {
     for text in ["one", "two", "three", "four", "five"] {
         fan.send(SessionEvent::Post {
             text: text.to_owned(),
+            card: None,
         })
         .await;
     }
@@ -323,15 +329,18 @@ async fn a_turn_is_announced_once_at_its_boundary_not_on_every_line() {
     fan.send(SessionEvent::BeginTurn { turn: 1 }).await;
     fan.send(SessionEvent::Post {
         text: "first".to_owned(),
+        card: None,
     })
     .await;
     fan.send(SessionEvent::Post {
         text: "second".to_owned(),
+        card: None,
     })
     .await;
     fan.send(SessionEvent::BeginTurn { turn: 2 }).await;
     fan.send(SessionEvent::Post {
         text: "third".to_owned(),
+        card: None,
     })
     .await;
 
@@ -361,11 +370,13 @@ async fn a_reply_is_kept_and_a_refusal_is_not() {
     fan.send(SessionEvent::Reply {
         text: "a listing".to_owned(),
         command: "!ls src".to_owned(),
+        card: None,
     })
     .await;
     fan.send(SessionEvent::Reply {
         text: "not yours".to_owned(),
         command: crate::session::event::REFUSAL.to_owned(),
+        card: None,
     })
     .await;
 
@@ -387,6 +398,7 @@ async fn what_is_reported_is_written_down_for_later_with_its_turn() {
     fan.send(SessionEvent::BeginTurn { turn: 4 }).await;
     fan.send(SessionEvent::Post {
         text: "said something".to_owned(),
+        card: None,
     })
     .await;
     fan.send(SessionEvent::Activity {
@@ -411,6 +423,7 @@ async fn restoring_replaces_what_is_held_rather_than_adding_to_it() {
             at: 0,
             entry: SessionEvent::Post {
                 text: "from before".to_owned(),
+                card: None,
             },
         },
         Held {
@@ -455,6 +468,7 @@ fn restoring_carries_the_turn_numbering_on() {
                 at: 0,
                 entry: SessionEvent::Post {
                     text: "one".to_owned(),
+                    card: None,
                 },
             },
             Held {
@@ -462,6 +476,7 @@ fn restoring_carries_the_turn_numbering_on() {
                 at: 0,
                 entry: SessionEvent::Post {
                     text: "three".to_owned(),
+                    card: None,
                 },
             },
         ],
@@ -542,6 +557,7 @@ async fn a_replay_carries_when_each_thing_happened() {
     .await;
     fan.send(SessionEvent::Post {
         text: "done".to_owned(),
+        card: None,
     })
     .await;
 

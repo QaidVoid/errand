@@ -54,6 +54,7 @@ async fn the_issue_is_told_only_what_the_turn_came_to() {
         SessionEvent::BeginTurn { turn: 1 },
         SessionEvent::Post {
             text: "Short answer for the thread, then the detail.".to_owned(),
+            card: None,
         },
         SessionEvent::Activity {
             line: "read src/parse.rs".to_owned(),
@@ -62,9 +63,11 @@ async fn the_issue_is_told_only_what_the_turn_came_to() {
         SessionEvent::Reply {
             text: "this session runs on `glm-5.3-flash`".to_owned(),
             command: "!model".to_owned(),
+            card: None,
         },
         SessionEvent::Post {
             text: "Fixed for <@github:octocat>, reset <t:1790273365:R>.".to_owned(),
+            card: None,
         },
         SessionEvent::Notice {
             text: "<@github:octocat> [done] glm-5.3-flash | 16m27s".to_owned(),
@@ -156,7 +159,9 @@ async fn comments_are_cut_short_only_when_the_translated_text_exceeds_the_limit(
         "\u{e9}".repeat(limit + 1),
         format!("{}<@github:x>", "\u{e9}".repeat(limit - 2)),
     ] {
-        view.observe(&SessionEvent::Post { text }).await.unwrap();
+        view.observe(&SessionEvent::Post { text, card: None })
+            .await
+            .unwrap();
         view.observe(&SessionEvent::Busy { busy: false })
             .await
             .unwrap();
@@ -187,6 +192,7 @@ async fn comment_body_survives_json_serialization() {
     let text = "Quotes \" and backslash \\, newline\n, null \0, and \u{96ea}";
     view.observe(&SessionEvent::Post {
         text: text.to_owned(),
+        card: None,
     })
     .await
     .unwrap();
@@ -215,6 +221,7 @@ async fn failed_comment_is_reported_and_not_posted_again() {
     let view = threads(api).view_for("github:o/r#2").unwrap();
     view.observe(&SessionEvent::Post {
         text: "answer".to_owned(),
+        card: None,
     })
     .await
     .unwrap();

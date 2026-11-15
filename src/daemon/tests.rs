@@ -31,6 +31,8 @@ use crate::sandbox::backend::{
 };
 use crate::sandbox::kage_providers::{KageProviders, as_installed};
 use crate::sandbox::paths;
+use crate::session::event::Answer;
+use crate::session::event::Card;
 use crate::session::event::EndReason;
 use crate::session::event::SessionEvent;
 use crate::session::manager::{CreatedThread, FoundView, MadeThread, SandboxPool, ThreadFactory};
@@ -369,7 +371,7 @@ struct Harness {
     daemon: Daemon,
     threads: Arc<FakeThreads>,
     sandbox: Arc<FakeSandbox>,
-    replies: Arc<Mutex<Vec<(String, String)>>>,
+    replies: Arc<Mutex<Vec<(String, Answer)>>>,
     /// Files posted to the channel: the name, the bytes, and the caption.
     files: PostedFiles,
     lines: Arc<Mutex<Vec<(LogLevel, String)>>>,
@@ -386,9 +388,22 @@ impl Harness {
             .lock()
             .unwrap()
             .iter()
-            .map(|(_, text)| text.as_str())
+            .map(|(_, answer)| answer.clone().words())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Every card the daemon answered with, in the order they were given.
+    fn cards(&self) -> Vec<Card> {
+        self.replies
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(_, answer)| match answer {
+                Answer::Text(_) => None,
+                Answer::Card(card) => Some(card.clone()),
+            })
+            .collect()
     }
 
     /// Where each answer was aimed, in the order they were given.
@@ -474,9 +489,11 @@ async fn with_daemon(
         },
         reply_in_channel: {
             let replies = Arc::clone(&replies);
-            Arc::new(move |message: IncomingMessage, text: String| {
+            Arc::new(move |message: IncomingMessage, answer: Answer| {
                 let replies = Arc::clone(&replies);
-                Box::pin(async move { replies.lock().unwrap().push((message.channel_id, text)) })
+                Box::pin(async move {
+                    replies.lock().unwrap().push((message.channel_id, answer));
+                })
             })
         },
         reply_with_file: {
@@ -629,7 +646,13 @@ async fn help_in_the_channel_is_answered_without_starting_anything() {
                 .await;
 
             assert!(created(&harness.threads).is_empty());
-            assert!(harness.replies.lock().unwrap()[0].1.contains("!steer"));
+            assert!(
+                harness.replies.lock().unwrap()[0]
+                    .1
+                    .clone()
+                    .words()
+                    .contains("!steer")
+            );
         })
     })
     .await;
@@ -1170,7 +1193,11 @@ async fn a_refusal_to_start_is_said_in_the_channel_where_it_was_asked() {
                 .await;
 
             let replies = harness.replies.lock().unwrap();
-            assert!(replies[0].1.contains("no-such-model"), "{:?}", replies[0].1);
+            assert!(
+                replies[0].1.clone().words().contains("no-such-model"),
+                "{:?}",
+                replies[0].1.clone().words()
+            );
         })
     })
     .await;
@@ -1264,6 +1291,8 @@ async fn a_message_in_a_thread_that_is_over_says_where_to_start_a_new_one() {
             assert!(
                 harness.replies.lock().unwrap()[0]
                     .1
+                    .clone()
+                    .words()
                     .contains("post in the channel to start a new one")
             );
         })
@@ -1377,6 +1406,8 @@ async fn nobody_powers_off_the_host_unless_the_daemons_own_list_says_so() {
             assert!(
                 harness.replies.lock().unwrap()[0]
                     .1
+                    .clone()
+                    .words()
                     .contains("nobody may power off this host")
             );
             assert!(created(&harness.threads).is_empty());
@@ -1402,6 +1433,8 @@ async fn an_account_not_on_the_shutdown_list_is_refused() {
                 assert!(
                     harness.replies.lock().unwrap()[0]
                         .1
+                        .clone()
+                        .words()
                         .contains("not on the list")
                 );
             })
@@ -1431,6 +1464,8 @@ async fn an_account_on_the_list_powers_the_host_off() {
                 assert!(
                     harness.replies.lock().unwrap()[0]
                         .1
+                        .clone()
+                        .words()
                         .contains("powering off now")
                 );
                 let logged = harness
@@ -1469,6 +1504,8 @@ async fn a_power_off_that_fails_says_what_went_wrong() {
                 assert!(
                     harness.replies.lock().unwrap()[0]
                         .1
+                        .clone()
+                        .words()
                         .contains("systemctl refused")
                 );
             })
@@ -1889,6 +1926,8 @@ async fn the_usage_window_is_reported_wherever_it_is_asked_about() {
                 assert!(
                     harness.replies.lock().unwrap()[0]
                         .1
+                        .clone()
+                        .words()
                         .contains("58% of the provider's usage window is left")
                 );
                 assert!(created(&harness.threads).is_empty());
@@ -1902,7 +1941,7 @@ async fn the_usage_window_is_reported_wherever_it_is_asked_about() {
                             content: "!usage".to_owned(),
                         })
                         .await,
-                    harness.replies.lock().unwrap()[0].1.clone()
+                    harness.replies.lock().unwrap()[0].1.clone().words()
                 );
             })
         },
@@ -2049,6 +2088,13 @@ async fn the_models_on_this_host_are_listed_without_starting_a_session() {
                 assert!(said.contains("**zai**\n- `glm-5.3:high`"), "{said}");
                 assert!(said.contains("**openrouter**\n- `a`"), "{said}");
                 assert!(created(&harness.threads).is_empty());
+                // The listing is drawn as a card, whose body is the same
+                // words minus the spacer the plain list carries.
+                let cards = harness.cards();
+                assert_eq!(cards.len(), 1);
+                assert_eq!(cards[0].title, "models on this host");
+                assert!(cards[0].description.contains("- `glm-5.3:high`"));
+                assert!(cards[0].description.contains("- `a`"));
             })
         },
     )
@@ -2162,6 +2208,8 @@ async fn a_provider_that_meters_nothing_says_so_rather_than_inventing_a_number()
             assert!(
                 harness.replies.lock().unwrap()[0]
                     .1
+                    .clone()
+                    .words()
                     .contains("does not report a usage window")
             );
         })

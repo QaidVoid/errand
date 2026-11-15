@@ -146,6 +146,7 @@ async fn an_issue_gets_a_chat_thread_that_answers_it_across_a_restart() {
     made.view
         .observe(&SessionEvent::Post {
             text: "done".to_owned(),
+            card: None,
         })
         .await
         .unwrap();
@@ -169,6 +170,7 @@ async fn an_issue_gets_a_chat_thread_that_answers_it_across_a_restart() {
     for event in [
         SessionEvent::Post {
             text: "ok".to_owned(),
+            card: None,
         },
         SessionEvent::Busy { busy: false },
     ] {
@@ -306,6 +308,7 @@ async fn finish_turn(view: &Arc<dyn SessionView>) {
     for event in [
         SessionEvent::Post {
             text: "done".to_owned(),
+            card: None,
         },
         SessionEvent::Busy { busy: false },
     ] {

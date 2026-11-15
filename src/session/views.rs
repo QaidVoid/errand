@@ -521,6 +521,7 @@ impl ViewFanOut {
         if snapshot.dropped > 0 {
             view.observe(&SessionEvent::Post {
                 text: format!("[{} earlier line(s) not kept]", snapshot.dropped),
+                card: None,
             })
             .await?;
         }
@@ -577,6 +578,7 @@ impl ViewFanOut {
         if snapshot.state.ended {
             view.observe(&SessionEvent::Post {
                 text: "[this session has ended]".to_owned(),
+                card: None,
             })
             .await?;
         }

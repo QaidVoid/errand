@@ -45,6 +45,9 @@ use crate::session::commands::{
     answer_without_session, argument_of, first_word, is_addressed_to_bot, is_aside, parse_user_id,
     speech_args,
 };
+use crate::session::event::Answer;
+use crate::session::event::Card;
+use crate::session::event::CardColor;
 use crate::session::event::EndReason;
 use crate::session::manager::SandboxPool;
 use crate::session::manager::{
@@ -301,9 +304,9 @@ pub type DescribeUsage =
 pub type RefreshModels =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = String> + Send>> + Send + Sync>;
 
-/// Posts a refusal back to the channel, outside any thread.
+/// Posts an answer back to the channel, outside any thread.
 pub type ReplyInChannel =
-    Arc<dyn Fn(IncomingMessage, String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+    Arc<dyn Fn(IncomingMessage, Answer) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// Posts a file back to the channel, outside any thread, with its caption.
 pub type ReplyWithFile = Arc<
@@ -699,20 +702,21 @@ impl Daemon {
         content: &str,
         author_id: &str,
         in_thread: bool,
-    ) -> Option<String> {
+    ) -> Option<Answer> {
         if let Some(answer) = self.power_off_host(content, author_id).await {
-            return Some(answer);
+            return Some(Answer::Text(answer));
         }
         if let Some(answer) = self.describe_usage(content, author_id).await {
-            return Some(answer);
+            return Some(Answer::Text(answer));
         }
         if let Some(answer) = self.refresh_models(content, author_id).await {
-            return Some(answer);
+            return Some(Answer::Text(answer));
         }
         if let Some(answer) = self.list_models(content, in_thread) {
             return Some(answer);
         }
         self.answer_about_memory(content, author_id, in_thread)
+            .map(Answer::Text)
     }
 
     /// Lists the models this host serves, for a channel with no session in it.
@@ -723,15 +727,15 @@ impl Daemon {
     /// answers instead, because that is where a name given is acted on: a
     /// session runs on one model at a time, and switching it needs the session
     /// that would change.
-    fn list_models(&self, content: &str, in_thread: bool) -> Option<String> {
+    fn list_models(&self, content: &str, in_thread: bool) -> Option<Answer> {
         if first_word(content) != "!model" || in_thread {
             return None;
         }
         if !argument_of(content, "!model").is_empty() {
-            return Some(
+            return Some(Answer::Text(
                 "a session runs on one model at a time, so switch it inside a session thread with `!model <name>`"
                     .to_owned(),
-            );
+            ));
         }
 
         let agent = self.options.config.get().agent;
@@ -751,20 +755,26 @@ impl Daemon {
             None => ("the provider default".to_owned(), String::new()),
         };
 
-        Some(if available.is_empty() {
-            "this host lists no models to switch to".to_owned()
-        } else {
-            let mut lines = vec![format!(
-                "a new session runs on `{shown}`. Switch with `!model <name>` in a session thread:"
-            )];
-            lines.extend(listed_models(
-                &available,
-                &provider,
-                &current,
-                &self.options.catalog.aliases(),
+        if available.is_empty() {
+            return Some(Answer::Text(
+                "this host lists no models to switch to".to_owned(),
             ));
-            lines.join("\n")
-        })
+        }
+        // The first entry of the list is a spacer, so an intro written above
+        // it stands apart from the first header; the card's body needs no
+        // spacer under its title.
+        let list = listed_models(
+            &available,
+            &provider,
+            &current,
+            &self.options.catalog.aliases(),
+        );
+        Some(Answer::Card(Card {
+            color: CardColor::Ready,
+            title: "models on this host".to_owned(),
+            description: format!("a new session runs on `{shown}`\n{}", list[1..].join("\n")),
+            footer: Some("switch with `!model <name>` in a session thread".to_owned()),
+        }))
     }
 
     /// Answers what is remembered, for somebody who is not in a thread.
@@ -910,7 +920,7 @@ impl Daemon {
             if let StartOutcome::Refused { reason } = outcome
                 && !aside
             {
-                (self.options.reply_in_channel)(message, reason).await;
+                (self.options.reply_in_channel)(message, reason.into()).await;
             }
             return;
         }
@@ -918,7 +928,9 @@ impl Daemon {
         if self.sessions.is_finished_thread(thread_id) {
             (self.options.reply_in_channel)(
                 message,
-                "this session has ended; post in the channel to start a new one".to_owned(),
+                Answer::Text(
+                    "this session has ended; post in the channel to start a new one".to_owned(),
+                ),
             )
             .await;
         }
@@ -937,7 +949,7 @@ impl Daemon {
         // describes the system needs nothing running, and opening a thread and
         // a sandbox to print a list is not an answer.
         if let Some(listed) = answer_without_session(&message.content) {
-            (self.options.reply_in_channel)(message, listed).await;
+            (self.options.reply_in_channel)(message, Answer::Text(listed)).await;
             return;
         }
 
@@ -963,7 +975,7 @@ impl Daemon {
 
         let outcome = self.sessions.start(message.clone()).await;
         if let StartOutcome::Refused { reason } = outcome {
-            (self.options.reply_in_channel)(message, reason).await;
+            (self.options.reply_in_channel)(message, reason.into()).await;
         }
     }
 
@@ -977,14 +989,16 @@ impl Daemon {
         let asked = match image_args(argument_of(&message.content, IMAGE_GENERATION)) {
             Ok(asked) => asked,
             Err(refused) => {
-                (self.options.reply_in_channel)(message.clone(), refused).await;
+                (self.options.reply_in_channel)(message.clone(), refused.into()).await;
                 return;
             }
         };
         if asked.prompt.is_empty() {
             (self.options.reply_in_channel)(
                 message.clone(),
-                "say what to generate, as `!gen-image [--effort <level>] <prompt>`".to_owned(),
+                "say what to generate, as `!gen-image [--effort <level>] <prompt>`"
+                    .to_owned()
+                    .into(),
             )
             .await;
             return;
@@ -1003,7 +1017,7 @@ impl Daemon {
                 .await;
             }
             Err(reason) => {
-                (self.options.reply_in_channel)(message.clone(), reason).await;
+                (self.options.reply_in_channel)(message.clone(), reason.into()).await;
             }
         }
     }
@@ -1018,7 +1032,7 @@ impl Daemon {
         let asked = match speech_args(argument_of(&message.content, SPEECH_GENERATION)) {
             Ok(asked) => asked,
             Err(refused) => {
-                (self.options.reply_in_channel)(message.clone(), refused).await;
+                (self.options.reply_in_channel)(message.clone(), refused.into()).await;
                 return;
             }
         };
@@ -1036,7 +1050,7 @@ impl Daemon {
                 .await;
             }
             Err(reason) => {
-                (self.options.reply_in_channel)(message.clone(), reason).await;
+                (self.options.reply_in_channel)(message.clone(), reason.into()).await;
             }
         }
     }
@@ -1129,12 +1143,14 @@ impl Daemon {
             return "the daemon is still starting up".to_owned();
         }
 
-        // A slash command is typed at the channel, never inside a thread.
+        // A slash command is typed at the channel, never inside a thread. An
+        // ephemeral acknowledgement has no place to draw a card in, so only
+        // the words of the answer go back.
         if let Some(answered) = self
             .answer_as_daemon(&command.content, &command.user_id, false)
             .await
         {
-            return answered;
+            return answered.words();
         }
 
         // Some commands describe the system rather than act on a session, so

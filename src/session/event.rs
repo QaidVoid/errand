@@ -184,6 +184,81 @@ pub enum EndReason {
     ProtocolViolation,
 }
 
+/// The state a card stands for, which a surface turns into a color.
+///
+/// Named by what the session means rather than by any palette, so every
+/// surface colors the same state the same way without sharing swatches. A
+/// card is a post that deserves reading at a glance: green when things are
+/// fine, blue while working, amber for a warning, red for a refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CardColor {
+    Ready,
+    Working,
+    Warning,
+    Refused,
+}
+
+/// A post a surface may draw as a card instead of plain text.
+///
+/// The text always rides alongside, so a surface without cards shows the
+/// same words and a surface with them lays the same words out under a title
+/// and a colored edge.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Card {
+    /// The state the card reports.
+    pub color: CardColor,
+    /// The card's heading.
+    pub title: String,
+    /// The body, in the markdown the surface renders.
+    pub description: String,
+    /// A quiet line under the body, when there is one worth saying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer: Option<String>,
+}
+
+impl Card {
+    /// The words of the card, which a surface without cards shows.
+    pub fn words(&self) -> String {
+        let mut said = format!("{}\n{}", self.title, self.description);
+        if let Some(footer) = &self.footer {
+            said.push('\n');
+            said.push_str(footer);
+        }
+        said
+    }
+}
+
+/// What the daemon answers by itself: words, or words worth a card.
+///
+/// Most answers are words; a listing of things, which is the same words every
+/// time, is a card. A surface that has no cards takes [`Answer::words`] and
+/// shows what it would have shown anyway.
+#[derive(Debug, Clone)]
+pub enum Answer {
+    /// Plain words.
+    Text(String),
+    /// Words laid out as a card.
+    Card(Card),
+}
+
+impl From<String> for Answer {
+    fn from(text: String) -> Self {
+        Answer::Text(text)
+    }
+}
+
+impl Answer {
+    /// The words of the answer, whatever shape it came in.
+    pub fn words(self) -> String {
+        match self {
+            Answer::Text(text) => text,
+            Answer::Card(card) => card.words(),
+        }
+    }
+}
+
 /// One thing a session says.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
@@ -193,7 +268,15 @@ pub enum EndReason {
 )]
 pub enum SessionEvent {
     /// Posts a message, splitting it if needed.
-    Post { text: String },
+    ///
+    /// A card, when present, is the same words drawn as a card by a surface
+    /// that has them. It is never split: a post carrying one fits in a card,
+    /// or it does not carry one.
+    Post {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<Card>,
+    },
     /// Notes that somebody asked the agent for something.
     ///
     /// A chat thread already holds the message that started a turn, so it
@@ -262,8 +345,14 @@ pub enum SessionEvent {
     /// A reply belongs to the command that asked for it rather than to the
     /// conversation, so a surface can attach it to that instead of showing it
     /// as the agent having spoken. `command` is the command as it was asked,
-    /// or [`REFUSAL`] for a refusal, which is never recorded.
-    Reply { text: String, command: String },
+    /// or [`REFUSAL`] for a refusal, which is never recorded. A card, when
+    /// present, is the same words drawn as a card by a surface that has them.
+    Reply {
+        text: String,
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<Card>,
+    },
     /// Reports what a tool produced, once it has finished.
     ///
     /// Separate from the call itself, so a surface can attach the result to it

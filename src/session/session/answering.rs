@@ -12,7 +12,7 @@ use crate::provider::models::{AvailableModel, Matched, match_model};
 use crate::session::commands::{
     COMMANDS, CommandAccess, Standing, help_text, may_run, parse_user_id,
 };
-use crate::session::event::{EndReason, REFUSAL, ReactionOutcome, SessionEvent};
+use crate::session::event::{Card, CardColor, EndReason, REFUSAL, ReactionOutcome, SessionEvent};
 use crate::session::model::{expand_alias, split_level};
 
 /// Which model a name picked out, when a name can pick out more than one.
@@ -242,21 +242,33 @@ impl Running {
             |model| format!("{provider}/{model}"),
         );
         let current = split_level(running.as_deref().unwrap_or_default()).0;
-        self.say(&if available.is_empty() {
-            format!("this session runs on `{shown}`; the host lists no others to switch to")
-        } else {
-            let mut lines = vec![format!(
-                "this session runs on `{shown}`. Switch with `!model <name>`:"
-            )];
-            lines.extend(listed_models(
-                available,
-                &provider,
-                &current,
-                &self.options.catalog.aliases(),
-            ));
-            lines.join("\n")
-        })
-        .await;
+        if available.is_empty() {
+            self.say(&format!(
+                "this session runs on `{shown}`; the host lists no others to switch to"
+            ))
+            .await;
+            return;
+        }
+        // The first entry of the list is a spacer for the plain text, so the
+        // intro stands apart from the first header; the card's body needs no
+        // spacer under its title.
+        let list = listed_models(
+            available,
+            &provider,
+            &current,
+            &self.options.catalog.aliases(),
+        );
+        let text = format!(
+            "this session runs on `{shown}`. Switch with `!model <name>`:\n{}",
+            list.join("\n")
+        );
+        let card = Card {
+            color: CardColor::Ready,
+            title: "models this session can switch to".to_owned(),
+            description: format!("runs on `{shown}`\n{}", list[1..].join("\n")),
+            footer: Some("switch with `!model <name>`".to_owned()),
+        };
+        self.say_with_card(&text, Some(card)).await;
     }
 
     /// Looks a model name up the way `!model` does, saying why when nothing
@@ -525,6 +537,7 @@ impl Running {
                 .send(SessionEvent::Reply {
                     text: why.to_owned(),
                     command: REFUSAL.to_owned(),
+                    card: None,
                 })
                 .await;
         }

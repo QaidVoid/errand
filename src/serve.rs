@@ -24,6 +24,7 @@ use crate::chat::render::{
     MESSAGE_LIMIT, models_refreshed, split_message, usage_table, when_relative, when_relative_plain,
 };
 use crate::chat::threads::ChatThreadFactory;
+use crate::chat::threads::card as card_message;
 use crate::chat::threads::plain;
 use crate::config::discover::Discovery;
 use crate::config::live::LiveConfig;
@@ -77,6 +78,8 @@ use crate::sandbox::broker::{BrokerTemplate, RECEIPTS_FILENAME, ReceiptStore};
 use crate::sandbox::broker::{LOOKUP_TIMEOUT, NoAddress, public_addresses, upstream_url};
 use crate::sandbox::egress::provider_prefix;
 use crate::sandbox::paths;
+use crate::session::event::Answer;
+use crate::session::event::Card;
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
 use crate::session::model::{configured_model, split_level};
 use crate::session::pr::ApiCall;
@@ -1410,7 +1413,7 @@ async fn run(
             let live = live.clone();
             let log = log.clone();
             let served = *served_channel;
-            Arc::new(move |message: IncomingMessage, text: String| {
+            Arc::new(move |message: IncomingMessage, answer: Answer| {
                 let http = Arc::clone(&http);
                 let live = live.clone();
                 let log = log.clone();
@@ -1418,24 +1421,31 @@ async fn run(
                     // Asked on an issue, but answered in the channel: the
                     // issue hears a session's turns, not the daemon turning
                     // work away, which is for whoever runs it.
-                    let text = match issue_of(&message.channel_id) {
+                    let answer = match issue_of(&message.channel_id) {
                         Some((repository, number)) => {
                             let name = live
                                 .get()
                                 .forge
                                 .map_or("the forge", |forge| forge::display(forge.kind));
-                            format!(
-                                "{} asked on {name}, on {repository}#{number}, and {text}",
+                            let asked = format!(
+                                "{} asked on {name}, on {repository}#{number}",
                                 message.author_name.as_deref().unwrap_or("somebody")
-                            )
+                            );
+                            match answer {
+                                Answer::Text(text) => Answer::Text(format!("{asked}, and {text}")),
+                                Answer::Card(card) => Answer::Card(Card {
+                                    description: format!("{asked}\n\n{}", card.description),
+                                    ..card
+                                }),
+                            }
                         }
-                        None => text,
+                        None => answer,
                     };
                     // Read from the configuration in force, so that a
                     // credential rotated in the file is scrubbed from the
                     // next thing said in the channel.
                     let secrets = secret_values(&live.get());
-                    reply_in_channel(&http, &log, &secrets, served, &message, &text).await;
+                    reply_in_channel(&http, &log, &secrets, served, &message, answer).await;
                 })
             })
         },
@@ -1850,7 +1860,7 @@ async fn reply_in_channel(
     secrets: &[String],
     served: ChannelId,
     message: &IncomingMessage,
-    text: &str,
+    answer: Answer,
 ) {
     let channel_id = answer_in(&message.channel_id, served);
     // A thread cannot hang a thread off itself, so a long answer is only
@@ -1863,10 +1873,6 @@ async fn reply_in_channel(
         )
         .await
         .ok();
-    let chunks = split_message(&redact_text(text, secrets), MESSAGE_LIMIT);
-    if chunks.is_empty() {
-        return;
-    }
 
     let said = |error: serenity::Error| {
         log.warn(
@@ -1875,47 +1881,71 @@ async fn reply_in_channel(
         );
     };
 
-    let Some(starter) = starter else {
-        // Nothing to hang it off, so it is said in the channel: the answer
-        // matters more than what it is attached to.
-        for chunk in chunks {
-            let _ = channel_id
-                .send_message(http, plain(&chunk))
+    match answer {
+        // A card is one message, never split and never moved into a thread of
+        // its own: it is written to be read at a glance, and its body is
+        // checked against the service's limit before it is drawn.
+        Answer::Card(card) => {
+            let description = redact_text(&card.description, secrets);
+            let shown = Card {
+                description,
+                ..card
+            };
+            let mut reply = card_message(&shown);
+            if let Some(starter) = starter {
+                reply = reply.reference_message(&starter);
+            }
+            let _ = channel_id.send_message(http, reply).await.map_err(said);
+        }
+        Answer::Text(text) => {
+            let chunks = split_message(&redact_text(&text, secrets), MESSAGE_LIMIT);
+            if chunks.is_empty() {
+                return;
+            }
+
+            let Some(starter) = starter else {
+                // Nothing to hang it off, so it is said in the channel: the
+                // answer matters more than what it is attached to.
+                for chunk in chunks {
+                    let _ = channel_id
+                        .send_message(http, plain(&chunk))
+                        .await
+                        .map_err(said);
+                }
+                return;
+            };
+
+            if chunks.len() == 1 {
+                let reply = plain(&chunks[0]).reference_message(&starter);
+                let _ = channel_id.send_message(http, reply).await.map_err(said);
+                return;
+            }
+
+            if !may_open_thread {
+                for chunk in chunks {
+                    let _ = channel_id
+                        .send_message(http, plain(&chunk))
+                        .await
+                        .map_err(said);
+                }
+                return;
+            }
+
+            // A long answer goes in a thread of its own rather than filling
+            // the channel with it.
+            let thread = channel_id
+                .create_thread_from_message(
+                    http,
+                    starter.id,
+                    serenity::builder::CreateThread::new("answer"),
+                )
                 .await
                 .map_err(said);
+            let Ok(thread) = thread else { return };
+            for chunk in chunks {
+                let _ = thread.send_message(http, plain(&chunk)).await.map_err(said);
+            }
         }
-        return;
-    };
-
-    if chunks.len() == 1 {
-        let reply = plain(&chunks[0]).reference_message(&starter);
-        let _ = channel_id.send_message(http, reply).await.map_err(said);
-        return;
-    }
-
-    if !may_open_thread {
-        for chunk in chunks {
-            let _ = channel_id
-                .send_message(http, plain(&chunk))
-                .await
-                .map_err(said);
-        }
-        return;
-    }
-
-    // A long answer goes in a thread of its own rather than filling the
-    // channel with it.
-    let thread = channel_id
-        .create_thread_from_message(
-            http,
-            starter.id,
-            serenity::builder::CreateThread::new("answer"),
-        )
-        .await
-        .map_err(said);
-    let Ok(thread) = thread else { return };
-    for chunk in chunks {
-        let _ = thread.send_message(http, plain(&chunk)).await.map_err(said);
     }
 }
 

@@ -120,7 +120,8 @@ fn the_call_names_are_the_ones_the_record_already_uses() {
     assert_eq!(named(&SessionEvent::BeginTurn { turn: 1 }), "beginTurn");
     assert_eq!(
         named(&SessionEvent::Post {
-            text: String::new()
+            text: String::new(),
+            card: None,
         }),
         "post"
     );

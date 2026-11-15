@@ -4,11 +4,13 @@
 //! service, which is what keeps the session layer free of chat types and
 //! testable without a connection.
 //!
-//! No message gets a link preview: a coding agent quotes URLs constantly, and
-//! a preview card for each one buries the conversation. The production
-//! transport is the only thing that builds a message, and it always sets the
-//! suppress-embeds flag, so a new call site cannot reintroduce embeds by
-//! forgetting it.
+//! No plain message gets a link preview: a coding agent quotes URLs
+//! constantly, and a preview card for each one buries the conversation. The
+//! production transport is the only thing that builds a message, and it sets
+//! the suppress-embeds flag on every plain message, so a new call site cannot
+//! reintroduce previews by forgetting it. A message carrying a card omits the
+//! flag, because the flag would hide the card too; a card keeps bare URLs out
+//! of itself, so leaving previews unmade costs it nothing.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -16,7 +18,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use serenity::builder::{
-    CreateAllowedMentions, CreateAttachment, CreateMessage, EditMessage, EditThread,
+    CreateAllowedMentions, CreateAttachment, CreateEmbed, CreateEmbedFooter, CreateMessage,
+    EditMessage, EditThread,
 };
 use serenity::model::channel::Channel;
 use serenity::model::channel::ChannelType;
@@ -32,6 +35,8 @@ use crate::chat::outbox::{DEFAULT_MAX_BUFFERED, Outbox, PermanentFailure, TaskEr
 use crate::chat::render::{MESSAGE_LIMIT, delegation_line, split_message};
 use crate::issues::thread::logins_plainly;
 use crate::log::{LogValue, Logger, fields};
+use crate::session::event::Card;
+use crate::session::event::CardColor;
 use crate::session::event::Delegated;
 use crate::session::event::ToolResult;
 use crate::session::event::{EndReason, ReactionOutcome, SessionEvent};
@@ -40,6 +45,9 @@ use crate::session::views::ViewError;
 
 /// The service expires a typing indicator after about ten seconds.
 pub const TYPING_REFRESH_MS: u64 = 8_000;
+
+/// The most characters a card's body may hold, as the service limits it.
+pub const CARD_DESCRIPTION_LIMIT: usize = 4_096;
 
 /// Everything one send or edit leaves behind, for later edits and reactions.
 #[derive(Debug, Clone, PartialEq)]
@@ -85,12 +93,8 @@ pub type ServiceCall<T> = Pin<Box<dyn Future<Output = Result<T, ServiceError>> +
 /// hands the thread a recording double, which is the seam the original's
 /// fake channel sat in.
 pub trait ThreadTransport: Send + Sync + 'static {
-    /// Sends a message, optionally carrying a named file. Returns its id.
-    fn send(
-        &self,
-        content: String,
-        attachment: Option<(String, Vec<u8>)>,
-    ) -> ServiceCall<MessageHandle>;
+    /// Sends a message. Returns its id.
+    fn send(&self, message: Outgoing) -> ServiceCall<MessageHandle>;
 
     /// Edits a message's text.
     fn edit(&self, message_id: String, content: String) -> ServiceCall<()>;
@@ -114,6 +118,46 @@ pub trait ThreadTransport: Send + Sync + 'static {
     fn send_typing(&self) -> ServiceCall<()>;
 }
 
+/// One message on its way out: words, maybe a file, maybe a card.
+///
+/// Words always ride along, so a transport that cannot draw a card still
+/// delivers the same content; a card is the layout those words deserve when
+/// the surface has one.
+#[derive(Debug, Clone, Default)]
+pub struct Outgoing {
+    /// The words themselves, kept inside the service's per-message limit by
+    /// the caller.
+    pub content: String,
+    /// The card drawn beside or instead of the words, when there is one.
+    pub card: Option<Card>,
+    /// A named file carried by the message, when there is one.
+    pub attachment: Option<(String, Vec<u8>)>,
+}
+
+impl Outgoing {
+    /// Words alone, the way most messages travel.
+    pub fn plain(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Words with the card that lays them out.
+    pub fn with_card(content: impl Into<String>, card: Card) -> Self {
+        Self {
+            content: content.into(),
+            card: Some(card),
+            attachment: None,
+        }
+    }
+}
+///
+/// The daemon addresses a person on purpose, to say a turn they asked for has
+/// settled, so user mentions are parsed. Nothing it posts ever means to reach
+/// everyone or a role, and most of what it posts is the agent's words or a
+/// person's own: without this, text that merely happens to contain the
+/// everyone or a role syntax would notify them.
 /// Who a message the daemon posts may notify.
 ///
 /// The daemon addresses a person on purpose, to say a turn they asked for has
@@ -128,15 +172,43 @@ fn addressed_to_people() -> CreateAllowedMentions {
         .everyone(false)
 }
 
-/// The message options for the production transport.
+/// The message options for an ordinary message, for the production transport.
 ///
-/// The one way a message is built, so neither the suppress-embeds flag nor
-/// the mention rule can be lost at a new call site.
+/// The one way a plain message is built, so neither the suppress-embeds flag
+/// nor the mention rule can be lost at a new call site.
 pub fn plain(content: &str) -> CreateMessage {
     CreateMessage::new()
         .content(content.to_owned())
         .flags(MessageFlags::SUPPRESS_EMBEDS)
         .allowed_mentions(addressed_to_people())
+}
+
+/// The message options for a message carrying a card.
+///
+/// The suppress-embeds flag is left off, because the flag would hide the card
+/// with the previews; a card keeps bare URLs out of itself, which is what
+/// keeps previews from being made.
+pub fn card(message: &Card) -> CreateMessage {
+    let mut embed = CreateEmbed::new()
+        .title(&message.title)
+        .description(&message.description)
+        .color(color_of(message.color));
+    if let Some(footer) = &message.footer {
+        embed = embed.footer(CreateEmbedFooter::new(footer.as_str()));
+    }
+    CreateMessage::new()
+        .embed(embed)
+        .allowed_mentions(addressed_to_people())
+}
+
+/// The color a state is drawn in, on the service's own palette.
+fn color_of(color: CardColor) -> u32 {
+    match color {
+        CardColor::Ready => 0x3B_A5_5D,
+        CardColor::Working => 0x58_65_F2,
+        CardColor::Warning => 0xE6_7E_22,
+        CardColor::Refused => 0xED_42_45,
+    }
 }
 
 /// Parses one message id and one reaction glyph, or fails trying.
@@ -169,19 +241,18 @@ impl SerenityThread {
 }
 
 impl ThreadTransport for SerenityThread {
-    fn send(
-        &self,
-        content: String,
-        attachment: Option<(String, Vec<u8>)>,
-    ) -> ServiceCall<MessageHandle> {
+    fn send(&self, message: Outgoing) -> ServiceCall<MessageHandle> {
         let thread_id = self.thread_id;
         let http = Arc::clone(&self.http);
         Box::pin(async move {
-            let mut message = plain(&content);
-            if let Some((name, bytes)) = attachment {
-                message = message.files(vec![CreateAttachment::bytes(bytes, name)]);
+            let mut sent_message = match &message.card {
+                Some(built) => card(built),
+                None => plain(&message.content),
+            };
+            if let Some((name, bytes)) = message.attachment {
+                sent_message = sent_message.files(vec![CreateAttachment::bytes(bytes, name)]);
             }
-            let sent = thread_id.send_message(&http, message).await?;
+            let sent = thread_id.send_message(&http, sent_message).await?;
             Ok(MessageHandle {
                 id: sent.id.get().to_string(),
             })
@@ -329,10 +400,9 @@ impl<T: ThreadTransport> ChatThread<T> {
                 let transport = transport.clone();
                 Box::pin(async move {
                     transport
-                        .send(
-                            format!("[{count} earlier message(s) dropped while disconnected]"),
-                            None,
-                        )
+                        .send(Outgoing::plain(format!(
+                            "[{count} earlier message(s) dropped while disconnected]"
+                        )))
                         .await
                         .map(|_| ())
                         .map_err(classified)
@@ -345,10 +415,9 @@ impl<T: ThreadTransport> ChatThread<T> {
                 let transport = transport.clone();
                 Box::pin(async move {
                     transport
-                        .send(
-                            format!("[a message could not be delivered: {detail}]"),
-                            None,
-                        )
+                        .send(Outgoing::plain(format!(
+                            "[a message could not be delivered: {detail}]"
+                        )))
                         .await
                         .map(|_| ())
                 })
@@ -441,13 +510,46 @@ impl<T: ThreadTransport> ChatThread<T> {
                 let chunk = chunk.clone();
                 Box::pin(async move {
                     transport
-                        .send(chunk, None)
+                        .send(Outgoing::plain(chunk))
                         .await
                         .map(|_| ())
                         .map_err(classified)
                 }) as Pin<Box<dyn Future<Output = Result<(), TaskError>> + Send>>
             }));
         }
+    }
+
+    /// Posts a message that may draw itself as a card.
+    ///
+    /// A card travels as one message and is never split: the words were
+    /// written to fit a card, and the same words are what a surface without
+    /// cards shows. Should the body outgrow a card, the card is left behind
+    /// and the words go out the ordinary way.
+    pub fn post_card(&self, text: &str, card: Option<&Card>) {
+        let Some(card) = card else {
+            self.post(text);
+            return;
+        };
+        if card.description.encode_utf16().count() > CARD_DESCRIPTION_LIMIT {
+            self.post(text);
+            return;
+        }
+        // The agent speaking ends the current run of tool calls, so the next
+        // one starts a fresh block rather than being appended below prose.
+        self.reset_activity();
+        let transport = Arc::clone(&self.transport);
+        let card = card.clone();
+        self.outbox.enqueue(Box::new(move || {
+            let transport = Arc::clone(&transport);
+            let card = card.clone();
+            Box::pin(async move {
+                transport
+                    .send(Outgoing::with_card(String::new(), card))
+                    .await
+                    .map(|_| ())
+                    .map_err(classified)
+            }) as Pin<Box<dyn Future<Output = Result<(), TaskError>> + Send>>
+        }));
     }
 
     /// Renders a change as a fenced diff, which is all a thread can show.
@@ -541,7 +643,7 @@ impl<T: ThreadTransport> ChatThread<T> {
                     let pieces = split_message(&line, MESSAGE_LIMIT);
                     let mut last: Option<MessageHandle> = None;
                     for piece in &pieces {
-                        let sent = transport.send(piece.clone(), None).await?;
+                        let sent = transport.send(Outgoing::plain(piece.clone())).await?;
                         last = Some(sent);
                     }
                     let mut state = state.lock().expect("the thread state lock");
@@ -587,7 +689,7 @@ impl<T: ThreadTransport> ChatThread<T> {
                     .waiting_message_id
                     .clone();
                 match existing {
-                    None => match self.transport.send(shown, None).await {
+                    None => match self.transport.send(Outgoing::plain(shown)).await {
                         Ok(sent) => {
                             self.state
                                 .lock()
@@ -686,7 +788,11 @@ impl<T: ThreadTransport> ChatThread<T> {
             let caption = caption.clone();
             Box::pin(async move {
                 transport
-                    .send(caption, Some((name, bytes)))
+                    .send(Outgoing {
+                        content: caption,
+                        card: None,
+                        attachment: Some((name, bytes)),
+                    })
                     .await
                     .map(|_| ())
                     .map_err(classified)
@@ -743,11 +849,14 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
             match event {
                 // A thread has one voice, so a notice is posted like
                 // anything else; so is a reply, whose command already sits
-                // above it in the thread.
-                SessionEvent::Post { text }
-                | SessionEvent::Notice { text, .. }
-                | SessionEvent::Reply { text, .. }
-                | SessionEvent::Question { text, .. } => self.post(text),
+                // above it in the thread. A post or reply carrying a card
+                // shows the card, whose text is the same words.
+                SessionEvent::Post { text, card } | SessionEvent::Reply { text, card, .. } => {
+                    self.post_card(text, card.as_ref());
+                }
+                SessionEvent::Notice { text, .. } | SessionEvent::Question { text, .. } => {
+                    self.post(text);
+                }
                 SessionEvent::Diff {
                     path,
                     added,

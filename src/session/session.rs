@@ -54,8 +54,8 @@ use crate::session::delegating::{Delegating, POLL_MS, Reported};
 use crate::session::disk::Verdict;
 use crate::session::disk::{MIN_CHECK_MS, next_check_ms, tree_bytes, verdict};
 use crate::session::event::{
-    Delegated, EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage, ToolActivity,
-    ToolResult,
+    Card, Delegated, EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage,
+    ToolActivity, ToolResult,
 };
 use crate::session::github::app::SessionToken;
 use crate::session::github::{
@@ -1572,12 +1572,19 @@ impl Running {
     /// one place is what keeps every reply marked without each of them having
     /// to remember to say so.
     async fn say(&self, text: &str) {
+        self.say_with_card(text, None).await;
+    }
+
+    /// Says something that a surface may draw as a card, routing it the way
+    /// [`Self::say`] does.
+    async fn say_with_card(&self, text: &str, card: Option<Card>) {
         match &self.replying_to {
             Some(command) => {
                 self.views
                     .send(SessionEvent::Reply {
                         text: text.to_owned(),
                         command: command.clone(),
+                        card,
                     })
                     .await;
             }
@@ -1585,6 +1592,7 @@ impl Running {
                 self.views
                     .send(SessionEvent::Post {
                         text: text.to_owned(),
+                        card,
                     })
                     .await;
             }

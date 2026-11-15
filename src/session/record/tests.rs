@@ -296,6 +296,7 @@ fn a_link_at_a_legacy_transcript_is_not_moved_into_the_record() {
     .append_at(
         &crate::session::event::SessionEvent::Post {
             text: "appended".to_owned(),
+            card: None,
         },
         Some(1),
         1,

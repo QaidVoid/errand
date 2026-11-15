@@ -38,7 +38,10 @@ pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
     let maybe = |text: &Option<String>| text.as_deref().map(clean);
 
     match event {
-        SessionEvent::Post { text } => SessionEvent::Post { text: clean(&text) },
+        SessionEvent::Post { text, card } => SessionEvent::Post {
+            text: clean(&text),
+            card: card.map(|card| redact_card(card, secrets)),
+        },
         SessionEvent::Prompt {
             author,
             text,
@@ -70,9 +73,14 @@ pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
             level,
         },
         SessionEvent::Thinking { text } => SessionEvent::Thinking { text: clean(&text) },
-        SessionEvent::Reply { text, command } => SessionEvent::Reply {
+        SessionEvent::Reply {
+            text,
+            command,
+            card,
+        } => SessionEvent::Reply {
             text: clean(&text),
             command: clean(&command),
+            card: card.map(|card| redact_card(card, secrets)),
         },
         SessionEvent::ToolResult { result } => SessionEvent::ToolResult {
             result: ToolResult {
@@ -138,6 +146,20 @@ pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
         | SessionEvent::Busy { .. }
         | SessionEvent::BeginTurn { .. }
         | SessionEvent::Close { .. } => event,
+    }
+}
+
+/// Scrubs the body of a card, whose words can quote the agent.
+///
+/// The title and footer are written by the daemon itself, which never echoes
+/// agent output into a heading, so they are left alone.
+fn redact_card(
+    card: crate::session::event::Card,
+    secrets: &[String],
+) -> crate::session::event::Card {
+    crate::session::event::Card {
+        description: redact_text(&card.description, secrets),
+        ..card
     }
 }
 

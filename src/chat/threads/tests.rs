@@ -2,9 +2,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::{ChatThread, MessageHandle, ServiceCall, ThreadTransport};
+use super::{ChatThread, MessageHandle, Outgoing, ServiceCall, ThreadTransport};
 use crate::log::LogFields;
 use crate::log::Logger;
+use crate::session::event::Card;
+use crate::session::event::CardColor;
 use crate::session::event::EndReason;
 use crate::session::event::ReactionOutcome;
 use crate::session::event::ToolResult;
@@ -14,6 +16,7 @@ use crate::session::event::ToolResult;
 struct Sent {
     id: String,
     content: String,
+    card: Option<Card>,
     edits: Vec<String>,
     reactions: Vec<String>,
     removed: Vec<String>,
@@ -61,14 +64,11 @@ impl FakeChannel {
 }
 
 impl ThreadTransport for FakeChannel {
-    fn send(
-        &self,
-        content: String,
-        _attachment: Option<(String, Vec<u8>)>,
-    ) -> ServiceCall<MessageHandle> {
+    fn send(&self, message: Outgoing) -> ServiceCall<MessageHandle> {
         let record = Arc::new(Mutex::new(Sent {
             id: format!("sent-{}", *self.next.lock().unwrap()),
-            content,
+            content: message.content,
+            card: message.card,
             ..Default::default()
         }));
         *self.next.lock().unwrap() += 1;
@@ -173,6 +173,65 @@ async fn what_is_posted_arrives_and_nothing_carries_a_link_preview() {
     );
     // The suppress-embeds flag is set by the one place messages are built,
     // the production transport; a recording double sees only the text.
+}
+
+#[tokio::test]
+async fn a_card_travels_as_one_message_without_its_words_duplicated() {
+    let (port, channel) = thread(false);
+
+    let card = Card {
+        color: CardColor::Ready,
+        title: "models on this host".to_owned(),
+        description: "- `glm-5.3`\n- `glm-4.7`".to_owned(),
+        footer: None,
+    };
+    port.post_card("models on this host", Some(&card));
+    port.flush().await;
+
+    let sent = channel.records();
+    assert_eq!(sent.len(), 1, "a card is never split");
+    let record = sent[0].lock().unwrap();
+    let card = record.card.clone().expect("the card travelled");
+    assert_eq!(card.title, "models on this host");
+    assert_eq!(card.description, "- `glm-5.3`\n- `glm-4.7`");
+}
+
+/// The service refuses a body over its limit rather than truncating it, so a
+/// card that will not fit is left behind and the words go out the ordinary
+/// way instead.
+#[tokio::test]
+async fn a_card_too_big_for_the_service_is_left_behind_and_the_words_are_posted() {
+    let (port, channel) = thread(false);
+
+    let body = "x".repeat(5_000);
+    let card = Card {
+        color: CardColor::Ready,
+        title: "too much".to_owned(),
+        description: body,
+        footer: None,
+    };
+    port.post_card("the words", Some(&card));
+    port.flush().await;
+
+    let sent = channel.records();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].lock().unwrap().card.is_none());
+    // The words go out the ordinary way, which means split into pieces the
+    // service will take.
+    assert!(sent[0].lock().unwrap().content.contains("the words"));
+}
+
+#[tokio::test]
+async fn a_post_without_a_card_is_just_the_words() {
+    let (port, channel) = thread(false);
+
+    port.post_card("plain", None);
+    port.flush().await;
+
+    let sent = channel.records();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].lock().unwrap().content, "plain");
+    assert!(sent[0].lock().unwrap().card.is_none());
 }
 
 #[tokio::test]

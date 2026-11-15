@@ -65,6 +65,7 @@ async fn what_a_session_says_becomes_one_event_each_with_its_turn() {
         .unwrap();
     view.observe(&SessionEvent::Post {
         text: "I did the thing".to_owned(),
+        card: None,
     })
     .await
     .unwrap();
@@ -140,6 +141,7 @@ async fn a_closed_view_accepts_calls_and_sends_nothing() {
 
     view.observe(&SessionEvent::Post {
         text: "into the void".to_owned(),
+        card: None,
     })
     .await
     .unwrap();
@@ -159,12 +161,14 @@ async fn what_a_thread_shows_and_the_interface_does_not_is_not_sent() {
     view.observe(&SessionEvent::Reply {
         text: "not yours".to_owned(),
         command: crate::session::event::REFUSAL.to_owned(),
+        card: None,
     })
     .await
     .unwrap();
     view.observe(&SessionEvent::Reply {
         text: "a listing".to_owned(),
         command: "!ls src".to_owned(),
+        card: None,
     })
     .await
     .unwrap();
@@ -176,6 +180,7 @@ async fn what_a_thread_shows_and_the_interface_does_not_is_not_sent() {
     .unwrap();
     view.observe(&SessionEvent::Post {
         text: "the only thing said".to_owned(),
+        card: None,
     })
     .await
     .unwrap();

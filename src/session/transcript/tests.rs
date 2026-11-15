@@ -39,6 +39,7 @@ impl Keep {
 fn post(text: &str) -> SessionEvent {
     SessionEvent::Post {
         text: text.to_owned(),
+        card: None,
     }
 }
 
@@ -319,7 +320,7 @@ fn a_torn_byte_does_not_empty_the_transcript() {
     assert_eq!(read.entries.len(), 3);
     assert!(matches!(
         &read.entries[1].entry,
-        SessionEvent::Post { text } if text.starts_with('\u{fffd}')
+        SessionEvent::Post { text, .. } if text.starts_with('\u{fffd}')
     ));
     assert!(
         kept.logged()

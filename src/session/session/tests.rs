@@ -28,7 +28,9 @@ use crate::sandbox::backend::{SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::paths;
 use crate::session::attachments::RawAttachment;
 use crate::session::event::ToolResult;
-use crate::session::event::{EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage};
+use crate::session::event::{
+    Card, EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage,
+};
 use crate::session::pr::{self, PullRequestError};
 use crate::session::projects::ProjectSelection;
 use crate::session::record::record_dir;
@@ -378,7 +380,7 @@ impl FakeThread {
 
     fn posts(&self) -> Vec<String> {
         self.pick(|event| match event {
-            SessionEvent::Post { text } => Some(text.clone()),
+            SessionEvent::Post { text, .. } => Some(text.clone()),
             _ => None,
         })
     }
@@ -392,7 +394,19 @@ impl FakeThread {
 
     fn replies(&self) -> Vec<(String, String)> {
         self.pick(|event| match event {
-            SessionEvent::Reply { text, command } => Some((text.clone(), command.clone())),
+            SessionEvent::Reply {
+                text,
+                command,
+                card: _,
+            } => Some((text.clone(), command.clone())),
+            _ => None,
+        })
+    }
+
+    /// The cards replies carried, in the order they were given.
+    fn reply_cards(&self) -> Vec<Option<Card>> {
+        self.pick(|event| match event {
+            SessionEvent::Reply { card, .. } => Some(card.clone()),
             _ => None,
         })
     }
@@ -517,7 +531,7 @@ impl FakeThread {
         events
             .iter()
             .filter_map(|event| match event {
-                SessionEvent::Post { text }
+                SessionEvent::Post { text, .. }
                 | SessionEvent::Question { text, .. }
                 | SessionEvent::Notice { text, .. }
                 | SessionEvent::Reply { text, .. } => Some(text.clone()),
@@ -4634,6 +4648,16 @@ async fn a_switch_names_the_model_and_says_the_level_apart_from_it() {
                 listing.contains("- **`muse-lite`** `muse`"),
                 "the model it was switched to is the one marked, got {listing}"
             );
+            // The same listing travels as a card, whose body is the list
+            // without the spacer the plain text carries.
+            let cards = harness.thread.reply_cards();
+            let card = cards
+                .last()
+                .and_then(std::clone::Clone::clone)
+                .expect("a card");
+            assert_eq!(card.title, "models this session can switch to");
+            assert!(card.description.contains("runs on `acme/muse-lite:max`"));
+            assert!(card.description.contains("- **`muse-lite`** `muse`"));
         })
     })
     .await;
