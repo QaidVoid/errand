@@ -838,6 +838,9 @@ struct Running {
     /// A turn admitted for this session while another ran, started once that
     /// one settles.
     pending_turn: Option<PendingTurn>,
+    /// Withdrawals a running turn held back: the words each withdrawn
+    /// message carried, rewritten into the agent's own copy once it stops
+    /// appending to that file.
     pending_withdrawals: Vec<String>,
     /// A `!model` asked for while a turn ran, applied once it settles: what
     /// followed the command, and the message that asked.
@@ -1033,7 +1036,7 @@ impl Running {
                     let _ = reply.send(());
                 }
                 Signal::Withdraw { message_id, reply } => {
-                    let held = self.withdraw(&message_id).await;
+                    let held = self.withdraw(&message_id);
                     let _ = reply.send(held);
                 }
                 Signal::Guests { reply } => {
@@ -1979,24 +1982,19 @@ impl Running {
         }
     }
 
+    /// What the agent is told when a message it was sent is taken back while
+    /// it works, so it stops acting on words that are no longer there.
+    const WITHDRAWN_NOTICE: &str = "A message you were sent has been withdrawn by the person who sent it. \
+        Disregard it; do not act on it further and do not reply about it.";
+
     /// Reconciles a message the person who sent it took back.
     ///
-    /// Held until the turn settles when one is running, so nothing writes to
-    /// the agent's conversation while the agent is appending to it.
-    async fn withdraw(&mut self, message_id: &str) -> bool {
-        if self.ticket.is_some() {
-            self.pending_withdrawals.push(message_id.to_owned());
-            return true;
-        }
-        self.apply_withdrawal(message_id).await
-    }
-
-    #[expect(
-        clippy::unused_async,
-        clippy::unused_async_trait_impl,
-        reason = "keeping the signature async keeps every caller's await uniform"
-    )]
-    async fn apply_withdrawal(&mut self, message_id: &str) -> bool {
+    /// The record is rewritten at once; its writes all go through this loop,
+    /// so a running turn cannot interleave. A running turn is told straight
+    /// away, since a steer joins the turn it is working in rather than
+    /// opening one. Only the rewrite of the agent's own copy waits for the
+    /// settle, because the agent appends to that file while it works.
+    fn withdraw(&mut self, message_id: &str) -> bool {
         let said = match withdraw_from_record(&self.options.state_dir, message_id) {
             Ok(Some(said)) => said,
             Ok(None) => return false,
@@ -2008,32 +2006,39 @@ impl Running {
                 return false;
             }
         };
-        if let Err(error) = withdraw_from_agent_session(&self.options.state_dir, &said) {
+        if self.ticket.is_some() {
+            // Told, not corrected: mid-turn the notice reaches the working
+            // agent without asking it for another turn. Once the turn has
+            // settled the work is done and the rewritten copies already
+            // carry the withdrawal, so telling it then would only be
+            // answered once more.
+            if let Some(client) = &self.client {
+                client.steer(Self::WITHDRAWN_NOTICE, None);
+            }
+            self.pending_withdrawals.push(said);
+            return true;
+        }
+        self.withdraw_agent_copy(&said);
+        true
+    }
+
+    /// Rewrites the agent's own copy of a withdrawn message, warning when it
+    /// cannot be reached.
+    fn withdraw_agent_copy(&self, said: &str) {
+        if let Err(error) = withdraw_from_agent_session(&self.options.state_dir, said) {
             self.log.warn(
                 "a withdrawal could not reach the agent's own copy of the conversation",
                 &fields([("detail", LogValue::from(error.to_string()))]),
             );
         }
-
-        // Told, not corrected: `steer` is the one command that reaches a
-        // running agent without asking it for another turn, and being
-        // answered about a withdrawal is the opposite of taking something
-        // back.
-        if let Some(client) = &self.client {
-            client.steer(
-                "A message you were sent has been withdrawn by the person who sent it. \
-                 Disregard it; do not act on it further and do not reply about it.",
-                None,
-            );
-        }
-        true
     }
 
-    /// Applies what a running turn held back.
-    async fn drain_withdrawals(&mut self) {
+    /// Rewrites the agent's own copies a running turn held back. The record
+    /// and the telling already happened when each withdrawal arrived.
+    fn drain_withdrawals(&mut self) {
         let pending = std::mem::take(&mut self.pending_withdrawals);
-        for message_id in pending {
-            self.apply_withdrawal(&message_id).await;
+        for said in pending {
+            self.withdraw_agent_copy(&said);
         }
     }
 
@@ -2049,7 +2054,7 @@ impl Running {
         self.views.send(SessionEvent::Busy { busy: false }).await;
         // Now that the agent is not writing to its own conversation, anything
         // a running turn held back can be applied to it.
-        self.drain_withdrawals().await;
+        self.drain_withdrawals();
         if let Some((rest, message)) = self.pending_switch.take() {
             self.switch_model(&rest, &message).await;
         }

@@ -3445,29 +3445,52 @@ fn seed_withdrawn_record(harness: &Harness, said: &str) {
 /// The transcript file name the record module prefers.
 const TRANSCRIPT_NAME: &str = "transcript.jsonl";
 
-/// A live session is told, in words that are not a new instruction.
+/// Seeds the agent's own copy of the conversation with the words, the shape
+/// a stored user message takes there.
+fn seed_agent_session(harness: &Harness, said: &str) {
+    let sessions = std::path::Path::new(&harness.state_dir).join("sessions");
+    std::fs::create_dir_all(&sessions).expect("the sessions directory is made");
+    std::fs::write(
+        sessions.join("s.jsonl"),
+        json!({
+            "message": { "role": "user", "content": [{ "type": "text", "text": said }] },
+        })
+        .to_string(),
+    )
+    .expect("the agent session is written");
+}
+
+/// Reads the agent's own copy of the conversation.
+fn agent_session_copy(harness: &Harness) -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(&harness.state_dir)
+            .join("sessions")
+            .join("s.jsonl"),
+    )
+    .expect("the agent session is read")
+}
+
+/// A withdrawal that lands while the session is idle rewrites the record and
+/// tells the agent nothing: the work is done, and a notice would only be
+/// answered once more.
 #[tokio::test(start_paused = true)]
-async fn a_live_session_is_told_of_a_withdrawal() {
+async fn an_idle_withdrawal_rewrites_the_record_and_tells_nobody() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
             let said = "my token is ghp_TOPSECRET123";
             seed_withdrawn_record(harness, said);
 
             // The opening turn is still running; let it settle, the way
-            // the agent finishing would, so the withdrawal is applied
-            // rather than held.
+            // the agent finishing would, so the withdrawal applies at once.
             harness.run_turn().await;
+            let prompts_before = harness.controls().prompts().len();
 
             assert!(harness.session.withdraw("m2".to_owned()).await);
             settle().await;
 
-            // The agent is told, not corrected; the notice says what
-            // happened rather than instructing it anew.
-            assert!(
-                harness
-                    .written()
-                    .contains("has been withdrawn by the person who sent it")
-            );
+            // Nobody is told, and no turn is opened to hear it.
+            assert!(!harness.written().contains("has been withdrawn"));
+            assert_eq!(harness.controls().prompts().len(), prompts_before);
             // The record keeps the turn and loses the words.
             let record = record_dir(&harness.state_dir);
             let transcript =
@@ -3482,34 +3505,57 @@ async fn a_live_session_is_told_of_a_withdrawal() {
     .await;
 }
 
-/// A turn in progress holds the reconciliation until it settles.
+/// A turn in progress is told of the withdrawal at once, as a steer that
+/// joins it rather than opening one; only the rewrite of the agent's own
+/// copy waits for the settle.
 #[tokio::test(start_paused = true)]
-async fn a_turn_in_progress_survives_a_withdrawal() {
+async fn a_turn_in_progress_is_told_of_a_withdrawal_at_once() {
     with_session(SessionTestCase::default(), |harness| {
         Box::pin(async move {
             let said = "take this back";
             seed_withdrawn_record(harness, said);
+            seed_agent_session(harness, said);
 
             // A turn starts and does not settle, so the session is busy.
             harness.controls().turn_start();
             settle().await;
 
-            // Held, because the agent is appending to its conversation.
             assert!(harness.session.withdraw("m2".to_owned()).await);
-            assert!(
-                !harness
-                    .written()
-                    .contains("has been withdrawn by the person")
-            );
+            settle().await;
 
-            // The turn finishes normally, and what it held back is
-            // applied after it.
+            // Told at once, and as a steer, which joins the running turn.
+            let steer = harness
+                .controls()
+                .written()
+                .iter()
+                .filter_map(|line| {
+                    let parsed: Value = serde_json::from_str(line).ok()?;
+                    (parsed["method"] == "session/prompt"
+                        && parsed["params"]["delivery"] == "steer")
+                        .then(|| {
+                            parsed["params"]["prompt"][0]["text"]
+                                .as_str()
+                                .map(str::to_owned)
+                        })?
+                })
+                .next_back();
+            assert_eq!(steer.as_deref(), Some(super::Running::WITHDRAWN_NOTICE));
+            // The record is rewritten at once, while the turn still runs.
+            let record = record_dir(&harness.state_dir);
+            let transcript =
+                std::fs::read_to_string(std::path::Path::new(&record).join(TRANSCRIPT_NAME))
+                    .unwrap();
+            assert!(transcript.contains(r#""withdrawn":true"#));
+
+            // The agent's own copy still carries the words, since the agent
+            // is appending to that file.
+            assert!(agent_session_copy(harness).contains(said));
+
+            // The turn finishes, and the copy is rewritten after it.
             harness.run_turn().await;
-            assert!(
-                harness
-                    .written()
-                    .contains("has been withdrawn by the person who sent it")
-            );
+            let copy = agent_session_copy(harness);
+            assert!(!copy.contains(said));
+            assert!(copy.contains("withdrawn by the person who sent it"));
             assert_eq!(
                 harness.thread.final_reaction("m1"),
                 Some(ReactionOutcome::Succeeded)
@@ -3537,9 +3583,9 @@ async fn an_unreachable_copy_does_not_cost_the_session() {
             assert!(harness.session.withdraw("m2".to_owned()).await);
             settle().await;
 
-            // The session carries on regardless.
+            // The session carries on regardless, and says nothing.
             assert!(!harness.session.is_ended().await);
-            assert!(harness.written().contains("has been withdrawn"));
+            assert!(!harness.written().contains("has been withdrawn"));
         })
     })
     .await;

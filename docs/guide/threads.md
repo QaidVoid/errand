@@ -88,7 +88,8 @@ Deleting a message in Discord withdraws it from the session:
   message was withdrawn.
 - It is removed from the agent's stored conversation, so a resumed session
   never sends it to a model again.
-- A running session is told to disregard it.
+- A turn that is still running is told to disregard it at once, without
+  being asked for another one.
 
 What deletion cannot do:
 
