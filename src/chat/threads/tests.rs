@@ -184,6 +184,7 @@ async fn a_card_travels_as_one_message_without_its_words_duplicated() {
         color: CardColor::Ready,
         title: "models on this host".to_owned(),
         description: "- `glm-5.3`\n- `glm-4.7`".to_owned(),
+        fields: Vec::new(),
         footer: None,
     };
     port.post_card("models on this host", Some(&card));
@@ -209,6 +210,7 @@ async fn a_card_too_big_for_the_service_is_left_behind_and_the_words_are_posted(
         color: CardColor::Ready,
         title: "too much".to_owned(),
         description: body,
+        fields: Vec::new(),
         footer: None,
     };
     port.post_card("the words", Some(&card));

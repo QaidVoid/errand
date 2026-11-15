@@ -191,10 +191,23 @@ pub fn plain(content: &str) -> CreateMessage {
 /// with the previews; a card keeps bare URLs out of itself, which is what
 /// keeps previews from being made.
 pub fn card(message: &Card) -> CreateMessage {
-    let mut embed = CreateEmbed::new()
-        .title(&message.title)
-        .description(&message.description)
-        .color(color_of(message.color));
+    let mut embed = CreateEmbed::new().title(&message.title);
+    embed = embed.color(color_of(message.color));
+    // An empty body is left off rather than drawn as nothing: a card of
+    // fields alone, or of a line saying there is nothing, has no body.
+    if !message.description.is_empty() {
+        embed = embed.description(&message.description);
+    }
+    if !message.fields.is_empty() {
+        // Not inline: an inline field sits beside the next two, which packs
+        // distinct things, like one provider per row, into shared rows.
+        embed = embed.fields(
+            message
+                .fields
+                .iter()
+                .map(|field| (field.name.clone(), field.value.clone(), false)),
+        );
+    }
     if let Some(footer) = &message.footer {
         embed = embed.footer(CreateEmbedFooter::new(footer.as_str()));
     }
@@ -229,6 +242,7 @@ fn notice_card(text: &str, level: NoticeLevel) -> Card {
         color,
         title: title.to_owned(),
         description: text.to_owned(),
+        fields: Vec::new(),
         footer: None,
     }
 }
@@ -239,6 +253,7 @@ fn refused_card(text: &str) -> Card {
         color: CardColor::Refused,
         title: "refused".to_owned(),
         description: text.to_owned(),
+        fields: Vec::new(),
         footer: None,
     }
 }

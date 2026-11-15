@@ -778,6 +778,7 @@ impl Daemon {
             color: CardColor::Ready,
             title: "models on this host".to_owned(),
             description: format!("a new session runs on `{shown}`\n{}", list[1..].join("\n")),
+            fields: Vec::new(),
             footer: Some("switch with `!model <name>` in a session thread".to_owned()),
         }))
     }

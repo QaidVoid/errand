@@ -200,6 +200,7 @@ fn a_cards_body_is_scrubbed_with_the_words_beside_it() {
                 color: CardColor::Ready,
                 title: "models on this host".to_owned(),
                 description: format!("a new session runs on nothing, the key is {SECRET}"),
+                fields: Vec::new(),
                 footer: Some("switch with `!model <name>`".to_owned()),
             }),
         },

@@ -266,6 +266,7 @@ impl Running {
             color: CardColor::Ready,
             title: "models this session can switch to".to_owned(),
             description: format!("runs on `{shown}`\n{}", list[1..].join("\n")),
+            fields: Vec::new(),
             footer: Some("switch with `!model <name>`".to_owned()),
         };
         self.say_with_card(&text, Some(card)).await;
@@ -459,6 +460,7 @@ impl Running {
             color: CardColor::Working,
             title: "session status".to_owned(),
             description: text.clone(),
+            fields: Vec::new(),
             footer: None,
         };
         (text, card)

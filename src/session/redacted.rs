@@ -153,14 +153,24 @@ pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
 ///
 /// The title and footer are written by the daemon itself, which never echoes
 /// agent output into a heading, so they are left alone.
+/// Scrubs the body of a card, whose words can quote the agent.
+///
+/// The title and footer are written by the daemon itself, which never echoes
+/// agent output into a heading, so they are left alone. A field's value is
+/// body text laid out beside a label, so it is scrubbed with the body; the
+/// label is a heading.
 fn redact_card(
     card: crate::session::event::Card,
     secrets: &[String],
 ) -> crate::session::event::Card {
-    crate::session::event::Card {
+    let mut scrubbed = crate::session::event::Card {
         description: redact_text(&card.description, secrets),
         ..card
+    };
+    for field in &mut scrubbed.fields {
+        field.value = redact_text(&field.value, secrets);
     }
+    scrubbed
 }
 
 /// The one door a session reports through, with secrets scrubbed at it.

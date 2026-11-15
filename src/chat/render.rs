@@ -18,6 +18,7 @@ use crate::provider::models::AvailableModel;
 use crate::provider::usage::{Quota, is_spent};
 use crate::session::event::Card;
 use crate::session::event::CardColor;
+use crate::session::event::CardField;
 use crate::session::event::Delegated;
 use crate::session::files::Entry;
 use crate::session::files::{FileContents, MAX_INLINE_BYTES};
@@ -554,16 +555,35 @@ pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
     format!("```\n{}\n```", lines.join("\n"))
 }
 
+/// The most labeled cells an embed may carry, as the service limits it.
+const EMBED_FIELD_LIMIT: usize = 25;
+
 /// What `!usage` found, as a card.
 ///
-/// The table rides as the body, and the color carries the verdict: amber
-/// when a provider has spent its window, so a reading is never mistaken for
-/// fine news, green otherwise. A provider that did not answer is not a
-/// warning; the table says unknown and the card stays calm.
+/// A provider is its field: the name on its own row, and under it one line
+/// with what is left and, when the provider named a moment, the service's
+/// own timestamp, which counts down in place. A provider that named no
+/// reset says only what is left: a dash would repeat the line above it
+/// without saying anything new.
+///
+/// Past the card's own limit of cells the windows fall back to the table in
+/// the body. A reading of nothing says so, rather than drawing an empty
+/// card.
+///
+/// The color carries the verdict: amber when a provider has spent its
+/// window, green otherwise. A provider that did not answer is not a
+/// warning; it says unknown and the card stays calm.
 pub fn usage_card(rows: &[(String, Option<Quota>)], now: i64) -> Card {
     let spent = rows
         .iter()
         .any(|(_, quota)| quota.as_ref().is_some_and(is_spent));
+    let description = if rows.len() > EMBED_FIELD_LIMIT {
+        usage_table(rows, now)
+    } else if rows.is_empty() {
+        "no provider reports a usage window".to_owned()
+    } else {
+        String::new()
+    };
     Card {
         color: if spent {
             CardColor::Warning
@@ -571,25 +591,38 @@ pub fn usage_card(rows: &[(String, Option<Quota>)], now: i64) -> Card {
             CardColor::Ready
         },
         title: "usage windows".to_owned(),
-        description: usage_table(rows, now),
+        description,
+        fields: rows
+            .iter()
+            .take(EMBED_FIELD_LIMIT)
+            .map(|(provider, quota)| CardField {
+                name: provider.clone(),
+                value: window_line(quota.as_ref()),
+            })
+            .collect(),
         footer: None,
     }
 }
 
-/// Every model this host can run, grouped under the provider that serves it.
-///
-/// The provider heads its group and is written once, which is most of the
-/// characters this listing saves over naming `provider/model` on every line.
-/// A bare id two providers serve is the exception: it is shown qualified,
-/// because such a name has to be finished before it means anything, and a
-/// list of names that fail is no list at all. Every other name shown can be
-/// typed back as it stands.
-///
-/// A level that applies without being asked for rides on the name as its
-/// `:level` suffix, which is the form `!model` takes: a list that never says
-/// `:high` cannot be used without reading the configuration first. The
-/// session's own provider comes first, so the models it could switch to
-/// without qualifying are the ones at the top, and the one it is on is bold.
+/// What one provider says of its window, as its cell's text.
+fn window_line(quota: Option<&Quota>) -> String {
+    let Some(quota) = quota else {
+        return "unknown".to_owned();
+    };
+    let left = if is_spent(quota) {
+        "**spent**".to_owned()
+    } else {
+        format!("**{}** left", left_of(quota))
+    };
+    match quota.resets_at {
+        None => left,
+        // The service's own seconds, which the client counts down live, on
+        // the same line as what is left, so a provider is one row of facts
+        // under its name.
+        Some(at) => format!("{left} \u{b7} resets <t:{}:R>", at / 1000),
+    }
+}
+
 /// A short name is shown beside the model it stands for.
 ///
 /// The first line is empty, so the intro the caller writes stands apart from

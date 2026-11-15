@@ -201,6 +201,20 @@ pub enum CardColor {
     Settled,
 }
 
+/// One labeled cell of a card's grid.
+///
+/// A surface that lays fields out side by side turns a list of these into a
+/// table the service renders itself; a surface without them reads each as a
+/// line of the card's words.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardField {
+    /// The label above the value.
+    pub name: String,
+    /// The text under the label, in the markdown the surface renders.
+    pub value: String,
+}
+
 /// A post a surface may draw as a card instead of plain text.
 ///
 /// The text always rides alongside, so a surface without cards shows the
@@ -215,6 +229,9 @@ pub struct Card {
     pub title: String,
     /// The body, in the markdown the surface renders.
     pub description: String,
+    /// Labeled cells laid out in a grid, when the card is a table of things.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<CardField>,
     /// A quiet line under the body, when there is one worth saying.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub footer: Option<String>,
@@ -223,7 +240,12 @@ pub struct Card {
 impl Card {
     /// The words of the card, which a surface without cards shows.
     pub fn words(&self) -> String {
+        use std::fmt::Write as _;
+
         let mut said = format!("{}\n{}", self.title, self.description);
+        for field in &self.fields {
+            let _ = write!(said, "\n{}: {}", field.name, field.value);
+        }
         if let Some(footer) = &self.footer {
             said.push('\n');
             said.push_str(footer);

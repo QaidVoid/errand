@@ -1907,6 +1907,7 @@ fn the_window(text: &str) -> Card {
         color: CardColor::Ready,
         title: "usage windows".to_owned(),
         description: text.to_owned(),
+        fields: Vec::new(),
         footer: None,
     }
 }
