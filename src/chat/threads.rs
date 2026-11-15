@@ -32,7 +32,7 @@ use crate::chat::chars::reaction;
 use crate::chat::diff::FileDiff;
 use crate::chat::diff::render_diff;
 use crate::chat::outbox::{DEFAULT_MAX_BUFFERED, Outbox, PermanentFailure, TaskError};
-use crate::chat::render::{MESSAGE_LIMIT, delegation_line, split_message};
+use crate::chat::render::{MESSAGE_LIMIT, delegation_line, split_message, table_card};
 use crate::issues::thread::logins_plainly;
 use crate::log::{LogValue, Logger, fields};
 use crate::session::event::Card;
@@ -628,13 +628,22 @@ impl<T: ThreadTransport> ChatThread<T> {
     ///
     /// A thread cannot attach output to the call above it, so forwarding is
     /// the only way to show it there, and it stays off by default because it
-    /// is a lot of text in a conversation.
+    /// is a lot of text in a conversation. An output that is one markdown
+    /// table is drawn as a card of labeled cells, titled with the tool that
+    /// produced it; a failed call is never dressed up, because its output is
+    /// an error to read, so it stays fenced.
     pub fn note_tool_result(&self, result: &ToolResult) {
         if !self.forward_tool_output {
             return;
         }
         let body = result.output.trim();
         if body.is_empty() {
+            return;
+        }
+        if !result.failed
+            && let Some(card) = table_card(&result.name, body)
+        {
+            self.post_card("", Some(&card));
             return;
         }
         self.post(&format!("```\n{body}\n```"));

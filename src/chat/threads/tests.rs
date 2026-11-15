@@ -442,6 +442,48 @@ async fn an_empty_tool_result_is_not_posted_even_when_output_is_forwarded() {
     assert!(channel.records().is_empty());
 }
 
+/// A tool output that is one markdown table is drawn as a card of labeled
+/// cells. A failed call is never dressed up: its output is an error to
+/// read, so the same table stays fenced.
+#[tokio::test]
+async fn a_table_tool_output_is_drawn_as_a_card_and_a_failure_is_not() {
+    let (port, channel) = thread(true);
+    let output = "| name | size |\n|------|------|\n| a.rs | 1.2k |";
+
+    port.note_tool_result(&ToolResult {
+        id: "t1".to_owned(),
+        name: "find".to_owned(),
+        failed: false,
+        output: output.to_owned(),
+    });
+    port.note_tool_result(&ToolResult {
+        id: "t2".to_owned(),
+        name: "bash".to_owned(),
+        failed: true,
+        output: output.to_owned(),
+    });
+    port.flush().await;
+
+    let records = channel.records();
+    assert_eq!(records.len(), 2);
+    let card = records[0]
+        .lock()
+        .unwrap()
+        .card
+        .clone()
+        .expect("the table is a card");
+    assert_eq!(card.title, "find");
+    assert_eq!(card.fields[0].name, "a.rs");
+    assert_eq!(records[1].lock().unwrap().card, None);
+    assert!(
+        records[1]
+            .lock()
+            .unwrap()
+            .content
+            .contains("| a.rs | 1.2k |")
+    );
+}
+
 /// A thread archived because its session idled out drops off the sidebar, and
 /// the people who were in it have to go hunting for it.
 #[tokio::test]

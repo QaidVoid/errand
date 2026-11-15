@@ -558,6 +558,13 @@ pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
 /// The most labeled cells an embed may carry, as the service limits it.
 const EMBED_FIELD_LIMIT: usize = 25;
 
+/// The most text an embed holds all together, as the service limits it.
+const EMBED_WEIGHT_LIMIT: usize = 6_000;
+
+/// The most body an embed carries, as the service limits it.
+const EMBED_DESCRIPTION_LIMIT: usize = 4_096;
+
+
 /// What `!usage` found, as a card.
 ///
 /// A provider is its field: the name on its own row, and under it one line
@@ -621,6 +628,129 @@ fn window_line(quota: Option<&Quota>) -> String {
         // under its name.
         Some(at) => format!("{left} \u{b7} resets <t:{}:R>", at / 1000),
     }
+}
+
+/// A markdown table's one row, cut into its cells.
+///
+/// The line has to be fenced by pipes on both ends, which is how every
+/// writer of a table writes one; the cells are trimmed of the padding a
+/// writer puts around them.
+fn cells_of(line: &str) -> Option<Vec<String>> {
+    let inside = line.trim().strip_prefix('|')?.strip_suffix('|')?;
+    Some(inside.split('|').map(|cell| cell.trim().to_owned()).collect())
+}
+
+/// Whether a row is the rule between a table's head and its body: dashes
+/// on every cell, with an alignment colon allowed at either end, which is
+/// part of the syntax and not a word to draw.
+fn is_rule(cells: &[String]) -> bool {
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let dashes = cell.trim_matches(':');
+            !dashes.is_empty() && dashes.chars().all(|ch| ch == '-')
+        })
+}
+
+/// Reads the whole text as one markdown table: a head, a rule under it, and
+/// rows as wide as the head.
+fn parse_table(text: &str) -> Option<(Vec<String>, Vec<Vec<String>>)> {
+    let mut lines = text.lines();
+    let header = cells_of(lines.next()?)?;
+    let rule = cells_of(lines.next()?)?;
+    if header.len() < 2 || rule.len() != header.len() || !is_rule(&rule) {
+        return None;
+    }
+    let mut rows = Vec::new();
+    for line in lines {
+        let row = cells_of(line)?;
+        if row.len() != header.len() {
+            return None;
+        }
+        rows.push(row);
+    }
+    Some((header, rows))
+}
+
+/// A table drawn whole, its columns padded so every row lines up under the
+/// fixed-width font of a fence.
+fn aligned_table(header: &[String], rows: &[Vec<String>]) -> String {
+    let mut table = vec![header.to_vec()];
+    table.extend(rows.iter().cloned());
+    let mut widths = vec![0; header.len()];
+    for row in &table {
+        for (cell, width) in row.iter().zip(&mut widths) {
+            *width = (*width).max(cell.chars().count());
+        }
+    }
+    let line = |cells: &[String]| {
+        let cells: Vec<String> = cells
+            .iter()
+            .zip(&widths)
+            .map(|(cell, width)| format!("{cell:<width$}"))
+            .collect();
+        format!("| {} |", cells.join(" | "))
+    };
+    let rule = widths
+        .iter()
+        .map(|width| "-".repeat(width + 2))
+        .collect::<Vec<_>>()
+        .join("|");
+    let mut lines = vec![line(&table[0]), format!("|{rule}|")];
+    lines.extend(table[1..].iter().map(|row| line(row)));
+    lines.join("\n")
+}
+
+/// A markdown table, drawn as a card.
+///
+/// A table of two columns is a name and its value, so it becomes labeled
+/// cells: nothing to misalign, and the same layout the usage card draws. A
+/// wider table has columns a reader maps values back to, which stacked
+/// cells lose, so it is drawn whole as an aligned block, which the fence's
+/// fixed-width font keeps lined up. Anything else (a ragged or unheaded
+/// table, more rows than the card has cells for, more text than an embed
+/// holds) is not drawn at all: the caller keeps the words exactly as the
+/// writer wrote them.
+pub fn table_card(title: &str, text: &str) -> Option<Card> {
+    let (header, rows) = parse_table(text.trim())?;
+    if header.len() == 2 {
+        if rows.len() > EMBED_FIELD_LIMIT {
+            return None;
+        }
+        let head = format!("**{}**", header.join(" \u{b7} "));
+        let mut weight = head.encode_utf16().count();
+        let mut fields = Vec::with_capacity(rows.len());
+        for row in rows {
+            let (name, value) = (row[0].clone(), row[1].clone());
+            // A cell with nothing to head its field with would draw a
+            // label over a value nobody can place.
+            if name.is_empty() {
+                return None;
+            }
+            weight += name.encode_utf16().count() + value.encode_utf16().count();
+            fields.push(CardField { name, value });
+        }
+        if weight > EMBED_WEIGHT_LIMIT {
+            return None;
+        }
+        return Some(Card {
+            color: CardColor::Ready,
+            title: title.to_owned(),
+            description: head,
+            fields,
+            footer: None,
+        });
+    }
+    let description = format!("```\n{}\n```", aligned_table(&header, &rows));
+    if description.encode_utf16().count() > EMBED_DESCRIPTION_LIMIT {
+        return None;
+    }
+    Some(Card {
+        color: CardColor::Ready,
+        title: title.to_owned(),
+        description,
+        fields: Vec::new(),
+        footer: None,
+    })
 }
 
 /// A short name is shown beside the model it stands for.

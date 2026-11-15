@@ -4,13 +4,14 @@ use serde_json::json;
 
 use super::{
     MAX_LISTED_ENTRIES, MESSAGE_LIMIT, THREAD_NAME_LIMIT, Usage, bytes, compaction_line,
-    dialog_lines, directory_listing, duration, file_view, output_rate, split_message, thread_name,
-    tokens, tool_line, truncate, turn_summary, turn_timing, usage_card, usage_summary, usage_table,
-    when_relative_plain,
+    dialog_lines, directory_listing, duration, file_view, output_rate, split_message, table_card,
+    thread_name, tokens, tool_line, truncate, turn_summary, turn_timing, usage_card,
+    usage_summary, usage_table, when_relative_plain,
 };
 use crate::agent::protocol::{DialogMethod, DialogRequest};
 use crate::provider::usage::Quota;
 use crate::session::event::CardColor;
+use crate::session::event::CardField;
 use crate::session::files::{Entry, FileContents};
 
 #[test]
@@ -597,6 +598,114 @@ fn usage_is_a_table_with_the_reset_in_utc() {
 | quiet         | unknown | -         | -                |\n\
 ```"
     );
+}
+
+/// A two-column table is a name and its value, so it becomes a card of
+/// labeled cells: nothing to misalign, and the same layout the usage card
+/// draws. Alignment colons in the rule are part of the syntax, not a
+/// reason to keep the fence.
+#[test]
+fn a_two_column_table_is_drawn_as_labeled_cells() {
+    let card = table_card(
+        "find",
+        "| name | size |\n|:-----|-----:|\n| a.rs | 1.2k |\n| b/ | - |",
+    )
+    .expect("a plain table transcribes");
+    assert_eq!(card.title, "find");
+    assert_eq!(card.color, CardColor::Ready);
+    assert_eq!(card.description, "**name \u{b7} size**");
+    assert_eq!(
+        card.fields,
+        vec![
+            CardField {
+                name: "a.rs".to_owned(),
+                value: "1.2k".to_owned(),
+            },
+            CardField {
+                name: "b/".to_owned(),
+                value: "-".to_owned(),
+            },
+        ]
+    );
+}
+
+/// A wider table has columns a reader maps values back to, which stacked
+/// cells lose, so it is drawn whole as an aligned block: the fixed-width
+/// font keeps every column lined up, which is what the raw pipes in a
+/// message could not do.
+#[test]
+fn a_wide_table_is_drawn_as_an_aligned_block() {
+    let card = table_card(
+        "find",
+        "| name | size | mtime |\n|---|---|---|\n| a.rs | 1.2k | today |\n| b | - | yesterday |",
+    )
+    .expect("a plain table transcribes");
+    assert_eq!(card.title, "find");
+    assert_eq!(card.fields, Vec::new());
+    assert_eq!(
+        card.description,
+        "```\n\
+| name | size | mtime     |\n\
+|------|------|-----------|\n\
+| a.rs | 1.2k | today     |\n\
+| b    | -    | yesterday |\n\
+```"
+    );
+}
+
+/// Prose around a table belongs with the table in the fence it is already
+/// shown in: a card that dropped the words would drop half the output.
+#[test]
+fn prose_around_a_table_keeps_the_output_fenced() {
+    let table = "| a | b |\n|---|---|\n| 1 | 2 |";
+    assert_eq!(table_card("ls", &format!("here it is:\n{table}")), None);
+    assert_eq!(table_card("ls", &format!("{table}\nthat is all")), None);
+    assert_eq!(table_card("ls", ""), None);
+}
+
+/// A table with more rows than a card has cells for stays fenced whole:
+/// showing the first 25 and dropping the rest would invent a shorter table.
+#[test]
+fn a_table_past_the_grid_limit_keeps_the_output_fenced() {
+    let header = "| id | note |\n|----|------|\n";
+    let rows = (0..25)
+        .map(|n| format!("| {n} | x |"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(table_card("ls", &format!("{header}{rows}\n")).is_some());
+    let rows = (0..26)
+        .map(|n| format!("| {n} | x |"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(table_card("ls", &format!("{header}{rows}\n")), None);
+}
+
+/// A table whose rows do not all agree with the header, or whose row has
+/// nothing to head its field with, is not transcribed: the fence shows it
+/// exactly as the tool wrote it.
+#[test]
+fn a_ragged_or_unheaded_table_keeps_the_output_fenced() {
+    assert_eq!(
+        table_card("ls", "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 |"),
+        None
+    );
+    assert_eq!(table_card("ls", "| a | b |\n|---|---|\n| | 2 |"), None);
+    assert_eq!(table_card("ls", "| a | b |\n|x|y|\n| 1 | 2 |"), None);
+    assert_eq!(table_card("ls", "| a |\n|---|\n| 1 |"), None);
+}
+
+/// A table that would not sit whole inside one embed is not drawn at all:
+/// the service refuses an over-heavy embed, which would lose the words
+/// beside it too.
+#[test]
+fn a_table_too_heavy_for_one_embed_keeps_the_output_fenced() {
+    let cell = "x".repeat(240);
+    let header = "| id | note |\n|----|------|\n";
+    let rows = (0..25)
+        .map(|n| format!("| {n} | {cell} |"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(table_card("ls", &format!("{header}{rows}")), None);
 }
 
 /// A server's text lands in a code span, so it must stay on one line and
