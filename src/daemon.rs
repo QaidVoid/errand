@@ -296,9 +296,10 @@ pub type PowerOff =
 /// Says what is left of the provider's usage window.
 ///
 /// The flag asks the providers again rather than answering from what the
-/// daemon already holds, for a window that changed before its expiry.
+/// daemon already holds, for a window that changed before its expiry. The
+/// answer is a card, whose color says whether anything is spent.
 pub type DescribeUsage =
-    Arc<dyn Fn(bool) -> Pin<Box<dyn Future<Output = String> + Send>> + Send + Sync>;
+    Arc<dyn Fn(bool) -> Pin<Box<dyn Future<Output = Card> + Send>> + Send + Sync>;
 
 /// Asks the providers for their models again, and says what came of it.
 pub type RefreshModels =
@@ -652,7 +653,7 @@ impl Daemon {
     /// refusing work the window can now serve until it restarted. The reading
     /// is open to anyone, and the asking is an operator's, since each refresh
     /// is a request to every provider.
-    async fn describe_usage(&self, content: &str, author_id: &str) -> Option<String> {
+    async fn describe_usage(&self, content: &str, author_id: &str) -> Option<Answer> {
         if first_word(content) != "!usage" {
             return None;
         }
@@ -660,18 +661,22 @@ impl Daemon {
             "" => false,
             "refresh" => true,
             _ => {
-                return Some(
+                return Some(Answer::Text(
                     "say `!usage refresh` to ask the providers about their window again".to_owned(),
-                );
+                ));
             }
         };
         let Some(describe) = &self.options.describe_usage else {
-            return Some("this provider does not report a usage window".to_owned());
+            return Some(Answer::Text(
+                "this provider does not report a usage window".to_owned(),
+            ));
         };
         if refresh && !self.is_operator(author_id) {
-            return Some("only an operator may ask the providers again".to_owned());
+            return Some(Answer::Text(
+                "only an operator may ask the providers again".to_owned(),
+            ));
         }
-        Some(describe(refresh).await)
+        Some(Answer::Card(describe(refresh).await))
     }
 
     /// Asks the providers for their models again, for an operator.
@@ -707,7 +712,7 @@ impl Daemon {
             return Some(Answer::Text(answer));
         }
         if let Some(answer) = self.describe_usage(content, author_id).await {
-            return Some(Answer::Text(answer));
+            return Some(answer);
         }
         if let Some(answer) = self.refresh_models(content, author_id).await {
             return Some(Answer::Text(answer));

@@ -33,6 +33,7 @@ use crate::sandbox::kage_providers::{KageProviders, as_installed};
 use crate::sandbox::paths;
 use crate::session::event::Answer;
 use crate::session::event::Card;
+use crate::session::event::CardColor;
 use crate::session::event::EndReason;
 use crate::session::event::SessionEvent;
 use crate::session::manager::{CreatedThread, FoundView, MadeThread, SandboxPool, ThreadFactory};
@@ -1900,6 +1901,16 @@ async fn the_same_gap_is_allowed_when_the_configuration_allows_it() {
 }
 
 /// About the account the host shares, so a session is not needed to ask.
+/// A usage answer a test double hands back, as the card the daemon expects.
+fn the_window(text: &str) -> Card {
+    Card {
+        color: CardColor::Ready,
+        title: "usage windows".to_owned(),
+        description: text.to_owned(),
+        footer: None,
+    }
+}
+
 #[tokio::test]
 async fn the_usage_window_is_reported_wherever_it_is_asked_about() {
     with_daemon(
@@ -1907,10 +1918,11 @@ async fn the_usage_window_is_reported_wherever_it_is_asked_about() {
             describe_usage: Some(Arc::new(|refresh| {
                 Box::pin(async move {
                     if refresh {
-                        "read the window again".to_owned()
+                        the_window("read the window again")
                     } else {
-                        "58% of the provider's usage window is left, and it resets in 2 hours"
-                            .to_owned()
+                        the_window(
+                            "58% of the provider's usage window is left, and it resets in 2 hours",
+                        )
                     }
                 })
             })),
@@ -1964,9 +1976,9 @@ async fn an_operator_can_ask_the_window_again_before_it_expires() {
             describe_usage: Some(Arc::new(|refresh| {
                 Box::pin(async move {
                     if refresh {
-                        "read from the provider again".to_owned()
+                        the_window("read from the provider again")
                     } else {
-                        "what was already held".to_owned()
+                        the_window("what was already held")
                     }
                 })
             })),
@@ -2008,7 +2020,10 @@ async fn a_permitted_account_that_is_not_an_operator_cannot_ask_the_window_again
                     "operatorUserIds": [OWNER],
                 },
             })),
-            describe_usage: Some(Arc::new(|_| Box::pin(async { "the window".to_owned() }))),
+            describe_usage: Some(Arc::new(|_| {
+                let card = the_window("the window");
+                Box::pin(async move { card })
+            })),
             ..DaemonCase::default()
         },
         |harness| {
@@ -2035,7 +2050,10 @@ async fn a_permitted_account_that_is_not_an_operator_cannot_ask_the_window_again
 async fn a_mistyped_refresh_is_refused_and_says_what_to_type() {
     with_daemon(
         DaemonCase {
-            describe_usage: Some(Arc::new(|_| Box::pin(async { "the window".to_owned() }))),
+            describe_usage: Some(Arc::new(|_| {
+                let card = the_window("the window");
+                Box::pin(async move { card })
+            })),
             ..DaemonCase::default()
         },
         |harness| {
@@ -2442,7 +2460,10 @@ async fn a_change_to_the_file_reaches_a_decision_the_daemon_already_made() {
 async fn a_change_that_cannot_be_read_leaves_the_daemon_answering_as_it_did() {
     with_daemon(
         DaemonCase {
-            describe_usage: Some(Arc::new(|_| Box::pin(async { "the window".to_owned() }))),
+            describe_usage: Some(Arc::new(|_| {
+                let card = the_window("the window");
+                Box::pin(async move { card })
+            })),
             ..Default::default()
         },
         |harness| {
@@ -2583,7 +2604,8 @@ async fn a_command_asked_in_a_thread_is_answered_there() {
     with_daemon(
         DaemonCase {
             describe_usage: Some(Arc::new(|_| {
-                Box::pin(async { "58% of the provider's usage window is left".to_owned() })
+                let card = the_window("58% of the provider's usage window is left");
+                Box::pin(async move { card })
             })),
             ..DaemonCase::default()
         },

@@ -38,6 +38,8 @@ use crate::log::{LogValue, Logger, fields};
 use crate::session::event::Card;
 use crate::session::event::CardColor;
 use crate::session::event::Delegated;
+use crate::session::event::NoticeLevel;
+use crate::session::event::REFUSAL;
 use crate::session::event::ToolResult;
 use crate::session::event::{EndReason, ReactionOutcome, SessionEvent};
 use crate::session::views::SessionView;
@@ -208,6 +210,36 @@ fn color_of(color: CardColor) -> u32 {
         CardColor::Working => 0x58_65_F2,
         CardColor::Warning => 0xE6_7E_22,
         CardColor::Refused => 0xED_42_45,
+        CardColor::Settled => 0x99_AA_B5,
+    }
+}
+
+/// The card a notice is drawn as: its level colors it and names it.
+///
+/// The text keeps the words every surface shows, markers included, so a
+/// thread with cards and a transcript without them tell the same story.
+fn notice_card(text: &str, level: NoticeLevel) -> Card {
+    let (color, title) = match level {
+        NoticeLevel::Started => (CardColor::Working, "session started"),
+        NoticeLevel::Warning => (CardColor::Warning, "warning"),
+        NoticeLevel::Done => (CardColor::Ready, "turn done"),
+        NoticeLevel::Ended => (CardColor::Settled, "session ended"),
+    };
+    Card {
+        color,
+        title: title.to_owned(),
+        description: text.to_owned(),
+        footer: None,
+    }
+}
+
+/// The card a refusal is drawn as: red, because the answer is a stop.
+fn refused_card(text: &str) -> Card {
+    Card {
+        color: CardColor::Refused,
+        title: "refused".to_owned(),
+        description: text.to_owned(),
+        footer: None,
     }
 }
 
@@ -850,11 +882,19 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
                 // A thread has one voice, so a notice is posted like
                 // anything else; so is a reply, whose command already sits
                 // above it in the thread. A post or reply carrying a card
-                // shows the card, whose text is the same words.
+                // shows the card, whose text is the same words. A notice and
+                // a refusal are drawn from what they mean: their level and
+                // their mark color the card.
+                SessionEvent::Reply { text, command, .. } if command == REFUSAL => {
+                    self.post_card(text, Some(&refused_card(text)));
+                }
                 SessionEvent::Post { text, card } | SessionEvent::Reply { text, card, .. } => {
                     self.post_card(text, card.as_ref());
                 }
-                SessionEvent::Notice { text, .. } | SessionEvent::Question { text, .. } => {
+                SessionEvent::Notice { text, level } => {
+                    self.post_card(text, Some(&notice_card(text, *level)));
+                }
+                SessionEvent::Question { text, .. } => {
                     self.post(text);
                 }
                 SessionEvent::Diff {

@@ -5,11 +5,12 @@ use serde_json::json;
 use super::{
     MAX_LISTED_ENTRIES, MESSAGE_LIMIT, THREAD_NAME_LIMIT, Usage, bytes, compaction_line,
     dialog_lines, directory_listing, duration, file_view, output_rate, split_message, thread_name,
-    tokens, tool_line, truncate, turn_summary, turn_timing, usage_summary, usage_table,
+    tokens, tool_line, truncate, turn_summary, turn_timing, usage_card, usage_summary, usage_table,
     when_relative_plain,
 };
 use crate::agent::protocol::{DialogMethod, DialogRequest};
 use crate::provider::usage::Quota;
+use crate::session::event::CardColor;
 use crate::session::files::{Entry, FileContents};
 
 #[test]
@@ -506,6 +507,49 @@ fn a_turn_summary_groups_what_it_answers() {
     // never told which model answered says nothing about one.
     assert_eq!(turn_summary(None, "2.4s", None), "2.4s");
     assert_eq!(turn_summary(Some(""), "2.4s", None), "2.4s");
+}
+
+/// The card carries the verdict in its color: amber when a provider has
+/// spent its window, green otherwise. A provider that did not answer is not
+/// a warning.
+#[test]
+fn the_usage_card_is_amber_only_when_a_window_is_spent() {
+    let now = 1_790_000_000_000;
+    let healthy = usage_card(
+        &[(
+            "acme".to_owned(),
+            Some(Quota {
+                percentage: 42.4,
+                resets_at: Some(now),
+            }),
+        )],
+        now,
+    );
+    assert_eq!(healthy.color, CardColor::Ready);
+
+    let spent = usage_card(
+        &[
+            (
+                "acme".to_owned(),
+                Some(Quota {
+                    percentage: 42.4,
+                    resets_at: Some(now),
+                }),
+            ),
+            (
+                "zai-coding-cn".to_owned(),
+                Some(Quota {
+                    percentage: 100.0,
+                    resets_at: Some(now),
+                }),
+            ),
+        ],
+        now,
+    );
+    assert_eq!(spent.color, CardColor::Warning);
+
+    let silent = usage_card(&[("quiet".to_owned(), None)], now);
+    assert_eq!(silent.color, CardColor::Ready);
 }
 
 /// `!usage` lines up as a table in a code block: what is left, when it resets

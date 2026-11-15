@@ -9,6 +9,7 @@ use crate::session::event::Card;
 use crate::session::event::CardColor;
 use crate::session::event::EndReason;
 use crate::session::event::ReactionOutcome;
+use crate::session::event::SessionEvent;
 use crate::session::event::ToolResult;
 
 /// One message the thread sent, and whatever it was later edited to.
@@ -603,6 +604,98 @@ async fn only_what_was_said_in_the_interface_is_posted_to_the_thread() {
             "**amelia** via the web:\nan aside on the web",
         ]
     );
+}
+
+/// A notice is drawn as a card its level colors: green for a turn done,
+/// amber for a warning, blue for a session starting, gray for one that has
+/// ended. The words stay what every surface shows.
+#[tokio::test]
+async fn a_notice_is_drawn_as_a_card_its_level_colors() {
+    use crate::session::event::NoticeLevel;
+    use crate::session::views::SessionView;
+
+    let (port, channel) = thread(false);
+    let notices = [
+        (NoticeLevel::Done, "turn done"),
+        (NoticeLevel::Warning, "warning"),
+        (NoticeLevel::Started, "session started"),
+        (NoticeLevel::Ended, "session ended"),
+    ];
+    for (level, _) in &notices {
+        port.observe(&SessionEvent::Notice {
+            text: "the words".to_owned(),
+            level: *level,
+        })
+        .await
+        .unwrap();
+    }
+    port.flush().await;
+
+    let sent = channel.records();
+    assert_eq!(sent.len(), notices.len());
+    for (record, (_, title)) in sent.iter().zip(&notices) {
+        let card = record.lock().unwrap().card.clone().expect("a card");
+        assert_eq!(card.title, *title);
+        assert_eq!(card.description, "the words");
+        assert!(record.lock().unwrap().content.is_empty());
+    }
+    let colors: Vec<_> = sent
+        .iter()
+        .map(|record| record.lock().unwrap().card.clone().expect("a card").color)
+        .collect();
+    assert_eq!(
+        colors,
+        [
+            CardColor::Ready,
+            CardColor::Warning,
+            CardColor::Working,
+            CardColor::Settled,
+        ]
+    );
+}
+
+/// A refusal is drawn as a red card, because the answer is a stop.
+#[tokio::test]
+async fn a_refusal_is_drawn_as_a_red_card() {
+    use crate::session::views::SessionView;
+
+    let (port, channel) = thread(false);
+    port.observe(&SessionEvent::Reply {
+        text: "only the owner can use !stop".to_owned(),
+        command: crate::session::event::REFUSAL.to_owned(),
+        card: None,
+    })
+    .await
+    .unwrap();
+    port.flush().await;
+
+    let sent = channel.records();
+    assert_eq!(sent.len(), 1);
+    let card = sent[0].lock().unwrap().card.clone().expect("a card");
+    assert_eq!(card.color, CardColor::Refused);
+    assert_eq!(card.title, "refused");
+    assert_eq!(card.description, "only the owner can use !stop");
+}
+
+/// A command that is answered rather than refused keeps the words alone; the
+/// thread is a conversation, and only stops and states are cards.
+#[tokio::test]
+async fn an_ordinary_reply_is_not_turned_into_a_card() {
+    use crate::session::views::SessionView;
+
+    let (port, channel) = thread(false);
+    port.observe(&SessionEvent::Reply {
+        text: "this session now runs on `zai/glm-5.3`".to_owned(),
+        command: "!model glm-5.3".to_owned(),
+        card: None,
+    })
+    .await
+    .unwrap();
+    port.flush().await;
+
+    let sent = channel.records();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].lock().unwrap().card.is_none());
 }
 
 /// The statuses that end the retrying are the service's own decisions, not

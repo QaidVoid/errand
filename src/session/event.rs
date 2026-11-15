@@ -189,7 +189,8 @@ pub enum EndReason {
 /// Named by what the session means rather than by any palette, so every
 /// surface colors the same state the same way without sharing swatches. A
 /// card is a post that deserves reading at a glance: green when things are
-/// fine, blue while working, amber for a warning, red for a refusal.
+/// fine, blue while working, amber for a warning, red for a refusal, gray
+/// for something that has settled and asks for nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CardColor {
@@ -197,6 +198,7 @@ pub enum CardColor {
     Working,
     Warning,
     Refused,
+    Settled,
 }
 
 /// A post a surface may draw as a card instead of plain text.

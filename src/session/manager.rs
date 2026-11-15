@@ -756,7 +756,7 @@ impl SessionManager {
             fan_out
                 .send(SessionEvent::Notice {
                     text: warning_line(&fell_back),
-                    level: NoticeLevel::Started,
+                    level: NoticeLevel::Warning,
                 })
                 .await;
         }
@@ -977,7 +977,7 @@ impl SessionManager {
                         "`{gone}`, which this thread ran on, is no longer in the configuration, \
                          so it continues on the configured model"
                     )),
-                    level: NoticeLevel::Started,
+                    level: NoticeLevel::Warning,
                 })
                 .await;
         }

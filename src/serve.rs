@@ -21,7 +21,7 @@ use crate::chat::commands::TranslatedCommand;
 use crate::chat::commands::register_commands;
 use crate::chat::gateway::{GIVE_UP_AFTER_MS, GIVE_UP_POLL_MS, Gateway, GatewayHandlers};
 use crate::chat::render::{
-    MESSAGE_LIMIT, models_refreshed, split_message, usage_table, when_relative, when_relative_plain,
+    MESSAGE_LIMIT, models_refreshed, split_message, usage_card, when_relative, when_relative_plain,
 };
 use crate::chat::threads::ChatThreadFactory;
 use crate::chat::threads::card as card_message;
@@ -1491,7 +1491,7 @@ async fn run(
                 Box::pin(async move {
                     let mut held = sources.lock().await;
                     let rows = read_usage(&mut held, refresh).await;
-                    usage_table(&rows, now_ms())
+                    usage_card(&rows, now_ms())
                 })
             }))
         },

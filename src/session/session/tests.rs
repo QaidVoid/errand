@@ -29,7 +29,7 @@ use crate::sandbox::paths;
 use crate::session::attachments::RawAttachment;
 use crate::session::event::ToolResult;
 use crate::session::event::{
-    Card, EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage,
+    Card, CardColor, EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage,
 };
 use crate::session::pr::{self, PullRequestError};
 use crate::session::projects::ProjectSelection;
@@ -2789,6 +2789,18 @@ async fn the_status_says_what_the_session_and_the_queue_are_doing() {
                 .join("\n");
             assert!(said.contains("project: demo"));
             assert!(said.contains("running a turn"));
+            // The same words travel as a card, blue because a status is the
+            // machine talking about itself.
+            let card = harness
+                .thread
+                .reply_cards()
+                .into_iter()
+                .flatten()
+                .next()
+                .expect("a card");
+            assert_eq!(card.title, "session status");
+            assert_eq!(card.color, CardColor::Working);
+            assert!(card.description.contains("project: demo"));
         })
     })
     .await;

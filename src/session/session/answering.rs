@@ -224,8 +224,8 @@ impl Running {
                 self.react(&message.id, ReactionOutcome::Accepted).await;
             }
             _ => {
-                let said = self.describe_status();
-                self.say(&said).await;
+                let (said, card) = self.describe_status();
+                self.say_with_card(&said, Some(card)).await;
             }
         }
     }
@@ -426,7 +426,7 @@ impl Running {
         clippy::cast_precision_loss,
         reason = "token totals sit far below f64's exact range"
     )]
-    pub(super) fn describe_status(&self) -> String {
+    pub(super) fn describe_status(&self) -> (String, Card) {
         let mut lines = vec![
             format!("project: {}", self.options.project.name),
             format!(
@@ -454,7 +454,14 @@ impl Running {
                 byte_count(self.delegated_kept_out as f64),
             ));
         }
-        lines.join("\n")
+        let text = lines.join("\n");
+        let card = Card {
+            color: CardColor::Working,
+            title: "session status".to_owned(),
+            description: text.clone(),
+            footer: None,
+        };
+        (text, card)
     }
 
     /// Aborts the running turn, force stopping if the agent will not confirm.

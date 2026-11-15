@@ -16,6 +16,8 @@ use crate::chat::chars::{PrefixKey, prefixed};
 use crate::provider::discover::Outcome;
 use crate::provider::models::AvailableModel;
 use crate::provider::usage::{Quota, is_spent};
+use crate::session::event::Card;
+use crate::session::event::CardColor;
 use crate::session::event::Delegated;
 use crate::session::files::Entry;
 use crate::session::files::{FileContents, MAX_INLINE_BYTES};
@@ -550,6 +552,28 @@ pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
     let mut lines = vec![line(&table[0]), format!("|{rule}|")];
     lines.extend(table[1..].iter().map(|row| line(row)));
     format!("```\n{}\n```", lines.join("\n"))
+}
+
+/// What `!usage` found, as a card.
+///
+/// The table rides as the body, and the color carries the verdict: amber
+/// when a provider has spent its window, so a reading is never mistaken for
+/// fine news, green otherwise. A provider that did not answer is not a
+/// warning; the table says unknown and the card stays calm.
+pub fn usage_card(rows: &[(String, Option<Quota>)], now: i64) -> Card {
+    let spent = rows
+        .iter()
+        .any(|(_, quota)| quota.as_ref().is_some_and(is_spent));
+    Card {
+        color: if spent {
+            CardColor::Warning
+        } else {
+            CardColor::Ready
+        },
+        title: "usage windows".to_owned(),
+        description: usage_table(rows, now),
+        footer: None,
+    }
 }
 
 /// Every model this host can run, grouped under the provider that serves it.
