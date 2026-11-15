@@ -564,7 +564,6 @@ const EMBED_WEIGHT_LIMIT: usize = 6_000;
 /// The most body an embed carries, as the service limits it.
 const EMBED_DESCRIPTION_LIMIT: usize = 4_096;
 
-
 /// What `!usage` found, as a card.
 ///
 /// A provider is its field: the name on its own row, and under it one line
@@ -751,6 +750,64 @@ pub fn table_card(title: &str, text: &str) -> Option<Card> {
         fields: Vec::new(),
         footer: None,
     })
+}
+
+/// Splits an answer at its markdown tables, each table drawn as a card and
+/// the words around it kept as they were written.
+///
+/// Every table outside a code fence that can be drawn becomes a piece: the
+/// words written before it travel with the card as the message's content,
+/// when they fit one message, and words written after follow as their own
+/// message, because a card draws under the words it travels with and
+/// lifting a followed table would turn the answer around. A table that
+/// cannot be drawn stays in the words; an answer with no table comes back
+/// as it went in, so a surface without cards posts exactly what it would
+/// have without any of this.
+pub fn split_tables(text: &str) -> Vec<(String, Option<Card>)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut pieces: Vec<(String, Option<Card>)> = Vec::new();
+    let mut words: Vec<&str> = Vec::new();
+    let mut fenced = false;
+    let mut at = 0;
+    while at < lines.len() {
+        let line = lines[at];
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            words.push(line);
+            at += 1;
+            continue;
+        }
+        if !fenced && line.trim_start().starts_with('|') {
+            let mut end = at;
+            while end < lines.len() && lines[end].trim_start().starts_with('|') {
+                end += 1;
+            }
+            if let Some(card) = table_card("", &lines[at..end].join("\n")) {
+                let intro = words.join("\n").trim().to_owned();
+                if intro.encode_utf16().count() > MESSAGE_LIMIT {
+                    // Words too long for one message travel on their own,
+                    // where the ordinary split handles their length.
+                    pieces.push((intro, None));
+                    pieces.push((String::new(), Some(card)));
+                } else {
+                    pieces.push((intro, Some(card)));
+                }
+                words.clear();
+                at = end;
+                continue;
+            }
+        }
+        words.push(line);
+        at += 1;
+    }
+    if pieces.is_empty() {
+        return vec![(text.to_owned(), None)];
+    }
+    let rest = words.join("\n").trim().to_owned();
+    if !rest.is_empty() {
+        pieces.push((rest, None));
+    }
+    pieces
 }
 
 /// A short name is shown beside the model it stands for.

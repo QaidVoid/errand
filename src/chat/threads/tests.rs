@@ -407,6 +407,53 @@ async fn a_reaction_on_a_message_that_is_gone_is_not_an_error() {
         .await;
 }
 
+/// An answer that draws a markdown table has the table posted as a card in
+/// place, the words around it as they stand, and the words themselves are
+/// never rewritten: what a transcript keeps is the markdown as the agent
+/// wrote it. Words the answer goes on after follow the card as their own
+/// message, in the order they were written.
+#[tokio::test]
+async fn an_answer_ending_with_a_table_draws_a_card_beneath_its_words() {
+    use crate::session::views::SessionView;
+
+    let (port, channel) = thread(false);
+    let table = "| name | size |\n|------|------|\n| a.rs | 1.2k |";
+
+    port.observe(&SessionEvent::Post {
+        text: format!("here it is:\n\n{table}"),
+        card: None,
+    })
+    .await
+    .unwrap();
+    port.observe(&SessionEvent::Post {
+        text: format!("{table}\nthat is all"),
+        card: None,
+    })
+    .await
+    .unwrap();
+    port.flush().await;
+
+    let records = channel.records();
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0].lock().unwrap().content, "here it is:");
+    let card = records[0]
+        .lock()
+        .unwrap()
+        .card
+        .clone()
+        .expect("the table is a card");
+    assert_eq!(card.fields[0].name, "a.rs");
+    let lone = records[1]
+        .lock()
+        .unwrap()
+        .card
+        .clone()
+        .expect("a table alone is a card");
+    assert_eq!(lone.fields.len(), 1);
+    assert_eq!(records[2].lock().unwrap().content, "that is all");
+    assert_eq!(records[2].lock().unwrap().card, None);
+}
+
 #[tokio::test]
 async fn tool_output_is_kept_out_of_the_thread_unless_it_was_asked_for() {
     let (quiet, quiet_channel) = thread(false);

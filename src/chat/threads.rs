@@ -32,7 +32,7 @@ use crate::chat::chars::reaction;
 use crate::chat::diff::FileDiff;
 use crate::chat::diff::render_diff;
 use crate::chat::outbox::{DEFAULT_MAX_BUFFERED, Outbox, PermanentFailure, TaskError};
-use crate::chat::render::{MESSAGE_LIMIT, delegation_line, split_message, table_card};
+use crate::chat::render::{MESSAGE_LIMIT, delegation_line, split_message, split_tables, table_card};
 use crate::issues::thread::logins_plainly;
 use crate::log::{LogValue, Logger, fields};
 use crate::session::event::Card;
@@ -293,7 +293,16 @@ impl ThreadTransport for SerenityThread {
         let http = Arc::clone(&self.http);
         Box::pin(async move {
             let mut sent_message = match &message.card {
-                Some(built) => card(built),
+                Some(built) => {
+                    let mut built = card(built);
+                    // Words beside the card, like the line that introduces a
+                    // drawn table, ride as the message's content; words the
+                    // card itself says are left to it.
+                    if !message.content.is_empty() {
+                        built = built.content(message.content.clone());
+                    }
+                    built
+                }
                 None => plain(&message.content),
             };
             if let Some((name, bytes)) = message.attachment {
@@ -584,14 +593,23 @@ impl<T: ThreadTransport> ChatThread<T> {
         // The agent speaking ends the current run of tool calls, so the next
         // one starts a fresh block rather than being appended below prose.
         self.reset_activity();
+        // Words the card itself carries (a notice's text, a session card's
+        // body) are said once, by the card; only words beside the card, like
+        // the line that introduces a drawn table, ride as the content.
+        let said = if text.is_empty() || text == card.title || card.description.contains(text) {
+            String::new()
+        } else {
+            text.to_owned()
+        };
         let transport = Arc::clone(&self.transport);
         let card = card.clone();
         self.outbox.enqueue(Box::new(move || {
             let transport = Arc::clone(&transport);
             let card = card.clone();
+            let said = said.clone();
             Box::pin(async move {
                 transport
-                    .send(Outgoing::with_card(String::new(), card))
+                    .send(Outgoing::with_card(said, card))
                     .await
                     .map(|_| ())
                     .map_err(classified)
@@ -913,7 +931,19 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
                     self.post_card(text, Some(&refused_card(text)));
                 }
                 SessionEvent::Post { text, card } | SessionEvent::Reply { text, card, .. } => {
-                    self.post_card(text, card.as_ref());
+                    match card {
+                        Some(card) => self.post_card(text, Some(card)),
+                        // The words are the transcript and are never
+                        // rewritten; only what the thread draws is taken
+                        // apart, so a table in the answer draws as a card
+                        // and the words around it go out as they were
+                        // written.
+                        None => {
+                            for (words, table) in split_tables(text) {
+                                self.post_card(&words, table.as_ref());
+                            }
+                        }
+                    }
                 }
                 SessionEvent::Notice { text, level } => {
                     self.post_card(text, Some(&notice_card(text, *level)));

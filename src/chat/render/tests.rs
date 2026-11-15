@@ -4,8 +4,8 @@ use serde_json::json;
 
 use super::{
     MAX_LISTED_ENTRIES, MESSAGE_LIMIT, THREAD_NAME_LIMIT, Usage, bytes, compaction_line,
-    dialog_lines, directory_listing, duration, file_view, output_rate, split_message, table_card,
-    thread_name, tokens, tool_line, truncate, turn_summary, turn_timing, usage_card,
+    dialog_lines, directory_listing, duration, file_view, output_rate, split_message, split_tables,
+    table_card, thread_name, tokens, tool_line, truncate, turn_summary, turn_timing, usage_card,
     usage_summary, usage_table, when_relative_plain,
 };
 use crate::agent::protocol::{DialogMethod, DialogRequest};
@@ -706,6 +706,93 @@ fn a_table_too_heavy_for_one_embed_keeps_the_output_fenced() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(table_card("ls", &format!("{header}{rows}")), None);
+}
+
+/// An answer that ends with a table is split: the words before it travel
+/// with the card as its content, untouched, so a thread can draw one under
+/// the other without the answer itself ever being rewritten.
+#[test]
+fn an_answer_ending_with_a_table_is_split_from_its_words() {
+    let text = "here is what I found:\n\n| name | size |\n|------|------|\n| a.rs | 1.2k |";
+    let pieces = split_tables(text);
+    assert_eq!(pieces.len(), 1);
+    assert_eq!(pieces[0].0, "here is what I found:");
+    let card = pieces[0].1.as_ref().expect("the table is a card");
+    assert_eq!(card.title, "");
+    assert_eq!(card.description, "**name \u{b7} size**");
+    assert_eq!(
+        card.fields,
+        vec![CardField {
+            name: "a.rs".to_owned(),
+            value: "1.2k".to_owned(),
+        }]
+    );
+}
+
+/// A table-only answer splits with no words before it.
+#[test]
+fn a_table_only_answer_splits_with_no_prose() {
+    let pieces = split_tables("| a | b |\n|---|---|\n| 1 | 2 |");
+    assert_eq!(pieces.len(), 1);
+    assert_eq!(pieces[0].0, "");
+    assert!(pieces[0].1.is_some());
+}
+
+/// Words after a table follow it as their own message: the card always
+/// draws under the words, so lifting a table that is followed would turn
+/// the answer around. Every table in an answer is drawn, wherever it
+/// sits.
+#[test]
+fn words_after_a_table_follow_it_as_their_own_message() {
+    let table = "| a | b |\n|---|---|\n| 1 | 2 |";
+    let pieces = split_tables(&format!("{table}\nthat is all"));
+    assert_eq!(pieces.len(), 2);
+    assert_eq!(pieces[0].0, "");
+    assert!(pieces[0].1.is_some());
+    assert_eq!(pieces[1], ("that is all".to_owned(), None));
+}
+
+/// Every table in an answer is drawn: two tables each become a card, and
+/// the words between them travel with the table they introduce.
+#[test]
+fn an_answer_with_two_tables_draws_both() {
+    let table = "| a | b |\n|---|---|\n| 1 | 2 |";
+    let pieces = split_tables(&format!("{table}\n\nand more:\n\n{table}"));
+    assert_eq!(pieces.len(), 2);
+    assert_eq!(pieces[0].0, "");
+    assert!(pieces[0].1.is_some());
+    assert_eq!(pieces[1].0, "and more:");
+    assert!(pieces[1].1.is_some());
+}
+
+/// Words too long for one message travel on their own, where the ordinary
+/// split handles their length, and the table after them goes out alone.
+#[test]
+fn an_answer_whose_prose_exceeds_one_message_travels_apart() {
+    let prose = "word ".repeat(500);
+    let text = format!("{prose}\n| a | b |\n|---|---|\n| 1 | 2 |");
+    let pieces = split_tables(&text);
+    assert_eq!(pieces.len(), 2);
+    assert_eq!(pieces[0].1, None);
+    assert!(pieces[0].0.starts_with("word word"));
+    assert_eq!(pieces[1].0, "");
+    assert!(pieces[1].1.is_some());
+}
+
+/// An answer with no table comes back whole and untouched, so a thread's
+/// posting of it is exactly what it would have been without any of this.
+#[test]
+fn an_answer_with_no_table_comes_back_untouched() {
+    let text = "just words, no table";
+    assert_eq!(split_tables(text), vec![(text.to_owned(), None)]);
+}
+
+/// A table inside a code fence is text the agent chose to show verbatim,
+/// not a layout to redraw, so it stays in the words untouched.
+#[test]
+fn a_table_inside_a_code_fence_stays_words() {
+    let text = "```markdown\n| a | b |\n|---|---|\n| 1 | 2 |\n```";
+    assert_eq!(split_tables(text), vec![(text.to_owned(), None)]);
 }
 
 /// A server's text lands in a code span, so it must stay on one line and
