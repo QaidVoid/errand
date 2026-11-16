@@ -10,6 +10,7 @@
   import { api, streamSession } from "./lib/api.ts";
   import { ago, cacheRate, money, tokens } from "./lib/format.ts";
   import { counts, type Lens, LENS_HELP, LENSES } from "./lib/lens.ts";
+  import { joinSpeech } from "./lib/speech.ts";
   import { read } from "./lib/turns.ts";
   import { nameFrom } from "./lib/naming.ts";
   import type {
@@ -327,7 +328,7 @@
     flushing = requestAnimationFrame(() => {
       flushing = 0;
       if (pending.length === 0) return;
-      entries = entries.concat(pending);
+      entries = joinSpeech(entries, pending);
       pending = [];
     });
   }

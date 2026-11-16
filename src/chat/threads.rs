@@ -1122,10 +1122,10 @@ impl<T: ThreadTransport> ChatThread<T> {
     /// would take it past one message's length finishes it and starts the
     /// next, so an answer of any length reads in order, a message at a time.
     fn append_speech(&self, paragraph: &str) {
-        let paragraph = paragraph.trim().to_owned();
-        if paragraph.is_empty() {
+        if paragraph.trim().is_empty() {
             return;
         }
+        let paragraph = paragraph.to_owned();
         let transport = Arc::clone(&self.transport);
         let state = Arc::clone(&self.state);
         self.outbox.enqueue(Box::new(move || {
@@ -1137,16 +1137,24 @@ impl<T: ThreadTransport> ChatThread<T> {
                     let (finished, message_id, whole, due) = {
                         let mut state = state.lock().expect("the thread state lock");
                         let speech = state.speech.get_or_insert_with(Live::new);
+                        // Joined as they arrived: each piece keeps the space or
+                        // the break it was cut at, so nothing is added here.
                         let joined = if speech.text.is_empty() {
-                            paragraph.clone()
+                            paragraph.trim_start().to_owned()
                         } else {
-                            format!("{}\n\n{paragraph}", speech.text)
+                            format!("{}{paragraph}", speech.text)
                         };
                         let finished = if joined.encode_utf16().count() > MESSAGE_LIMIT
                             && !speech.text.is_empty()
                         {
-                            let full = std::mem::replace(speech, Live::new());
-                            speech.text.clone_from(&paragraph);
+                            // The message is full. It ends where a message is
+                            // best cut, and the rest carries on in the next.
+                            let mut pieces = split_message(&joined, MESSAGE_LIMIT).into_iter();
+                            let first = pieces.next().unwrap_or_default();
+                            let rest: Vec<String> = pieces.collect();
+                            let mut full = std::mem::replace(speech, Live::new());
+                            full.text = first;
+                            speech.text = rest.join("\n");
                             Some(full)
                         } else {
                             speech.text = joined;
@@ -1338,28 +1346,6 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
     }
 }
 
-/// The paragraph of answer `event` carries, when it is one that grows the
-/// message showing the answer: plain words, with no card and no table that
-/// would draw as one.
-fn spoken_paragraph(event: &SessionEvent) -> Option<&str> {
-    let SessionEvent::Post { text, card: None } = event else {
-        return None;
-    };
-    let pieces = split_tables(text);
-    (pieces.len() == 1 && pieces[0].1.is_none()).then_some(text.as_str())
-}
-
-/// Draws a finished run of answer, when it grew since it was last drawn.
-async fn finish_speech<T: ThreadTransport + ?Sized>(
-    transport: &T,
-    speech: Live,
-) -> Result<(), ServiceError> {
-    match speech.message_id {
-        Some(id) if speech.text != speech.shown => transport.edit(id, speech.text).await,
-        _ => Ok(()),
-    }
-}
-
 /// The people a card addresses, as the service's mentions of them, each
 /// once, in the order the card names them.
 fn mentions_in(card: &Card) -> Vec<String> {
@@ -1384,6 +1370,28 @@ fn mentions_in(card: &Card) -> Vec<String> {
         }
     }
     found
+}
+
+/// The paragraph of answer `event` carries, when it is one that grows the
+/// message showing the answer: plain words, with no card and no table that
+/// would draw as one.
+fn spoken_paragraph(event: &SessionEvent) -> Option<&str> {
+    let SessionEvent::Post { text, card: None } = event else {
+        return None;
+    };
+    let pieces = split_tables(text);
+    (pieces.len() == 1 && pieces[0].1.is_none()).then_some(text.as_str())
+}
+
+/// Draws a finished run of answer, when it grew since it was last drawn.
+async fn finish_speech<T: ThreadTransport + ?Sized>(
+    transport: &T,
+    speech: Live,
+) -> Result<(), ServiceError> {
+    match speech.message_id {
+        Some(id) if speech.text != speech.shown => transport.edit(id, speech.text).await,
+        _ => Ok(()),
+    }
 }
 
 /// Whether `event` puts something in the thread, which ends the run of

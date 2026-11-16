@@ -962,7 +962,7 @@ async fn an_answer_longer_than_a_message_carries_on_in_the_next() {
     let paragraph = "x".repeat(1_500);
     for _ in 0..2 {
         port.observe(&SessionEvent::Post {
-            text: paragraph.clone(),
+            text: format!("{paragraph}\n\n"),
             card: None,
         })
         .await
@@ -973,7 +973,38 @@ async fn an_answer_longer_than_a_message_carries_on_in_the_next() {
         .unwrap();
     port.flush().await;
 
-    assert_eq!(channel.contents(), [paragraph.clone(), paragraph]);
+    let shown: Vec<String> = channel
+        .contents()
+        .iter()
+        .map(|content| content.trim().to_owned())
+        .collect();
+    assert_eq!(shown, [paragraph.clone(), paragraph]);
+}
+
+/// Pieces cut mid-paragraph keep the space they were cut at, so the message
+/// reads as if it had never been cut.
+#[tokio::test]
+async fn pieces_of_one_paragraph_join_with_nothing_added() {
+    use crate::session::views::SessionView;
+
+    let (port, channel) = thread(false);
+    for piece in ["The parser now ", "reads empty input ", "and says so."] {
+        port.observe(&SessionEvent::Post {
+            text: piece.to_owned(),
+            card: None,
+        })
+        .await
+        .unwrap();
+    }
+    port.observe(&SessionEvent::Busy { busy: false })
+        .await
+        .unwrap();
+    port.flush().await;
+
+    assert_eq!(
+        channel.contents(),
+        ["The parser now reads empty input and says so."]
+    );
 }
 
 /// The service notifies only for a mention in a message's text. A notice

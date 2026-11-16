@@ -708,6 +708,50 @@ async fn settled_paragraphs_are_reported_before_the_span_ends_but_a_fence_is_kep
     setup.finish().await;
 }
 
+/// A paragraph that goes on without a break is reported up to its last space
+/// once it has been held a while, so a long answer still grows as it is
+/// written. An open code fence is held until it closes.
+#[tokio::test(start_paused = true)]
+async fn a_long_paragraph_is_reported_at_its_last_space_once_held_a_while() {
+    let said: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let text_seen = Arc::clone(&said);
+    let setup = client(
+        AgentHandlers {
+            on_assistant_text: Some(Box::new(move |text: String| {
+                text_seen.lock().unwrap().push(text);
+            })),
+            ..AgentHandlers::default()
+        },
+        300_000,
+    );
+
+    setup.controls.send(&text_chunk("The parser now reads"));
+    settle().await;
+    assert!(said.lock().unwrap().is_empty(), "not held long enough yet");
+
+    tokio::time::advance(std::time::Duration::from_secs(3)).await;
+    setup.controls.send(&text_chunk(" empty inp"));
+    settle().await;
+    assert_eq!(
+        *said.lock().unwrap(),
+        vec!["The parser now reads empty ".to_owned()]
+    );
+
+    setup.controls.send(&text_chunk("ut.\n```\nlet a = 1;"));
+    tokio::time::advance(std::time::Duration::from_secs(3)).await;
+    setup.controls.send(&text_chunk(" let b = 2;"));
+    settle().await;
+    assert_eq!(said.lock().unwrap().len(), 1, "the fence is still open");
+
+    setup.controls.send(&turn_end());
+    settle().await;
+    assert_eq!(
+        said.lock().unwrap().concat(),
+        "The parser now reads empty input.\n```\nlet a = 1; let b = 2;"
+    );
+    setup.finish().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_whitespace_only_fragment_is_kept_between_words() {
     let said: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));

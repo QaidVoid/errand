@@ -80,7 +80,7 @@ impl IssueView {
     async fn flush(&self) -> Result<(), ViewError> {
         let turn = std::mem::take(&mut *self.turn.lock().expect("the issue turn lock"));
         match turn.answer.or(turn.failure) {
-            Some(said) => self.post(&said).await,
+            Some(said) => self.post(said.trim_end()).await,
             None => Ok(()),
         }
     }
@@ -133,11 +133,11 @@ impl SessionView for IssueView {
             match event {
                 SessionEvent::Post { text, .. } => {
                     let mut turn = self.turn.lock().expect("the issue turn lock");
+                    // Joined as the pieces arrived: each keeps the space or
+                    // the break it was cut at.
                     turn.answer = Some(match turn.answer.take() {
-                        Some(said) if turn.speaking => {
-                            format!("{}\n\n{}", said.trim_end(), text.trim())
-                        }
-                        _ => text.trim().to_owned(),
+                        Some(said) if turn.speaking => format!("{said}{text}"),
+                        _ => text.trim_start().to_owned(),
                     });
                     turn.speaking = true;
                 }

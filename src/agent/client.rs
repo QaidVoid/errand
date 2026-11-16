@@ -249,13 +249,28 @@ pub(crate) struct PendingDialog {
     pub(crate) timer: tokio::task::JoinHandle<()>,
 }
 
-/// Splits an open run at its last paragraph break outside a code fence:
-/// the settled paragraphs before it, when there are any, and the rest, which
+/// How long the open run may hold words without a paragraph break before
+/// what it holds is reported up to its last space.
+const RELEASE_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Splits an open run at its last paragraph break outside a code fence: the
+/// settled paragraphs before it, when there are any, and the rest, which
 /// stays open.
-fn split_settled(text: String, span: fn(String) -> SpeechSpan) -> (Option<SpeechSpan>, SpeechSpan) {
+///
+/// A run held too long, `overdue`, settles at its last whitespace instead,
+/// so a long paragraph is reported as it grows. Whitespace is where no
+/// secret is cut in two, which keeps each piece redactable on its own. A run
+/// inside a code fence or a table waits for it to end: half of either would
+/// draw as something it is not.
+fn split_settled(
+    text: String,
+    overdue: bool,
+    span: fn(String) -> SpeechSpan,
+) -> (Option<SpeechSpan>, SpeechSpan) {
     let mut fenced = false;
     let mut cut = None;
     let mut at = 0;
+    let mut last_line = "";
     for line in text.split_inclusive('\n') {
         if line.trim_start().starts_with("```") {
             fenced = !fenced;
@@ -264,6 +279,14 @@ fn split_settled(text: String, span: fn(String) -> SpeechSpan) -> (Option<Speech
         if !fenced && line.trim().is_empty() && at > line.len() {
             cut = Some(at);
         }
+        last_line = line;
+    }
+    if cut.is_none() && overdue && !fenced && !last_line.trim_start().starts_with('|') {
+        cut = text
+            .char_indices()
+            .rev()
+            .find(|(_, character)| character.is_whitespace())
+            .map(|(index, character)| index + character.len_utf8());
     }
     match cut {
         Some(cut) if cut < text.len() => {
@@ -339,6 +362,9 @@ pub(crate) struct ClientState {
     /// reasoning and answers a fragment at a time, and the thread wants
     /// each span as one message, in the order it was said.
     pub(crate) speech: Vec<SpeechSpan>,
+    /// Since when the open run has held words not yet reported, so a long
+    /// paragraph is reported in pieces rather than only once it ends.
+    pub(crate) holding_since: Option<tokio::time::Instant>,
     /// Tool calls seen but not yet running, by id: the title and the raw
     /// input, which a streaming call only completes later.
     pub(crate) tool_calls: BTreeMap<String, PendingTool>,
@@ -433,6 +459,7 @@ impl AgentClient {
                     session_id: None,
                     tool_calls: BTreeMap::new(),
                     speech: Vec::new(),
+                    holding_since: None,
                     pending_compaction: None,
                     dialogs: BTreeMap::new(),
                     requests: BTreeMap::new(),
@@ -1244,11 +1271,21 @@ impl Shared {
             let mut state = self.state.lock().expect("the client lock");
             let open = state.speech.pop();
             let mut released = std::mem::take(&mut state.speech);
+            if !released.is_empty() {
+                state.holding_since = None;
+            }
             if let Some(open) = open {
+                let since = *state
+                    .holding_since
+                    .get_or_insert_with(tokio::time::Instant::now);
+                let overdue = since.elapsed() >= RELEASE_AFTER;
                 let (whole, kept) = match open {
-                    SpeechSpan::Text(text) => split_settled(text, SpeechSpan::Text),
-                    SpeechSpan::Thought(text) => split_settled(text, SpeechSpan::Thought),
+                    SpeechSpan::Text(text) => split_settled(text, overdue, SpeechSpan::Text),
+                    SpeechSpan::Thought(text) => split_settled(text, overdue, SpeechSpan::Thought),
                 };
+                if whole.is_some() {
+                    state.holding_since = None;
+                }
                 released.extend(whole);
                 state.speech.push(kept);
             }
