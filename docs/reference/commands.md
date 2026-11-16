@@ -31,8 +31,8 @@ aside: everyone in the thread sees it and the agent is never told.
 | `!allow <user>` | the owner and operators | let somebody take part in this thread |
 | `!deny <user>` | the owner and operators | withdraw somebody from this thread |
 | `!guests` | the owner and whoever they invited | who takes part in this thread |
-| `!facts [@somebody|project]` | the owner and whoever they invited | what is remembered about somebody or the project |
-| `!forget <@somebody|project>` | the owner and operators | drop what is remembered about somebody or the project |
+| `!facts [@somebody\|project]` | the owner and whoever they invited | what is remembered about somebody or the project |
+| `!forget <@somebody\|project>` | the owner and operators | drop what is remembered about somebody or the project |
 
 ## The project
 
@@ -54,6 +54,6 @@ aside: everyone in the thread sees it and the agent is never told.
 | `!shutdown` | named accounts, answered by the daemon | power off this daemon's host |
 | `!drain` | operators, answered by the daemon | refuse new work and say when none is running |
 | `!undrain` | operators, answered by the daemon | accept work again, and call off a restart |
-| `!restart [now|<wait>]` | operators, answered by the daemon | drain, then restart into the binary on disk |
+| `!restart [now\|<wait>]` | operators, answered by the daemon | drain, then restart into the binary on disk |
 | `!gc` | operators, answered by the daemon | collect cold sessions now, as retention says |
 
