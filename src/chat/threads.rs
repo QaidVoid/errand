@@ -684,6 +684,17 @@ impl<T: ThreadTransport> ChatThread<T> {
     /// cards shows. Should the body outgrow a card, the card is left behind
     /// and the words go out the ordinary way.
     pub fn post_card(&self, text: &str, card: Option<&Card>) {
+        self.post_card_naming(text, card, false);
+    }
+
+    /// Posts a card as [`Self::post_card`] does, and when `naming`, names
+    /// whoever it addresses beside it as well.
+    ///
+    /// The service notifies only for a mention in a message's text, never for
+    /// one inside a card. A notice is how a person is told their turn
+    /// settled, so its mentions have to reach them. Other cards name people
+    /// to show them, as `!status` does, and must not notify anybody.
+    fn post_card_naming(&self, text: &str, card: Option<&Card>, naming: bool) {
         let Some(card) = card else {
             self.post(text);
             return;
@@ -698,11 +709,19 @@ impl<T: ThreadTransport> ChatThread<T> {
         // Words the card itself carries (a notice's text, a session card's
         // body) are said once, by the card; only words beside the card, like
         // the line that introduces a drawn table, ride as the content.
-        let said = if text.is_empty() || text == card.title || card.description.contains(text) {
+        let mut said = if text.is_empty() || text == card.title || card.description.contains(text) {
             String::new()
         } else {
             text.to_owned()
         };
+        for mention in mentions_in(card).into_iter().filter(|_| naming) {
+            if !said.contains(&mention) {
+                if !said.is_empty() {
+                    said.push(' ');
+                }
+                said.push_str(&mention);
+            }
+        }
         let transport = Arc::clone(&self.transport);
         let card = card.clone();
         self.outbox.enqueue(Box::new(move || {
@@ -1257,7 +1276,7 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
                     }
                 }
                 SessionEvent::Notice { text, level } => {
-                    self.post_card(text, Some(&notice_card(text, *level)));
+                    self.post_card_naming(text, Some(&notice_card(text, *level)), true);
                 }
                 SessionEvent::Question { text, .. } => {
                     self.post(text);
@@ -1339,6 +1358,32 @@ async fn finish_speech<T: ThreadTransport + ?Sized>(
         Some(id) if speech.text != speech.shown => transport.edit(id, speech.text).await,
         _ => Ok(()),
     }
+}
+
+/// The people a card addresses, as the service's mentions of them, each
+/// once, in the order the card names them.
+fn mentions_in(card: &Card) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut texts = vec![card.title.as_str(), card.description.as_str()];
+    texts.extend(card.fields.iter().map(|field| field.value.as_str()));
+    texts.extend(card.pages.iter().map(|page| page.description.as_str()));
+    for text in texts {
+        let mut rest = text;
+        while let Some(start) = rest.find("<@") {
+            let after = &rest[start + 2..];
+            let digits = after.trim_start_matches('!');
+            let length = digits.chars().take_while(char::is_ascii_digit).count();
+            let closed = length > 0 && digits[length..].starts_with('>');
+            if closed {
+                let mention = format!("<@{}>", &digits[..length]);
+                if !found.contains(&mention) {
+                    found.push(mention);
+                }
+            }
+            rest = after;
+        }
+    }
+    found
 }
 
 /// Whether `event` puts something in the thread, which ends the run of

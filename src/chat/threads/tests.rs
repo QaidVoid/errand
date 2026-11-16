@@ -975,3 +975,43 @@ async fn an_answer_longer_than_a_message_carries_on_in_the_next() {
 
     assert_eq!(channel.contents(), [paragraph.clone(), paragraph]);
 }
+
+/// The service notifies only for a mention in a message's text. A notice
+/// drawn as a card that addresses somebody names them beside the card too,
+/// so the turn ending still reaches them. Any other card that names people
+/// only shows them.
+#[tokio::test]
+async fn a_card_addressing_somebody_names_them_where_the_service_notifies() {
+    use crate::session::event::NoticeLevel;
+    use crate::session::views::SessionView;
+
+    let (port, channel) = thread(false);
+    port.observe(&SessionEvent::Notice {
+        text: "<@123456> [done] sonnet | 42s".to_owned(),
+        level: NoticeLevel::Done,
+    })
+    .await
+    .unwrap();
+    port.observe(&SessionEvent::Notice {
+        text: "nobody to tell <@github:octocat>".to_owned(),
+        level: NoticeLevel::Warning,
+    })
+    .await
+    .unwrap();
+    port.observe(&SessionEvent::Post {
+        text: "listed".to_owned(),
+        card: Some(Card {
+            color: CardColor::Ready,
+            title: "host status".to_owned(),
+            description: "- <#1> for <@123456>".to_owned(),
+            fields: Vec::new(),
+            footer: None,
+            pages: Vec::new(),
+        }),
+    })
+    .await
+    .unwrap();
+    port.flush().await;
+
+    assert_eq!(channel.contents(), ["<@123456>", "", "listed"]);
+}
