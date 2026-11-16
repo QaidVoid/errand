@@ -97,6 +97,19 @@ impl ThreadTransport for FakeChannel {
         Box::pin(async { Ok(()) })
     }
 
+    fn edit_card(&self, message_id: String, card: Card, page: usize) -> ServiceCall<()> {
+        if let Some(record) = self
+            .records()
+            .into_iter()
+            .find(|record| record.lock().unwrap().id == message_id)
+        {
+            let mut sent = record.lock().unwrap();
+            sent.edits.push(format!("page {page}"));
+            sent.card = Some(card);
+        }
+        Box::pin(async { Ok(()) })
+    }
+
     fn delete(&self, message_id: String) -> ServiceCall<()> {
         self.deleted.lock().unwrap().push(message_id);
         Box::pin(async { Ok(()) })
@@ -155,6 +168,19 @@ fn thread(forward_tool_output: bool) -> (ChatThread<FakeChannel>, Arc<FakeChanne
         Arc::clone(&channel),
         Logger::new(LogFields::new(), Arc::new(|_level, _line| {})),
         forward_tool_output,
+        false,
+    );
+    (port, channel)
+}
+
+/// A thread that shows the agent's reasoning.
+fn thinking_thread() -> (ChatThread<FakeChannel>, Arc<FakeChannel>) {
+    let channel = FakeChannel::new();
+    let port = ChatThread::new(
+        Arc::clone(&channel),
+        Logger::new(LogFields::new(), Arc::new(|_level, _line| {})),
+        false,
+        true,
     );
     (port, channel)
 }
@@ -810,4 +836,81 @@ fn a_status_the_service_decided_on_is_permanent_and_a_wait_is_not() {
     for status in [399, 500, 502, 503, 599] {
         assert!(!a_service_decision(status), "{status} is not a decision");
     }
+}
+
+/// The agent's reasoning shows where it happened: one card for a run of it,
+/// which the next thing the agent says finishes, so the reply comes after.
+/// Bookkeeping in the middle of a run, which shows nothing, does not cut it.
+#[tokio::test]
+async fn a_run_of_reasoning_is_one_card_finished_by_what_the_agent_does_next() {
+    use crate::session::views::SessionView;
+
+    let (port, channel) = thinking_thread();
+    for event in [
+        SessionEvent::Thinking {
+            text: "The token failed, ".to_owned(),
+        },
+        SessionEvent::BeginTurn { turn: 1 },
+        SessionEvent::Thinking {
+            text: "but the repos are public.".to_owned(),
+        },
+        SessionEvent::Post {
+            text: "Cloning both.".to_owned(),
+            card: None,
+        },
+        SessionEvent::Thinking {
+            text: "Both cloned.".to_owned(),
+        },
+        SessionEvent::Busy { busy: false },
+    ] {
+        port.observe(&event).await.unwrap();
+    }
+    port.flush().await;
+
+    let records = channel.records();
+    let shown: Vec<(String, Option<String>)> = records
+        .iter()
+        .map(|record| {
+            let record = record.lock().unwrap();
+            (
+                record.content.clone(),
+                record.card.as_ref().map(|card| card.title.clone()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (String::new(), Some("reasoning".to_owned())),
+            ("Cloning both.".to_owned(), None),
+            (String::new(), Some("reasoning".to_owned())),
+        ]
+    );
+    let first = records[0].lock().unwrap();
+    assert_eq!(
+        first.card.as_ref().unwrap().description,
+        "The token failed, but the repos are public."
+    );
+}
+
+/// Reasoning is shown only where the operator asked for it.
+#[tokio::test]
+async fn reasoning_is_not_shown_unless_asked_for() {
+    use crate::session::views::SessionView;
+
+    let (port, channel) = thread(false);
+    port.observe(&SessionEvent::Thinking {
+        text: "private musing".to_owned(),
+    })
+    .await
+    .unwrap();
+    port.observe(&SessionEvent::Post {
+        text: "hello".to_owned(),
+        card: None,
+    })
+    .await
+    .unwrap();
+    port.flush().await;
+
+    assert_eq!(channel.contents(), ["hello"]);
 }

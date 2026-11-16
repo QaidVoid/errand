@@ -116,8 +116,9 @@ const KNOWN_INCUS: [&str; 5] = ["project", "image", "golden", "rootSize", "guest
 const KNOWN_SHUTDOWN: [&str; 1] = ["allowedUserIds"];
 const KNOWN_WEB: [&str; 5] = ["host", "port", "observer", "publicUrl", "login"];
 const KNOWN_WEB_LOGIN: [&str; 2] = ["clientId", "clientSecret"];
-const KNOWN_OUTPUT: [&str; 8] = [
+const KNOWN_OUTPUT: [&str; 9] = [
     "forwardToolOutput",
+    "forwardThinking",
     "maxToolOutputChars",
     "maxAttachmentBytes",
     "maxAttachmentsPerMessage",
@@ -1923,6 +1924,13 @@ fn validate_output(raw: &Map<String, Value>, problems: &mut Problems) -> OutputC
             &source,
             "forwardToolOutput",
             schema::defaults::FORWARD_TOOL_OUTPUT,
+            "output",
+            problems,
+        ),
+        forward_thinking: flag(
+            &source,
+            "forwardThinking",
+            schema::defaults::FORWARD_THINKING,
             "output",
             problems,
         ),

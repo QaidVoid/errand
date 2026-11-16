@@ -416,6 +416,10 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
             Value::Bool(defaults::FORWARD_TOOL_OUTPUT),
         ),
         (
+            "output/forwardthinking",
+            Value::Bool(defaults::FORWARD_THINKING),
+        ),
+        (
             "output/maxtooloutputchars",
             serde_json::json!(defaults::MAX_TOOL_OUTPUT_CHARS),
         ),

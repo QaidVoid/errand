@@ -876,6 +876,32 @@ pub fn model_pages(intro: &str, list: &[String]) -> Vec<CardPage> {
         .collect()
 }
 
+/// The most of a reasoning page, below the card body's limit so a page split
+/// inside a fence has room to close and reopen it.
+const THOUGHT_PAGE: usize = 3_500;
+
+/// A run of the agent's reasoning, as a card turned a page at a time.
+///
+/// While the run goes on it says so in its title, and a surface shows its
+/// newest page. Once the agent acts, the run is done, and the title says
+/// what it was.
+pub fn thought_card(text: &str, live: bool) -> Card {
+    let pages = split_message(text.trim(), THOUGHT_PAGE)
+        .into_iter()
+        .map(|description| CardPage {
+            label: String::new(),
+            description,
+            fields: Vec::new(),
+        })
+        .collect();
+    Card::paged(
+        CardColor::Settled,
+        if live { "thinking..." } else { "reasoning" }.to_owned(),
+        pages,
+        None,
+    )
+}
+
 /// The short names that stand for one model, in the order they were written.
 ///
 /// A short name spelled the same as the model teaches nobody anything, so it

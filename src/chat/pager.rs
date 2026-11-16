@@ -58,6 +58,12 @@ impl Pager {
     ///
     /// An ordinary card has nothing to turn, and is not held.
     pub fn hold(&self, message_id: u64, card: &Card) {
+        self.hold_at(message_id, card, 0);
+    }
+
+    /// Remembers `card` as shown by `message_id`, on page `page`. A card held
+    /// again, as one that grows does, starts its hour over.
+    pub fn hold_at(&self, message_id: u64, card: &Card, page: usize) {
         if card.page_count() < 2 {
             return;
         }
@@ -78,7 +84,7 @@ impl Pager {
             message_id,
             Held {
                 card: card.clone(),
-                page: 0,
+                page: page.min(card.page_count() - 1),
                 since: now,
             },
         );

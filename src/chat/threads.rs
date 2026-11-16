@@ -34,7 +34,7 @@ use crate::chat::diff::render_diff;
 use crate::chat::outbox::{DEFAULT_MAX_BUFFERED, Outbox, PermanentFailure, TaskError};
 use crate::chat::pager::{self, Pager};
 use crate::chat::render::{
-    MESSAGE_LIMIT, delegation_line, split_message, split_tables, table_card,
+    MESSAGE_LIMIT, delegation_line, split_message, split_tables, table_card, thought_card,
 };
 use crate::issues::thread::logins_plainly;
 use crate::log::{LogValue, Logger, fields};
@@ -103,6 +103,10 @@ pub trait ThreadTransport: Send + Sync + 'static {
 
     /// Edits a message's text.
     fn edit(&self, message_id: String, content: String) -> ServiceCall<()>;
+
+    /// Redraws a message as page `page` of `card`, with the buttons that turn
+    /// it when it has more than one.
+    fn edit_card(&self, message_id: String, card: Card, page: usize) -> ServiceCall<()>;
 
     /// Deletes a message.
     fn delete(&self, message_id: String) -> ServiceCall<()>;
@@ -341,6 +345,32 @@ impl ThreadTransport for SerenityThread {
         })
     }
 
+    fn edit_card(&self, message_id: String, card: Card, page: usize) -> ServiceCall<()> {
+        let thread_id = self.thread_id;
+        let http = Arc::clone(&self.http);
+        let pager = Arc::clone(&self.pager);
+        let id = match message_id.parse::<u64>() {
+            Ok(id) => id,
+            Err(error) => return parse_failure(error),
+        };
+        Box::pin(async move {
+            let count = card.page_count();
+            let buttons = if count > 1 {
+                pager::buttons(page, count)
+            } else {
+                Vec::new()
+            };
+            let edited = EditMessage::new()
+                .embed(embed(&card.page(page)))
+                .components(buttons);
+            thread_id
+                .edit_message(&http, MessageId::new(id), edited)
+                .await?;
+            pager.hold_at(id, &card, page);
+            Ok(())
+        })
+    }
+
     fn edit(&self, message_id: String, content: String) -> ServiceCall<()> {
         let thread_id = self.thread_id;
         let http = Arc::clone(&self.http);
@@ -459,7 +489,25 @@ struct ThreadState {
     activity_message_id: Option<String>,
     activity_text: String,
     typing: Option<tokio::task::JoinHandle<()>>,
+    /// The run of reasoning being shown, until the agent acts.
+    thought: Option<Thought>,
 }
+
+/// A run of the agent's reasoning, shown in one card that grows as it goes.
+struct Thought {
+    /// The card's message, once it has been posted.
+    message_id: Option<String>,
+    /// Everything reasoned in this run so far.
+    text: String,
+    /// When the card was last drawn, so a fast stream does not outrun the
+    /// service's limit on edits.
+    drawn_at: std::time::Instant,
+}
+
+/// How long a reasoning card waits between redraws while the agent thinks.
+/// The service allows about five edits in five seconds on a channel, and the
+/// thread's other messages need some of them.
+const THOUGHT_REDRAW: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// A thread a session posts to.
 ///
@@ -469,13 +517,20 @@ pub struct ChatThread<T: ThreadTransport> {
     transport: Arc<T>,
     log: Logger,
     forward_tool_output: bool,
+    /// Whether the agent's reasoning is shown as it happens.
+    forward_thinking: bool,
     outbox: Outbox,
     state: Arc<Mutex<ThreadState>>,
 }
 
 impl<T: ThreadTransport> ChatThread<T> {
     /// A thread over `transport`, announcing dropped work to itself.
-    pub fn new(transport: Arc<T>, log: Logger, forward_tool_output: bool) -> Self {
+    pub fn new(
+        transport: Arc<T>,
+        log: Logger,
+        forward_tool_output: bool,
+        forward_thinking: bool,
+    ) -> Self {
         let announcer: Arc<Announce> = {
             let transport = transport.clone();
             Arc::new(move |count| {
@@ -515,10 +570,12 @@ impl<T: ThreadTransport> ChatThread<T> {
             ),
             log,
             forward_tool_output,
+            forward_thinking,
             state: Arc::new(Mutex::new(ThreadState {
                 waiting_message_id: None,
                 reactions: HashMap::new(),
                 activity_message_id: None,
+                thought: None,
                 activity_text: String::new(),
                 typing: None,
             })),
@@ -926,6 +983,104 @@ impl<T: ThreadTransport> ChatThread<T> {
         }
     }
 
+    /// Adds what the agent just reasoned to the card showing this run of it,
+    /// posting the card when the run starts.
+    ///
+    /// The card is redrawn on its newest page at most every
+    /// [`THOUGHT_REDRAW`]; what arrives between redraws is drawn when the run
+    /// is finished. A tool block above the card is over, so the next tool
+    /// line starts a block below it.
+    fn append_thought(&self, text: &str) {
+        let text = text.to_owned();
+        let transport = Arc::clone(&self.transport);
+        let state = Arc::clone(&self.state);
+        self.outbox.enqueue(Box::new(move || {
+            let transport = Arc::clone(&transport);
+            let state = Arc::clone(&state);
+            let text = text.clone();
+            Box::pin(async move {
+                let (message_id, whole, due) = {
+                    let mut state = state.lock().expect("the thread state lock");
+                    let thought = state.thought.get_or_insert_with(|| Thought {
+                        message_id: None,
+                        text: String::new(),
+                        drawn_at: std::time::Instant::now(),
+                    });
+                    thought.text.push_str(&text);
+                    (
+                        thought.message_id.clone(),
+                        thought.text.clone(),
+                        thought.drawn_at.elapsed() >= THOUGHT_REDRAW,
+                    )
+                };
+                let card = thought_card(&whole, true);
+                let drawn = match message_id {
+                    None => {
+                        let sent = transport
+                            .send(Outgoing::with_card(String::new(), card))
+                            .await
+                            .map_err(classified)?;
+                        let mut state = state.lock().expect("the thread state lock");
+                        state.activity_message_id = None;
+                        state.activity_text.clear();
+                        if let Some(thought) = state.thought.as_mut() {
+                            thought.message_id = Some(sent.id);
+                        }
+                        true
+                    }
+                    Some(id) if due => {
+                        let last = card.page_count() - 1;
+                        transport
+                            .edit_card(id, card, last)
+                            .await
+                            .map_err(classified)?;
+                        true
+                    }
+                    Some(_) => false,
+                };
+                if drawn
+                    && let Some(thought) = state
+                        .lock()
+                        .expect("the thread state lock")
+                        .thought
+                        .as_mut()
+                {
+                    thought.drawn_at = std::time::Instant::now();
+                }
+                Ok(())
+            })
+        }));
+    }
+
+    /// Finishes the run of reasoning being shown, when there is one: its card
+    /// is drawn whole, on its last page, and says what it was rather than
+    /// that it is going on.
+    fn close_thought(&self) {
+        let transport = Arc::clone(&self.transport);
+        let state = Arc::clone(&self.state);
+        self.outbox.enqueue(Box::new(move || {
+            let transport = Arc::clone(&transport);
+            let state = Arc::clone(&state);
+            Box::pin(async move {
+                let thought = state.lock().expect("the thread state lock").thought.take();
+                let Some(Thought {
+                    message_id: Some(id),
+                    text,
+                    ..
+                }) = thought
+                else {
+                    return Ok(());
+                };
+                let card = thought_card(&text, false);
+                let last = card.page_count() - 1;
+                transport
+                    .edit_card(id, card, last)
+                    .await
+                    .map_err(classified)
+            })
+        }));
+    }
+
     fn reset_activity(&self) {
         let state = Arc::clone(&self.state);
         self.outbox.enqueue(Box::new(move || {
@@ -946,6 +1101,9 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
         event: &'a SessionEvent,
     ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
         Box::pin(async move {
+            if self.forward_thinking && ends_thought(event) {
+                self.close_thought();
+            }
             match event {
                 // A thread has one voice, so a notice is posted like
                 // anything else; so is a reply, whose command already sits
@@ -1012,10 +1170,14 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
                     from_interface: true,
                     ..
                 } => self.post(&format!("**{author}** via the web:\n{text}")),
+                SessionEvent::Thinking { text } if self.forward_thinking => {
+                    self.append_thought(text);
+                }
                 // Otherwise the prompt is already in the thread, posted by the
-                // person who wrote it; an aside likewise; reasoning is long
-                // and a thread is a conversation; usage is a dashboard thing;
-                // and turn boundaries are plain from the messages themselves.
+                // person who wrote it, and an aside likewise. Reasoning is
+                // shown only where the operator asked for it. Usage is a
+                // dashboard thing, and turn boundaries are plain from the
+                // messages themselves.
                 SessionEvent::Prompt { .. }
                 | SessionEvent::Aside { .. }
                 | SessionEvent::Thinking { .. }
@@ -1027,6 +1189,35 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
             }
             Ok(())
         })
+    }
+}
+
+/// Whether `event` puts something in the thread, which ends the run of
+/// reasoning before it.
+///
+/// Usage and turn bookkeeping arrive in the middle of a run of reasoning and
+/// show nothing, so they leave the run open rather than cut it into pieces.
+fn ends_thought(event: &SessionEvent) -> bool {
+    match event {
+        SessionEvent::Post { .. }
+        | SessionEvent::Reply { .. }
+        | SessionEvent::Notice { .. }
+        | SessionEvent::Question { .. }
+        | SessionEvent::Diff { .. }
+        | SessionEvent::Activity { .. }
+        | SessionEvent::ToolResult { .. }
+        | SessionEvent::Delegation { .. }
+        | SessionEvent::Upload { .. }
+        | SessionEvent::Close { .. } => true,
+        SessionEvent::Busy { busy } => !busy,
+        SessionEvent::Prompt { from_interface, .. }
+        | SessionEvent::Aside { from_interface, .. } => *from_interface,
+        SessionEvent::Thinking { .. }
+        | SessionEvent::Usage { .. }
+        | SessionEvent::BeginTurn { .. }
+        | SessionEvent::Waiting { .. }
+        | SessionEvent::Reaction { .. }
+        | SessionEvent::Attachment { .. } => false,
     }
 }
 
@@ -1056,6 +1247,8 @@ pub struct ChatThreadFactory {
     log: Logger,
     /// Whether a thread shows what tools produced. Off unless configured.
     forward_tool_output: bool,
+    /// Whether a thread shows the agent's reasoning. Off unless configured.
+    forward_thinking: bool,
     /// Whether the gateway is up, which every port it builds follows.
     connection: watch::Receiver<bool>,
     /// Where the paged cards its threads post are remembered.
@@ -1069,6 +1262,7 @@ impl ChatThreadFactory {
         http: Arc<serenity::http::Http>,
         log: Logger,
         forward_tool_output: bool,
+        forward_thinking: bool,
         connection: watch::Receiver<bool>,
         pager: Arc<Pager>,
     ) -> Self {
@@ -1077,6 +1271,7 @@ impl ChatThreadFactory {
             http,
             log,
             forward_tool_output,
+            forward_thinking,
             connection,
             pager,
         }
@@ -1091,6 +1286,7 @@ impl ChatThreadFactory {
             )),
             self.log.clone(),
             self.forward_tool_output,
+            self.forward_thinking,
         );
         thread.follow(self.connection.clone());
         thread

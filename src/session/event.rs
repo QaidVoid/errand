@@ -346,7 +346,11 @@ impl Card {
             return self.clone();
         };
         let number = index.min(self.pages.len() - 1) + 1;
-        let position = format!("page {number} of {}: {}", self.pages.len(), page.label);
+        let position = if page.label.is_empty() {
+            format!("page {number} of {}", self.pages.len())
+        } else {
+            format!("page {number} of {}: {}", self.pages.len(), page.label)
+        };
         Self {
             color: self.color,
             title: self.title.clone(),

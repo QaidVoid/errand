@@ -498,6 +498,10 @@
           "type": "boolean",
           "description": "Whether tool output bodies are posted, not just that a tool ran."
         },
+        "forwardThinking": {
+          "type": "boolean",
+          "description": "Whether a thread shows the agent's reasoning as it happens: a card per run of it, redrawn while the agent thinks and turned a page at a time once it acts. Only for threads started after the daemon reads it."
+        },
         "maxToolOutputChars": {
           "type": "number",
           "description": "Longest tool output posted before it is truncated and marked as such."

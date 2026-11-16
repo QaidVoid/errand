@@ -1253,6 +1253,7 @@ async fn run(
         Arc::clone(&http),
         log.clone(),
         config.output.forward_tool_output,
+        config.output.forward_thinking,
         watching,
         Arc::clone(&pager),
     ));

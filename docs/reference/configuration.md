@@ -206,6 +206,7 @@ How much of the agent's activity reaches the thread.
 | field | type | default | what it does |
 | --- | --- | --- | --- |
 | `forwardToolOutput` | `boolean` | `false` | Whether tool output bodies are posted, not just that a tool ran. |
+| `forwardThinking` | `boolean` | `false` | Whether a thread shows the agent's reasoning as it happens: a card per run of it, redrawn while the agent thinks and turned a page at a time once it acts. Only for threads started after the daemon reads it. |
 | `maxToolOutputChars` | `number` | `1500` | Longest tool output posted before it is truncated and marked as such. |
 | `maxAttachmentBytes` | `number` | `5242880` | Largest attached file taken into a session, in bytes. |
 | `maxAttachmentsPerMessage` | `number` | `4` | Most attached files taken from one message. The rest are refused. |

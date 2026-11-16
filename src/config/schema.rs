@@ -673,6 +673,10 @@ pub struct ShutdownConfig {
 pub struct OutputConfig {
     /// Whether tool output bodies are posted, not just that a tool ran.
     pub forward_tool_output: bool,
+    /// Whether a thread shows the agent's reasoning as it happens: a card per
+    /// run of it, redrawn while the agent thinks and turned a page at a time
+    /// once it acts. Only for threads started after the daemon reads it.
+    pub forward_thinking: bool,
     /// Longest tool output posted before it is truncated and marked as such.
     pub max_tool_output_chars: usize,
     /// Largest attached file taken into a session, in bytes.
@@ -907,6 +911,8 @@ pub mod defaults {
 
     /// Whether tool output bodies are posted.
     pub const FORWARD_TOOL_OUTPUT: bool = false;
+    /// Whether threads show the agent's reasoning.
+    pub const FORWARD_THINKING: bool = false;
     /// Longest tool output posted before it is truncated.
     pub const MAX_TOOL_OUTPUT_CHARS: usize = 1_500;
     /// Largest attached file taken into a session.
