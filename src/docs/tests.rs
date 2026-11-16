@@ -27,6 +27,46 @@ fn the_schema_is_read_into_every_documented_section() {
     }
 }
 
+/// A pipe ends a markdown table cell even inside a code span, so a row
+/// with one unescaped in a cell splits into more cells than its header,
+/// and a `<word>` pushed out of its backticks stops the site from building.
+/// Every row of every generated table has as many cells as its header.
+#[test]
+fn every_table_row_has_as_many_cells_as_its_header() {
+    let cells = |line: &str| {
+        let mut count = 0;
+        let mut escaped = false;
+        for character in line.chars() {
+            match character {
+                '\\' if !escaped => escaped = true,
+                '|' if !escaped => count += 1,
+                _ => escaped = false,
+            }
+        }
+        count
+    };
+    for (path, page) in super::pages(&schema()) {
+        if std::path::Path::new(&path)
+            .extension()
+            .is_none_or(|extension| extension != "md")
+        {
+            continue;
+        }
+        let mut header = None;
+        for line in page.lines() {
+            if !line.starts_with('|') {
+                header = None;
+                continue;
+            }
+            let width = cells(line);
+            match header {
+                None => header = Some(width),
+                Some(expected) => assert_eq!(width, expected, "{path}: {line}"),
+            }
+        }
+    }
+}
+
 #[test]
 fn every_command_appears_in_the_command_page() {
     let page = commands_page();
@@ -35,8 +75,9 @@ fn every_command_appears_in_the_command_page() {
         let spelled = meta
             .argument
             .map_or_else(|| name.to_string(), |argument| format!("{name} {argument}"));
+        let written = spelled.replace('|', "\\|");
         assert!(
-            page.contains(&format!("| `{spelled}` |")),
+            page.contains(&format!("| `{written}` |")),
             "{spelled} is missing"
         );
     }

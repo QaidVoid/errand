@@ -588,8 +588,11 @@ pub fn configuration_page(
             };
             let _ = writeln!(
                 out,
-                "| `{}` | `{shown}` | {stands} | {} |",
-                field.name, field.says
+                "| `{}` | `{}` | {} | {} |",
+                cell(&field.name),
+                cell(&shown),
+                cell(&stands),
+                cell(&field.says)
             );
         }
         out.push('\n');
@@ -774,15 +777,26 @@ pub fn commands_page() -> String {
                 .map_or_else(|| name.to_string(), |argument| format!("{name} {argument}"));
             let _ = writeln!(
                 out,
-                "| `{spelled}` | {} | {} |",
-                access(meta.access),
-                meta.summary
+                "| `{}` | {} | {} |",
+                cell(&spelled),
+                cell(access(meta.access)),
+                cell(meta.summary)
             );
         }
         out.push('\n');
     }
 
     out
+}
+
+/// Text made safe for one cell of a markdown table.
+///
+/// A pipe ends a cell even inside a code span, so `[now|<wait>]` would split
+/// into two cells and leave `<wait>` outside its backticks, where the site
+/// reads it as an unclosed tag and fails to build. Escaped, it stays one cell
+/// and renders as the pipe it is.
+fn cell(text: &str) -> String {
+    text.replace('|', "\\|")
 }
 
 /// The character table, which is the whole set this system may emit.
@@ -826,9 +840,9 @@ pub fn characters_page() -> String {
         let _ = writeln!(
             out,
             "| {} | {} | {} |",
-            glyph_of(entry.codepoints),
-            entry.name,
-            entry.meaning
+            cell(&glyph_of(entry.codepoints)),
+            cell(entry.name),
+            cell(entry.meaning)
         );
     }
 
@@ -841,9 +855,9 @@ pub fn characters_page() -> String {
         let _ = writeln!(
             out,
             "| {} | {} | {} |",
-            glyph_of(entry.codepoints),
-            entry.name,
-            entry.meaning
+            cell(&glyph_of(entry.codepoints)),
+            cell(entry.name),
+            cell(entry.meaning)
         );
     }
     let _ = writeln!(out, "\nIn total {} characters.\n", all_chars().len());
