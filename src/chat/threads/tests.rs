@@ -914,3 +914,64 @@ async fn reasoning_is_not_shown_unless_asked_for() {
 
     assert_eq!(channel.contents(), ["hello"]);
 }
+
+/// An answer that arrives a paragraph at a time grows one message rather
+/// than posting one per paragraph, and the agent doing something else
+/// finishes it, so what it says next starts a message of its own below.
+#[tokio::test]
+async fn an_answer_arriving_in_paragraphs_grows_one_message() {
+    use crate::session::views::SessionView;
+
+    let (port, channel) = thread(false);
+    for event in [
+        SessionEvent::Post {
+            text: "First.\n\n".to_owned(),
+            card: None,
+        },
+        SessionEvent::Post {
+            text: "Second.".to_owned(),
+            card: None,
+        },
+        SessionEvent::Activity {
+            line: "read src/main.rs".to_owned(),
+            tool: None,
+        },
+        SessionEvent::Post {
+            text: "After the tool.".to_owned(),
+            card: None,
+        },
+        SessionEvent::Busy { busy: false },
+    ] {
+        port.observe(&event).await.unwrap();
+    }
+    port.flush().await;
+
+    assert_eq!(
+        channel.contents(),
+        ["First.\n\nSecond.", "read src/main.rs", "After the tool."]
+    );
+}
+
+/// A message holds only so much, so an answer that outgrows one carries on
+/// in the next, in order.
+#[tokio::test]
+async fn an_answer_longer_than_a_message_carries_on_in_the_next() {
+    use crate::session::views::SessionView;
+
+    let (port, channel) = thread(false);
+    let paragraph = "x".repeat(1_500);
+    for _ in 0..2 {
+        port.observe(&SessionEvent::Post {
+            text: paragraph.clone(),
+            card: None,
+        })
+        .await
+        .unwrap();
+    }
+    port.observe(&SessionEvent::Busy { busy: false })
+        .await
+        .unwrap();
+    port.flush().await;
+
+    assert_eq!(channel.contents(), [paragraph.clone(), paragraph]);
+}

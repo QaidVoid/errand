@@ -249,6 +249,33 @@ pub(crate) struct PendingDialog {
     pub(crate) timer: tokio::task::JoinHandle<()>,
 }
 
+/// Splits an open run at its last paragraph break outside a code fence:
+/// the settled paragraphs before it, when there are any, and the rest, which
+/// stays open.
+fn split_settled(text: String, span: fn(String) -> SpeechSpan) -> (Option<SpeechSpan>, SpeechSpan) {
+    let mut fenced = false;
+    let mut cut = None;
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        }
+        at += line.len();
+        if !fenced && line.trim().is_empty() && at > line.len() {
+            cut = Some(at);
+        }
+    }
+    match cut {
+        Some(cut) if cut < text.len() => {
+            let rest = text[cut..].to_owned();
+            let mut settled = text;
+            settled.truncate(cut);
+            (Some(span(settled)), span(rest))
+        }
+        _ => (None, span(text)),
+    }
+}
+
 /// One run of buffered speech: reasoning or an answer, as it arrived.
 /// Adjacent runs of the same kind merge on the flush; alternating kinds
 /// keep their order.
@@ -1190,17 +1217,48 @@ impl Shared {
     }
 
     /// Buffers a span of assistant text. The agent streams a span a
-    /// fragment at a time, and the thread wants whole messages, so the
-    /// span is assembled here and reported once it ends: when a tool,
-    /// a thought, or the turn itself follows it.
+    /// fragment at a time, and a thread reads whole paragraphs, so the span
+    /// is assembled here and reported a paragraph at a time as it grows, and
+    /// whole once it ends: when a tool, a thought, or the turn itself
+    /// follows it.
     fn apply_text(&self, text: &str) {
-        let mut state = self.state.lock().expect("the client lock");
-        if !text.trim().is_empty() {
-            state.produced_text = true;
+        {
+            let mut state = self.state.lock().expect("the client lock");
+            if !text.trim().is_empty() {
+                state.produced_text = true;
+            }
+            match state.speech.last_mut() {
+                Some(SpeechSpan::Text(joined)) => joined.push_str(text),
+                _ => state.speech.push(SpeechSpan::Text(text.to_owned())),
+            }
         }
-        match state.speech.last_mut() {
-            Some(SpeechSpan::Text(joined)) => joined.push_str(text),
-            _ => state.speech.push(SpeechSpan::Text(text.to_owned())),
+        self.release_paragraphs();
+    }
+
+    /// Reports what of the buffered speech is settled: every run already
+    /// followed by another, and the paragraphs of the open run before its
+    /// last paragraph break. A break inside a code fence is not one, so a
+    /// fence is never reported in halves.
+    fn release_paragraphs(&self) {
+        let released = {
+            let mut state = self.state.lock().expect("the client lock");
+            let open = state.speech.pop();
+            let mut released = std::mem::take(&mut state.speech);
+            if let Some(open) = open {
+                let (whole, kept) = match open {
+                    SpeechSpan::Text(text) => split_settled(text, SpeechSpan::Text),
+                    SpeechSpan::Thought(text) => split_settled(text, SpeechSpan::Thought),
+                };
+                released.extend(whole);
+                state.speech.push(kept);
+            }
+            released
+        };
+        for span in released {
+            match span {
+                SpeechSpan::Thought(text) => self.report_thought(&text),
+                SpeechSpan::Text(text) => self.report_text(&text),
+            }
         }
     }
 
@@ -1220,6 +1278,7 @@ impl Shared {
         if report && let Some(on_thinking) = &self.handlers.on_thinking {
             on_thinking(());
         }
+        self.release_paragraphs();
     }
 
     /// Reports the buffered speech: each run of reasoning, then each run

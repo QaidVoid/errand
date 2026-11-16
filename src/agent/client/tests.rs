@@ -662,6 +662,52 @@ async fn text_fragments_are_reported_as_one_message_when_the_span_ends() {
     setup.finish().await;
 }
 
+/// A long answer is reported a paragraph at a time as it streams, so a
+/// thread can show it growing, but a blank line inside a code fence is not
+/// a paragraph break and the fence arrives whole.
+#[tokio::test(start_paused = true)]
+async fn settled_paragraphs_are_reported_before_the_span_ends_but_a_fence_is_kept_whole() {
+    let said: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let text_seen = Arc::clone(&said);
+    let setup = client(
+        AgentHandlers {
+            on_assistant_text: Some(Box::new(move |text: String| {
+                text_seen.lock().unwrap().push(text);
+            })),
+            ..AgentHandlers::default()
+        },
+        300_000,
+    );
+
+    setup
+        .controls
+        .send(&text_chunk("First paragraph.\n\nSecond"));
+    settle().await;
+    assert_eq!(
+        *said.lock().unwrap(),
+        vec!["First paragraph.\n\n".to_owned()]
+    );
+
+    setup
+        .controls
+        .send(&text_chunk(" one.\n```\nlet a = 1;\n\nlet b = 2;\n"));
+    settle().await;
+    assert_eq!(said.lock().unwrap().len(), 1, "the fence is still open");
+
+    setup.controls.send(&text_chunk("```\n\nDone."));
+    setup.controls.send(&turn_end());
+    settle().await;
+    assert_eq!(
+        *said.lock().unwrap(),
+        vec![
+            "First paragraph.\n\n".to_owned(),
+            "Second one.\n```\nlet a = 1;\n\nlet b = 2;\n```\n\n".to_owned(),
+            "Done.".to_owned(),
+        ]
+    );
+    setup.finish().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_whitespace_only_fragment_is_kept_between_words() {
     let said: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));

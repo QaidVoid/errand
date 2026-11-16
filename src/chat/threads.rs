@@ -490,24 +490,42 @@ struct ThreadState {
     activity_text: String,
     typing: Option<tokio::task::JoinHandle<()>>,
     /// The run of reasoning being shown, until the agent acts.
-    thought: Option<Thought>,
+    thought: Option<Live>,
+    /// The answer being shown as it is written, until the agent does
+    /// something else.
+    speech: Option<Live>,
 }
 
-/// A run of the agent's reasoning, shown in one card that grows as it goes.
-struct Thought {
-    /// The card's message, once it has been posted.
+/// One message that grows as the agent goes: a run of its reasoning, or of
+/// its answer.
+struct Live {
+    /// The message, once it has been posted.
     message_id: Option<String>,
-    /// Everything reasoned in this run so far.
+    /// Everything in this run so far.
     text: String,
-    /// When the card was last drawn, so a fast stream does not outrun the
+    /// What the message last showed, so a finished run is redrawn only when
+    /// it has grown since.
+    shown: String,
+    /// When the message was last drawn, so a fast stream does not outrun the
     /// service's limit on edits.
     drawn_at: std::time::Instant,
 }
 
-/// How long a reasoning card waits between redraws while the agent thinks.
-/// The service allows about five edits in five seconds on a channel, and the
-/// thread's other messages need some of them.
-const THOUGHT_REDRAW: std::time::Duration = std::time::Duration::from_secs(3);
+impl Live {
+    fn new() -> Self {
+        Self {
+            message_id: None,
+            text: String::new(),
+            shown: String::new(),
+            drawn_at: std::time::Instant::now(),
+        }
+    }
+}
+
+/// How long a growing message waits between redraws. The service allows
+/// about five edits in five seconds on a channel, and the thread's other
+/// messages need some of them.
+const LIVE_REDRAW: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// A thread a session posts to.
 ///
@@ -576,6 +594,7 @@ impl<T: ThreadTransport> ChatThread<T> {
                 reactions: HashMap::new(),
                 activity_message_id: None,
                 thought: None,
+                speech: None,
                 activity_text: String::new(),
                 typing: None,
             })),
@@ -987,7 +1006,7 @@ impl<T: ThreadTransport> ChatThread<T> {
     /// posting the card when the run starts.
     ///
     /// The card is redrawn on its newest page at most every
-    /// [`THOUGHT_REDRAW`]; what arrives between redraws is drawn when the run
+    /// [`LIVE_REDRAW`]; what arrives between redraws is drawn when the run
     /// is finished. A tool block above the card is over, so the next tool
     /// line starts a block below it.
     fn append_thought(&self, text: &str) {
@@ -1001,16 +1020,12 @@ impl<T: ThreadTransport> ChatThread<T> {
             Box::pin(async move {
                 let (message_id, whole, due) = {
                     let mut state = state.lock().expect("the thread state lock");
-                    let thought = state.thought.get_or_insert_with(|| Thought {
-                        message_id: None,
-                        text: String::new(),
-                        drawn_at: std::time::Instant::now(),
-                    });
+                    let thought = state.thought.get_or_insert_with(Live::new);
                     thought.text.push_str(&text);
                     (
                         thought.message_id.clone(),
                         thought.text.clone(),
-                        thought.drawn_at.elapsed() >= THOUGHT_REDRAW,
+                        thought.drawn_at.elapsed() >= LIVE_REDRAW,
                     )
                 };
                 let card = thought_card(&whole, true);
@@ -1063,7 +1078,7 @@ impl<T: ThreadTransport> ChatThread<T> {
             let state = Arc::clone(&state);
             Box::pin(async move {
                 let thought = state.lock().expect("the thread state lock").thought.take();
-                let Some(Thought {
+                let Some(Live {
                     message_id: Some(id),
                     text,
                     ..
@@ -1077,6 +1092,109 @@ impl<T: ThreadTransport> ChatThread<T> {
                     .edit_card(id, card, last)
                     .await
                     .map_err(classified)
+            })
+        }));
+    }
+
+    /// Adds a paragraph of the answer to the message showing it as it is
+    /// written, posting the message when the answer starts.
+    ///
+    /// The message is redrawn at most every [`LIVE_REDRAW`]. A paragraph that
+    /// would take it past one message's length finishes it and starts the
+    /// next, so an answer of any length reads in order, a message at a time.
+    fn append_speech(&self, paragraph: &str) {
+        let paragraph = paragraph.trim().to_owned();
+        if paragraph.is_empty() {
+            return;
+        }
+        let transport = Arc::clone(&self.transport);
+        let state = Arc::clone(&self.state);
+        self.outbox.enqueue(Box::new(move || {
+            let transport = Arc::clone(&transport);
+            let state = Arc::clone(&state);
+            let paragraph = paragraph.clone();
+            Box::pin(async move {
+                let run = async {
+                    let (finished, message_id, whole, due) = {
+                        let mut state = state.lock().expect("the thread state lock");
+                        let speech = state.speech.get_or_insert_with(Live::new);
+                        let joined = if speech.text.is_empty() {
+                            paragraph.clone()
+                        } else {
+                            format!("{}\n\n{paragraph}", speech.text)
+                        };
+                        let finished = if joined.encode_utf16().count() > MESSAGE_LIMIT
+                            && !speech.text.is_empty()
+                        {
+                            let full = std::mem::replace(speech, Live::new());
+                            speech.text.clone_from(&paragraph);
+                            Some(full)
+                        } else {
+                            speech.text = joined;
+                            None
+                        };
+                        (
+                            finished,
+                            speech.message_id.clone(),
+                            speech.text.clone(),
+                            speech.drawn_at.elapsed() >= LIVE_REDRAW,
+                        )
+                    };
+                    if let Some(full) = finished {
+                        finish_speech(&*transport, full).await?;
+                    }
+                    match message_id {
+                        None => {
+                            // One paragraph can be longer than a message on
+                            // its own. It is split, and the run carries on in
+                            // the last piece.
+                            let pieces = split_message(&whole, MESSAGE_LIMIT);
+                            let mut last = None;
+                            for piece in &pieces {
+                                last = Some(transport.send(Outgoing::plain(piece.clone())).await?);
+                            }
+                            let mut state = state.lock().expect("the thread state lock");
+                            state.activity_message_id = None;
+                            state.activity_text.clear();
+                            if let Some(speech) = state.speech.as_mut() {
+                                speech.message_id = last.map(|sent| sent.id);
+                                speech.text = pieces.last().cloned().unwrap_or_default();
+                                speech.shown.clone_from(&speech.text);
+                                speech.drawn_at = std::time::Instant::now();
+                            }
+                        }
+                        Some(id) if due => {
+                            transport.edit(id, whole.clone()).await?;
+                            if let Some(speech) =
+                                state.lock().expect("the thread state lock").speech.as_mut()
+                            {
+                                speech.shown = whole;
+                                speech.drawn_at = std::time::Instant::now();
+                            }
+                        }
+                        Some(_) => {}
+                    }
+                    Ok(())
+                };
+                run.await.map_err(classified)
+            })
+        }));
+    }
+
+    /// Finishes the answer being shown, when there is one, drawing whatever
+    /// it grew since it was last drawn.
+    fn close_speech(&self) {
+        let transport = Arc::clone(&self.transport);
+        let state = Arc::clone(&self.state);
+        self.outbox.enqueue(Box::new(move || {
+            let transport = Arc::clone(&transport);
+            let state = Arc::clone(&state);
+            Box::pin(async move {
+                let speech = state.lock().expect("the thread state lock").speech.take();
+                match speech {
+                    Some(speech) => finish_speech(&*transport, speech).await.map_err(classified),
+                    None => Ok(()),
+                }
             })
         }));
     }
@@ -1103,6 +1221,15 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
         Box::pin(async move {
             if self.forward_thinking && ends_thought(event) {
                 self.close_thought();
+            }
+            let spoken = spoken_paragraph(event);
+            let thinks = matches!(event, SessionEvent::Thinking { .. }) && self.forward_thinking;
+            if spoken.is_none() && (ends_thought(event) || thinks) {
+                self.close_speech();
+            }
+            if let Some(paragraph) = spoken {
+                self.append_speech(paragraph);
+                return Ok(());
             }
             match event {
                 // A thread has one voice, so a notice is posted like
@@ -1189,6 +1316,28 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
             }
             Ok(())
         })
+    }
+}
+
+/// The paragraph of answer `event` carries, when it is one that grows the
+/// message showing the answer: plain words, with no card and no table that
+/// would draw as one.
+fn spoken_paragraph(event: &SessionEvent) -> Option<&str> {
+    let SessionEvent::Post { text, card: None } = event else {
+        return None;
+    };
+    let pieces = split_tables(text);
+    (pieces.len() == 1 && pieces[0].1.is_none()).then_some(text.as_str())
+}
+
+/// Draws a finished run of answer, when it grew since it was last drawn.
+async fn finish_speech<T: ThreadTransport + ?Sized>(
+    transport: &T,
+    speech: Live,
+) -> Result<(), ServiceError> {
+    match speech.message_id {
+        Some(id) if speech.text != speech.shown => transport.edit(id, speech.text).await,
+        _ => Ok(()),
     }
 }
 

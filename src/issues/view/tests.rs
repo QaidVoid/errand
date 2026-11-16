@@ -97,6 +97,45 @@ async fn the_issue_is_told_only_what_the_turn_came_to() {
     );
 }
 
+/// An answer arrives a paragraph at a time. The issue is told the whole of
+/// the last one, and paragraphs said before the agent last acted are not
+/// part of it.
+#[tokio::test]
+async fn the_issue_is_told_the_whole_last_answer_however_it_arrived() {
+    let (api, posted) = api();
+    let view = threads(api)
+        .view_for("github:Acme/widgets#7")
+        .expect("an issue");
+
+    for event in [
+        SessionEvent::Post {
+            text: "Looking first.\n\n".to_owned(),
+            card: None,
+        },
+        SessionEvent::Activity {
+            line: "read src/parse.rs".to_owned(),
+            tool: None,
+        },
+        SessionEvent::Post {
+            text: "Fixed the parser.\n\n".to_owned(),
+            card: None,
+        },
+        SessionEvent::Post {
+            text: "It now reads empty input.".to_owned(),
+            card: None,
+        },
+        SessionEvent::Busy { busy: false },
+    ] {
+        view.observe(&event).await.expect("observed");
+    }
+
+    let posted = posted.lock().unwrap();
+    assert_eq!(
+        posted[0].1["body"],
+        "Fixed the parser.\n\nIt now reads empty input."
+    );
+}
+
 /// A turn that failed before saying anything still tells the issue why, so
 /// whoever asked there is not left waiting.
 #[tokio::test]

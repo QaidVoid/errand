@@ -68,6 +68,10 @@ pub struct IssueView {
 struct Turn {
     /// The agent's latest message, which is its answer once the turn ends.
     answer: Option<String>,
+    /// Whether the latest message is still being said: it arrives a
+    /// paragraph at a time, and the next paragraph belongs to it until the
+    /// agent does something else.
+    speaking: bool,
     /// Why the turn failed, for a turn that said nothing.
     failure: Option<String>,
 }
@@ -127,8 +131,28 @@ impl SessionView for IssueView {
     ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
         Box::pin(async move {
             match event {
-                SessionEvent::Post { text, .. } | SessionEvent::Question { text, .. } => {
-                    self.turn.lock().expect("the issue turn lock").answer = Some(text.clone());
+                SessionEvent::Post { text, .. } => {
+                    let mut turn = self.turn.lock().expect("the issue turn lock");
+                    turn.answer = Some(match turn.answer.take() {
+                        Some(said) if turn.speaking => {
+                            format!("{}\n\n{}", said.trim_end(), text.trim())
+                        }
+                        _ => text.trim().to_owned(),
+                    });
+                    turn.speaking = true;
+                }
+                SessionEvent::Question { text, .. } => {
+                    let mut turn = self.turn.lock().expect("the issue turn lock");
+                    turn.answer = Some(text.clone());
+                    turn.speaking = false;
+                }
+                SessionEvent::Activity { .. }
+                | SessionEvent::ToolResult { .. }
+                | SessionEvent::Diff { .. }
+                | SessionEvent::Delegation { .. }
+                | SessionEvent::Upload { .. }
+                | SessionEvent::Reply { .. } => {
+                    self.turn.lock().expect("the issue turn lock").speaking = false;
                 }
                 SessionEvent::Notice {
                     text,
