@@ -1372,9 +1372,12 @@ async fn run(
                 message: IncomingMessage,
                 name: String,
             ) -> Pin<Box<dyn Future<Output = Result<CreatedThread, String>> + Send>> {
-                let starter = serenity::model::id::MessageId::new(message.id.parse().unwrap_or(0));
+                let starter = reply_to(&message);
                 let factory = Arc::clone(&self.0);
                 Box::pin(async move {
+                    let starter = starter.ok_or_else(|| {
+                        "the message has no id a thread could be started from".to_owned()
+                    })?;
                     let (id, thread) = factory.create(starter, &name).await?;
                     Ok(CreatedThread {
                         id,
@@ -1947,13 +1950,12 @@ async fn reply_in_channel(
     // A thread cannot hang a thread off itself, so a long answer is only
     // moved out of the way when the answer is going to the channel.
     let may_open_thread = channel_id == served;
-    let starter = channel_id
-        .message(
-            http,
-            serenity::model::id::MessageId::new(message.id.parse().unwrap_or(0)),
-        )
-        .await
-        .ok();
+    // A notice the daemon posts of its own accord answers no message, and has
+    // no id to fetch.
+    let starter = match reply_to(message) {
+        Some(id) => channel_id.message(http, id).await.ok(),
+        None => None,
+    };
 
     let said = |error: serenity::Error| {
         log.warn(
