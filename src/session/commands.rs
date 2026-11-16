@@ -353,6 +353,15 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
             argument: Some("[now|<wait>]"),
         },
     ),
+    (
+        "!gc",
+        CommandMeta {
+            access: Operator,
+            group: You,
+            summary: "collect cold sessions now, as retention says",
+            argument: None,
+        },
+    ),
 ];
 
 /// What marks a message the agent is never told about.

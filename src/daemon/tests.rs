@@ -2925,3 +2925,49 @@ async fn a_session_the_daemon_may_not_delete_is_emptied_as_the_guest_and_collect
     )
     .await;
 }
+
+/// `!gc` is the same sweep, asked for now, and only by an operator.
+#[tokio::test]
+async fn only_an_operator_may_collect_and_is_told_what_was_collected() {
+    let mut settings = operated();
+    settings["retention"] = json!({ "olderThan": "3d" });
+    with_daemon(
+        DaemonCase {
+            settings: Some(settings),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("go"), InboundDecision::Start)
+                    .await;
+                age_session(harness, "thread-1").await;
+
+                harness
+                    .daemon
+                    .handle(
+                        raw_with("!gc", "m2", "100000000000000002"),
+                        InboundDecision::Start,
+                    )
+                    .await;
+                assert!(harness.said().contains("only an operator"));
+
+                harness
+                    .daemon
+                    .handle(raw_with("!gc", "m3", OWNER), InboundDecision::Start)
+                    .await;
+                let card = harness.cards().pop().expect("a card");
+                assert_eq!(card.title, "collected");
+                assert_eq!(card.fields[0].value, "1");
+
+                harness
+                    .daemon
+                    .handle(raw_with("!gc", "m4", OWNER), InboundDecision::Start)
+                    .await;
+                assert_eq!(harness.cards().pop().unwrap().title, "nothing to collect");
+            })
+        },
+    )
+    .await;
+}

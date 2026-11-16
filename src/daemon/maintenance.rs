@@ -1,5 +1,6 @@
-//! Maintenance: draining the daemon so its binary can be replaced, and the
-//! note a restart leaves for the daemon that comes up after it.
+//! Maintenance: draining the daemon so its binary can be replaced, the note
+//! a restart leaves for the daemon that comes up after it, and what a sweep
+//! for cold sessions asked for by hand says it did.
 //!
 //! A restart loses only the turns running and the prompts waiting when it
 //! happens. A session's history and workspace outlive it, so a drain waits
@@ -12,6 +13,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::config::duration::parse_duration;
+use crate::session::disk::human_size;
 use crate::session::event::{Card, CardColor, CardField};
 
 /// The file a restart leaves in the state directory.
@@ -253,6 +255,65 @@ pub fn dropped_card() -> Card {
                       did not run. Send it again."
             .to_owned(),
         fields: Vec::new(),
+        footer: None,
+    }
+}
+
+/// The most kept sessions a collection card names; the log names them all.
+const KEPT_SHOWN: usize = 10;
+
+/// The most of one reason a collection card shows, so a long path cannot
+/// push the card past what the service takes.
+const REASON_SHOWN: usize = 200;
+
+/// What a sweep for cold sessions collected and what it kept.
+pub fn collection_card(collection: &super::Collection) -> Card {
+    let mut lines: Vec<String> = collection
+        .kept
+        .iter()
+        .take(KEPT_SHOWN)
+        .map(|(thread_id, why)| {
+            let why: String = why.chars().take(REASON_SHOWN).collect();
+            format!("- <#{thread_id}>: {why}")
+        })
+        .collect();
+    if collection.kept.len() > KEPT_SHOWN {
+        lines.push(format!(
+            "- and {} more, named in the log",
+            collection.kept.len() - KEPT_SHOWN
+        ));
+    }
+    let quiet = collection.collected == 0 && collection.kept.is_empty();
+    Card {
+        color: if collection.kept.is_empty() {
+            CardColor::Ready
+        } else {
+            CardColor::Warning
+        },
+        title: if quiet {
+            "nothing to collect".to_owned()
+        } else {
+            "collected".to_owned()
+        },
+        description: lines.join("\n"),
+        fields: if quiet {
+            Vec::new()
+        } else {
+            vec![
+                CardField {
+                    name: "collected".to_owned(),
+                    value: collection.collected.to_string(),
+                },
+                CardField {
+                    name: "freed".to_owned(),
+                    value: human_size(collection.freed),
+                },
+                CardField {
+                    name: "kept".to_owned(),
+                    value: collection.kept.len().to_string(),
+                },
+            ]
+        },
         footer: None,
     }
 }

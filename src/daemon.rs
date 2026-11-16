@@ -875,6 +875,33 @@ impl Daemon {
         }
     }
 
+    /// Collects cold sessions now, for an operator, and says what it did.
+    ///
+    /// The same sweep the daemon runs every `retention.every`, so it is safe
+    /// while sessions run: a live session, or one used since the sweep began,
+    /// is left whole.
+    async fn collect_on_request(&self, content: &str, author_id: &str) -> Option<Answer> {
+        if first_word(content) != "!gc" {
+            return None;
+        }
+        if !self.is_operator(author_id) {
+            return Some(Answer::Card(maintenance::refused_card(
+                "only an operator may use `!gc`",
+            )));
+        }
+        if !self.options.config.get().retention.enabled {
+            return Some(Answer::Card(maintenance::refused_card(
+                "retention.enabled is false, so nothing is collected",
+            )));
+        }
+        self.options.log.info(
+            "collecting cold sessions on request",
+            &fields([("user", LogValue::from(author_id))]),
+        );
+        let collection = self.collect_cold().await;
+        Some(Answer::Card(maintenance::collection_card(&collection)))
+    }
+
     /// Whatever the daemon answers itself, wherever it was typed.
     async fn answer_as_daemon(
         &self,
@@ -882,6 +909,9 @@ impl Daemon {
         author_id: &str,
         in_thread: bool,
     ) -> Option<Answer> {
+        if let Some(answer) = self.collect_on_request(content, author_id).await {
+            return Some(answer);
+        }
         if let Some(answer) = self.power_off_host(content, author_id).await {
             return Some(Answer::Text(answer));
         }

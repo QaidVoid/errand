@@ -6,6 +6,26 @@
 
 use std::path::PathBuf;
 
+/// A size in bytes as a person reads it, such as `73.3G`.
+pub fn human_size(bytes: u64) -> String {
+    let units = ["B", "K", "M", "G", "T"];
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a directory that would lose precision past 52 bits is terabytes, and the drift is the same one the TypeScript table showed"
+    )]
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < units.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{}{}", bytes, units[unit])
+    } else {
+        format!("{size:.1}{}", units[unit])
+    }
+}
+
 /// Bytes held under a directory, following no symlink.
 ///
 /// A link is counted as the link rather than as what it points at, so a

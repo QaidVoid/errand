@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use crate::config::duration::parse_duration;
 use crate::sandbox::broker::receipts::{Outcome, Receipt};
 use crate::session::collect::{Sweep, cold_sessions, collect, owns_project};
+use crate::session::disk::human_size;
 use crate::session::registry::{ThreadRecord, ThreadRegistry};
 
 /// Where the project a session worked in is read from the policy it kept.
@@ -92,25 +93,6 @@ usage: errand threads <command>
      [--dry-run]       configured), needs the daemon stopped unless --dry-run;
      [--unindexed]     --unindexed also takes state the index no longer names
   revive <session>     put a forgotten thread back, needs --thread and --owner";
-
-fn human_size(bytes: u64) -> String {
-    let units = ["B", "K", "M", "G", "T"];
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a directory that would lose precision past 52 bits is terabytes, and the drift is the same one the TypeScript table showed"
-    )]
-    let mut size = bytes as f64;
-    let mut unit = 0;
-    while size >= 1024.0 && unit < units.len() - 1 {
-        size /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{}{}", bytes, units[unit])
-    } else {
-        format!("{size:.1}{}", units[unit])
-    }
-}
 
 fn ago(at: i64, now: i64) -> String {
     let seconds = (now - at).div_euclid(1000).max(0);
