@@ -6,7 +6,8 @@ use std::sync::Mutex;
 use serde_json::{Value, json};
 
 use super::{
-    Drawn, Endpoint, ImageError, Post, Request, Response, decode_base64, draw, endpoint_with_effort,
+    Drawn, Endpoint, ImageError, Post, Request, Response, decode_base64, draw,
+    endpoint_with_effort, image_mime,
 };
 use crate::provider::models::AvailableModel;
 
@@ -767,4 +768,21 @@ fn image_captions_cannot_carry_mentions_or_escape_the_model_span() {
         "{}",
         picture.caption
     );
+}
+
+/// The type a picture is sent under is read from its bytes, and only the
+/// types a model takes are named; anything else is not a picture to it.
+#[test]
+fn a_pictures_type_is_read_from_its_bytes() {
+    assert_eq!(
+        image_mime(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0]),
+        Some("image/png")
+    );
+    assert_eq!(image_mime(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
+    assert_eq!(image_mime(b"GIF89a..."), Some("image/gif"));
+    assert_eq!(image_mime(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+    assert_eq!(image_mime(b"RIFF\0\0\0\0WAVEfmt "), None);
+    assert_eq!(image_mime(b"\0\0\0\x1cftypavif"), None);
+    assert_eq!(image_mime(b"<svg xmlns="), None);
+    assert_eq!(image_mime(&[0x89, b'P', b'N', b'G']), None);
 }

@@ -1,4 +1,4 @@
-use super::{ATTACHMENTS_DIR, Limits, RawAttachment, is_image, receive};
+use super::{ATTACHMENTS_DIR, Limits, RawAttachment, receive};
 
 const LIMITS: Limits = Limits {
     max_bytes: 1_000,
@@ -184,14 +184,6 @@ async fn a_file_that_cannot_be_fetched_is_reported_and_the_rest_are_kept() {
     let paths: Vec<String> = outcome.taken.into_iter().map(|file| file.path).collect();
     assert_eq!(paths, ["attachments/here.txt"]);
     assert!(outcome.refused[0].reason.contains("could not be fetched"));
-}
-
-#[test]
-fn an_image_is_recognised_by_what_it_says_it_is_or_by_its_name() {
-    assert!(is_image(Some("image/png"), "screenshot"));
-    assert!(is_image(None, "screenshot.JPEG"));
-    assert!(!is_image(None, "notes.txt"));
-    assert!(is_image(Some("application/octet-stream"), "logo.webp"));
 }
 
 /// The agent writes the attachments directory, so a link planted at the name

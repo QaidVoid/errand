@@ -107,6 +107,22 @@ pub fn image_extension(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// The media type the image `bytes` are, for the types a model takes as a
+/// picture: PNG, JPEG, GIF or WebP.
+///
+/// Read from the bytes, never from what a sender declared: a model refuses a
+/// picture whose declared type is not what its bytes are, and a session
+/// holding one is refused on every turn after.
+pub fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    match image_extension(bytes)? {
+        "png" => Some("image/png"),
+        "jpg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
 /// A drawn picture ready to post: its bytes, the name to give the file, and
 /// the caption to post it with.
 ///

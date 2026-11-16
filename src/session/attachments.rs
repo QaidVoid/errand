@@ -39,7 +39,8 @@ pub struct Taken {
     pub path: String,
     /// The file's contents, held so an image can also be shown to a model.
     pub bytes: Vec<u8>,
-    /// What the service believed it was, when it said.
+    /// What the service declared it was, when it said. Never trusted as the
+    /// type of the bytes, only to notice a picture the model cannot be shown.
     pub content_type: Option<String>,
 }
 
@@ -144,17 +145,6 @@ fn write_new(project_path: &str, name: &str, bytes: &[u8]) -> std::io::Result<St
 
 /// How many names are tried before a file is refused a place.
 const MAX_NAME_ATTEMPTS: usize = 512;
-
-/// Whether a file is one the model could be asked to look at.
-pub fn is_image(content_type: Option<&str>, name: &str) -> bool {
-    if content_type.is_some_and(|kind| kind.starts_with("image/")) {
-        return true;
-    }
-    let lower = name.to_lowercase();
-    [".png", ".jpg", ".jpeg", ".gif", ".webp"]
-        .iter()
-        .any(|extension| lower.ends_with(extension))
-}
 
 /// Takes what was attached into the project.
 ///
