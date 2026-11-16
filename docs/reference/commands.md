@@ -47,7 +47,7 @@ aside: everyone in the thread sees it and the agent is never told.
 
 | command | who may | what it does |
 | --- | --- | --- |
-| `!status` | anyone permitted | session state and queue |
+| `!status` | anyone permitted | this session in a thread, the host in the channel |
 | `!help` | anyone permitted | list these commands |
 | `!usage [refresh]` | anyone permitted | what is left of the provider's usage window |
 | `!models refresh` | the owner and operators | ask the providers again for their models |

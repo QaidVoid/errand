@@ -396,6 +396,8 @@ pub struct Daemon {
     /// Held while cold sessions are swept, so two sweeps never share a
     /// cleanup guest.
     sweeping: tokio::sync::Mutex<()>,
+    /// When the daemon was built, in epoch milliseconds, for `!status`.
+    started_at: i64,
 }
 
 /// Where a slash command used in the channel is answered with a file.
@@ -468,6 +470,7 @@ impl Daemon {
             maintenance: Arc::new(AtomicU64::new(0)),
             restart_at: Mutex::new(None),
             sweeping: tokio::sync::Mutex::new(()),
+            started_at: now_ms(),
         }
     }
 
@@ -875,6 +878,40 @@ impl Daemon {
         }
     }
 
+    /// What the host is doing, for `!status` typed outside any session.
+    ///
+    /// Inside a thread the session answers `!status` about itself, so this
+    /// answers only in the channel.
+    fn host_status(&self, content: &str, in_thread: bool) -> Option<Answer> {
+        if in_thread || first_word(content) != "!status" {
+            return None;
+        }
+        let limits = self.options.config.get().limits;
+        let (running, unthreaded) = self.running_turns();
+        let as_count = |limit: u32| usize::try_from(limit).unwrap_or(usize::MAX);
+        let status = maintenance::HostStatus {
+            version: env!("CARGO_PKG_VERSION"),
+            started_at: self.started_at,
+            live: (
+                self.sessions.sessions().len(),
+                as_count(limits.max_live_sessions),
+            ),
+            running: (running, as_count(limits.max_concurrent_turns)),
+            unthreaded,
+            waiting: (
+                self.scheduler.queue_length(),
+                as_count(limits.max_queue_length),
+            ),
+            resumable: self.sessions.resumable().len(),
+            paused: self.scheduler.paused_because(),
+            draining: (
+                self.scheduler.is_draining(),
+                *self.restart_at.lock().expect("the restart lock"),
+            ),
+        };
+        Some(Answer::Card(maintenance::status_card(&status)))
+    }
+
     /// Collects cold sessions now, for an operator, and says what it did.
     ///
     /// The same sweep the daemon runs every `retention.every`, so it is safe
@@ -1093,7 +1130,12 @@ impl Daemon {
 
         // Before anything is routed. These are not session commands, and being
         // in a thread is not a reason to be allowed to run one.
-        if let Some(answered) = self.maintain(&message) {
+        if let Some(answered) = self.maintain(&message).or_else(|| {
+            self.host_status(
+                &message.content,
+                matches!(decision, InboundDecision::Thread { .. }),
+            )
+        }) {
             (self.options.reply_in_channel)(message, answered).await;
             return;
         }
@@ -1363,7 +1405,10 @@ impl Daemon {
             channel_id: command.thread_id.clone().unwrap_or_default(),
             ..answered_in_channel(command)
         };
-        if let Some(answered) = self.maintain(&asked) {
+        if let Some(answered) = self
+            .maintain(&asked)
+            .or_else(|| self.host_status(&command.content, command.thread_id.is_some()))
+        {
             return answered.words();
         }
 

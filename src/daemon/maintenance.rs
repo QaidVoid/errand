@@ -1,6 +1,7 @@
 //! Maintenance: draining the daemon so its binary can be replaced, the note
-//! a restart leaves for the daemon that comes up after it, and what a sweep
-//! for cold sessions asked for by hand says it did.
+//! a restart leaves for the daemon that comes up after it, what a sweep for
+//! cold sessions asked for by hand says it did, and what the host is doing,
+//! for `!status` in the channel.
 //!
 //! A restart loses only the turns running and the prompts waiting when it
 //! happens. A session's history and workspace outlive it, so a drain waits
@@ -314,6 +315,90 @@ pub fn collection_card(collection: &super::Collection) -> Card {
                 },
             ]
         },
+        footer: None,
+    }
+}
+
+/// What the host is doing, as `!status` in the channel shows it.
+#[derive(Debug)]
+pub struct HostStatus {
+    /// The version running.
+    pub version: &'static str,
+    /// When the daemon started, in epoch milliseconds.
+    pub started_at: i64,
+    /// Sessions with a sandbox, and the most there may be.
+    pub live: (usize, usize),
+    /// Turns running, by thread, and the most there may be at once.
+    pub running: (Vec<Turn>, usize),
+    /// Turns running outside any thread, such as one from the interface.
+    pub unthreaded: usize,
+    /// Prompts waiting for a turn, and the most that may wait.
+    pub waiting: (usize, usize),
+    /// Threads that resume when somebody posts in them.
+    pub resumable: usize,
+    /// Why turns are held back, when they are.
+    pub paused: Option<&'static str>,
+    /// Whether new work is refused, and when the pending restart happens at
+    /// the latest.
+    pub draining: (bool, Option<i64>),
+}
+
+/// What the host is doing.
+pub fn status_card(status: &HostStatus) -> Card {
+    let (running, max_turns) = &status.running;
+    let (draining, restart_at) = status.draining;
+    let mut lines = Vec::new();
+    match (draining, restart_at) {
+        (true, Some(at)) => lines.push(format!(
+            "Restarting for maintenance <t:{}:R> at the latest; new work is refused.",
+            at / 1000
+        )),
+        (true, None) => lines.push("Draining for maintenance; new work is refused.".to_owned()),
+        (false, _) => {}
+    }
+    if let Some(reason) = status.paused {
+        lines.push(format!("Turns are held back: {reason}."));
+    }
+    lines.extend(
+        running
+            .iter()
+            .map(|turn| format!("- <#{}> for <@{}>", turn.thread_id, turn.owner_id)),
+    );
+    if status.unthreaded > 0 {
+        lines.push(format!("- {} outside any thread", status.unthreaded));
+    }
+    if running.is_empty() && status.unthreaded == 0 {
+        lines.push("No turn is running.".to_owned());
+    }
+    let field = |name: &str, value: String| CardField {
+        name: name.to_owned(),
+        value,
+    };
+    Card {
+        color: if draining || status.paused.is_some() {
+            CardColor::Warning
+        } else {
+            CardColor::Ready
+        },
+        title: "host status".to_owned(),
+        description: lines.join("\n"),
+        fields: vec![
+            field(
+                "turns",
+                format!("{} of {max_turns}", running.len() + status.unthreaded),
+            ),
+            field(
+                "sessions",
+                format!("{} of {}", status.live.0, status.live.1),
+            ),
+            field(
+                "waiting",
+                format!("{} of {}", status.waiting.0, status.waiting.1),
+            ),
+            field("resumable threads", status.resumable.to_string()),
+            field("version", status.version.to_owned()),
+            field("up since", format!("<t:{}:R>", status.started_at / 1000)),
+        ],
         footer: None,
     }
 }

@@ -275,7 +275,7 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Anyone,
             group: You,
-            summary: "session state and queue",
+            summary: "this session in a thread, the host in the channel",
             argument: None,
         },
     ),

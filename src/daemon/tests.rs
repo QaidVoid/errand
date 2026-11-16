@@ -2971,3 +2971,45 @@ async fn only_an_operator_may_collect_and_is_told_what_was_collected() {
     )
     .await;
 }
+
+/// `!status` in the channel describes the host; in a thread it is the
+/// session's to answer about itself.
+#[tokio::test]
+async fn status_in_the_channel_describes_the_host_and_in_a_thread_is_left_to_the_session() {
+    with_daemon(DaemonCase::default(), |harness| {
+        Box::pin(async move {
+            *harness.sandbox.holds_prompts.lock().unwrap() = true;
+            harness
+                .daemon
+                .handle(raw("go"), InboundDecision::Start)
+                .await;
+
+            harness
+                .daemon
+                .handle(raw_with("!status", "m2", OWNER), InboundDecision::Start)
+                .await;
+            let card = harness.cards().pop().expect("a card");
+            assert_eq!(card.title, "host status");
+            assert!(
+                card.description.contains("<#thread-1>"),
+                "{}",
+                card.description
+            );
+            assert_eq!(card.fields[0].name, "turns");
+            assert_eq!(card.fields[0].value, "1 of 2");
+
+            harness.replies.lock().unwrap().clear();
+            harness
+                .daemon
+                .handle(
+                    raw_with("!status", "m3", OWNER),
+                    InboundDecision::Thread {
+                        thread_id: "thread-1".to_owned(),
+                    },
+                )
+                .await;
+            assert!(harness.cards().is_empty());
+        })
+    })
+    .await;
+}
