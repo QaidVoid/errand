@@ -74,6 +74,19 @@ on. It needs a kage binary for the guest, which must be newer than 0.5.1:
 KAGE_BIN=/path/to/kage ./build.sh
 ```
 
+The work is split by where it runs:
+
+| file | what it is |
+| ---- | ---------- |
+| `build.sh` | the host side: makes the build container, pushes files in, publishes |
+| `provision.sh` | the guest side, run as root in the build container, one function per step |
+| `packages` | the Debian packages, grouped by what they are for |
+| `sudoers`, `errand-kvm.service`, `docker-socket.conf`, `containers.conf` | files installed as they are |
+
+To add a Debian package, add a line to `packages`. To add a tool from its own
+installer, add a step to `provision.sh` and name it in `check_tools`, so a
+build that lost it fails rather than a session.
+
 Optional settings:
 
 | variable | default | what it does |
@@ -82,10 +95,9 @@ Optional settings:
 | `INCUS_ALIAS` | `errand-agent` | the image alias the backend names |
 | `INCUS_GOLDEN` | none | when set, also create a stopped instance of that name |
 
-The script creates a temporary container named `errand-image-build`, installs
-the packages, pushes the wrapper, the socket drop-in and kage, enables Docker,
-stops the container and publishes it. The temporary container is deleted on
-exit.
+The script creates a temporary container named `errand-image-build`, runs
+`provision.sh` in it, stops it and publishes it. The temporary container is
+deleted on exit.
 
 The published image is not bit-for-bit reproducible. It is built from the
 Debian image server and the packages available at build time. Record the

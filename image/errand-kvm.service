@@ -1,0 +1,14 @@
+# The runtime creates /dev/kvm as 0660 root:kvm, and the agent is uid 1000.
+# systemd-tmpfiles skips /dev, so this unit widens the node instead. Without
+# the device the condition fails and the unit is skipped.
+[Unit]
+Description=Widen /dev/kvm for the agent
+ConditionPathExists=/dev/kvm
+
+[Service]
+Type=oneshot
+ExecStart=/bin/chmod 0666 /dev/kvm
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

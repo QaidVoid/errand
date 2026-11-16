@@ -1,0 +1,5 @@
+# The agent is confined by the container, not by its guest uid. Guest root is
+# root inside the guest, so package installation is allowed to work. The proxy
+# variables survive sudo so apt and pip use the broker in proxy mode.
+Defaults env_keep += "HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy"
+agent ALL=(ALL) NOPASSWD: ALL

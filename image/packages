@@ -1,0 +1,79 @@
+# Debian packages in the guest image, one per line, installed without
+# recommends. provision.sh reads everything outside a comment.
+
+# Init, accounts and the network basics the wrapper and agent rely on.
+systemd-sysv
+sudo
+ca-certificates
+curl
+wget
+iproute2
+socat
+
+# Containers inside the guest: Docker, rootless podman and FUSE.
+docker.io
+docker-cli
+docker-buildx
+podman
+passt
+slirp4netns
+uidmap
+fuse3
+fuse-overlayfs
+
+# Native build chain, for C code and the crates that wrap it.
+build-essential
+pkg-config
+clang
+lld
+
+# Headers for crates that link OpenSSL.
+libssl-dev
+
+# Languages from Debian. Rust, Bun, uv and Zig come from their own
+# installers in provision.sh.
+golang-go
+python3
+python3-pip
+python3-venv
+nodejs
+npm
+
+# Version control.
+git
+gh
+
+# Text, files and archives.
+vim
+less
+jq
+ripgrep
+fd-find
+file
+unzip
+xz-utils
+htop
+fastfetch
+
+# Virtual machines.
+qemu-system-x86
+qemu-utils
+
+# Media.
+ffmpeg
+imagemagick
+
+# Headless GUI: a virtual display, a window manager, input and capture.
+xvfb
+x11-utils
+x11-xserver-utils
+xdotool
+openbox
+dbus-x11
+fonts-dejavu-core
+mesa-utils
+libgl1-mesa-dri
+scrot
+xterm
+wmctrl
+xclip
