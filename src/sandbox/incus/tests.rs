@@ -351,6 +351,7 @@ fn stop_handle(run: Run, grace_ms: u64) -> crate::sandbox::SandboxHandle {
         spawned: Arc::new(spawned),
         run,
         grace_ms,
+        disk_tmp: false,
         log: silent(),
         broker: Mutex::new(None),
         stopped: AtomicBool::new(false),
@@ -377,6 +378,100 @@ async fn a_graceful_stop_deletes_the_instance() {
             .any(|call| call.contains("delete errand-s-1") && !call.contains("delete --force")),
         "{joined:?}"
     );
+}
+
+/// A disk-backed /tmp holds what the guest's root wrote, under ids the
+/// daemon cannot delete, so the guest clears it before it stops.
+#[tokio::test]
+async fn a_disk_tmp_is_cleared_by_the_guest_before_it_stops() {
+    let (run, calls) = fake_run(|_| (0, String::new()));
+    let crate::sandbox::SandboxHandle::Incus(mut stop) = stop_handle(run, 10_000) else {
+        unreachable!("an incus handle");
+    };
+    stop.disk_tmp = true;
+    crate::sandbox::SandboxHandle::Incus(stop).stop().await;
+
+    let joined: Vec<String> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|call| call.join(" "))
+        .collect();
+    let cleared = joined
+        .iter()
+        .position(|call| call.contains("exec errand-s-1 -- find /tmp -mindepth 1"))
+        .expect("the guest clears /tmp");
+    let stopped = joined
+        .iter()
+        .position(|call| call.contains("stop errand-s-1"))
+        .expect("the instance stops");
+    assert!(cleared < stopped, "{joined:?}");
+}
+
+/// The cleanup guest mounts the two roots, empties the paths below them as
+/// guest root, and is deleted afterwards, however the emptying went.
+#[tokio::test]
+async fn deleting_as_the_guest_empties_each_path_under_its_root_mount() {
+    let root = populated();
+    let (run, calls) = fake_run(|joined| {
+        if joined.contains(" find ") {
+            (1, String::new())
+        } else {
+            (0, String::new())
+        }
+    });
+    let incus = probed(config(), &root, host_facts(super::effective_ids()), run);
+    let state = root.path().join("state");
+    let projects = root.path().join("projects");
+
+    let outcome = incus
+        .remove_as_guest(&[state.join("s-1"), projects.join("s-1")])
+        .await;
+
+    assert!(outcome.unwrap_err().contains("could not be emptied"));
+    let joined: Vec<String> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|call| call.join(" "))
+        .collect();
+    assert!(
+        joined
+            .iter()
+            .any(|call| call.contains(&format!("source={}", state.display()))
+                && call.contains("path=/sweep/state")),
+        "{joined:?}"
+    );
+    assert!(
+        joined
+            .iter()
+            .any(|call| call.contains("find /sweep/state/s-1 /sweep/projects/s-1 -mindepth 1")),
+        "{joined:?}"
+    );
+    assert!(
+        joined
+            .last()
+            .unwrap()
+            .contains("delete --force errand-sweep")
+    );
+}
+
+#[tokio::test]
+async fn deleting_as_the_guest_refuses_a_path_outside_the_roots() {
+    let root = populated();
+    let (run, calls) = fake_run(|_| (0, String::new()));
+    let incus = probed(config(), &root, host_facts(super::effective_ids()), run);
+
+    let outside = incus
+        .remove_as_guest(&[root.path().join("state").join("..").join("elsewhere")])
+        .await;
+    let beside = incus
+        .remove_as_guest(&[std::path::PathBuf::from("/etc")])
+        .await;
+
+    assert!(outside.unwrap_err().contains("not inside"));
+    assert!(beside.unwrap_err().contains("not inside"));
+    assert!(calls.lock().unwrap().is_empty(), "no guest is made for it");
 }
 
 #[tokio::test]

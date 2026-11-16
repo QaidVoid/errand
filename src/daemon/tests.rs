@@ -183,6 +183,11 @@ struct FakeSandbox {
     probe_fails: Mutex<bool>,
     /// Whether the agents launched from now on leave prompts unanswered.
     holds_prompts: Mutex<bool>,
+    /// The paths each delete as the guest was asked for.
+    removed_as_guest: Mutex<Vec<Vec<std::path::PathBuf>>>,
+    /// Directories a delete as the guest makes writable again, standing in
+    /// for files a guest's root wrote.
+    guest_owned: Mutex<Vec<std::path::PathBuf>>,
     launched: Mutex<Vec<SandboxLaunch>>,
     agents: Mutex<Vec<QuietControls>>,
 }
@@ -193,6 +198,8 @@ impl FakeSandbox {
             report: Mutex::new(report),
             probe_fails: Mutex::new(false),
             holds_prompts: Mutex::new(false),
+            removed_as_guest: Mutex::new(Vec::new()),
+            guest_owned: Mutex::new(Vec::new()),
             launched: Mutex::new(Vec::new()),
             agents: Mutex::new(Vec::new()),
         })
@@ -259,6 +266,18 @@ impl SandboxPool for FakeSandbox {
         _names: &'a [String],
     ) -> Pin<Box<dyn Future<Output = usize> + Send + 'a>> {
         Box::pin(async { 0 })
+    }
+
+    fn remove_as_guest<'a>(
+        &'a self,
+        paths: &'a [std::path::PathBuf],
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        use std::os::unix::fs::PermissionsExt;
+        self.removed_as_guest.lock().unwrap().push(paths.to_vec());
+        for dir in self.guest_owned.lock().unwrap().drain(..) {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -1340,7 +1359,7 @@ async fn a_stopped_session_is_collected_after_retention_even_after_reloading_the
 
                 assert!(!harness.daemon.sessions().can_resume("thread-1"));
                 assert!(harness.daemon.sessions().resumable().is_empty());
-                assert_eq!(harness.daemon.collect_cold(), 0);
+                assert_eq!(harness.daemon.collect_cold().await.collected, 0);
                 assert!(project.exists());
                 assert!(state.exists());
 
@@ -1367,7 +1386,7 @@ async fn a_stopped_session_is_collected_after_retention_even_after_reloading_the
                     .set_times(std::fs::FileTimes::new().set_modified(old))
                     .unwrap();
 
-                assert_eq!(harness.daemon.collect_cold(), 1);
+                assert_eq!(harness.daemon.collect_cold().await.collected, 1);
                 assert!(!state.exists());
                 assert!(!std::path::Path::new(&record_dir).exists());
                 assert!(!project.exists());
@@ -2824,6 +2843,83 @@ async fn a_restart_cuts_off_a_running_turn_and_the_next_start_continues_it() {
 
                 harness.daemon.after_restart().await;
                 assert_eq!(harness.replied_in().len(), 2, "the note is acted on once");
+            })
+        },
+    )
+    .await;
+}
+
+/// Ends `thread`'s session and makes it look unused for four days, so a
+/// sweep with `olderThan: 3d` collects it. Returns its state directory.
+async fn age_session(harness: &Harness, thread: &str) -> std::path::PathBuf {
+    let session = harness.daemon.sessions().for_thread(thread).unwrap();
+    let state = std::path::Path::new(&harness.config.get().state_dir).join(session.id());
+    harness
+        .daemon
+        .sessions()
+        .end_thread(thread, EndReason::Stopped)
+        .await;
+    let old = std::time::SystemTime::now() - Duration::from_hours(96);
+    let mut record = harness
+        .daemon
+        .registry
+        .lock()
+        .unwrap()
+        .get(thread)
+        .unwrap()
+        .clone();
+    record.updated_at = i64::try_from(
+        old.duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    harness.daemon.registry.lock().unwrap().remember(record);
+    std::fs::File::open(crate::session::record::transcript_path(
+        &state.display().to_string(),
+    ))
+    .unwrap()
+    .set_times(std::fs::FileTimes::new().set_modified(old))
+    .unwrap();
+    state
+}
+
+/// What a guest's root wrote cannot be deleted by the daemon's uid. A sweep
+/// that is refused asks the backend to empty it as the guest, then deletes
+/// what is left, rather than keeping the session forever.
+#[tokio::test]
+async fn a_session_the_daemon_may_not_delete_is_emptied_as_the_guest_and_collected() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    with_daemon(
+        DaemonCase {
+            settings: Some(json!({ "retention": { "olderThan": "3d" } })),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("go"), InboundDecision::Start)
+                    .await;
+                let state = age_session(harness, "thread-1").await;
+                if std::fs::metadata(&state).unwrap().uid() == 0 {
+                    // Root deletes through any permission, so nothing would
+                    // be refused.
+                    return;
+                }
+                let locked = state.join("tmp");
+                std::fs::create_dir_all(locked.join(".X11-unix")).unwrap();
+                std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
+                harness.sandbox.guest_owned.lock().unwrap().push(locked);
+
+                let collection = harness.daemon.collect_cold().await;
+
+                assert_eq!(collection.collected, 1);
+                assert!(collection.kept.is_empty());
+                assert!(!state.exists());
+                let asked = harness.sandbox.removed_as_guest.lock().unwrap().clone();
+                assert_eq!(asked.len(), 1);
+                assert!(asked[0].contains(&state));
             })
         },
     )

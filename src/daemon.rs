@@ -393,6 +393,9 @@ pub struct Daemon {
     /// When the pending restart happens at the latest, or none when a drain
     /// only waits or nothing drains.
     restart_at: Mutex<Option<i64>>,
+    /// Held while cold sessions are swept, so two sweeps never share a
+    /// cleanup guest.
+    sweeping: tokio::sync::Mutex<()>,
 }
 
 /// Where a slash command used in the channel is answered with a file.
@@ -464,6 +467,7 @@ impl Daemon {
             options,
             maintenance: Arc::new(AtomicU64::new(0)),
             restart_at: Mutex::new(None),
+            sweeping: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -519,95 +523,77 @@ impl Daemon {
         Ok(report)
     }
 
-    /// Collects every cold session once, as `retention` says, and returns how
-    /// many were collected. Does nothing while `retention.enabled` is false.
+    /// Collects every cold session once, as `retention` says, and says what
+    /// it collected and what it kept. Does nothing while `retention.enabled`
+    /// is false.
     ///
-    /// Each thread is claimed first, as a resume claims it, so a thread that
-    /// comes back during the sweep is either reopened before the sweep reaches
-    /// it or waits until its session is gone. Under the claim the entry is
-    /// read again, and a session that is live, was used since the sweep began,
-    /// or whose project another live session works in is left whole. The
-    /// entry is forgotten only once everything else is deleted, so a sweep
-    /// that fails or is cut short leaves it naming what remains, for the next
-    /// one. Each collection is logged with what it freed.
-    pub fn collect_cold(&self) -> usize {
-        let config = self.options.config.get();
-        if !config.retention.enabled {
-            return 0;
-        }
-        let Some(older_than_ms) = parse_duration(&config.retention.older_than) else {
-            return 0;
+    /// The deleting runs off the async workers. A session whose files the
+    /// daemon may not delete, because its guest wrote them as root or as a
+    /// rootless container's user, is emptied from inside a guest and tried
+    /// again. One sweep runs at a time.
+    pub async fn collect_cold(&self) -> Collection {
+        let _sweeping = self.sweeping.lock().await;
+        let parts = SweepParts {
+            config: self.options.config.get(),
+            registry: Arc::clone(&self.registry),
+            sessions: Arc::clone(&self.sessions),
+            log: self.options.log.clone(),
         };
-        let records = self.registry.lock().expect("the registry lock").all();
-        let sessions = Arc::clone(&self.sessions);
-        let is_live = move |session_id: &str| sessions.for_session(session_id).is_some();
-        let sweep = Sweep {
-            state_root: &config.state_dir,
-            project_root: &config.project_root,
-            now_ms: now_ms(),
-            older_than_ms,
-            is_live: &is_live,
-        };
-        let mut collected = Vec::new();
-        for cold in cold_sessions(&sweep, &records, false) {
-            let Some(thread_id) = cold.thread_id.as_deref() else {
-                continue;
-            };
-            let Some(_claim) = self.sessions.claim_thread(thread_id) else {
-                continue;
-            };
-            let then = records.iter().find(|record| record.thread_id == thread_id);
-            let now = self
-                .registry
-                .lock()
-                .expect("the registry lock")
-                .get(thread_id)
-                .cloned();
-            let own_project = std::path::Path::new(&config.project_root).join(&cold.session_id);
-            let project_busy = cold.unnamed
-                && self
-                    .sessions
-                    .sessions()
-                    .iter()
-                    .any(|live| std::path::Path::new(&live.project().path) == own_project);
-            if now.as_ref() != then || is_live(&cold.session_id) || project_busy {
-                continue;
-            }
-            match collect(&sweep, &cold) {
+        let mut swept = parts.sweep_off_workers(None).await;
+        if !swept.refused.is_empty() {
+            let paths: Vec<std::path::PathBuf> = swept
+                .refused
+                .iter()
+                .flat_map(|refused| refused.paths.iter().cloned())
+                .collect();
+            match self.options.sandbox.remove_as_guest(&paths).await {
                 Ok(()) => {
-                    self.registry
-                        .lock()
-                        .expect("the registry lock")
-                        .forget(thread_id);
-                    self.options.log.info(
-                        "collected a cold session",
-                        &fields([
-                            ("thread", LogValue::from(thread_id)),
-                            ("session", LogValue::from(cold.session_id.as_str())),
-                            ("bytes", LogValue::from(cold.bytes)),
-                        ]),
-                    );
-                    collected.push(cold.session_id.clone());
+                    let again: std::collections::BTreeSet<String> = swept
+                        .refused
+                        .iter()
+                        .map(|refused| refused.session_id.clone())
+                        .collect();
+                    let retried = parts.sweep_off_workers(Some(again)).await;
+                    swept.collected.extend(retried.collected);
+                    swept.refused = retried.refused;
                 }
                 Err(why) => {
-                    self.options.log.warn(
-                        "a cold session could not be collected, and is kept for the next sweep",
-                        &fields([
-                            ("thread", LogValue::from(thread_id)),
-                            ("detail", LogValue::from(why)),
-                        ]),
-                    );
+                    for refused in &mut swept.refused {
+                        refused.why = format!("{}; and from inside a guest: {why}", refused.why);
+                    }
                 }
             }
         }
-        let receipts = std::path::Path::new(&config.state_dir).join(RECEIPTS_FILENAME);
+        for refused in &swept.refused {
+            self.options.log.warn(
+                "a cold session could not be collected, and is kept for the next sweep",
+                &fields([
+                    ("thread", LogValue::from(refused.thread_id.as_str())),
+                    ("detail", LogValue::from(refused.why.as_str())),
+                ]),
+            );
+        }
+        let collected: Vec<String> = swept
+            .collected
+            .iter()
+            .map(|(session_id, _)| session_id.clone())
+            .collect();
+        let receipts = std::path::Path::new(&parts.config.state_dir).join(RECEIPTS_FILENAME);
         if let Err(error) = forget_sessions(&receipts, &collected) {
             self.options.log.warn(
                 "the receipts of collected sessions could not be deleted",
                 &fields([("detail", LogValue::from(error.to_string()))]),
             );
         }
-        collected.len()
+        Collection {
+            collected: collected.len(),
+            freed: swept.collected.iter().map(|(_, bytes)| bytes).sum(),
+            kept: swept
+                .refused
+                .into_iter()
+                .map(|refused| (refused.thread_id, refused.why))
+                .collect(),
+        }
     }
 
     /// Whether this account is an operator under the configuration in force.
@@ -1474,6 +1460,143 @@ impl Daemon {
         self.accepting.store(false, Ordering::SeqCst);
         self.sessions.shutdown().await;
         self.scheduler.shutdown();
+    }
+}
+
+/// What a sweep for cold sessions did.
+#[derive(Debug, Default)]
+pub struct Collection {
+    /// How many sessions were collected.
+    pub collected: usize,
+    /// How many bytes they held.
+    pub freed: u64,
+    /// The sessions kept, by thread, with why each could not be collected.
+    pub kept: Vec<(String, String)>,
+}
+
+/// A cold session whose files could not all be deleted.
+struct Refused {
+    thread_id: String,
+    session_id: String,
+    paths: Vec<std::path::PathBuf>,
+    why: String,
+}
+
+/// What one pass over the cold sessions did.
+#[derive(Default)]
+struct Swept {
+    /// Each session collected, with the bytes it held.
+    collected: Vec<(String, u64)>,
+    refused: Vec<Refused>,
+}
+
+/// What a pass over the cold sessions works with, owned so it can run off the
+/// async workers.
+#[derive(Clone)]
+struct SweepParts {
+    config: Config,
+    registry: Arc<Mutex<ThreadRegistry>>,
+    sessions: Arc<SessionManager>,
+    log: Logger,
+}
+
+impl SweepParts {
+    /// Runs [`Self::sweep`] on a thread that may block, since a session can
+    /// hold gigabytes to delete.
+    async fn sweep_off_workers(&self, only: Option<std::collections::BTreeSet<String>>) -> Swept {
+        let parts = self.clone();
+        tokio::task::spawn_blocking(move || parts.sweep(only.as_ref()))
+            .await
+            .unwrap_or_else(|error| {
+                self.log.error(
+                    "a sweep for cold sessions failed, and the next is tried on schedule",
+                    &fields([("detail", LogValue::from(error.to_string()))]),
+                );
+                Swept::default()
+            })
+    }
+
+    /// Collects each cold session, or only those `only` names.
+    ///
+    /// Each thread is claimed first, as a resume claims it, so a thread that
+    /// comes back during the sweep is either reopened before the sweep
+    /// reaches it or waits until its session is gone. Under the claim the
+    /// entry is read again, and a session that is live, was used since the
+    /// sweep began, or whose project another live session works in is left
+    /// whole. The entry is forgotten only once everything else is deleted, so
+    /// a sweep that fails or is cut short leaves it naming what remains, for
+    /// the next one. Each collection is logged with what it freed.
+    fn sweep(&self, only: Option<&std::collections::BTreeSet<String>>) -> Swept {
+        let config = &self.config;
+        let mut swept = Swept::default();
+        if !config.retention.enabled {
+            return swept;
+        }
+        let Some(older_than_ms) = parse_duration(&config.retention.older_than) else {
+            return swept;
+        };
+        let records = self.registry.lock().expect("the registry lock").all();
+        let sessions = Arc::clone(&self.sessions);
+        let is_live = move |session_id: &str| sessions.for_session(session_id).is_some();
+        let sweep = Sweep {
+            state_root: &config.state_dir,
+            project_root: &config.project_root,
+            now_ms: now_ms(),
+            older_than_ms,
+            is_live: &is_live,
+        };
+        for cold in cold_sessions(&sweep, &records, false) {
+            if only.is_some_and(|only| !only.contains(&cold.session_id)) {
+                continue;
+            }
+            let Some(thread_id) = cold.thread_id.as_deref() else {
+                continue;
+            };
+            let Some(_claim) = self.sessions.claim_thread(thread_id) else {
+                continue;
+            };
+            let then = records.iter().find(|record| record.thread_id == thread_id);
+            let now = self
+                .registry
+                .lock()
+                .expect("the registry lock")
+                .get(thread_id)
+                .cloned();
+            let own_project = std::path::Path::new(&config.project_root).join(&cold.session_id);
+            let project_busy = cold.unnamed
+                && self
+                    .sessions
+                    .sessions()
+                    .iter()
+                    .any(|live| std::path::Path::new(&live.project().path) == own_project);
+            if now.as_ref() != then || is_live(&cold.session_id) || project_busy {
+                continue;
+            }
+            match collect(&sweep, &cold) {
+                Ok(()) => {
+                    self.registry
+                        .lock()
+                        .expect("the registry lock")
+                        .forget(thread_id);
+                    self.log.info(
+                        "collected a cold session",
+                        &fields([
+                            ("thread", LogValue::from(thread_id)),
+                            ("session", LogValue::from(cold.session_id.as_str())),
+                            ("bytes", LogValue::from(cold.bytes)),
+                        ]),
+                    );
+                    swept.collected.push((cold.session_id.clone(), cold.bytes));
+                }
+                Err(why) => swept.refused.push(Refused {
+                    thread_id: thread_id.to_owned(),
+                    session_id: cold.session_id.clone(),
+                    paths: cold.paths.clone(),
+                    why,
+                }),
+            }
+        }
+        swept
     }
 }
 

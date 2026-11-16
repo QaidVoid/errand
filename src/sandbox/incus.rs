@@ -323,6 +323,53 @@ fn base(project: &str) -> Vec<String> {
     ]
 }
 
+/// The command that makes the instance `name` the way a session's is made:
+/// copied from the golden when there is one, from the image otherwise.
+fn create_command(incus: &IncusConfig, name: &str) -> Vec<String> {
+    let mut command = base(&incus.project);
+    match incus.golden.as_deref() {
+        Some(golden) => command.extend(["copy".to_owned(), golden.to_owned(), name.to_owned()]),
+        None => command.extend(["init".to_owned(), incus.image.clone(), name.to_owned()]),
+    }
+    command
+}
+
+/// Where each of `paths` sits inside the cleanup guest, which mounts the
+/// state root at `/sweep/state` and the project root at `/sweep/projects`.
+///
+/// A path under neither, or one that climbs out of its root, is refused
+/// rather than mounted.
+fn in_sweep_guest(
+    paths: &[PathBuf],
+    state_root: &str,
+    project_root: &str,
+) -> Result<Vec<String>, String> {
+    let roots = [
+        ("/sweep/state", state_root),
+        ("/sweep/projects", project_root),
+    ];
+    paths
+        .iter()
+        .map(|path| {
+            roots
+                .iter()
+                .find_map(|(mount, root)| {
+                    let below = path.strip_prefix(root).ok()?;
+                    below
+                        .components()
+                        .all(|part| matches!(part, std::path::Component::Normal(_)))
+                        .then(|| Path::new(mount).join(below).display().to_string())
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "{} is not inside the state or the project root",
+                        path.display()
+                    )
+                })
+        })
+        .collect()
+}
+
 /// The first line of a tool's complaint, for a message a person reads.
 fn first_line(text: &str) -> &str {
     text.trim().lines().next().unwrap_or("it said nothing")
@@ -598,10 +645,6 @@ impl IncusSandbox {
     }
 
     /// The commands a launch runs before the agent starts.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one command per setting a session applies"
-    )]
     fn command_plan(
         config: &SandboxConfig,
         launch: &SandboxLaunch,
@@ -610,15 +653,7 @@ impl IncusSandbox {
         let incus = &config.incus;
         let name = instance_name(&launch.session_id);
         let project = incus.project.as_str();
-        let create = if let Some(golden) = incus.golden.as_deref() {
-            let mut command = base(project);
-            command.extend(["copy".to_owned(), golden.to_owned(), name.clone()]);
-            command
-        } else {
-            let mut command = base(project);
-            command.extend(["init".to_owned(), incus.image.clone(), name.clone()]);
-            command
-        };
+        let create = create_command(incus, &name);
 
         let mut config_keys = vec![
             ("user.errand.system".to_owned(), "true".to_owned()),
@@ -1139,6 +1174,7 @@ impl IncusSandbox {
             spawned: Arc::new(spawned),
             run: Arc::clone(&self.run),
             grace_ms: config.grace_period_ms,
+            disk_tmp: config.disk_tmp,
             log: self.log.clone(),
             broker: std::sync::Mutex::new(broker.map(|broker| broker.broker)),
             stopped: std::sync::atomic::AtomicBool::new(false),
@@ -1366,6 +1402,109 @@ impl IncusSandbox {
                     .map(str::to_owned)
             })
             .collect())
+    }
+
+    /// Deletes what is inside each of `paths` from inside a short-lived guest
+    /// that maps ids the way a session's does.
+    ///
+    /// What a guest's root or its rootless podman wrote lands under host ids
+    /// the daemon's own uid may not delete, so a plain delete of a session's
+    /// state or project is refused. Guest root may. The roots the paths lie
+    /// under are mounted whole, so one guest serves any number of them, and
+    /// the paths themselves are left, empty, for the daemon to remove. The
+    /// guest is deleted whether or not the delete worked.
+    pub async fn remove_as_guest(&self, paths: &[PathBuf]) -> Result<(), String> {
+        let inside = in_sweep_guest(paths, &self.state_dir, &self.project_root)?;
+        if inside.is_empty() {
+            return Ok(());
+        }
+
+        let settings = self.settings.get();
+        let incus = &settings.sandbox.incus;
+        let project = incus.project.as_str();
+        let name = sandbox_name("sweep");
+        let owner = owner_of(&self.project_root);
+        let command = |args: &[&str]| {
+            let mut command = base(project);
+            command.extend(args.iter().map(|arg| (*arg).to_owned()));
+            command
+        };
+        let delete = command(&["delete", "--force", &name]);
+        let _ = self.call(&delete).await;
+
+        let idmap = idmap(owner.uid, owner.gid, incus.guest_uid);
+        let state_source = format!("source={}", self.state_dir);
+        let projects_source = format!("source={}", self.project_root);
+        let mut find = vec!["exec", name.as_str(), "--", "find"];
+        find.extend(inside.iter().map(String::as_str));
+        find.extend(["-mindepth", "1", "-ignore_readdir_race", "-delete"]);
+        let steps = [
+            ("created", create_command(incus, &name)),
+            (
+                "configured",
+                command(&[
+                    "config",
+                    "set",
+                    &name,
+                    "user.errand.system=true",
+                    &format!("raw.idmap={idmap}"),
+                ]),
+            ),
+            (
+                "given no network",
+                command(&["config", "device", "add", &name, "eth0", "none"]),
+            ),
+            (
+                "given the state root",
+                command(&[
+                    "config",
+                    "device",
+                    "add",
+                    &name,
+                    "sweep-state",
+                    "disk",
+                    &state_source,
+                    "path=/sweep/state",
+                ]),
+            ),
+            (
+                "given the project root",
+                command(&[
+                    "config",
+                    "device",
+                    "add",
+                    &name,
+                    "sweep-projects",
+                    "disk",
+                    &projects_source,
+                    "path=/sweep/projects",
+                ]),
+            ),
+            ("started", command(&["start", &name])),
+            ("emptied", command(&find)),
+        ];
+        let mut outcome = Ok(());
+        for (done, step) in steps {
+            let result = self.call(&step).await;
+            if result.code != 0 {
+                outcome = Err(format!(
+                    "the cleanup guest could not be {done}: {}",
+                    first_line(&result.stderr)
+                ));
+                break;
+            }
+        }
+        let removed = self.call(&delete).await;
+        if removed.code != 0 {
+            self.log.warn(
+                "the cleanup guest could not be deleted, and the next start removes it",
+                &fields([
+                    ("name", name.as_str().into()),
+                    ("detail", first_line(&removed.stderr).to_owned().into()),
+                ]),
+            );
+        }
+        outcome
     }
 
     /// Removes the named sandboxes, returning how many were removed.

@@ -871,11 +871,15 @@ fn refresh_presence(
 fn collect_cold_sessions(daemon: Arc<Daemon>, live: LiveConfig, log: Logger) {
     tokio::spawn(async move {
         loop {
-            let sweeping = Arc::clone(&daemon);
-            if let Err(error) = tokio::task::spawn_blocking(move || sweeping.collect_cold()).await {
-                log.error(
-                    "a sweep for cold sessions failed, and the next is tried on schedule",
-                    &fields([("detail", LogValue::from(error.to_string()))]),
+            let swept = daemon.collect_cold().await;
+            if swept.collected > 0 || !swept.kept.is_empty() {
+                log.info(
+                    "swept for cold sessions",
+                    &fields([
+                        ("collected", LogValue::from(swept.collected)),
+                        ("freed_bytes", LogValue::from(swept.freed)),
+                        ("kept", LogValue::from(swept.kept.len())),
+                    ]),
                 );
             }
             let every = crate::config::duration::parse_duration(&live.get().retention.every)

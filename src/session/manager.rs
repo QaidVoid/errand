@@ -143,6 +143,18 @@ pub trait SandboxPool: Send + Sync {
         &'a self,
         names: &'a [String],
     ) -> Pin<Box<dyn Future<Output = usize> + Send + 'a>>;
+
+    /// Deletes what is inside each of `paths` as the guest would, for files
+    /// a guest wrote under host ids the daemon's own uid may not delete.
+    ///
+    /// A backend whose guests write only as the daemon's uid has nothing to
+    /// offer here, and says so.
+    fn remove_as_guest<'a>(
+        &'a self,
+        _paths: &'a [std::path::PathBuf],
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async { Err("this sandbox backend cannot delete as its guest".to_owned()) })
+    }
 }
 
 /// Options for the session manager.

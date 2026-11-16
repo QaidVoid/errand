@@ -127,6 +127,9 @@ pub struct IncusStop {
     pub run: Run,
     /// How long the instance may take to stop before it is deleted by force.
     pub grace_ms: u64,
+    /// Whether the guest's `/tmp` is a directory of the session's state,
+    /// which the guest clears before it stops.
+    pub disk_tmp: bool,
     /// The logger the warnings go to.
     pub log: Logger,
     /// The session's own egress broker, closed when the session is stopped.
@@ -330,12 +333,44 @@ impl IncusStop {
 
         close_broker(&self.broker);
 
-        let timeout = incus::stop_timeout(self.grace_ms).to_string();
         let failed = |error: std::io::Error| RunResult {
             code: -1,
             stdout: String::new(),
             stderr: error.to_string(),
         };
+        if self.disk_tmp {
+            // What the guest's root wrote there is under host ids the daemon
+            // cannot delete, which would keep the session's state from ever
+            // being collected. Guest root can, while the guest still runs.
+            let cleared = (self.run)(
+                self.command(&[
+                    "exec",
+                    self.name.as_str(),
+                    "--",
+                    "find",
+                    "/tmp",
+                    "-mindepth",
+                    "1",
+                    "-ignore_readdir_race",
+                    "-delete",
+                ]),
+                None,
+                None,
+            )
+            .await
+            .unwrap_or_else(failed);
+            if cleared.code != 0 {
+                self.log.warn(
+                    "the guest's /tmp could not be cleared, so collecting the session will need the guest",
+                    &fields([
+                        ("session", self.session_id.as_str().into()),
+                        ("detail", cleared.stderr.trim().to_owned().into()),
+                    ]),
+                );
+            }
+        }
+
+        let timeout = incus::stop_timeout(self.grace_ms).to_string();
         let stopped = (self.run)(
             self.command(&["stop", self.name.as_str(), "--timeout", &timeout]),
             None,
@@ -541,5 +576,19 @@ impl SandboxPool for Backend {
         names: &'a [String],
     ) -> Pin<Box<dyn Future<Output = usize> + Send + 'a>> {
         Box::pin(async move { Self::remove_orphans(self, names).await })
+    }
+
+    fn remove_as_guest<'a>(
+        &'a self,
+        paths: &'a [std::path::PathBuf],
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            match self {
+                Self::Incus(incus) => incus.remove_as_guest(paths).await,
+                Self::Bailey(_) | Self::Podman(_) => {
+                    Err("this sandbox backend cannot delete as its guest".to_owned())
+                }
+            }
+        })
     }
 }
