@@ -20,8 +20,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use serenity::builder::{
+    CreateInteractionResponse, CreateInteractionResponseFollowup, CreateInteractionResponseMessage,
+};
 use serenity::client::{Context, EventHandler};
-use serenity::model::application::Interaction;
+use serenity::model::application::{ComponentInteraction, Interaction};
 use serenity::model::channel::{Attachment, Channel, Message};
 use serenity::model::gateway::Ready;
 use serenity::model::id::ChannelId;
@@ -33,6 +36,8 @@ use crate::chat::inbound::{
     InboundDecision, RawAttachment, RawDeletion, RawMessage, classify, classify_deletion,
     is_permitted, without_bot_mention,
 };
+use crate::chat::pager::{self, BUTTON_PREFIX, Pager};
+use crate::chat::threads;
 use crate::config::schema::ChatConfig;
 use crate::log::{LogValue, Logger, fields};
 
@@ -183,11 +188,18 @@ pub struct Gateway {
     ready: tokio::sync::watch::Receiver<bool>,
     /// The other end of `ready`; held so the channel cannot die first.
     ready_sender: tokio::sync::watch::Sender<bool>,
+    /// The paged cards the daemon posted, which a click on a button turns.
+    pager: Arc<Pager>,
 }
 
 impl Gateway {
     /// A gateway on the served channel, reporting through `handlers`.
-    pub fn new(config: ChatConfig, handlers: GatewayHandlers, log: Logger) -> Arc<Self> {
+    pub fn new(
+        config: ChatConfig,
+        handlers: GatewayHandlers,
+        log: Logger,
+        pager: Arc<Pager>,
+    ) -> Arc<Self> {
         let (ready_sender, ready) = tokio::sync::watch::channel(false);
         Arc::new(Self {
             config,
@@ -201,7 +213,53 @@ impl Gateway {
             shard: std::sync::Mutex::new(None),
             ready,
             ready_sender,
+            pager,
         })
+    }
+
+    /// Turns a paged card for a click on one of its buttons.
+    ///
+    /// Anybody permitted may turn a card, and it turns for everyone looking at
+    /// it. A card no longer held, past its hour or from before a restart,
+    /// loses its buttons, and the clicker is told privately to ask again.
+    async fn turn_page(&self, ctx: &Context, click: &ComponentInteraction) {
+        if !click.data.custom_id.starts_with(BUTTON_PREFIX) {
+            return;
+        }
+        if !is_permitted(&self.config, click.user.id.get().to_string().as_str()) {
+            let refused = CreateInteractionResponseMessage::new()
+                .content("you are not permitted to use this bot")
+                .ephemeral(true);
+            let _ = click
+                .create_response(ctx, CreateInteractionResponse::Message(refused))
+                .await;
+            return;
+        }
+        let turned = self
+            .pager
+            .turn(click.message.id.get(), &click.data.custom_id);
+        let update = match &turned {
+            Some(turned) => CreateInteractionResponseMessage::new()
+                .embed(threads::embed(&turned.shown))
+                .components(pager::buttons(turned.index, turned.count)),
+            None => CreateInteractionResponseMessage::new().components(Vec::new()),
+        };
+        if let Err(error) = click
+            .create_response(ctx, CreateInteractionResponse::UpdateMessage(update))
+            .await
+        {
+            self.log.warn(
+                "a card's page could not be turned",
+                &fields([("detail", LogValue::from(error.to_string()))]),
+            );
+            return;
+        }
+        if turned.is_none() {
+            let gone = CreateInteractionResponseFollowup::new()
+                .content("this listing is no longer held, so ask for it again")
+                .ephemeral(true);
+            let _ = click.create_followup(ctx, gone).await;
+        }
     }
 
     /// Gives up when the connection has been away too long, reporting it
@@ -305,6 +363,10 @@ impl EventHandler for Gateway {
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        if let Some(click) = interaction.as_message_component() {
+            self.turn_page(&ctx, click).await;
+            return;
+        }
         let Some(command) = interaction.as_command().cloned() else {
             return;
         };

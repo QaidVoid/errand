@@ -13,6 +13,8 @@ pub mod gateway;
 pub mod inbound;
 /// One ordered, buffered work queue per thread.
 pub mod outbox;
+/// Which page each posted paged card shows, and the buttons that turn it.
+pub mod pager;
 /// Turns what a session produces into message text.
 pub mod render;
 /// A thread as a session writes to it.

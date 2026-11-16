@@ -20,6 +20,7 @@ use crate::session::event::Card;
 use crate::session::event::CardColor;
 use crate::session::event::CardField;
 use crate::session::event::Delegated;
+use crate::session::event::{CardPage, PAGE_BUDGET, pack_pages};
 use crate::session::files::Entry;
 use crate::session::files::{FileContents, MAX_INLINE_BYTES};
 use crate::session::model::split_level;
@@ -503,61 +504,6 @@ pub fn when_relative_plain(epoch_ms: i64, now: i64) -> String {
     }
 }
 
-/// `!usage` as a markdown-style table, in a code block so the columns line
-/// up: chat does not render a markdown table, only a fixed-width font.
-///
-/// Each row is a provider and what it said of its window, or nothing where it
-/// did not answer. What is left is shown rather than what is used, because
-/// that is the number somebody is deciding on. A code block shows `<t:...>`
-/// verbatim, so a reset is written out twice instead: how long until it, as
-/// of `now`, and the moment itself in UTC. ASCII throughout, so it renders the
-/// same in any font.
-pub fn usage_table(rows: &[(String, Option<Quota>)], now: i64) -> String {
-    let dash = || "-".to_owned();
-    let mut table = vec![[
-        "provider".to_owned(),
-        "left".to_owned(),
-        "resets in".to_owned(),
-        "at (UTC)".to_owned(),
-    ]];
-    for (provider, quota) in rows {
-        let (left, resets, at) = match quota {
-            None => ("unknown".to_owned(), dash(), dash()),
-            Some(quota) => {
-                let left = left_of(quota);
-                match quota.resets_at {
-                    None => (left, dash(), dash()),
-                    Some(at) => (left, span_until(at, now), utc_minute(at)),
-                }
-            }
-        };
-        table.push([provider.clone(), left, resets, at]);
-    }
-
-    let widths: Vec<usize> = (0..4)
-        .map(|column| table.iter().map(|row| row[column].len()).max().unwrap_or(0))
-        .collect();
-    let line = |cells: &[String]| {
-        let cells: Vec<String> = cells
-            .iter()
-            .zip(&widths)
-            .map(|(cell, width)| format!("{cell:<width$}"))
-            .collect();
-        format!("| {} |", cells.join(" | "))
-    };
-    let rule = widths
-        .iter()
-        .map(|width| "-".repeat(width + 2))
-        .collect::<Vec<_>>()
-        .join("|");
-    let mut lines = vec![line(&table[0]), format!("|{rule}|")];
-    lines.extend(table[1..].iter().map(|row| line(row)));
-    format!("```\n{}\n```", lines.join("\n"))
-}
-
-/// The most labeled cells an embed may carry, as the service limits it.
-const EMBED_FIELD_LIMIT: usize = 25;
-
 /// The most text an embed holds all together, as the service limits it.
 const EMBED_WEIGHT_LIMIT: usize = 6_000;
 
@@ -572,42 +518,44 @@ pub const EMBED_DESCRIPTION_LIMIT: usize = 4_096;
 /// reset says only what is left: a dash would repeat the line above it
 /// without saying anything new.
 ///
-/// Past the card's own limit of cells the windows fall back to the table in
-/// the body. A reading of nothing says so, rather than drawing an empty
-/// card.
+/// Past a page's worth of cells the providers go onto further pages. A
+/// reading of nothing says so, rather than drawing an empty card.
 ///
 /// The color carries the verdict: amber when a provider has spent its
 /// window, green otherwise. A provider that did not answer is not a
-/// warning; it says unknown and the card stays calm.
-pub fn usage_card(rows: &[(String, Option<Quota>)], now: i64) -> Card {
+/// warning. It says unknown and the card stays calm.
+pub fn usage_card(rows: &[(String, Option<Quota>)]) -> Card {
     let spent = rows
         .iter()
         .any(|(_, quota)| quota.as_ref().is_some_and(is_spent));
-    let description = if rows.len() > EMBED_FIELD_LIMIT {
-        usage_table(rows, now)
-    } else if rows.is_empty() {
-        "no provider reports a usage window".to_owned()
+    let color = if spent {
+        CardColor::Warning
     } else {
-        String::new()
+        CardColor::Ready
     };
-    Card {
-        color: if spent {
-            CardColor::Warning
-        } else {
-            CardColor::Ready
-        },
-        title: "usage windows".to_owned(),
-        description,
-        fields: rows
-            .iter()
-            .take(EMBED_FIELD_LIMIT)
-            .map(|(provider, quota)| CardField {
+    let title = "usage windows".to_owned();
+    if rows.is_empty() {
+        return Card {
+            color,
+            title,
+            description: "no provider reports a usage window".to_owned(),
+            fields: Vec::new(),
+            footer: None,
+            pages: Vec::new(),
+        };
+    }
+    let groups = rows
+        .iter()
+        .map(|(provider, quota)| CardPage {
+            label: provider.clone(),
+            description: String::new(),
+            fields: vec![CardField {
                 name: provider.clone(),
                 value: window_line(quota.as_ref()),
-            })
-            .collect(),
-        footer: None,
-    }
+            }],
+        })
+        .collect();
+    Card::paged(color, title, pack_pages(groups), None)
 }
 
 /// What one provider says of its window, as its cell's text.
@@ -709,52 +657,83 @@ fn aligned_table(header: &[String], rows: &[Vec<String>]) -> String {
 /// A table of two columns is a name and its value, so it becomes labeled
 /// cells: nothing to misalign, and the same layout the usage card draws. A
 /// wider table has columns a reader maps values back to, which stacked
-/// cells lose, so it is drawn whole as an aligned block, which the fence's
-/// fixed-width font keeps lined up. Anything else (a ragged or unheaded
-/// table, more rows than the card has cells for, more text than an embed
-/// holds) is not drawn at all: the caller keeps the words exactly as the
+/// cells lose, so it is drawn as an aligned block, which the fence's
+/// fixed-width font keeps lined up. A table longer than a page goes onto
+/// several, each with the table's header, so every page reads on its own.
+/// Anything else (a ragged or unheaded table, a row too long for a page of
+/// its own) is not drawn at all: the caller keeps the words exactly as the
 /// writer wrote them.
 pub fn table_card(title: &str, text: &str) -> Option<Card> {
     let (header, rows) = parse_table(text.trim())?;
-    if header.len() == 2 {
-        if rows.len() > EMBED_FIELD_LIMIT {
-            return None;
-        }
+    let pages = if header.len() == 2 {
         let head = format!("**{}**", header.join(" \u{b7} "));
-        let mut weight = head.encode_utf16().count();
-        let mut fields = Vec::with_capacity(rows.len());
-        for row in rows {
-            let (name, value) = (row[0].clone(), row[1].clone());
+        let mut groups = Vec::with_capacity(rows.len());
+        for (index, row) in rows.into_iter().enumerate() {
+            let mut cells = row.into_iter();
+            let (name, value) = (cells.next()?, cells.next()?);
             // A cell with nothing to head its field with would draw a
             // label over a value nobody can place.
             if name.is_empty() {
                 return None;
             }
-            weight += name.encode_utf16().count() + value.encode_utf16().count();
-            fields.push(CardField { name, value });
+            groups.push(CardPage {
+                label: (index + 1).to_string(),
+                description: String::new(),
+                fields: vec![CardField { name, value }],
+            });
         }
-        if weight > EMBED_WEIGHT_LIMIT {
-            return None;
+        pack_pages(groups)
+            .into_iter()
+            .map(|page| CardPage {
+                label: format!("rows {}", page.label),
+                description: head.clone(),
+                ..page
+            })
+            .collect()
+    } else {
+        let aligned = aligned_table(&header, &rows);
+        let mut lines = aligned.lines();
+        let top = format!("{}\n{}", lines.next()?, lines.next()?);
+        let mut pages: Vec<CardPage> = Vec::new();
+        let (mut held, mut first) = (Vec::new(), 1);
+        for (index, line) in lines.enumerate() {
+            let size: usize = held.iter().map(|row: &&str| row.len() + 1).sum();
+            if !held.is_empty() && size + line.len() > PAGE_BUDGET {
+                pages.push(table_page(&top, &held, first, index));
+                held.clear();
+                first = index + 1;
+            }
+            held.push(line);
         }
-        return Some(Card {
-            color: CardColor::Ready,
-            title: title.to_owned(),
-            description: head,
-            fields,
-            footer: None,
-        });
-    }
-    let description = format!("```\n{}\n```", aligned_table(&header, &rows));
-    if description.encode_utf16().count() > EMBED_DESCRIPTION_LIMIT {
-        return None;
-    }
-    Some(Card {
-        color: CardColor::Ready,
-        title: title.to_owned(),
-        description,
+        if !held.is_empty() {
+            pages.push(table_page(&top, &held, first, first + held.len() - 1));
+        }
+        pages
+    };
+    let fits = pages.iter().all(|page| {
+        let weight = page.description.encode_utf16().count()
+            + page
+                .fields
+                .iter()
+                .map(|field| field.name.encode_utf16().count() + field.value.encode_utf16().count())
+                .sum::<usize>();
+        page.description.encode_utf16().count() <= EMBED_DESCRIPTION_LIMIT
+            && weight <= EMBED_WEIGHT_LIMIT
+    });
+    fits.then(|| Card::paged(CardColor::Ready, title.to_owned(), pages, None))
+}
+
+/// One page of a wide table: its header, then rows `first` to `last`.
+fn table_page(top: &str, rows: &[&str], first: usize, last: usize) -> CardPage {
+    CardPage {
+        label: if first == last {
+            format!("row {first}")
+        } else {
+            format!("rows {first} to {last}")
+        },
+        description: format!("```\n{top}\n{}\n```", rows.join("\n")),
         fields: Vec::new(),
-        footer: None,
-    })
+    }
 }
 
 /// Splits an answer at its markdown tables, each table drawn as a card and
@@ -868,6 +847,35 @@ pub fn listed_models(
     lines
 }
 
+/// A model listing as card pages: a group per provider, small ones sharing a
+/// page, and every page opening with `intro`, so whichever page a reader is
+/// on says what a new choice is measured against.
+pub fn model_pages(intro: &str, list: &[String]) -> Vec<CardPage> {
+    let mut groups: Vec<CardPage> = Vec::new();
+    for line in list.iter().filter(|line| !line.is_empty()) {
+        if let Some(provider) = line
+            .strip_prefix("**")
+            .and_then(|rest| rest.strip_suffix("**"))
+        {
+            groups.push(CardPage {
+                label: provider.to_owned(),
+                description: line.clone(),
+                fields: Vec::new(),
+            });
+        } else if let Some(group) = groups.last_mut() {
+            group.description.push('\n');
+            group.description.push_str(line);
+        }
+    }
+    pack_pages(groups)
+        .into_iter()
+        .map(|page| CardPage {
+            description: format!("{intro}\n\n{}", page.description),
+            ..page
+        })
+        .collect()
+}
+
 /// The short names that stand for one model, in the order they were written.
 ///
 /// A short name spelled the same as the model teaches nobody anything, so it
@@ -895,17 +903,6 @@ fn left_of(quota: &Quota) -> String {
     }
 }
 
-/// How long until a moment, in days, hours, and minutes as it grows.
-fn span_until(epoch_ms: i64, now: i64) -> String {
-    let minutes = ((epoch_ms - now).max(0) + 59_999) / 60_000;
-    let (days, hours, minutes) = (minutes / 1_440, minutes / 60 % 24, minutes % 60);
-    match (days, hours) {
-        (0, 0) => format!("{minutes}m"),
-        (0, _) => format!("{hours}h {minutes}m"),
-        _ => format!("{days}d {hours}h"),
-    }
-}
-
 /// What `!models refresh` found, one line per provider asked.
 pub fn models_refreshed(outcomes: &[Outcome]) -> String {
     if outcomes.is_empty() {
@@ -920,14 +917,6 @@ pub fn models_refreshed(outcomes: &[Outcome]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// A moment as `YYYY-MM-DD HH:MM` in UTC.
-fn utc_minute(epoch_ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(epoch_ms).map_or_else(
-        |_| "-".to_owned(),
-        |at| at.strftime("%Y-%m-%d %H:%M").to_string(),
-    )
 }
 
 /// How long a turn took, and how much of it was spent before it said

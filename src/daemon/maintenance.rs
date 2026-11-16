@@ -170,6 +170,7 @@ pub fn draining_card(
         footer: restart_at.map(|_| {
             "A turn still running then is stopped and continued once the bot is back.".to_owned()
         }),
+        pages: Vec::new(),
     }
 }
 
@@ -183,6 +184,7 @@ pub fn drained_card() -> Card {
             .to_owned(),
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     }
 }
 
@@ -207,6 +209,7 @@ pub fn restarting_card(note: &RestartNote) -> Card {
         description: lines.join("\n"),
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     }
 }
 
@@ -218,6 +221,7 @@ pub fn back_card(version: &str) -> Card {
         description: format!("Running errand {version}."),
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     }
 }
 
@@ -233,6 +237,7 @@ pub fn undrained_card(called_off_restart: bool) -> Card {
         },
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     }
 }
 
@@ -244,6 +249,7 @@ pub fn continued_card() -> Card {
         description: "The bot restarted during this turn. Continuing where it stopped.".to_owned(),
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     }
 }
 
@@ -257,6 +263,7 @@ pub fn dropped_card() -> Card {
             .to_owned(),
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     }
 }
 
@@ -316,6 +323,7 @@ pub fn collection_card(collection: &super::Collection) -> Card {
             ]
         },
         footer: None,
+        pages: Vec::new(),
     }
 }
 
@@ -400,6 +408,7 @@ pub fn status_card(status: &HostStatus) -> Card {
             field("up since", format!("<t:{}:R>", status.started_at / 1000)),
         ],
         footer: None,
+        pages: Vec::new(),
     }
 }
 
@@ -411,6 +420,7 @@ pub fn refused_card(why: &str) -> Card {
         description: why.to_owned(),
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     }
 }
 

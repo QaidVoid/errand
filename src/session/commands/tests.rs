@@ -2,8 +2,8 @@
 
 use super::{
     COMMANDS, CommandAccess, SpeechArgs, Standing, answer_without_session, argument_of,
-    asks_for_pull_request, help_text, image_args, is_addressed_to_bot, is_aside, is_command,
-    may_run, parse_user_id, pull_request_args, speech_args,
+    asks_for_pull_request, help_card, help_text, image_args, is_addressed_to_bot, is_aside,
+    is_command, may_run, parse_user_id, pull_request_args, speech_args,
 };
 use crate::chat::render::EMBED_DESCRIPTION_LIMIT;
 
@@ -147,8 +147,8 @@ fn ordinary_work_is_not_read_as_asking_to_publish() {
 #[test]
 fn help_is_answered_without_starting_a_session_and_nothing_else_is() {
     let answer = answer_without_session("!help");
-    assert!(answer.is_some_and(|card| card.description.contains("!stop")));
-    assert!(answer_without_session("!help").is_some_and(|card| card.description.contains("!ls")));
+    assert!(answer.is_some_and(|card| card.words().contains("!stop")));
+    assert!(answer_without_session("!help").is_some_and(|card| card.words().contains("!ls")));
     assert_eq!(answer_without_session("!ls src"), None);
     assert_eq!(answer_without_session("write me a parser"), None);
 }
@@ -430,4 +430,30 @@ fn forge_account_mentions_validate_the_named_forges_login_grammar() {
             assert_eq!(parse_user_id(&format!("<@{prefix}:{login}>")), None);
         }
     }
+}
+
+/// Help is a card turned a group at a time, and between its pages every
+/// command appears once.
+#[test]
+fn help_is_paged_by_group_and_lists_every_command() {
+    let card = help_card();
+    assert!(card.page_count() > 1);
+    let pages: Vec<String> = (0..card.page_count())
+        .map(|index| card.page(index).description)
+        .collect();
+    assert!(pages[0].contains("THE SESSION"));
+    for (name, _) in COMMANDS {
+        let listed = pages
+            .iter()
+            .filter(|page| {
+                page.contains(&format!("  {name} ")) || page.contains(&format!("  {name}\n"))
+            })
+            .count();
+        assert_eq!(listed, 1, "{name}");
+    }
+    assert!(
+        pages
+            .iter()
+            .all(|page| page.encode_utf16().count() <= EMBED_DESCRIPTION_LIMIT)
+    );
 }

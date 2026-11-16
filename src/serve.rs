@@ -21,6 +21,7 @@ use crate::agent::protocol::AgentImage;
 use crate::chat::commands::TranslatedCommand;
 use crate::chat::commands::register_commands;
 use crate::chat::gateway::{GIVE_UP_AFTER_MS, GIVE_UP_POLL_MS, Gateway, GatewayHandlers};
+use crate::chat::pager::Pager;
 use crate::chat::render::{
     MESSAGE_LIMIT, models_refreshed, split_message, usage_card, when_relative, when_relative_plain,
 };
@@ -82,6 +83,7 @@ use crate::sandbox::egress::provider_prefix;
 use crate::sandbox::paths;
 use crate::session::event::Answer;
 use crate::session::event::Card;
+use crate::session::event::CardPage;
 use crate::session::manager::{CreatedThread, FoundView, ThreadFactory};
 use crate::session::model::{configured_model, split_level};
 use crate::session::pr::ApiCall;
@@ -1090,6 +1092,9 @@ async fn run(
     }
     let (restart_tx, restart_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
+    // Where every paged card the daemon posts is remembered, so a click on
+    // its buttons, which the gateway receives, finds its pages.
+    let pager = Arc::new(Pager::new(now_ms));
     let gateway = Gateway::new(
         config.chat.clone(),
         GatewayHandlers {
@@ -1185,6 +1190,7 @@ async fn run(
             },
         },
         log.clone(),
+        Arc::clone(&pager),
     );
 
     // A real serenity client owns the socket; the gateway is its handler.
@@ -1248,6 +1254,7 @@ async fn run(
         log.clone(),
         config.output.forward_tool_output,
         watching,
+        Arc::clone(&pager),
     ));
 
     // Only when somebody may ask for work there: otherwise the forge stays
@@ -1446,10 +1453,12 @@ async fn run(
             let live = live.clone();
             let log = log.clone();
             let served = *served_channel;
+            let pager = Arc::clone(&pager);
             Arc::new(move |message: IncomingMessage, answer: Answer| {
                 let http = Arc::clone(&http);
                 let live = live.clone();
                 let log = log.clone();
+                let pager = Arc::clone(&pager);
                 Box::pin(async move {
                     // Asked on an issue, but answered in the channel: the
                     // issue hears a session's turns, not the daemon turning
@@ -1478,7 +1487,14 @@ async fn run(
                     // credential rotated in the file is scrubbed from the
                     // next thing said in the channel.
                     let secrets = secret_values(&live.get());
-                    reply_in_channel(&http, &log, &secrets, served, &message, answer).await;
+                    let reply = Reply {
+                        http: &http,
+                        log: &log,
+                        secrets: &secrets,
+                        pager: &pager,
+                        served,
+                    };
+                    reply_in_channel(&reply, &message, answer).await;
                 })
             })
         },
@@ -1522,7 +1538,7 @@ async fn run(
                 Box::pin(async move {
                     let mut held = sources.lock().await;
                     let rows = read_usage(&mut held, refresh).await;
-                    usage_card(&rows, now_ms())
+                    usage_card(&rows)
                 })
             }))
         },
@@ -1929,6 +1945,16 @@ fn answer_in(asked_in: &str, served: ChannelId) -> ChannelId {
         .map_or(served, ChannelId::new)
 }
 
+/// What a reply to the channel is sent with.
+#[derive(Clone, Copy)]
+struct Reply<'a> {
+    http: &'a serenity::http::Http,
+    log: &'a Logger,
+    secrets: &'a [String],
+    pager: &'a Pager,
+    served: ChannelId,
+}
+
 /// Says the refusal where it was asked, redacted, in pieces the service
 /// takes.
 ///
@@ -1942,14 +1968,14 @@ fn answer_in(asked_in: &str, served: ChannelId) -> ChannelId {
 /// already worked out simply never arrived and nothing said why. A reply
 /// that cannot be delivered is worth a line: it is the difference between a
 /// command that did nothing and one that was never heard.
-async fn reply_in_channel(
-    http: &serenity::http::Http,
-    log: &Logger,
-    secrets: &[String],
-    served: ChannelId,
-    message: &IncomingMessage,
-    answer: Answer,
-) {
+async fn reply_in_channel(reply_with: &Reply<'_>, message: &IncomingMessage, answer: Answer) {
+    let Reply {
+        http,
+        log,
+        secrets,
+        pager,
+        served,
+    } = *reply_with;
     let channel_id = answer_in(&message.channel_id, served);
     // A thread cannot hang a thread off itself, so a long answer is only
     // moved out of the way when the answer is going to the channel.
@@ -1974,15 +2000,26 @@ async fn reply_in_channel(
         // checked against the service's limit before it is drawn.
         Answer::Card(card) => {
             let description = redact_text(&card.description, secrets);
+            let pages = card
+                .pages
+                .iter()
+                .map(|page| CardPage {
+                    description: redact_text(&page.description, secrets),
+                    ..page.clone()
+                })
+                .collect();
             let shown = Card {
                 description,
+                pages,
                 ..card
             };
             let mut reply = card_message(&shown);
             if let Some(starter) = starter {
                 reply = reply.reference_message(&starter);
             }
-            let _ = channel_id.send_message(http, reply).await.map_err(said);
+            if let Ok(sent) = channel_id.send_message(http, reply).await.map_err(said) {
+                pager.hold(sent.id.get(), &shown);
+            }
         }
         Answer::Text(text) => {
             let chunks = split_message(&redact_text(&text, secrets), MESSAGE_LIMIT);

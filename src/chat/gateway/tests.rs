@@ -70,7 +70,12 @@ fn recording_handlers(calls: &Arc<Mutex<Calls>>) -> GatewayHandlers {
 
 /// A gateway whose callbacks are recorded in `calls`.
 fn recorded_gateway(calls: &Arc<Mutex<Calls>>) -> Arc<Gateway> {
-    Gateway::new(config(), recording_handlers(calls), logger(LogLevel::Error))
+    Gateway::new(
+        config(),
+        recording_handlers(calls),
+        logger(LogLevel::Error),
+        std::sync::Arc::new(crate::chat::pager::Pager::new(|| 0)),
+    )
 }
 
 /// Builds a library message from the wire shape it arrives in.

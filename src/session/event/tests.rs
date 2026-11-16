@@ -208,3 +208,67 @@ fn a_notice_and_an_end_reason_keep_their_written_names() {
         EndReason::ResourceLimit
     );
 }
+
+fn group(label: &str, size: usize) -> CardPage {
+    CardPage {
+        label: label.to_owned(),
+        description: "x".repeat(size),
+        fields: Vec::new(),
+    }
+}
+
+/// Small groups share a page and are named by their first and last. A
+/// group that would push a page past its budget starts a page of its own,
+/// and no group is ever split.
+#[test]
+fn groups_share_a_page_while_they_fit_and_none_is_split() {
+    let pages = pack_pages(vec![
+        group("a", 400),
+        group("b", 400),
+        group("c", 400),
+        group("d", 900),
+        group("e", PAGE_BUDGET + 1),
+    ]);
+    let labels: Vec<&str> = pages.iter().map(|page| page.label.as_str()).collect();
+    assert_eq!(labels, ["a to c", "d", "e"]);
+    assert_eq!(pages[2].description.len(), PAGE_BUDGET + 1);
+
+    let two = pack_pages(vec![group("a", 10), group("b", 10)]);
+    assert_eq!(two[0].label, "a, b");
+}
+
+/// One page is an ordinary card. Several are shown one at a time with the
+/// page named under the card's own footer, and a surface without pages reads
+/// them all.
+#[test]
+fn a_paged_card_shows_one_page_at_a_time_and_reads_whole_as_words() {
+    let one = Card::paged(
+        CardColor::Ready,
+        "t".to_owned(),
+        vec![group("only", 3)],
+        None,
+    );
+    assert_eq!((one.page_count(), one.description.as_str()), (1, "xxx"));
+    assert!(one.pages.is_empty());
+
+    let card = Card::paged(
+        CardColor::Ready,
+        "listing".to_owned(),
+        vec![group("first", 2), group("second", 4)],
+        Some("switch with !model".to_owned()),
+    );
+    assert_eq!(card.page_count(), 2);
+    let second = card.page(1);
+    assert_eq!(second.description, "xxxx");
+    assert_eq!(
+        second.footer.as_deref(),
+        Some("switch with !model\npage 2 of 2: second")
+    );
+    assert_eq!(
+        card.page(9).description,
+        "xxxx",
+        "past the end shows the last"
+    );
+    let words = card.words();
+    assert!(words.contains("first") && words.contains("xx") && words.contains("second"));
+}

@@ -235,16 +235,153 @@ pub struct Card {
     /// A quiet line under the body, when there is one worth saying.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub footer: Option<String>,
+    /// The pages of a card that holds more than one card's worth, in order.
+    /// Empty for an ordinary card, whose body and cells are its only page.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<CardPage>,
+}
+
+/// The most body and cells a page holds before the next group starts a page
+/// of its own, in the UTF-16 units the service counts in.
+pub const PAGE_BUDGET: usize = 1_500;
+
+/// The most cells a page holds before the next group starts a page of its
+/// own. The service takes 25, but more than ten stacked cells is a long scroll.
+pub const FIELDS_PER_PAGE: usize = 10;
+
+/// Lays `groups` onto pages in order. A group joins the page before it while
+/// both fit [`PAGE_BUDGET`] and [`FIELDS_PER_PAGE`], so small groups share a
+/// page and no group is split. A page that holds several groups is labeled
+/// by its first and last.
+pub fn pack_pages(groups: Vec<CardPage>) -> Vec<CardPage> {
+    let size = |page: &CardPage| {
+        page.description.encode_utf16().count()
+            + page
+                .fields
+                .iter()
+                .map(|field| field.name.encode_utf16().count() + field.value.encode_utf16().count())
+                .sum::<usize>()
+    };
+    let mut pages: Vec<(CardPage, String, usize)> = Vec::new();
+    for group in groups {
+        if let Some((page, first, joined)) = pages.last_mut()
+            && size(page) + size(&group) <= PAGE_BUDGET
+            && page.fields.len() + group.fields.len() <= FIELDS_PER_PAGE
+        {
+            *joined += 1;
+            page.label = if *joined == 2 {
+                format!("{first}, {}", group.label)
+            } else {
+                format!("{first} to {}", group.label)
+            };
+            if !group.description.is_empty() {
+                if !page.description.is_empty() {
+                    page.description.push_str("\n\n");
+                }
+                page.description.push_str(&group.description);
+            }
+            page.fields.extend(group.fields);
+            continue;
+        }
+        let first = group.label.clone();
+        pages.push((group, first, 1));
+    }
+    pages.into_iter().map(|(page, _, _)| page).collect()
+}
+
+/// One page of a card that holds more than one card's worth.
+///
+/// A surface that can turn pages shows one at a time under the card's title;
+/// one that cannot shows them all, one after another.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardPage {
+    /// What the page holds, such as the group it lists, shown with its number.
+    pub label: String,
+    /// The page's body.
+    pub description: String,
+    /// The page's cells.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<CardField>,
 }
 
 impl Card {
-    /// The words of the card, which a surface without cards shows.
+    /// A card of `pages`, one at a time where the surface can turn them.
+    ///
+    /// One page is an ordinary card, with nothing to turn.
+    pub fn paged(
+        color: CardColor,
+        title: String,
+        mut pages: Vec<CardPage>,
+        footer: Option<String>,
+    ) -> Self {
+        let single = (pages.len() == 1).then(|| pages.remove(0));
+        let (description, fields) = single.map_or_else(
+            || (String::new(), Vec::new()),
+            |page| (page.description, page.fields),
+        );
+        Self {
+            color,
+            title,
+            description,
+            fields,
+            footer,
+            pages,
+        }
+    }
+
+    /// How many pages the card has. An ordinary card has one.
+    pub fn page_count(&self) -> usize {
+        self.pages.len().max(1)
+    }
+
+    /// The card as page `index` alone shows it: that page's body and cells,
+    /// with its number and label under the card's own footer. An index past
+    /// the last shows the last.
+    pub fn page(&self, index: usize) -> Self {
+        let Some(page) = self
+            .pages
+            .get(index.min(self.pages.len().saturating_sub(1)))
+        else {
+            return self.clone();
+        };
+        let number = index.min(self.pages.len() - 1) + 1;
+        let position = format!("page {number} of {}: {}", self.pages.len(), page.label);
+        Self {
+            color: self.color,
+            title: self.title.clone(),
+            description: page.description.clone(),
+            fields: page.fields.clone(),
+            footer: Some(match &self.footer {
+                Some(footer) => format!("{footer}\n{position}"),
+                None => position,
+            }),
+            pages: Vec::new(),
+        }
+    }
+
+    /// The words of the card, which a surface without cards shows: every
+    /// page, one after another, under its label.
     pub fn words(&self) -> String {
         use std::fmt::Write as _;
 
-        let mut said = format!("{}\n{}", self.title, self.description);
-        for field in &self.fields {
-            let _ = write!(said, "\n{}: {}", field.name, field.value);
+        let mut said = self.title.clone();
+        let mut body = |description: &str, fields: &[CardField]| {
+            if !description.is_empty() {
+                said.push('\n');
+                said.push_str(description);
+            }
+            for field in fields {
+                let _ = write!(said, "\n{}: {}", field.name, field.value);
+            }
+        };
+        if self.pages.is_empty() {
+            body(&self.description, &self.fields);
+        } else {
+            for page in &self.pages {
+                body(&format!("\n{}", page.label), &[]);
+                body(&page.description, &page.fields);
+            }
         }
         if let Some(footer) = &self.footer {
             said.push('\n');

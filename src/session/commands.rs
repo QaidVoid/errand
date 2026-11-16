@@ -7,7 +7,7 @@
 
 use crate::config::schema::ForgeKind;
 use crate::forge;
-use crate::session::event::{Card, CardColor};
+use crate::session::event::{Card, CardColor, CardPage, pack_pages};
 use crate::session::model::{LEVELS, split_level};
 
 use CommandAccess::{Anyone, Guest, Host, Operator, Owner};
@@ -734,16 +734,27 @@ pub fn answer_without_session(content: &str) -> Option<Card> {
     (first_word(content) == "!help").then(help_card)
 }
 
-/// The command list as a card, whose body holds twice what a message does,
-/// so the list is not cut short as commands are added.
+/// The command list as a card, a page per group of commands, or a few small
+/// groups to a page.
 pub fn help_card() -> Card {
-    Card {
-        color: CardColor::Settled,
-        title: "commands".to_owned(),
-        description: help_text(),
-        fields: Vec::new(),
-        footer: None,
-    }
+    let groups = help_groups()
+        .into_iter()
+        .map(|(title, name, rows)| CardPage {
+            label: name.to_owned(),
+            description: format!("```\n{title}\n{}\n```", rows.join("\n")),
+            fields: Vec::new(),
+        })
+        .collect();
+    Card::paged(
+        CardColor::Settled,
+        "commands".to_owned(),
+        pack_pages(groups),
+        Some(
+            "Type these in a thread, or as slash commands. Anything else is a prompt. A \
+             message starting !!! is an aside the agent never sees."
+                .to_owned(),
+        ),
+    )
 }
 
 const GROUP_TITLES: [(CommandGroup, &str); 4] = [
@@ -771,6 +782,27 @@ fn access_note(access: CommandAccess) -> &'static str {
 /// Nothing here is decorated with a glyph, because every glyph this system
 /// emits names one state and none of them names "a command exists".
 pub fn help_text() -> String {
+    let lines: Vec<String> = help_groups()
+        .into_iter()
+        .map(|(title, _, rows)| format!("{title}\n{}", rows.join("\n")))
+        .collect();
+    [
+        "Type these in the thread, or use the same name as a slash command.".to_owned(),
+        "```".to_owned(),
+        lines.join("\n\n"),
+        "```".to_owned(),
+        HELP_ASIDE.to_owned(),
+    ]
+    .join("\n")
+}
+
+/// What help says after the list, about what is not a command.
+const HELP_ASIDE: &str = "Anything else is a prompt for the agent. A message starting `!!!` is an\naside: the agent is never told about it.";
+
+/// Each group of commands that has any: its heading as the list prints it,
+/// its name as a page is labeled with, and its lines, aligned across every
+/// group so the columns line up whichever page a reader is on.
+fn help_groups() -> Vec<(&'static str, &'static str, Vec<String>)> {
     let spelled = |name: &str, meta: &CommandMeta| match meta.argument {
         None => name.to_owned(),
         Some(argument) => format!("{name} {argument}"),
@@ -781,48 +813,30 @@ pub fn help_text() -> String {
         .max()
         .unwrap_or(0);
 
-    let mut lines: Vec<String> = Vec::new();
-    for (group, title) in GROUP_TITLES {
-        let in_group: Vec<&(&str, CommandMeta)> = COMMANDS
-            .iter()
-            .filter(|(_, meta)| meta.group == group)
-            .collect();
-        if in_group.is_empty() {
-            continue;
-        }
-        if !lines.is_empty() {
-            lines.push(String::new());
-        }
-        lines.push(title.to_owned());
-        for (name, meta) in in_group {
-            let note = access_note(meta.access);
-            let spelled_name = spelled(name, meta);
-            let padding = " ".repeat(width - spelled_name.chars().count());
-            lines.push(format!(
-                "  {spelled_name}{padding}  {}{}",
-                meta.summary,
-                if note.is_empty() {
-                    String::new()
-                } else {
-                    format!(" ({note})")
-                },
-            ));
-        }
-    }
-
-    [
-        "Type these in the thread, or use the same name as a slash command.".to_owned(),
-        "```".to_owned(),
-    ]
-    .into_iter()
-    .chain(lines)
-    .chain([
-        "```".to_owned(),
-        "Anything else is a prompt for the agent. A message starting `!!!` is an".to_owned(),
-        "aside: the agent is never told about it.".to_owned(),
-    ])
-    .collect::<Vec<_>>()
-    .join("\n")
+    GROUP_TITLES
+        .into_iter()
+        .filter_map(|(group, title)| {
+            let rows: Vec<String> = COMMANDS
+                .iter()
+                .filter(|(_, meta)| meta.group == group)
+                .map(|(name, meta)| {
+                    let note = access_note(meta.access);
+                    let spelled_name = spelled(name, meta);
+                    let padding = " ".repeat(width - spelled_name.chars().count());
+                    format!(
+                        "  {spelled_name}{padding}  {}{}",
+                        meta.summary,
+                        if note.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({note})")
+                        },
+                    )
+                })
+                .collect();
+            (!rows.is_empty()).then(|| (title, group.title(), rows))
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -4,8 +4,8 @@
 //! `crate::session::commands`. This is the half that acts on one.
 
 use super::{Attached, IncomingMessage, Running, SessionTimer, display_name, end_reason_name};
-use crate::chat::render::listed_models;
 use crate::chat::render::{bytes as byte_count, compaction_line, connection_line};
+use crate::chat::render::{listed_models, model_pages};
 use crate::log::{LogValue, fields};
 
 use crate::provider::models::{AvailableModel, Matched, match_model};
@@ -262,13 +262,12 @@ impl Running {
             "this session runs on `{shown}`. Switch with `!model <name>`:\n{}",
             list.join("\n")
         );
-        let card = Card {
-            color: CardColor::Ready,
-            title: "models this session can switch to".to_owned(),
-            description: format!("runs on `{shown}`\n{}", list[1..].join("\n")),
-            fields: Vec::new(),
-            footer: Some("switch with `!model <name>`".to_owned()),
-        };
+        let card = Card::paged(
+            CardColor::Ready,
+            "models this session can switch to".to_owned(),
+            model_pages(&format!("runs on `{shown}`"), &list),
+            Some("switch with `!model <name>`".to_owned()),
+        );
         self.say_with_card(&text, Some(card)).await;
     }
 
@@ -462,6 +461,7 @@ impl Running {
             description: text.clone(),
             fields: Vec::new(),
             footer: None,
+            pages: Vec::new(),
         };
         (text, card)
     }

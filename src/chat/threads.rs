@@ -32,6 +32,7 @@ use crate::chat::chars::reaction;
 use crate::chat::diff::FileDiff;
 use crate::chat::diff::render_diff;
 use crate::chat::outbox::{DEFAULT_MAX_BUFFERED, Outbox, PermanentFailure, TaskError};
+use crate::chat::pager::{self, Pager};
 use crate::chat::render::{
     MESSAGE_LIMIT, delegation_line, split_message, split_tables, table_card,
 };
@@ -192,7 +193,20 @@ pub fn plain(content: &str) -> CreateMessage {
 /// The suppress-embeds flag is left off, because the flag would hide the card
 /// with the previews; a card keeps bare URLs out of itself, which is what
 /// keeps previews from being made.
+///
+/// A card of several pages shows its first, with the buttons that turn it.
 pub fn card(message: &Card) -> CreateMessage {
+    let mut built = CreateMessage::new()
+        .embed(embed(&message.page(0)))
+        .allowed_mentions(addressed_to_people());
+    if message.page_count() > 1 {
+        built = built.components(pager::buttons(0, message.page_count()));
+    }
+    built
+}
+
+/// One page of a card, as the service draws it.
+pub fn embed(message: &Card) -> CreateEmbed {
     let mut embed = CreateEmbed::new().title(&message.title);
     embed = embed.color(color_of(message.color));
     // An empty body is left off rather than drawn as nothing: a card of
@@ -213,9 +227,7 @@ pub fn card(message: &Card) -> CreateMessage {
     if let Some(footer) = &message.footer {
         embed = embed.footer(CreateEmbedFooter::new(footer.as_str()));
     }
-    CreateMessage::new()
-        .embed(embed)
-        .allowed_mentions(addressed_to_people())
+    embed
 }
 
 /// The color a state is drawn in, on the service's own palette.
@@ -246,6 +258,7 @@ fn notice_card(text: &str, level: NoticeLevel) -> Card {
         description: text.to_owned(),
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     }
 }
 
@@ -257,6 +270,7 @@ fn refused_card(text: &str) -> Card {
         description: text.to_owned(),
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     }
 }
 
@@ -280,12 +294,18 @@ fn parse_failure(error: std::num::ParseIntError) -> ServiceCall<()> {
 pub struct SerenityThread {
     thread_id: ChannelId,
     http: Arc<serenity::http::Http>,
+    /// Where a paged card it posts is remembered, so its buttons turn it.
+    pager: Arc<Pager>,
 }
 
 impl SerenityThread {
     /// A transport for one thread channel.
-    pub fn new(thread_id: ChannelId, http: Arc<serenity::http::Http>) -> Self {
-        Self { thread_id, http }
+    pub fn new(thread_id: ChannelId, http: Arc<serenity::http::Http>, pager: Arc<Pager>) -> Self {
+        Self {
+            thread_id,
+            http,
+            pager,
+        }
     }
 }
 
@@ -293,6 +313,7 @@ impl ThreadTransport for SerenityThread {
     fn send(&self, message: Outgoing) -> ServiceCall<MessageHandle> {
         let thread_id = self.thread_id;
         let http = Arc::clone(&self.http);
+        let pager = Arc::clone(&self.pager);
         Box::pin(async move {
             let mut sent_message = match &message.card {
                 Some(built) => {
@@ -311,6 +332,9 @@ impl ThreadTransport for SerenityThread {
                 sent_message = sent_message.files(vec![CreateAttachment::bytes(bytes, name)]);
             }
             let sent = thread_id.send_message(&http, sent_message).await?;
+            if let Some(card) = &message.card {
+                pager.hold(sent.id.get(), card);
+            }
             Ok(MessageHandle {
                 id: sent.id.get().to_string(),
             })
@@ -1034,6 +1058,8 @@ pub struct ChatThreadFactory {
     forward_tool_output: bool,
     /// Whether the gateway is up, which every port it builds follows.
     connection: watch::Receiver<bool>,
+    /// Where the paged cards its threads post are remembered.
+    pager: Arc<Pager>,
 }
 
 impl ChatThreadFactory {
@@ -1044,6 +1070,7 @@ impl ChatThreadFactory {
         log: Logger,
         forward_tool_output: bool,
         connection: watch::Receiver<bool>,
+        pager: Arc<Pager>,
     ) -> Self {
         Self {
             channel_id,
@@ -1051,12 +1078,17 @@ impl ChatThreadFactory {
             log,
             forward_tool_output,
             connection,
+            pager,
         }
     }
 
     fn adopt(&self, thread_id: ChannelId) -> ChatThread<SerenityThread> {
         let thread = ChatThread::new(
-            Arc::new(SerenityThread::new(thread_id, Arc::clone(&self.http))),
+            Arc::new(SerenityThread::new(
+                thread_id,
+                Arc::clone(&self.http),
+                Arc::clone(&self.pager),
+            )),
             self.log.clone(),
             self.forward_tool_output,
         );

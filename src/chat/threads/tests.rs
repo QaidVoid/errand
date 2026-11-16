@@ -186,6 +186,7 @@ async fn a_card_travels_as_one_message_without_its_words_duplicated() {
         description: "- `glm-5.3`\n- `glm-4.7`".to_owned(),
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     };
     port.post_card("models on this host", Some(&card));
     port.flush().await;
@@ -212,6 +213,7 @@ async fn a_card_too_big_for_the_service_is_left_behind_and_the_words_are_posted(
         description: body,
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     };
     port.post_card("the words", Some(&card));
     port.flush().await;

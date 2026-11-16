@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::admission::scheduler::{Scheduler, SystemClock};
 use crate::chat::inbound::{InboundDecision, RawMessage};
-use crate::chat::render::listed_models;
+use crate::chat::render::{listed_models, model_pages};
 use crate::config::duration::parse_duration;
 use crate::config::live::LiveConfig;
 use crate::config::redact::redact_config;
@@ -1015,13 +1015,12 @@ impl Daemon {
             &current,
             &self.options.catalog.aliases(),
         );
-        Some(Answer::Card(Card {
-            color: CardColor::Ready,
-            title: "models on this host".to_owned(),
-            description: format!("a new session runs on `{shown}`\n{}", list[1..].join("\n")),
-            fields: Vec::new(),
-            footer: Some("switch with `!model <name>` in a session thread".to_owned()),
-        }))
+        Some(Answer::Card(Card::paged(
+            CardColor::Ready,
+            "models on this host".to_owned(),
+            model_pages(&format!("a new session runs on `{shown}`"), &list),
+            Some("switch with `!model <name>` in a session thread".to_owned()),
+        )))
     }
 
     /// Answers what is remembered, for somebody who is not in a thread.

@@ -1950,6 +1950,7 @@ fn the_window(text: &str) -> Card {
         description: text.to_owned(),
         fields: Vec::new(),
         footer: None,
+        pages: Vec::new(),
     }
 }
 

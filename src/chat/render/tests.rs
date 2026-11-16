@@ -4,9 +4,9 @@ use serde_json::json;
 
 use super::{
     MAX_LISTED_ENTRIES, MESSAGE_LIMIT, THREAD_NAME_LIMIT, Usage, bytes, compaction_line,
-    dialog_lines, directory_listing, duration, file_view, output_rate, split_message, split_tables,
-    table_card, thread_name, tokens, tool_line, truncate, turn_summary, turn_timing, usage_card,
-    usage_summary, usage_table, when_relative_plain,
+    dialog_lines, directory_listing, duration, file_view, model_pages, output_rate, split_message,
+    split_tables, table_card, thread_name, tokens, tool_line, truncate, turn_summary, turn_timing,
+    usage_card, usage_summary, when_relative_plain,
 };
 use crate::agent::protocol::{DialogMethod, DialogRequest};
 use crate::provider::usage::Quota;
@@ -516,88 +516,35 @@ fn a_turn_summary_groups_what_it_answers() {
 #[test]
 fn the_usage_card_is_amber_only_when_a_window_is_spent() {
     let now = 1_790_000_000_000;
-    let healthy = usage_card(
-        &[(
+    let healthy = usage_card(&[(
+        "acme".to_owned(),
+        Some(Quota {
+            percentage: 42.4,
+            resets_at: Some(now),
+        }),
+    )]);
+    assert_eq!(healthy.color, CardColor::Ready);
+
+    let spent = usage_card(&[
+        (
             "acme".to_owned(),
             Some(Quota {
                 percentage: 42.4,
                 resets_at: Some(now),
             }),
-        )],
-        now,
-    );
-    assert_eq!(healthy.color, CardColor::Ready);
-
-    let spent = usage_card(
-        &[
-            (
-                "acme".to_owned(),
-                Some(Quota {
-                    percentage: 42.4,
-                    resets_at: Some(now),
-                }),
-            ),
-            (
-                "zai-coding-cn".to_owned(),
-                Some(Quota {
-                    percentage: 100.0,
-                    resets_at: Some(now),
-                }),
-            ),
-        ],
-        now,
-    );
+        ),
+        (
+            "zai-coding-cn".to_owned(),
+            Some(Quota {
+                percentage: 100.0,
+                resets_at: Some(now),
+            }),
+        ),
+    ]);
     assert_eq!(spent.color, CardColor::Warning);
 
-    let silent = usage_card(&[("quiet".to_owned(), None)], now);
+    let silent = usage_card(&[("quiet".to_owned(), None)]);
     assert_eq!(silent.color, CardColor::Ready);
-}
-
-/// `!usage` lines up as a table in a code block: what is left, when it resets
-/// as a span, and the moment in UTC, with a dash for what a provider did not
-/// say.
-#[test]
-fn usage_is_a_table_with_the_reset_in_utc() {
-    let now = 1_790_000_000_000;
-    let table = usage_table(
-        &[
-            (
-                "acme".to_owned(),
-                Some(Quota {
-                    percentage: 42.4,
-                    resets_at: Some(now + 2 * 3_600_000 + 13 * 60_000),
-                }),
-            ),
-            (
-                "zai-coding-cn".to_owned(),
-                Some(Quota {
-                    percentage: 100.0,
-                    resets_at: Some(now + 93 * 3_600_000),
-                }),
-            ),
-            (
-                "fresh".to_owned(),
-                Some(Quota {
-                    percentage: 0.0,
-                    resets_at: None,
-                }),
-            ),
-            ("quiet".to_owned(), None),
-        ],
-        now,
-    );
-
-    assert_eq!(
-        table,
-        "```\n\
-| provider      | left    | resets in | at (UTC)         |\n\
-|---------------|---------|-----------|------------------|\n\
-| acme          | 58%     | 2h 13m    | 2026-09-21 16:26 |\n\
-| zai-coding-cn | spent   | 3d 21h    | 2026-09-25 11:13 |\n\
-| fresh         | 100%    | -         | -                |\n\
-| quiet         | unknown | -         | -                |\n\
-```"
-    );
 }
 
 /// A two-column table is a name and its value, so it becomes a card of
@@ -663,21 +610,39 @@ fn prose_around_a_table_keeps_the_output_fenced() {
     assert_eq!(table_card("ls", ""), None);
 }
 
-/// A table with more rows than a card has cells for stays fenced whole:
-/// showing the first 25 and dropping the rest would invent a shorter table.
+/// A table longer than a page goes onto several rather than being cut
+/// short or left fenced, and every page carries the header, so each reads on
+/// its own.
 #[test]
-fn a_table_past_the_grid_limit_keeps_the_output_fenced() {
+fn a_long_table_is_paged_with_its_header_on_every_page() {
     let header = "| id | note |\n|----|------|\n";
-    let rows = (0..25)
+    let rows = (1..=26)
         .map(|n| format!("| {n} | x |"))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(table_card("ls", &format!("{header}{rows}\n")).is_some());
-    let rows = (0..26)
-        .map(|n| format!("| {n} | x |"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(table_card("ls", &format!("{header}{rows}\n")), None);
+    let card = table_card("ls", &format!("{header}{rows}\n")).expect("drawn");
+    assert_eq!(card.page_count(), 3);
+    let last = card.page(2);
+    assert_eq!(last.fields.len(), 6);
+    assert_eq!(last.fields[0].name, "21");
+    assert!(last.description.contains("id"));
+    assert!(last.footer.unwrap().contains("page 3 of 3: rows 21 to 26"));
+
+    let wide = "| id | name | note |\n|----|------|------|\n".to_owned()
+        + &(1..=200)
+            .map(|n| format!("| {n} | someone | {} |", "y".repeat(20)))
+            .collect::<Vec<_>>()
+            .join("\n");
+    let card = table_card("ls", &wide).expect("drawn");
+    assert!(card.page_count() > 1);
+    for index in 0..card.page_count() {
+        let page = card.page(index);
+        assert!(
+            page.description.starts_with("```\n| id"),
+            "{}",
+            page.description
+        );
+    }
 }
 
 /// A table whose rows do not all agree with the header, or whose row has
@@ -694,18 +659,13 @@ fn a_ragged_or_unheaded_table_keeps_the_output_fenced() {
     assert_eq!(table_card("ls", "| a |\n|---|\n| 1 |"), None);
 }
 
-/// A table that would not sit whole inside one embed is not drawn at all:
-/// the service refuses an over-heavy embed, which would lose the words
-/// beside it too.
+/// A row too heavy for a page of its own is not drawn at all: the service
+/// refuses an over-heavy embed, which would lose the words beside it too.
 #[test]
-fn a_table_too_heavy_for_one_embed_keeps_the_output_fenced() {
-    let cell = "x".repeat(240);
-    let header = "| id | note |\n|----|------|\n";
-    let rows = (0..25)
-        .map(|n| format!("| {n} | {cell} |"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(table_card("ls", &format!("{header}{rows}")), None);
+fn a_row_too_heavy_for_a_page_keeps_the_output_fenced() {
+    let cell = "x".repeat(7_000);
+    let table = format!("| id | note |\n|----|------|\n| 1 | {cell} |");
+    assert_eq!(table_card("ls", &table), None);
 }
 
 /// An answer that ends with a table is split: the words before it travel
@@ -840,4 +800,29 @@ fn a_long_quoted_prompt_is_cut_short() {
             .count(),
         super::MAX_QUOTED_CHARS
     );
+}
+
+/// A model listing is turned a provider at a time, small providers sharing
+/// a page, and every page says what a new choice is measured against.
+#[test]
+fn a_model_listing_is_paged_by_provider_with_the_intro_on_every_page() {
+    let mut list = vec![String::new()];
+    for provider in ["kenari", "ant"] {
+        list.push(format!("**{provider}**"));
+        list.extend((0..60).map(|n| format!("- `{provider}-model-{n}`")));
+        list.push(String::new());
+    }
+    list.push("**tiny**".to_owned());
+    list.push("- `one`".to_owned());
+
+    let pages = model_pages("runs on `kenari/a`", &list);
+
+    let labels: Vec<&str> = pages.iter().map(|page| page.label.as_str()).collect();
+    assert_eq!(labels, ["kenari", "ant, tiny"]);
+    assert!(
+        pages
+            .iter()
+            .all(|page| page.description.starts_with("runs on `kenari/a`\n\n"))
+    );
+    assert!(pages.last().unwrap().description.contains("**tiny**"));
 }
