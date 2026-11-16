@@ -1,7 +1,7 @@
 # Changelog
 
 What changed in each release, from the commit messages.
-## [0.4.2] - 2026-11-16
+## [0.5.0] - 2026-11-16
 
 
 ### Features
