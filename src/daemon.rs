@@ -551,10 +551,10 @@ impl Daemon {
                 .collect();
             match self.options.sandbox.remove_as_guest(&paths).await {
                 Ok(()) => {
-                    let again: std::collections::BTreeSet<String> = swept
+                    let again: BTreeMap<String, u64> = swept
                         .refused
                         .iter()
-                        .map(|refused| refused.session_id.clone())
+                        .map(|refused| (refused.session_id.clone(), refused.bytes))
                         .collect();
                     let retried = parts.sweep_off_workers(Some(again)).await;
                     swept.collected.extend(retried.collected);
@@ -1553,6 +1553,8 @@ pub struct Collection {
 struct Refused {
     thread_id: String,
     session_id: String,
+    /// What it held before anything of it was deleted.
+    bytes: u64,
     paths: Vec<std::path::PathBuf>,
     why: String,
 }
@@ -1578,7 +1580,7 @@ struct SweepParts {
 impl SweepParts {
     /// Runs [`Self::sweep`] on a thread that may block, since a session can
     /// hold gigabytes to delete.
-    async fn sweep_off_workers(&self, only: Option<std::collections::BTreeSet<String>>) -> Swept {
+    async fn sweep_off_workers(&self, only: Option<BTreeMap<String, u64>>) -> Swept {
         let parts = self.clone();
         tokio::task::spawn_blocking(move || parts.sweep(only.as_ref()))
             .await
@@ -1593,6 +1595,9 @@ impl SweepParts {
 
     /// Collects each cold session, or only those `only` names.
     ///
+    /// `only` carries what each held when a first pass measured it: a guest
+    /// that emptied it since would have it measure as nothing.
+    ///
     /// Each thread is claimed first, as a resume claims it, so a thread that
     /// comes back during the sweep is either reopened before the sweep
     /// reaches it or waits until its session is gone. Under the claim the
@@ -1601,7 +1606,7 @@ impl SweepParts {
     /// whole. The entry is forgotten only once everything else is deleted, so
     /// a sweep that fails or is cut short leaves it naming what remains, for
     /// the next one. Each collection is logged with what it freed.
-    fn sweep(&self, only: Option<&std::collections::BTreeSet<String>>) -> Swept {
+    fn sweep(&self, only: Option<&BTreeMap<String, u64>>) -> Swept {
         let config = &self.config;
         let mut swept = Swept::default();
         if !config.retention.enabled {
@@ -1621,9 +1626,12 @@ impl SweepParts {
             is_live: &is_live,
         };
         for cold in cold_sessions(&sweep, &records, false) {
-            if only.is_some_and(|only| !only.contains(&cold.session_id)) {
+            if only.is_some_and(|only| !only.contains_key(&cold.session_id)) {
                 continue;
             }
+            let bytes = only
+                .and_then(|only| only.get(&cold.session_id).copied())
+                .unwrap_or(cold.bytes);
             let Some(thread_id) = cold.thread_id.as_deref() else {
                 continue;
             };
@@ -1658,14 +1666,15 @@ impl SweepParts {
                         &fields([
                             ("thread", LogValue::from(thread_id)),
                             ("session", LogValue::from(cold.session_id.as_str())),
-                            ("bytes", LogValue::from(cold.bytes)),
+                            ("bytes", LogValue::from(bytes)),
                         ]),
                     );
-                    swept.collected.push((cold.session_id.clone(), cold.bytes));
+                    swept.collected.push((cold.session_id.clone(), bytes));
                 }
                 Err(why) => swept.refused.push(Refused {
                     thread_id: thread_id.to_owned(),
                     session_id: cold.session_id.clone(),
+                    bytes,
                     paths: cold.paths.clone(),
                     why,
                 }),

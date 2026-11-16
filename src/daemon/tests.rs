@@ -277,6 +277,17 @@ impl SandboxPool for FakeSandbox {
         for dir in self.guest_owned.lock().unwrap().drain(..) {
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
+        // As the real guest does: each path is left, empty.
+        for path in paths {
+            for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+                let inside = entry.path();
+                if inside.is_dir() {
+                    std::fs::remove_dir_all(&inside).unwrap();
+                } else {
+                    std::fs::remove_file(&inside).unwrap();
+                }
+            }
+        }
         Box::pin(async { Ok(()) })
     }
 }
@@ -2916,6 +2927,10 @@ async fn a_session_the_daemon_may_not_delete_is_emptied_as_the_guest_and_collect
 
                 assert_eq!(collection.collected, 1);
                 assert!(collection.kept.is_empty());
+                assert!(
+                    collection.freed > 0,
+                    "what it held before the guest emptied it"
+                );
                 assert!(!state.exists());
                 let asked = harness.sandbox.removed_as_guest.lock().unwrap().clone();
                 assert_eq!(asked.len(), 1);
