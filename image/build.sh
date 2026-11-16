@@ -3,7 +3,8 @@
 #
 # A temporary container is provisioned by provision.sh, then published under
 # the alias and, with INCUS_GOLDEN, copied to the golden instance the backend
-# starts sessions from.
+# starts sessions from. The image the alias named before is deleted, since
+# nothing starts from it any more.
 set -eu
 
 : "${KAGE_BIN:?set KAGE_BIN to a kage binary newer than 0.5.1}"
@@ -22,6 +23,22 @@ docker-socket.conf containers.conf"
 # an argument to the guest's command instead.
 incus_() {
     incus --project "$project" "$@" </dev/null
+}
+
+fingerprint() {
+    incus_ image info "$alias" 2>/dev/null | sed -n 's/^Fingerprint: //p'
+}
+
+# A golden instance carries the contract. Rebuilding only the image would
+# leave the backend starting sessions from the golden as it was.
+refuse_forgotten_golden() {
+    [ -z "$golden" ] || return 0
+    for instance in $(incus_ list --format csv --columns n); do
+        if [ -n "$(incus_ config get "$instance" user.errand.contract)" ]; then
+            echo "$instance is a golden instance; build with INCUS_GOLDEN=$instance" >&2
+            exit 1
+        fi
+    done
 }
 
 remove_build() {
@@ -47,16 +64,25 @@ contract() {
 }
 
 publish() {
+    previous=$(fingerprint)
     incus_ publish "$build" --alias "$alias" --reuse
     incus_ image set-property "$alias" user.errand.contract "$1"
+    if [ -n "$previous" ] && [ "$previous" != "$(fingerprint)" ]; then
+        incus_ image delete "$previous"
+    fi
 }
 
+# Copied aside first and renamed into place, so the golden is missing for a
+# moment rather than for the length of a copy.
 replace_golden() {
+    incus_ delete --force "$golden-next" >/dev/null 2>&1 || true
+    incus_ copy "$build" "$golden-next"
+    incus_ config set "$golden-next" user.errand.contract "$1"
     incus_ delete --force "$golden" >/dev/null 2>&1 || true
-    incus_ copy "$build" "$golden"
-    incus_ config set "$golden" user.errand.contract "$1"
+    incus_ move "$golden-next" "$golden"
 }
 
+refuse_forgotten_golden
 trap remove_build EXIT
 remove_build
 provision

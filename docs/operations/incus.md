@@ -76,6 +76,10 @@ An image must carry a `user.errand.contract` property naming its contract
 version and the providers its kage knows. The probe refuses an image without
 one.
 
+When `sandbox.incus.golden` is set, sessions start from that instance rather
+than from the alias, so a rebuilt image reaches them only through
+`INCUS_GOLDEN`. `image/README.md` describes updating a running host.
+
 ## Configuration
 
 ```json

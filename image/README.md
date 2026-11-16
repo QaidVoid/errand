@@ -96,8 +96,29 @@ Optional settings:
 | `INCUS_GOLDEN` | none | when set, also create a stopped instance of that name |
 
 The script creates a temporary container named `errand-image-build`, runs
-`provision.sh` in it, stops it and publishes it. The temporary container is
-deleted on exit.
+`provision.sh` in it, stops it and publishes it. The image the alias named
+before is deleted, since publishing moves the alias and would otherwise leave
+it behind, unnamed, at nearly 2 GiB. The temporary container is deleted on
+exit.
+
+When the backend is configured with `sandbox.incus.golden`, sessions start
+from that instance and not from the alias, so `INCUS_GOLDEN` must name it.
+The script refuses to run without it while an instance carrying the contract
+exists, rather than build an image nothing starts from.
+
+## Updating a running host
+
+1. Rebuild, naming the golden when there is one:
+
+   ```sh
+   KAGE_BIN=/path/to/kage INCUS_GOLDEN=errand-golden ./build.sh
+   ```
+
+   Sessions that start after this use the new image. Running ones keep the
+   instance they started with until they stop.
+
+2. Type `!restart` in the channel. The daemon reads the contract once, when
+   it starts, so a new kage is only known to it after a restart.
 
 The published image is not bit-for-bit reproducible. It is built from the
 Debian image server and the packages available at build time. Record the
