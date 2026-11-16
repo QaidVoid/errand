@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 
@@ -378,4 +378,76 @@ async fn a_round_that_asks_one_provider_keeps_the_rest_and_follows_the_file() {
     )
     .await;
     assert!(!providers.contains_key("quiet"));
+}
+
+/// Answers every URL with the same listing, but only once `asked` providers
+/// are waiting on it at the same time.
+struct Gathered {
+    asked: Arc<tokio::sync::Barrier>,
+}
+
+impl Fetch for Gathered {
+    fn fetch(
+        &self,
+        _url: String,
+        _request: HttpRequest,
+    ) -> impl Future<Output = Result<HttpResponse, FetchError>> + Send {
+        let asked = Arc::clone(&self.asked);
+        async move {
+            asked.wait().await;
+            Ok(HttpResponse {
+                status: 200,
+                body: Some(gateway_listing()),
+            })
+        }
+    }
+}
+
+/// Every provider is asked at once, so one slow provider does not hold up
+/// the rest: each answer here waits until both have been asked, which asking
+/// one after the other never gets past.
+#[tokio::test(start_paused = true)]
+async fn the_providers_are_asked_all_at_once() {
+    let config = validate_config(&json!({
+        "chat": { "token": "chat-token", "channelId": "c", "allowedUserIds": ["u"] },
+        "agent": {
+            "provider": "first",
+            "providers": {
+                "first": {
+                    "baseUrl": "https://first.example/v1",
+                    "credential": "f-key",
+                    "discover": true,
+                },
+                "second": {
+                    "baseUrl": "https://second.example/v1",
+                    "credential": "s-key",
+                    "discover": true,
+                },
+            },
+        },
+        "projectRoot": "/tmp/p",
+        "stateDir": "/tmp/s",
+    }))
+    .expect("resolves");
+    let fetch = Gathered {
+        asked: Arc::new(tokio::sync::Barrier::new(2)),
+    };
+
+    let (_, _, outcomes) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        discover(
+            &config.agent,
+            &serde_json::Map::new(),
+            |_| true,
+            None,
+            &fetch,
+            1_000,
+        ),
+    )
+    .await
+    .expect("both were asked before either answered");
+
+    let named: Vec<&str> = outcomes.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(named, ["first", "second"]);
+    assert!(outcomes.iter().all(|(_, found)| found.is_ok()));
 }

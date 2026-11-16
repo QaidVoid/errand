@@ -280,6 +280,39 @@ fn counted_source(
     }
 }
 
+/// Every provider's window is asked for at once: each read here waits until
+/// both have been asked, which a read one after the other never gets past.
+#[tokio::test(start_paused = true)]
+async fn usage_windows_are_read_all_at_once() {
+    let asked = Arc::new(tokio::sync::Barrier::new(2));
+    let waiting = |provider: &str| {
+        let asked = Arc::clone(&asked);
+        let read: BoxedGateRead = Box::new(move || {
+            let asked = Arc::clone(&asked);
+            Box::pin(async move {
+                asked.wait().await;
+                Some(Quota {
+                    percentage: 10.0,
+                    resets_at: None,
+                })
+            }) as Pin<Box<dyn Future<Output = Option<Quota>> + Send>>
+        });
+        UsageSource {
+            provider: provider.to_owned(),
+            gate: QuotaGate::new(read, || 1_000),
+            spent_refuses: true,
+        }
+    };
+    let mut sources = vec![waiting("first"), waiting("second")];
+
+    let rows = tokio::time::timeout(Duration::from_secs(5), read_usage(&mut sources, true))
+        .await
+        .expect("both were asked before either answered");
+
+    let providers: Vec<&str> = rows.iter().map(|(provider, _)| provider.as_str()).collect();
+    assert_eq!(providers, ["first", "second"]);
+}
+
 /// A spent window is held until it rolls over, so a provider that resets early
 /// goes unread. A refresh is what makes the daemon ask again, and read it is
 /// where the flag has to be acted on rather than merely carried.

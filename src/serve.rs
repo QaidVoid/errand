@@ -10,6 +10,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use futures_util::future::join_all;
 use serenity::client::Context;
 use serenity::client::EventHandler as SerenityEventHandler;
 use serenity::model::application::Interaction;
@@ -410,22 +411,25 @@ type BoxedGateRead =
 
 /// Reads every provider's window, one row each, in the order they are listed.
 ///
+/// The providers are asked all at once: each is a round trip of its own, and
+/// the lock on the sources is held until the last one answers, so one slow
+/// provider would otherwise hold up every reading after it.
+///
 /// A refresh drops what each gate is holding before it is read again, which is
 /// what a provider that resets or tops a window up early needs: the gate would
 /// otherwise keep answering from what it last saw, since nothing about a spent
 /// window can change before it rolls over.
 async fn read_usage(
-    sources: &mut Vec<UsageSource<BoxedGateRead>>,
+    sources: &mut [UsageSource<BoxedGateRead>],
     refresh: bool,
 ) -> Vec<(String, Option<Quota>)> {
-    let mut rows = Vec::new();
-    for source in sources.iter_mut() {
+    join_all(sources.iter_mut().map(|source| async move {
         if refresh {
             source.gate.forget();
         }
-        rows.push((source.provider.clone(), source.gate.current().await));
-    }
-    rows
+        (source.provider.clone(), source.gate.current().await)
+    }))
+    .await
 }
 
 /// Why a session on `provider` cannot start, or nothing when it can.
@@ -838,22 +842,20 @@ fn refresh_presence(
     let status_gateway = Arc::clone(gateway);
     tokio::spawn(async move {
         loop {
-            let mut windows = Vec::new();
-            {
-                let mut sources = status_sources.lock().await;
-                for source in sources.iter_mut() {
-                    let quota = source.gate.current().await;
-                    windows.push(quota.map(|quota| {
-                        let relative = quota.resets_at.map(|at| when_relative_plain(at, now_ms()));
-                        Window {
-                            provider: source.provider.clone(),
-                            quota,
-                            relative,
-                        }
-                    }));
-                }
-            }
-            if let Some(status) = usage_status(&windows.into_iter().flatten().collect::<Vec<_>>()) {
+            let rows = read_usage(&mut status_sources.lock().await, false).await;
+            let windows: Vec<Window> = rows
+                .into_iter()
+                .filter_map(|(provider, quota)| {
+                    let quota = quota?;
+                    let relative = quota.resets_at.map(|at| when_relative_plain(at, now_ms()));
+                    Some(Window {
+                        provider,
+                        quota,
+                        relative,
+                    })
+                })
+                .collect();
+            if let Some(status) = usage_status(&windows) {
                 status_gateway.set_status(Some(&status));
             } else {
                 status_gateway.set_status(None);

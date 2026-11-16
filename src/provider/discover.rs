@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
+use futures_util::future::join_all;
 use serde_json::{Map, Value};
 
 use super::models::{AvailableModel, available_models};
@@ -164,25 +165,30 @@ pub async fn discover(
             }
         }
     }
-    let mut outcomes = Vec::new();
-    for (name, definition) in &agent.providers {
-        if !ask(name) {
-            continue;
-        }
-        let Ok(Some(discovery)) = Discovery::of(name, definition) else {
-            continue;
-        };
-        let Some(base_url) = definition.get("baseUrl").and_then(Value::as_str) else {
-            continue;
-        };
-        let fetched = fetch_models(
+    let asked: Vec<(&String, &Value, Discovery, &str)> = agent
+        .providers
+        .iter()
+        .filter(|(name, _)| ask(name))
+        .filter_map(|(name, definition)| {
+            let discovery = Discovery::of(name, definition).ok()??;
+            let base_url = definition.get("baseUrl").and_then(Value::as_str)?;
+            Some((name, definition, discovery, base_url))
+        })
+        .collect();
+    // Asked all at once: each is a round trip of its own, and one slow
+    // provider would otherwise hold up every provider listed after it.
+    let fetched = join_all(asked.iter().map(|(name, _, discovery, base_url)| {
+        fetch_models(
             base_url,
             agent.credential_of(name),
-            &discovery,
+            discovery,
             fetch,
             timeout_ms,
         )
-        .await;
+    }))
+    .await;
+    let mut outcomes = Vec::new();
+    for ((name, definition, _, _), fetched) in asked.into_iter().zip(fetched) {
         if let Ok(found) = &fetched {
             providers.insert(name.clone(), with_discovered(definition, found));
         }
