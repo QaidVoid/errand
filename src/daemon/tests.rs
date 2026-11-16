@@ -2987,7 +2987,7 @@ async fn only_an_operator_may_collect_and_is_told_what_was_collected() {
     .await;
 }
 
-/// `!status` in the channel describes the host; in a thread it is the
+/// `!status` in the channel describes the host. In a thread it is the
 /// session's to answer about itself.
 #[tokio::test]
 async fn status_in_the_channel_describes_the_host_and_in_a_thread_is_left_to_the_session() {

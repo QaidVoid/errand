@@ -35,7 +35,7 @@ refuse_forgotten_golden() {
     [ -z "$golden" ] || return 0
     for instance in $(incus_ list --format csv --columns n); do
         if [ -n "$(incus_ config get "$instance" user.errand.contract)" ]; then
-            echo "$instance is a golden instance; build with INCUS_GOLDEN=$instance" >&2
+            echo "$instance is a golden instance, so build with INCUS_GOLDEN=$instance" >&2
             exit 1
         fi
     done

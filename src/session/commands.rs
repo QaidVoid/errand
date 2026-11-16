@@ -32,7 +32,7 @@ pub enum CommandAccess {
     Owner,
     /// Acts on the machine; the daemon answers it itself.
     Host,
-    /// Acts on the daemon; the daemon answers it, for operators only.
+    /// Acts on the daemon. The daemon answers it, for operators only.
     Operator,
 }
 

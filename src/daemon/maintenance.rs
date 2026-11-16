@@ -115,7 +115,7 @@ pub fn wait_of(argument: &str, configured_ms: u64) -> Result<i64, String> {
         "" => Ok(i64::try_from(configured_ms).unwrap_or(i64::MAX)),
         "now" => Ok(0),
         given => parse_duration(given).ok_or_else(|| {
-            format!("`{given}` is not a wait; say `!restart now`, or a time such as `!restart 30m`")
+            format!("`{given}` is not a wait. Say `!restart now`, or a time such as `!restart 30m`")
         }),
     }
 }
@@ -197,7 +197,7 @@ pub fn restarting_card(note: &RestartNote) -> Card {
     }
     if !note.dropped.is_empty() {
         lines.push(format!(
-            "{} waiting message(s) did not run; their threads will be told.",
+            "{} waiting message(s) did not run, and their threads will be told.",
             note.dropped.len()
         ));
     }
@@ -260,7 +260,7 @@ pub fn dropped_card() -> Card {
     }
 }
 
-/// The most kept sessions a collection card names; the log names them all.
+/// The most kept sessions a collection card names. The log names them all.
 const KEPT_SHOWN: usize = 10;
 
 /// The most of one reason a collection card shows, so a long path cannot
@@ -350,10 +350,10 @@ pub fn status_card(status: &HostStatus) -> Card {
     let mut lines = Vec::new();
     match (draining, restart_at) {
         (true, Some(at)) => lines.push(format!(
-            "Restarting for maintenance <t:{}:R> at the latest; new work is refused.",
+            "Restarting for maintenance <t:{}:R> at the latest. New work is refused.",
             at / 1000
         )),
-        (true, None) => lines.push("Draining for maintenance; new work is refused.".to_owned()),
+        (true, None) => lines.push("Draining for maintenance. New work is refused.".to_owned()),
         (false, _) => {}
     }
     if let Some(reason) = status.paused {

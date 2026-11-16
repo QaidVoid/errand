@@ -154,7 +154,7 @@ and `libssl-dev` are present for crates that link C.
 Both directories belong to the agent uid, so `rustup toolchain install`,
 `rustup target add` and `rustup component add` work without sudo. What an
 agent adds lasts until its sandbox stops, like anything else it installs
-outside its home; stable is always there when a session starts.
+outside its home, and stable is always there when a session starts.
 
 The wrapper puts `$HOME/.cargo/bin` and `/usr/local/cargo/bin` ahead of
 `PATH` and sets `RUSTUP_HOME=/usr/local/rustup`. Cargo's own home is not set,

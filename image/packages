@@ -85,7 +85,7 @@ rsync
 htop
 fastfetch
 
-# Network probes, for open egress; in proxy mode only the broker answers.
+# Network probes, for open egress. In proxy mode only the broker answers.
 netcat-openbsd
 bind9-dnsutils
 

@@ -169,7 +169,7 @@ pub const PAUSED_REASON: &str = "provider backoff";
 
 /// What new work is told while the daemon drains for maintenance.
 pub const DRAINING_REASON: &str = "the bot is paused for maintenance, so this message was not \
-     accepted; send it again once the bot is back";
+     accepted. Send it again once the bot is back.";
 
 /// Bounds turns in flight, live sessions, and the queue between them.
 pub struct Scheduler {
