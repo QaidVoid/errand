@@ -132,7 +132,13 @@ const KNOWN_LIMITS: [&str; 4] = [
     "maxQueueLength",
     "maxQueueWaitMs",
 ];
-const KNOWN_TIMEOUTS: [&str; 4] = ["idleMs", "startupMs", "questionMs", "abortMs"];
+const KNOWN_TIMEOUTS: [&str; 5] = [
+    "idleMs",
+    "startupMs",
+    "questionMs",
+    "abortMs",
+    "providerConnectMs",
+];
 
 /// Collects reasons so that a first run reports all of them at once.
 #[derive(Default)]
@@ -2103,6 +2109,13 @@ fn validate_timeouts(raw: &Map<String, Value>, problems: &mut Problems) -> Timeo
             &source,
             "abortMs",
             schema::defaults::ABORT_MS,
+            "timeouts",
+            problems,
+        ),
+        provider_connect_ms: positive_as(
+            &source,
+            "providerConnectMs",
+            schema::defaults::PROVIDER_CONNECT_MS,
             "timeouts",
             problems,
         ),

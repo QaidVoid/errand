@@ -397,14 +397,22 @@ async fn an_edited_models_list_reaches_the_catalog() {
     let log = Logger::new(LogFields::new(), std::sync::Arc::new(|_level, _line| {}));
     let catalog = Catalog::default();
 
-    rebuild_catalog(&named("glm-5.3"), |_| true, None, &log, &catalog).await;
+    rebuild_catalog(&named("glm-5.3"), |_| true, None, &log, &catalog, 10_000).await;
     assert_eq!(
         listed(&catalog),
         ["glm-5.3"],
         "the first list was not taken in"
     );
 
-    rebuild_catalog(&named("glm-5.3-air"), |_| true, None, &log, &catalog).await;
+    rebuild_catalog(
+        &named("glm-5.3-air"),
+        |_| true,
+        None,
+        &log,
+        &catalog,
+        10_000,
+    )
+    .await;
     assert_eq!(
         listed(&catalog),
         ["glm-5.3-air"],

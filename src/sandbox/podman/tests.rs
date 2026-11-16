@@ -452,6 +452,7 @@ async fn an_unbrokered_proxy_mode_reports_the_missing_broker() {
         credential_names: BTreeMap::new(),
         receipts: None,
         now: Arc::new(|| 0),
+        connect_timeout: crate::sandbox::broker::DIAL_TIMEOUT,
     };
     let mut open = config();
     open.egress.mode = EgressMode::Open;
@@ -583,6 +584,7 @@ async fn stopping_a_container_closes_its_broker() {
         credential_names: BTreeMap::new(),
         receipts: None,
         now: Arc::new(|| 0),
+        connect_timeout: crate::sandbox::broker::DIAL_TIMEOUT,
     };
     let started = template
         .start("s-1", None, crate::sandbox::broker::BrokerListen::Tcp)

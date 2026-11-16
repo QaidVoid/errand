@@ -451,6 +451,10 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
             serde_json::json!(defaults::MAX_QUEUE_WAIT_MS),
         ),
         ("timeouts/idlems", serde_json::json!(defaults::IDLE_MS)),
+        (
+            "timeouts/providerconnectms",
+            serde_json::json!(defaults::PROVIDER_CONNECT_MS),
+        ),
         ("web/host", Value::from(defaults::WEB_HOST)),
         ("web/port", serde_json::json!(defaults::WEB_PORT)),
         ("web/observer", Value::Bool(defaults::WEB_OBSERVER)),

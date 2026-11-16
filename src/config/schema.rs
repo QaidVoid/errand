@@ -764,6 +764,15 @@ pub struct TimeoutsConfig {
     pub question_ms: u64,
     /// How long an abort waits for the agent before it is forced.
     pub abort_ms: u64,
+    /// How long a call to a provider may take to connect, name lookup and
+    /// TLS included.
+    ///
+    /// A call the egress broker makes for a session fails with a 502 past it.
+    /// A model listing or usage check the daemon makes itself is given this
+    /// long on top of the 10 seconds it allows for the answer. Raise it on a
+    /// host with a slow route to its providers, since opening a TLS
+    /// connection costs two or three round trips.
+    pub provider_connect_ms: u64,
 }
 
 /// When what a cold session left on disk is collected.
@@ -943,6 +952,8 @@ pub mod defaults {
     pub const QUESTION_MS: u64 = 300_000;
     /// How long an abort waits for the agent before it is forced.
     pub const ABORT_MS: u64 = 15_000;
+    /// How long the broker may take to connect to a provider.
+    pub const PROVIDER_CONNECT_MS: u64 = 5_000;
     /// Whether the daemon collects cold sessions.
     pub const RETENTION_ENABLED: bool = true;
     /// How long a session goes unused before it is collected.

@@ -740,6 +740,7 @@ fn template() -> BrokerTemplate {
         credential_names: BTreeMap::from([("zai-coding-cn".to_owned(), "ZAI_KEY".to_owned())]),
         receipts: None,
         now: Arc::new(|| 0),
+        connect_timeout: crate::sandbox::broker::DIAL_TIMEOUT,
     }
 }
 

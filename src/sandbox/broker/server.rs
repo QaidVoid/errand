@@ -56,6 +56,8 @@ pub struct BrokerTemplate {
     pub receipts: Option<Arc<ReceiptStore>>,
     /// The clock receipts are stamped with.
     pub now: Clock,
+    /// How long a provider call may take to connect, lookup and TLS included.
+    pub connect_timeout: Duration,
 }
 
 /// How long the accept loop waits before trying again after a failed accept,
@@ -135,6 +137,7 @@ impl BrokerTemplate {
             }),
         );
         broker.grants = grants;
+        broker.connect_timeout = self.connect_timeout;
         let port = match listen {
             // The listener sits on loopback; the address a sandbox dials is
             // only mapped back to this host from inside it.
@@ -161,9 +164,12 @@ impl BrokerTemplate {
 /// redirect reaches the session as it was sent. It dials only addresses its
 /// resolver judged, and never through a proxy from the daemon's environment,
 /// which would resolve the name itself. The tunnel path dials directly too.
-pub(super) fn provider_client(resolve: Option<super::Resolve>) -> std::io::Result<reqwest::Client> {
+pub(super) fn provider_client(
+    resolve: Option<super::Resolve>,
+    connect_timeout: Duration,
+) -> std::io::Result<reqwest::Client> {
     reqwest::Client::builder()
-        .connect_timeout(DIAL_TIMEOUT)
+        .connect_timeout(connect_timeout)
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .dns_resolver(Arc::new(JudgedResolver { resolve }))
@@ -212,6 +218,9 @@ pub struct Broker {
     /// The socket this broker bound, removed when it closes.
     unix_path: Option<PathBuf>,
     closed: Arc<AtomicBool>,
+    /// How long a provider call may take to connect, [`DIAL_TIMEOUT`] unless
+    /// the template says otherwise.
+    connect_timeout: Duration,
 }
 
 impl Broker {
@@ -241,6 +250,7 @@ impl Broker {
             provider_shutdown: None,
             unix_path: None,
             closed: Arc::new(AtomicBool::new(false)),
+            connect_timeout: DIAL_TIMEOUT,
         }
     }
 
@@ -270,7 +280,7 @@ impl Broker {
     /// Runs on the async runtime, which owns the accept loop and the provider
     /// endpoint from here on.
     pub async fn listen(&mut self, host: &str) -> std::io::Result<u16> {
-        let client = provider_client(None)?;
+        let client = provider_client(None, self.connect_timeout)?;
         let provider_port = if self.routes.is_empty() {
             0
         } else {
@@ -328,7 +338,7 @@ impl Broker {
     pub async fn listen_unix(&mut self, path: &Path) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
-        let client = provider_client(None)?;
+        let client = provider_client(None, self.connect_timeout)?;
         let provider_port = if self.routes.is_empty() {
             0
         } else {

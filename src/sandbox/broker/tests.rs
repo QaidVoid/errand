@@ -1572,6 +1572,7 @@ fn template_for(upstream_port: u16, log: Logger) -> BrokerTemplate {
         credential_names: BTreeMap::new(),
         receipts: None,
         now: Arc::new(|| 0),
+        connect_timeout: super::DIAL_TIMEOUT,
     }
 }
 
@@ -1643,6 +1644,7 @@ async fn a_unix_listener_serves_the_same_authenticated_requests() {
         credential_names: BTreeMap::new(),
         receipts: None,
         now: Arc::new(|| 0),
+        connect_timeout: super::DIAL_TIMEOUT,
     };
     let directory = tempfile::tempdir().expect("a temporary directory");
     let path = directory.path().join("broker.sock");
@@ -2034,7 +2036,9 @@ async fn the_judged_resolver_answers_only_public_addresses() {
 #[tokio::test]
 async fn a_name_that_answers_internal_at_dial_time_is_not_dialled() {
     let (port, hits) = counting_upstream(200, None).await;
-    let client = super::server::provider_client(Some(resolver(&["127.0.0.1"]))).unwrap();
+    let client =
+        super::server::provider_client(Some(resolver(&["127.0.0.1"])), super::DIAL_TIMEOUT)
+            .unwrap();
 
     let sent = client
         .get(format!("http://rebind.test:{port}/"))

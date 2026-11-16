@@ -32,7 +32,7 @@ use crate::config::load::Environment;
 use crate::config::redact::{contains_secret, redact_text, secret_values};
 use crate::config::route::RoutePolicy;
 use crate::config::schema::{
-    AgentConfig, Config, EgressMode, ForgeConfig, ForgeTrigger, SandboxConfig,
+    AgentConfig, Config, EgressMode, ForgeConfig, ForgeTrigger, SandboxConfig, TimeoutsConfig,
 };
 use crate::config::usage::UsageShape;
 use crate::config::watch::{AfterReload, POLL, watch};
@@ -184,8 +184,17 @@ async fn listen_on_forge(
     });
 }
 
-/// How long a provider may take to list its models.
-const DISCOVER_TIMEOUT_MS: u64 = 10_000;
+/// How long a provider may take to answer the daemon once connected.
+const ANSWER_TIMEOUT_MS: u64 = 10_000;
+
+/// How long the daemon's own call to a provider, a model listing or a usage
+/// check, may take in all: the connect budget the file sets, and the time an
+/// answer is given on top of it.
+fn provider_fetch_ms(timeouts: &TimeoutsConfig) -> u64 {
+    timeouts
+        .provider_connect_ms
+        .saturating_add(ANSWER_TIMEOUT_MS)
+}
 
 /// Asks the providers `ask` names and puts what they said into the catalog.
 ///
@@ -204,6 +213,7 @@ async fn rebuild_catalog(
     store: Option<&str>,
     log: &Logger,
     catalog: &Catalog,
+    timeout_ms: u64,
 ) -> Vec<Outcome> {
     let (providers, switchable, outcomes) = discover(
         agent,
@@ -211,7 +221,7 @@ async fn rebuild_catalog(
         ask,
         store,
         &HttpFetch,
-        DISCOVER_TIMEOUT_MS,
+        timeout_ms,
     )
     .await;
     report_discovery(log, &outcomes);
@@ -262,7 +272,8 @@ fn auto_refresh(live: LiveConfig, catalog: Catalog, store: Option<String>, log: 
             .map(|(name, _)| (name, now_ms()))
             .collect();
         loop {
-            let agent = live.get().agent;
+            let config = live.get();
+            let agent = config.agent;
             let now = now_ms();
             let due: BTreeSet<String> = due_providers(&agent, &last_asked, now)
                 .into_iter()
@@ -274,6 +285,7 @@ fn auto_refresh(live: LiveConfig, catalog: Catalog, store: Option<String>, log: 
                     store.as_deref(),
                     &log,
                     &catalog,
+                    provider_fetch_ms(&config.timeouts),
                 )
                 .await;
                 for (name, _) in &outcomes {
@@ -449,6 +461,7 @@ fn usage_sources(config: &Config) -> Vec<UsageSource<BoxedGateRead>> {
         };
         let credential = credential.to_owned();
         let spent_refuses = shape.spent_refuses();
+        let timeout_ms = provider_fetch_ms(&config.timeouts);
         let base_url = definition
             .get("baseUrl")
             .and_then(serde_json::Value::as_str)
@@ -459,12 +472,12 @@ fn usage_sources(config: &Config) -> Vec<UsageSource<BoxedGateRead>> {
                 (shape.clone(), base_url.clone(), credential.clone());
             Box::pin(async move {
                 match &shape {
-                    UsageShape::Zai => fetch_quota(&credential, &HttpFetch, 10_000).await,
+                    UsageShape::Zai => fetch_quota(&credential, &HttpFetch, timeout_ms).await,
                     UsageShape::Gateway => {
-                        fetch_gateway_usage(&base_url, &credential, &HttpFetch, 10_000).await
+                        fetch_gateway_usage(&base_url, &credential, &HttpFetch, timeout_ms).await
                     }
                     UsageShape::Mapped(mapping) => {
-                        fetch_mapped(&base_url, &credential, mapping, &HttpFetch, 10_000).await
+                        fetch_mapped(&base_url, &credential, mapping, &HttpFetch, timeout_ms).await
                     }
                 }
             })
@@ -943,6 +956,7 @@ async fn broker_template(
         credential_names: brokering_credential_names(&config.agent),
         receipts: receipts.or_else(|| open_receipts(&config.state_dir, log)),
         now: Arc::new(crate::log::now_ms),
+        connect_timeout: std::time::Duration::from_millis(config.timeouts.provider_connect_ms),
     }))
 }
 
@@ -1295,7 +1309,7 @@ async fn run(
         |_| true,
         store.as_deref(),
         &HttpFetch,
-        DISCOVER_TIMEOUT_MS,
+        provider_fetch_ms(&config.timeouts),
     )
     .await;
     report_discovery(log, &outcomes);
@@ -1551,9 +1565,16 @@ async fn run(
                 let (live, store, log, catalog) =
                     (live.clone(), store.clone(), log.clone(), catalog.clone());
                 Box::pin(async move {
-                    let agent = live.get().agent;
-                    let outcomes =
-                        rebuild_catalog(&agent, |_| true, store.as_deref(), &log, &catalog).await;
+                    let config = live.get();
+                    let outcomes = rebuild_catalog(
+                        &config.agent,
+                        |_| true,
+                        store.as_deref(),
+                        &log,
+                        &catalog,
+                        provider_fetch_ms(&config.timeouts),
+                    )
+                    .await;
                     models_refreshed(&outcomes)
                 }) as Pin<Box<dyn Future<Output = String> + Send>>
             })
@@ -1714,7 +1735,15 @@ async fn run(
                 reload_launch_settings(&config, &launch_settings, store.as_deref(), &log).await;
                 // What each provider answered is already in the log, from the
                 // reporting inside the one place the catalog is built.
-                rebuild_catalog(&config.agent, |_| true, store.as_deref(), &log, &catalog).await;
+                rebuild_catalog(
+                    &config.agent,
+                    |_| true,
+                    store.as_deref(),
+                    &log,
+                    &catalog,
+                    provider_fetch_ms(&config.timeouts),
+                )
+                .await;
             }) as Pin<Box<dyn Future<Output = ()> + Send>>
         }) as AfterReload
     };

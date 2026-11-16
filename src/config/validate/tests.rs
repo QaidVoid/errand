@@ -59,6 +59,10 @@ fn a_minimal_file_resolves_with_the_documented_defaults_filled_in() {
         defaults::MAX_CONCURRENT_TURNS
     );
     assert_eq!(config.timeouts.idle_ms, defaults::IDLE_MS);
+    assert_eq!(
+        config.timeouts.provider_connect_ms,
+        defaults::PROVIDER_CONNECT_MS
+    );
     assert_eq!(config.chat.blocked_user_ids, Vec::<String>::new());
     assert_eq!(
         config.agent.max_provider_retries,
