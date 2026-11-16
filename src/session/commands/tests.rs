@@ -5,7 +5,7 @@ use super::{
     asks_for_pull_request, help_text, image_args, is_addressed_to_bot, is_aside, is_command,
     may_run, parse_user_id, pull_request_args, speech_args,
 };
-use crate::chat::render::MESSAGE_LIMIT;
+use crate::chat::render::EMBED_DESCRIPTION_LIMIT;
 
 const OWNER: Standing = Standing {
     is_owner: true,
@@ -147,8 +147,8 @@ fn ordinary_work_is_not_read_as_asking_to_publish() {
 #[test]
 fn help_is_answered_without_starting_a_session_and_nothing_else_is() {
     let answer = answer_without_session("!help");
-    assert!(answer.unwrap_or_default().contains("!stop"));
-    assert!(answer_without_session("!help").is_some_and(|text| text.contains("!ls")));
+    assert!(answer.is_some_and(|card| card.description.contains("!stop")));
+    assert!(answer_without_session("!help").is_some_and(|card| card.description.contains("!ls")));
     assert_eq!(answer_without_session("!ls src"), None);
     assert_eq!(answer_without_session("write me a parser"), None);
 }
@@ -164,17 +164,17 @@ fn help_groups_the_commands_and_says_which_are_not_open_to_all() {
     assert_eq!(text.matches("```").count(), 2);
 }
 
-/// `!help` reaches a slash command as a single interaction response, and the
-/// service refuses one over its message limit rather than truncating it. A
-/// command added to the table must not push the list past that.
+/// `!help` is drawn as one card, and the service refuses a card body over
+/// its limit rather than truncating it. A command added to the table must
+/// not push the list past that.
 #[test]
-fn the_help_list_fits_one_message() {
+fn the_help_list_fits_one_card() {
     let text = help_text();
 
     assert!(
-        text.chars().count() <= MESSAGE_LIMIT,
-        "the help list is {} characters, over the {MESSAGE_LIMIT} a message allows",
-        text.chars().count()
+        text.encode_utf16().count() <= EMBED_DESCRIPTION_LIMIT,
+        "the help list is {} characters, over the {EMBED_DESCRIPTION_LIMIT} a card allows",
+        text.encode_utf16().count()
     );
 }
 

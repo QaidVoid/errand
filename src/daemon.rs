@@ -955,7 +955,7 @@ impl Daemon {
         // describes the system needs nothing running, and opening a thread and
         // a sandbox to print a list is not an answer.
         if let Some(listed) = answer_without_session(&message.content) {
-            (self.options.reply_in_channel)(message, Answer::Text(listed)).await;
+            (self.options.reply_in_channel)(message, Answer::Card(listed)).await;
             return;
         }
 
@@ -1163,7 +1163,7 @@ impl Daemon {
         // they answer anywhere. The answer is the acknowledgement: it goes
         // back to the person who ran it and nowhere else.
         if let Some(listed) = answer_without_session(&command.content) {
-            return listed;
+            return listed.words();
         }
 
         // A picture needs no session, so outside a thread it is drawn here

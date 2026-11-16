@@ -7,6 +7,7 @@
 
 use crate::config::schema::ForgeKind;
 use crate::forge;
+use crate::session::event::{Card, CardColor};
 use crate::session::model::{LEVELS, split_level};
 
 use CommandAccess::{Anyone, Guest, Host, Owner};
@@ -687,8 +688,20 @@ pub fn may_run(access: CommandAccess, standing: Standing) -> bool {
 /// channel rather than in a thread. Without it `!help` starts a session and is
 /// answered by the agent, or refused because the provider is busy, neither of
 /// which is an answer to "what can I type".
-pub fn answer_without_session(content: &str) -> Option<String> {
-    (first_word(content) == "!help").then(help_text)
+pub fn answer_without_session(content: &str) -> Option<Card> {
+    (first_word(content) == "!help").then(help_card)
+}
+
+/// The command list as a card, whose body holds twice what a message does,
+/// so the list is not cut short as commands are added.
+pub fn help_card() -> Card {
+    Card {
+        color: CardColor::Settled,
+        title: "commands".to_owned(),
+        description: help_text(),
+        fields: Vec::new(),
+        footer: None,
+    }
 }
 
 const GROUP_TITLES: [(CommandGroup, &str); 4] = [

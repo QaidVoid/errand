@@ -562,7 +562,7 @@ const EMBED_FIELD_LIMIT: usize = 25;
 const EMBED_WEIGHT_LIMIT: usize = 6_000;
 
 /// The most body an embed carries, as the service limits it.
-const EMBED_DESCRIPTION_LIMIT: usize = 4_096;
+pub const EMBED_DESCRIPTION_LIMIT: usize = 4_096;
 
 /// What `!usage` found, as a card.
 ///

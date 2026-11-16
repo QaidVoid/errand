@@ -10,7 +10,7 @@ use crate::log::{LogValue, fields};
 
 use crate::provider::models::{AvailableModel, Matched, match_model};
 use crate::session::commands::{
-    COMMANDS, CommandAccess, Standing, help_text, may_run, parse_user_id,
+    COMMANDS, CommandAccess, Standing, help_card, help_text, may_run, parse_user_id,
 };
 use crate::session::event::{Card, CardColor, EndReason, REFUSAL, ReactionOutcome, SessionEvent};
 use crate::session::model::{expand_alias, split_level};
@@ -194,7 +194,7 @@ impl Running {
             "!model" => self.switch_model(rest, message).await,
             "!gen-image" => self.generate_image(rest, message).await,
             "!gen-speech" => self.generate_speech(rest, message).await,
-            "!help" => self.say(&help_text()).await,
+            "!help" => self.say_with_card(&help_text(), Some(help_card())).await,
             "!then" => {
                 if rest.trim().is_empty() {
                     self.say("say what to hold, as `!then <instruction>`").await;
