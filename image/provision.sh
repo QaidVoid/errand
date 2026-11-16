@@ -77,7 +77,11 @@ install_rust() {
         --profile minimal --default-toolchain stable --component clippy,rustfmt
     # cross uses the guest's rootless podman, which errand-exec selects.
     cargo install cross --locked
-    chmod -R a+rX "$RUSTUP_HOME" "$CARGO_HOME"
+    rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+    # The agent owns the toolchain, so it can add a toolchain, a target or a
+    # component without sudo. What it adds lasts until its sandbox stops,
+    # like anything else it installs outside its home.
+    chown -R 1000:1000 "$RUSTUP_HOME" "$CARGO_HOME"
 }
 
 install_uv() {

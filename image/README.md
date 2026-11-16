@@ -15,7 +15,7 @@ is fine if it carries the same contract property.
 | agent | `/usr/local/bin/kage`, pinned by whoever builds the image |
 | wrapper | `/usr/local/bin/errand-exec` |
 | agent uid and gid | 1000 |
-| Rust | rustup stable, clippy, rustfmt |
+| Rust | rustup stable, clippy, rustfmt, owned by the agent |
 | Go | Debian `golang-go`, `go` and `gofmt` on PATH |
 | jj | Jujutsu 0.46.0, static musl build in `/usr/local/bin/jj` |
 | GitHub CLI | `gh` from Debian |
@@ -25,14 +25,20 @@ is fine if it carries the same contract property.
 | uv | `uv` and `uvx` in `/usr/local/bin` |
 | Zig | latest stable at build time, `/usr/local/bin/zig` |
 | cross | Rust `cross` in `/usr/local/cargo/bin`, podman engine by default |
-| compilers | gcc from `build-essential`, `clang`, `lld` |
+| compilers | gcc from `build-essential`, `clang`, `lld`, `libclang-dev` for bindgen |
+| build tools | `cmake`, `ninja`, autotools, `bison`, `flex`, `protoc` |
+| headers | OpenSSL, zlib, SQLite, libffi and Python's |
+| debuggers | `gdb`, `strace`, `lsof` |
 | QEMU | `qemu-system-x86`, `qemu-utils` |
 | Xvfb | `xvfb`, `xvfb-run` |
 | GUI | Xvfb, openbox, xdotool, `scrot`, ImageMagick, Mesa llvmpipe |
 | GUI launcher | `/usr/local/bin/errand-gui` |
 | media | `ffmpeg` 7.1.5 and `ffprobe` |
 | fonts | `fonts-dejavu-core` |
-| utilities | `git`, `curl`, `wget`, `vim`, `less`, `htop`, `jq`, `rg`, `fd`, `fastfetch`, `file` |
+| utilities | `git`, `git-lfs`, `curl`, `wget`, `vim`, `less`, `htop`, `jq`, `rg`, `fd`, `tree`, `file`, `shellcheck`, `sqlite3`, `envsubst`, `hexdump`, `column`, `fastfetch` |
+| archives | `zip`, `unzip`, `xz`, `zstd`, `rsync` |
+| network probes | `nc` (OpenBSD), `dig` |
+| compose | `docker-compose`, `catatonit` for `podman run --init` |
 | sudo | the agent has passwordless sudo inside the guest |
 | docker socket group | `agent` (gid 1000) |
 | rootless podman | host networking, cgroupfs manager |
@@ -145,9 +151,15 @@ under `/usr/local/rustup`, the proxies (`cargo`, `rustc`, `rustup`, `clippy`,
 `rustfmt`) are in `/usr/local/cargo/bin`, and `build-essential`, `pkg-config`
 and `libssl-dev` are present for crates that link C.
 
-The wrapper puts `/usr/local/cargo/bin` ahead of `PATH` and sets
-`RUSTUP_HOME=/usr/local/rustup`. Cargo's own home is not set, so it uses
-`$HOME/.cargo`, which is inside the session state and persists with it. A
+Both directories belong to the agent uid, so `rustup toolchain install`,
+`rustup target add` and `rustup component add` work without sudo. What an
+agent adds lasts until its sandbox stops, like anything else it installs
+outside its home; stable is always there when a session starts.
+
+The wrapper puts `$HOME/.cargo/bin` and `/usr/local/cargo/bin` ahead of
+`PATH` and sets `RUSTUP_HOME=/usr/local/rustup`. Cargo's own home is not set,
+so it uses `$HOME/.cargo`, which is inside the session state and persists
+with it, along with whatever `cargo install` puts there. A
 session can therefore build, cache and reuse dependencies without downloading
 a toolchain per launch.
 

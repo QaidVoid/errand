@@ -16,8 +16,9 @@ fi
 
 # The image's Rust proxies are rustup shims, so the toolchain root has to be
 # named. Cargo's own home stays under the agent's HOME, inside the session
-# state, so the registry and build cache persist with it.
-PATH=/usr/local/bun/bin:/usr/local/cargo/bin:$PATH
+# state, so the registry, the build cache and what `cargo install` puts in
+# its bin persist with it.
+PATH=${HOME:-/state/home}/.cargo/bin:/usr/local/bun/bin:/usr/local/cargo/bin:$PATH
 export PATH
 RUSTUP_HOME=${RUSTUP_HOME:-/usr/local/rustup}
 export RUSTUP_HOME

@@ -14,21 +14,37 @@ socat
 docker.io
 docker-cli
 docker-buildx
+docker-compose
 podman
+catatonit
 passt
 slirp4netns
 uidmap
 fuse3
 fuse-overlayfs
 
-# Native build chain, for C code and the crates that wrap it.
+# Native build chain, for C code and the crates and wheels that wrap it.
 build-essential
 pkg-config
 clang
 lld
+libclang-dev
+cmake
+ninja-build
+autoconf
+automake
+libtool
+m4
+bison
+flex
+protobuf-compiler
 
-# Headers for crates that link OpenSSL.
+# Headers that common crates and Python packages link against.
 libssl-dev
+zlib1g-dev
+libsqlite3-dev
+libffi-dev
+python3-dev
 
 # Languages from Debian. Rust, Bun, uv and Zig come from their own
 # installers in provision.sh.
@@ -41,7 +57,13 @@ npm
 
 # Version control.
 git
+git-lfs
 gh
+
+# Debugging.
+gdb
+strace
+lsof
 
 # Text, files and archives.
 vim
@@ -49,11 +71,23 @@ less
 jq
 ripgrep
 fd-find
+tree
 file
+bsdextrautils
+gettext-base
+shellcheck
+sqlite3
 unzip
+zip
 xz-utils
+zstd
+rsync
 htop
 fastfetch
+
+# Network probes, for open egress; in proxy mode only the broker answers.
+netcat-openbsd
+bind9-dnsutils
 
 # Virtual machines.
 qemu-system-x86
