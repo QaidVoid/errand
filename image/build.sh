@@ -3,8 +3,8 @@
 #
 # A temporary container is provisioned by provision.sh, then published under
 # the alias and, with INCUS_GOLDEN, copied to the golden instance the backend
-# starts sessions from. The image the alias named before is deleted, since
-# nothing starts from it any more.
+# starts sessions from. Publishing over the alias deletes the image it named
+# before.
 set -eu
 
 : "${KAGE_BIN:?set KAGE_BIN to a kage binary newer than 0.5.1}"
@@ -23,10 +23,6 @@ docker-socket.conf containers.conf"
 # an argument to the guest's command instead.
 incus_() {
     incus --project "$project" "$@" </dev/null
-}
-
-fingerprint() {
-    incus_ image info "$alias" 2>/dev/null | sed -n 's/^Fingerprint: //p'
 }
 
 # A golden instance carries the contract. Rebuilding only the image would
@@ -64,12 +60,8 @@ contract() {
 }
 
 publish() {
-    previous=$(fingerprint)
     incus_ publish "$build" --alias "$alias" --reuse
     incus_ image set-property "$alias" user.errand.contract "$1"
-    if [ -n "$previous" ] && [ "$previous" != "$(fingerprint)" ]; then
-        incus_ image delete "$previous"
-    fi
 }
 
 # Copied aside first and renamed into place, so the golden is missing for a

@@ -102,9 +102,8 @@ Optional settings:
 | `INCUS_GOLDEN` | none | when set, also create a stopped instance of that name |
 
 The script creates a temporary container named `errand-image-build`, runs
-`provision.sh` in it, stops it and publishes it. The image the alias named
-before is deleted, since publishing moves the alias and would otherwise leave
-it behind, unnamed, at nearly 2 GiB. The temporary container is deleted on
+`provision.sh` in it, stops it and publishes it. Publishing over the alias
+deletes the image it named before. The temporary container is deleted on
 exit.
 
 When the backend is configured with `sandbox.incus.golden`, sessions start
