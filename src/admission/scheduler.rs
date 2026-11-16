@@ -161,10 +161,15 @@ struct SchedulerState {
     backoff_timer: Option<u64>,
     last_start_at: i64,
     sweep_timer: Option<u64>,
+    draining: bool,
 }
 
 /// Why the scheduler is currently refusing to admit work.
 pub const PAUSED_REASON: &str = "provider backoff";
+
+/// What new work is told while the daemon drains for maintenance.
+pub const DRAINING_REASON: &str = "the bot is paused for maintenance, so this message was not \
+     accepted; send it again once the bot is back";
 
 /// Bounds turns in flight, live sessions, and the queue between them.
 pub struct Scheduler {
@@ -203,6 +208,7 @@ impl Scheduler {
                 backoff_timer: None,
                 last_start_at: 0,
                 sweep_timer: None,
+                draining: false,
             }),
         })
     }
@@ -242,11 +248,42 @@ impl Scheduler {
         (state.backoff_until - self.clock.now()).max(0)
     }
 
+    /// Refuses new prompts and sessions while `draining`, or admits them
+    /// again.
+    ///
+    /// Work already admitted or queued carries on, so a drain ends once it
+    /// has run. A slot taken without queueing is still given out, since only
+    /// a running turn asks for one.
+    pub fn set_draining(&self, draining: bool) {
+        self.state.lock().expect("the scheduler lock").draining = draining;
+    }
+
+    /// Whether new work is being refused for maintenance.
+    pub fn is_draining(&self) -> bool {
+        self.state.lock().expect("the scheduler lock").draining
+    }
+
+    /// Whether no turn is running and no prompt is waiting for one.
+    pub fn is_idle(&self) -> bool {
+        let state = self.state.lock().expect("the scheduler lock");
+        state.in_flight == 0 && state.queue.is_empty()
+    }
+
+    /// The sessions with a prompt waiting for a slot, in queue order.
+    pub fn queued_sessions(&self) -> Vec<String> {
+        let state = self.state.lock().expect("the scheduler lock");
+        state
+            .queue
+            .iter()
+            .map(|pending| pending.entry.session_id.clone())
+            .collect()
+    }
+
     /// Reserves capacity for a new session, returning how long to wait before
-    /// starting, or nothing when the cap is reached.
+    /// starting, or nothing when the cap is reached or the daemon drains.
     pub fn reserve_session(&self) -> Option<i64> {
         let mut state = self.state.lock().expect("the scheduler lock");
-        if state.live_sessions >= self.limits.max_live_sessions as usize {
+        if state.draining || state.live_sessions >= self.limits.max_live_sessions as usize {
             return None;
         }
         state.live_sessions += 1;
@@ -268,6 +305,9 @@ impl Scheduler {
 
     /// Why a session was refused, in words worth posting back to the channel.
     pub fn session_refused_reason(&self) -> String {
+        if self.is_draining() {
+            return DRAINING_REASON.to_owned();
+        }
         format!(
             "the session limit of {} is reached, so this message did not start one",
             self.limits.max_live_sessions
@@ -295,6 +335,11 @@ impl Scheduler {
 
     /// Submits a prompt, admitting it now or queueing it behind the cap.
     pub fn submit(self: &Arc<Self>, entry: QueueEntry) -> SubmitOutcome {
+        if self.is_draining() {
+            return SubmitOutcome::Rejected {
+                reason: DRAINING_REASON.to_owned(),
+            };
+        }
         if let Some(ticket) = self.try_admit() {
             return SubmitOutcome::Admitted { ticket };
         }

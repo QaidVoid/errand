@@ -435,3 +435,42 @@ fn no_slot_is_given_out_while_the_provider_is_being_backed_off() {
     clock.advance(5_001);
     assert!(scheduler.try_admit().is_some());
 }
+
+/// A drain refuses new prompts and sessions with a reason worth posting, but
+/// lets what was already admitted or queued run, and is done only once
+/// nothing is running or waiting.
+#[test]
+fn a_drain_refuses_new_work_and_lets_admitted_work_finish() {
+    let clock = TestClock::new();
+    let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let first = scheduler.submit(entry("a", &seen, &held));
+    let second = scheduler.submit(entry("b", &seen, &held));
+    scheduler.submit(entry("c", &seen, &held));
+
+    scheduler.set_draining(true);
+    match scheduler.submit(entry("d", &seen, &held)) {
+        SubmitOutcome::Rejected { reason } => assert!(reason.contains("maintenance")),
+        other => panic!("expected rejected, got {other:?}"),
+    }
+    assert_eq!(scheduler.reserve_session(), None);
+    assert!(scheduler.session_refused_reason().contains("maintenance"));
+    assert_eq!(scheduler.queued_sessions(), ["c"]);
+    assert!(!scheduler.is_idle());
+
+    let SubmitOutcome::Admitted { ticket } = first else {
+        panic!("expected the first to be admitted");
+    };
+    assert!(scheduler.release(&ticket));
+    assert!(seen.lock().unwrap().contains(&"admitted:c".to_owned()));
+
+    for ticket in held.lock().unwrap().drain(..) {
+        scheduler.release(&ticket);
+    }
+    drop(second);
+    assert!(scheduler.is_idle());
+
+    scheduler.set_draining(false);
+    assert!(scheduler.reserve_session().is_some());
+}

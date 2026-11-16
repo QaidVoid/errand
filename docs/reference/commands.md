@@ -52,4 +52,7 @@ aside: everyone in the thread sees it and the agent is never told.
 | `!usage [refresh]` | anyone permitted | what is left of the provider's usage window |
 | `!models refresh` | the owner and operators | ask the providers again for their models |
 | `!shutdown` | named accounts, answered by the daemon | power off this daemon's host |
+| `!drain` | operators, answered by the daemon | refuse new work and say when none is running |
+| `!undrain` | operators, answered by the daemon | accept work again, and call off a restart |
+| `!restart [now|<wait>]` | operators, answered by the daemon | drain, then restart into the binary on disk |
 

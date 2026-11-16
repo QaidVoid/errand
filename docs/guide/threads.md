@@ -109,7 +109,10 @@ resumes the conversation where it stopped.
 Only `!stop` finishes a session for good and archives its thread.
 
 Idle timeouts and restarts are not announced, because the resumed session says
-so when you come back. A failure is announced, with the reason.
+so when you come back. A failure is announced, with the reason. A restart an
+operator asks for with `!restart` is the exception: a turn it cut off is
+announced in its thread and continued once the bot is back. See
+[updating the binary](/operations/service#updating-the-binary).
 
 Old sessions are cleaned up automatically after 30 days without use. See
 [configuration and data](/operations/configuration#what-is-kept-on-disk) to

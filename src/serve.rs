@@ -38,6 +38,7 @@ use crate::config::usage::UsageShape;
 use crate::config::watch::{AfterReload, POLL, watch};
 use crate::daemon::SlashCommand;
 use crate::daemon::StartError;
+use crate::daemon::maintenance::Restarter;
 use crate::daemon::{Daemon, DaemonOptions};
 use crate::daemon::{create_sandbox, probe_sandbox};
 use crate::forge;
@@ -1072,6 +1073,17 @@ async fn run(
     // sandboxes, and a process that vanishes skips all of it.
     let (stopped_tx, stopped_rx) = tokio::sync::mpsc::unbounded_channel::<&'static str>();
 
+    // Where `!restart` starts the daemon again from, read now: once the file
+    // is replaced, this process's own path names a file that is gone.
+    let exe = std::env::current_exe();
+    if let Err(error) = &exe {
+        log.warn(
+            "`!restart` is not offered: the daemon cannot tell which binary it runs",
+            &fields([("detail", LogValue::from(error.to_string()))]),
+        );
+    }
+    let (restart_tx, restart_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+
     let gateway = Gateway::new(
         config.chat.clone(),
         GatewayHandlers {
@@ -1577,6 +1589,14 @@ async fn run(
         }),
         delegate_base_url,
         unavailable,
+        restart: exe.as_ref().ok().map(|exe| {
+            Restarter::new(
+                exe.clone(),
+                Arc::new(move || {
+                    let _ = restart_tx.send(());
+                }),
+            )
+        }),
     }));
     *sessions_holder.lock().await = Some(Arc::clone(&daemon));
 
@@ -1694,6 +1714,10 @@ async fn run(
     );
 
     auto_refresh(live.clone(), catalog.clone(), store.clone(), log.clone());
+    {
+        let daemon = Arc::clone(&daemon);
+        tokio::spawn(async move { daemon.after_restart().await });
+    }
 
     // Started once the daemon is serving, so a change to the file is applied
     // to a daemon that is already answering. A session already running keeps
@@ -1758,7 +1782,7 @@ async fn run(
         after,
     );
 
-    let stopped = stop_request(stopped_rx).await;
+    let stopped = stop_request(stopped_rx, restart_rx).await;
 
     log.info(
         "shutting down",
@@ -1769,7 +1793,32 @@ async fn run(
     }
     daemon.shutdown().await;
     lock.release();
-    stopped.exit()
+    match (&stopped, &exe) {
+        (Stopped::Restart, Ok(exe)) => exec_self(exe, log),
+        _ => stopped.exit(),
+    }
+}
+
+/// Replaces this process with the binary at `exe`, run with the arguments
+/// this one was.
+///
+/// Returns only when that fails, which is said loudly: the daemon has
+/// already shut down, so nothing is serving until somebody starts it.
+fn exec_self(exe: &std::path::Path, log: &Logger) -> Exit {
+    use std::os::unix::process::CommandExt;
+    let shown = LogValue::from(exe.display().to_string());
+    log.info("restarting", &fields([("binary", shown.clone())]));
+    let error = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .exec();
+    log.error(
+        "the daemon could not start itself again, and nothing is serving",
+        &fields([
+            ("binary", shown),
+            ("detail", LogValue::from(error.to_string())),
+        ]),
+    );
+    Exit::Failed
 }
 
 /// Runs what the interface's home page sends as a command the way a slash
@@ -2100,6 +2149,8 @@ enum Stopped {
     Signal,
     /// Something inside gave up; the string says what, for the log.
     GaveUp(&'static str),
+    /// An operator asked for a restart into the binary on disk.
+    Restart,
 }
 
 impl Stopped {
@@ -2108,25 +2159,30 @@ impl Stopped {
         match self {
             Stopped::Signal => "signal",
             Stopped::GaveUp(reason) => reason,
+            Stopped::Restart => "restart for maintenance",
         }
     }
 
     /// The exit code the run earns.
     fn exit(self) -> Exit {
         match self {
-            Stopped::Signal => Exit::Served,
+            Stopped::Signal | Stopped::Restart => Exit::Served,
             Stopped::GaveUp(_) => Exit::Failed,
         }
     }
 }
 
 /// Waits for the daemon to be told to stop: by a signal, or from inside.
-async fn stop_request(mut stopped: tokio::sync::mpsc::UnboundedReceiver<&'static str>) -> Stopped {
+async fn stop_request(
+    mut stopped: tokio::sync::mpsc::UnboundedReceiver<&'static str>,
+    mut restart: tokio::sync::mpsc::UnboundedReceiver<()>,
+) -> Stopped {
     use tokio::signal::unix::{SignalKind, signal};
     let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM is supported");
     tokio::select! {
         _ = tokio::signal::ctrl_c() => Stopped::Signal,
         _ = sigterm.recv() => Stopped::Signal,
+        Some(()) = restart.recv() => Stopped::Restart,
         reason = stopped.recv() => {
             // Every sender sits in a handler of the connection, and the
             // connection lives as long as the run; a gone channel still

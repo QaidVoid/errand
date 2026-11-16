@@ -264,6 +264,7 @@ Deadlines that end or unblock a session.
 | `questionMs` | `number` | none | How long a question posted to a thread waits for an answer. |
 | `abortMs` | `number` | none | How long an abort waits for the agent before it is forced. |
 | `providerConnectMs` | `number` | `5000` | How long a call to a provider may take to connect, name lookup and TLS included.  A call the egress broker makes for a session fails with a 502 past it. A model listing or usage check the daemon makes itself is given this long on top of the 10 seconds it allows for the answer. Raise it on a host with a slow route to its providers, since opening a TLS connection costs two or three round trips. |
+| `drainMs` | `number` | `600000` | How long `!restart` waits for running turns before it restarts anyway.  A turn still running then is stopped, and continued once the daemon is back. `!restart <time>` and `!restart now` say otherwise for one restart. |
 
 ## retention
 

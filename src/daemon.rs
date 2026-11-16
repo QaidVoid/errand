@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::admission::scheduler::{Scheduler, SystemClock};
@@ -56,6 +56,14 @@ use crate::session::manager::{
 use crate::session::model::{configured_model, split_level};
 use crate::session::registry::ThreadRegistry;
 use crate::session::session::{DescribeImages, DrawImage, FetchLinked, IncomingMessage, SpeakText};
+
+/// Draining the daemon for maintenance, and restarting it.
+pub mod maintenance;
+
+use maintenance::{RestartNote, Restarter, Turn};
+
+/// How often a drain looks at whether it has anything left to wait for.
+const DRAIN_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Raised when the backend cannot enforce what configuration demands.
 #[derive(Debug, thiserror::Error)]
@@ -367,6 +375,9 @@ pub struct DaemonOptions {
     pub operator_ids: Option<Vec<String>>,
     /// Why nothing can run yet, or none when it can.
     pub unavailable: Option<Unavailable>,
+    /// Restarts the daemon into its binary, or none when `!restart` is not
+    /// offered.
+    pub restart: Option<Restarter>,
 }
 
 /// The running daemon.
@@ -376,6 +387,12 @@ pub struct Daemon {
     accepting: AtomicBool,
     registry: Arc<Mutex<ThreadRegistry>>,
     options: DaemonOptions,
+    /// Counts drains begun and ended, so a drain's watcher stops once another
+    /// has replaced it or `!undrain` ended it.
+    maintenance: Arc<AtomicU64>,
+    /// When the pending restart happens at the latest, or none when a drain
+    /// only waits or nothing drains.
+    restart_at: Mutex<Option<i64>>,
 }
 
 /// Where a slash command used in the channel is answered with a file.
@@ -445,6 +462,8 @@ impl Daemon {
             accepting: AtomicBool::new(false),
             registry,
             options,
+            maintenance: Arc::new(AtomicU64::new(0)),
+            restart_at: Mutex::new(None),
         }
     }
 
@@ -605,6 +624,175 @@ impl Daemon {
             .operator_user_ids
             .iter()
             .any(|id| id == author_id)
+    }
+
+    /// Answers `!drain`, `!undrain`, and `!restart`, for an operator.
+    ///
+    /// Answered here rather than in a session, since they act on every
+    /// session at once. `message` is where the answer goes, and where a
+    /// drain says later that it is done.
+    fn maintain(&self, message: &IncomingMessage) -> Option<Answer> {
+        let command = first_word(&message.content);
+        if !matches!(command, "!drain" | "!undrain" | "!restart") {
+            return None;
+        }
+        if !self.is_operator(&message.author_id) {
+            return Some(Answer::Card(maintenance::refused_card(&format!(
+                "only an operator may use `{command}`"
+            ))));
+        }
+        let card = match command {
+            "!drain" if self.scheduler.is_draining() => {
+                let (running, unthreaded) = self.running_turns();
+                maintenance::draining_card(
+                    &running,
+                    unthreaded,
+                    self.scheduler.queue_length(),
+                    *self.restart_at.lock().expect("the restart lock"),
+                )
+            }
+            "!drain" => self.drain(message, None),
+            "!undrain" => self.undrain(),
+            _ => match self.restart_plan(&message.content) {
+                Ok(plan) => self.drain(message, Some(plan)),
+                Err(why) => maintenance::refused_card(&why),
+            },
+        };
+        Some(Answer::Card(card))
+    }
+
+    /// What `!restart` would restart into and when, or why it cannot.
+    fn restart_plan(&self, content: &str) -> Result<(Restarter, i64), String> {
+        let restarter = self
+            .options
+            .restart
+            .clone()
+            .ok_or_else(|| "this daemon cannot restart itself".to_owned())?;
+        restarter.check()?;
+        let wait = maintenance::wait_of(
+            argument_of(content, "!restart"),
+            self.options.config.get().timeouts.drain_ms,
+        )?;
+        Ok((restarter, now_ms().saturating_add(wait)))
+    }
+
+    /// The turns running now with the thread each runs in, and how many run
+    /// outside any thread.
+    fn running_turns(&self) -> (Vec<Turn>, usize) {
+        running_turns(&self.sessions)
+    }
+
+    /// Refuses new work from now on and watches for the running work to end,
+    /// then says so, or restarts when `restart` names a restarter and the
+    /// moment to restart by at the latest.
+    ///
+    /// A drain already under way is replaced, which is how `!restart` after
+    /// `!drain` turns a drain into a restart.
+    fn drain(&self, asked: &IncomingMessage, restart: Option<(Restarter, i64)>) -> Card {
+        let generation = self.maintenance.fetch_add(1, Ordering::SeqCst) + 1;
+        self.scheduler.set_draining(true);
+        let (running, unthreaded) = self.running_turns();
+        let restart_at = restart.as_ref().map(|(_, at)| *at);
+        *self.restart_at.lock().expect("the restart lock") = restart_at;
+        self.options.log.warn(
+            "draining for maintenance",
+            &fields([
+                ("user", LogValue::from(asked.author_id.as_str())),
+                ("running", LogValue::from(running.len() + unthreaded)),
+                ("waiting", LogValue::from(self.scheduler.queue_length())),
+                ("restart", LogValue::from(restart.is_some())),
+            ]),
+        );
+        tokio::spawn(watch_drain(DrainWatch {
+            generation,
+            current: Arc::clone(&self.maintenance),
+            scheduler: Arc::clone(&self.scheduler),
+            sessions: Arc::clone(&self.sessions),
+            reply: Arc::clone(&self.options.reply_in_channel),
+            asked: asked.clone(),
+            restart,
+            state_dir: self.options.config.get().state_dir,
+            log: self.options.log.clone(),
+        }));
+        maintenance::draining_card(
+            &running,
+            unthreaded,
+            self.scheduler.queue_length(),
+            restart_at,
+        )
+    }
+
+    /// Ends a drain, and with it any restart it was waiting to make.
+    fn undrain(&self) -> Card {
+        if !self.scheduler.is_draining() {
+            return maintenance::refused_card("the bot is not draining");
+        }
+        self.maintenance.fetch_add(1, Ordering::SeqCst);
+        self.scheduler.set_draining(false);
+        let called_off = self
+            .restart_at
+            .lock()
+            .expect("the restart lock")
+            .take()
+            .is_some();
+        self.options
+            .log
+            .info("accepting work again after a drain", &fields([]));
+        maintenance::undrained_card(called_off)
+    }
+
+    /// Acts on the note a restart left: says the daemon is back where the
+    /// restart was asked, tells each thread whose waiting message was dropped,
+    /// and continues each turn the restart cut off, in its owner's name.
+    ///
+    /// Does nothing on a start that did not follow `!restart`.
+    pub async fn after_restart(&self) {
+        let state_dir = self.options.config.get().state_dir;
+        let note = match maintenance::take_note(&state_dir) {
+            Ok(Some(note)) => note,
+            Ok(None) => return,
+            Err(why) => {
+                self.options.log.warn(
+                    "the note the last restart left cannot be read, so no turn is continued",
+                    &fields([("detail", LogValue::from(why))]),
+                );
+                return;
+            }
+        };
+        self.options.log.info(
+            "back from a restart",
+            &fields([
+                ("continued", LogValue::from(note.interrupted.len())),
+                ("dropped", LogValue::from(note.dropped.len())),
+            ]),
+        );
+        let reply = &self.options.reply_in_channel;
+        reply(
+            posted_in(&note.asked_in),
+            Answer::Card(maintenance::back_card(env!("CARGO_PKG_VERSION"))),
+        )
+        .await;
+        for thread_id in &note.dropped {
+            reply(
+                posted_in(thread_id),
+                Answer::Card(maintenance::dropped_card()),
+            )
+            .await;
+        }
+        for turn in note.interrupted {
+            reply(
+                posted_in(&turn.thread_id),
+                Answer::Card(maintenance::continued_card()),
+            )
+            .await;
+            let prompt = IncomingMessage {
+                id: format!("restart-{}", turn.thread_id),
+                author_id: turn.owner_id,
+                content: maintenance::CONTINUE_PROMPT.to_owned(),
+                ..posted_in(&turn.thread_id)
+            };
+            self.deliver_to_thread(&turn.thread_id, prompt).await;
+        }
     }
 
     /// Turns the host off, if this person may.
@@ -889,6 +1077,10 @@ impl Daemon {
 
         // Before anything is routed. These are not session commands, and being
         // in a thread is not a reason to be allowed to run one.
+        if let Some(answered) = self.maintain(&message) {
+            (self.options.reply_in_channel)(message, answered).await;
+            return;
+        }
         if let Some(answered) = self
             .answer_as_daemon(
                 &message.content,
@@ -1149,6 +1341,16 @@ impl Daemon {
             return "the daemon is still starting up".to_owned();
         }
 
+        // Answered in words here like the rest, but a drain also says later
+        // where it was asked that it is done, so it is told where that was.
+        let asked = IncomingMessage {
+            channel_id: command.thread_id.clone().unwrap_or_default(),
+            ..answered_in_channel(command)
+        };
+        if let Some(answered) = self.maintain(&asked) {
+            return answered.words();
+        }
+
         // A slash command is typed at the channel, never inside a thread. An
         // ephemeral acknowledgement has no place to draw a card in, so only
         // the words of the answer go back.
@@ -1272,6 +1474,118 @@ impl Daemon {
         self.accepting.store(false, Ordering::SeqCst);
         self.sessions.shutdown().await;
         self.scheduler.shutdown();
+    }
+}
+
+/// A message to post into `channel_id`, a thread or the channel, that answers
+/// nothing in particular.
+fn posted_in(channel_id: &str) -> IncomingMessage {
+    IncomingMessage {
+        id: String::new(),
+        author_id: String::new(),
+        channel_id: channel_id.to_owned(),
+        author_name: None,
+        content: String::new(),
+        attachments: Vec::new(),
+        from_interface: false,
+    }
+}
+
+/// The turns running now with the thread each runs in, and how many run
+/// outside any thread, such as one started from the interface.
+fn running_turns(sessions: &SessionManager) -> (Vec<Turn>, usize) {
+    let mut threaded = Vec::new();
+    let mut unthreaded = 0;
+    for session in sessions.sessions() {
+        if !sessions.is_busy(session.id()) {
+            continue;
+        }
+        match sessions.thread_id_for(session.id()) {
+            Some(thread_id) => threaded.push(Turn {
+                thread_id,
+                owner_id: session.owner_id().to_owned(),
+            }),
+            None => unthreaded += 1,
+        }
+    }
+    (threaded, unthreaded)
+}
+
+/// What a drain's watcher needs, taken from the daemon when it begins.
+struct DrainWatch {
+    generation: u64,
+    current: Arc<AtomicU64>,
+    scheduler: Arc<Scheduler>,
+    sessions: Arc<SessionManager>,
+    reply: ReplyInChannel,
+    asked: IncomingMessage,
+    restart: Option<(Restarter, i64)>,
+    state_dir: String,
+    log: Logger,
+}
+
+/// Waits for a drain to have nothing left to wait for, then says so where it
+/// was asked, or restarts once that happens or its moment comes.
+///
+/// Stops without a word once another drain replaced this one or `!undrain`
+/// ended it.
+async fn watch_drain(watch: DrainWatch) {
+    loop {
+        tokio::time::sleep(DRAIN_POLL).await;
+        if watch.current.load(Ordering::SeqCst) != watch.generation {
+            return;
+        }
+        let idle = watch.scheduler.is_idle();
+        let Some((restarter, restart_at)) = &watch.restart else {
+            if idle {
+                watch
+                    .log
+                    .info("drained: no turn is running or waiting", &fields([]));
+                (watch.reply)(watch.asked, Answer::Card(maintenance::drained_card())).await;
+                return;
+            }
+            continue;
+        };
+        if !idle && now_ms() < *restart_at {
+            continue;
+        }
+        let note = RestartNote {
+            asked_in: watch.asked.channel_id.clone(),
+            interrupted: running_turns(&watch.sessions).0,
+            dropped: watch
+                .scheduler
+                .queued_sessions()
+                .iter()
+                .filter_map(|session_id| watch.sessions.thread_id_for(session_id))
+                .collect(),
+        };
+        if let Err(error) = maintenance::leave_note(&watch.state_dir, &note) {
+            // Without the note nothing cut off would be continued, so the
+            // restart waits for somebody rather than losing work quietly.
+            watch.log.error(
+                "the restart is called off: its note cannot be written",
+                &fields([("detail", LogValue::from(error.to_string()))]),
+            );
+            let why = format!(
+                "the restart is called off, since its note cannot be written: {error}.                  The bot is still draining; `!undrain` accepts work again."
+            );
+            (watch.reply)(watch.asked, Answer::Card(maintenance::refused_card(&why))).await;
+            return;
+        }
+        watch.log.warn(
+            "restarting for maintenance",
+            &fields([
+                ("continued", LogValue::from(note.interrupted.len())),
+                ("dropped", LogValue::from(note.dropped.len())),
+            ]),
+        );
+        (watch.reply)(
+            watch.asked,
+            Answer::Card(maintenance::restarting_card(&note)),
+        )
+        .await;
+        restarter.restart();
+        return;
     }
 }
 

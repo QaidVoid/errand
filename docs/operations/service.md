@@ -45,6 +45,31 @@ rc-update add errand default
 rc-service errand start
 ```
 
+## Updating the binary
+
+A restart loses only the turns running and the prompts waiting when it
+happens. A session's history and workspace outlive it, so an idle session
+resumes as soon as somebody posts in its thread.
+
+1. Put the new binary where the running one was started from, with
+   `install` or `mv` rather than `cp`. A running binary cannot be written
+   over in place, but it can be replaced by a new file at the same path.
+2. Type `!restart` in the channel or any thread. It is for operators.
+
+The bot then refuses new work and says so to whoever asks, waits for running
+turns to finish, and starts the new binary in its own place, with the same
+arguments and the same process id. It says when it is back where `!restart`
+was typed.
+
+It waits `timeouts.drainMs` at most, ten minutes unless configured. A turn
+still running then is stopped, and once the bot is back its thread is told
+and the session is asked, in its owner's name, to continue where it stopped.
+`!restart 30m` waits longer this once, and `!restart now` does not wait.
+
+`!drain` refuses new work in the same way and says when nothing is running,
+without restarting, for a restart done by hand. `!undrain` ends either one,
+and calls off a restart that is waiting.
+
 ## Exit codes
 
 | Code | Meaning | Restarted? |

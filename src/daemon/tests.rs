@@ -50,6 +50,9 @@ fn silent() -> Logger {
 
 /// An agent that answers its readiness call and otherwise says nothing.
 struct QuietAgent {
+    /// Whether a prompt is left unanswered, so its turn runs until the
+    /// session ends.
+    holds_prompts: bool,
     queue: Mutex<std::collections::VecDeque<u8>>,
     closed: Mutex<bool>,
     exit: watch::Receiver<Option<i32>>,
@@ -62,9 +65,10 @@ struct QuietControls {
 }
 
 impl QuietAgent {
-    fn new() -> (Arc<Self>, QuietControls) {
+    fn new(holds_prompts: bool) -> (Arc<Self>, QuietControls) {
         let (exit_sender, exit_receiver) = watch::channel(None);
         let fake = Arc::new(Self {
+            holds_prompts,
             queue: Mutex::new(std::collections::VecDeque::new()),
             closed: Mutex::new(false),
             exit: exit_receiver.clone(),
@@ -118,6 +122,7 @@ impl AgentProcess for QuietAgent {
                         .unwrap_or_else(|| json!("s-1")),
                 })),
                 "session/set_config_option" | "_kage/session/compact" => Some(json!({})),
+                "session/prompt" if self.holds_prompts => None,
                 _ if method.is_empty() => None,
                 _ => Some(json!({})),
             };
@@ -176,6 +181,8 @@ impl AgentProcess for QuietAgent {
 struct FakeSandbox {
     report: Mutex<Option<CapabilityReport>>,
     probe_fails: Mutex<bool>,
+    /// Whether the agents launched from now on leave prompts unanswered.
+    holds_prompts: Mutex<bool>,
     launched: Mutex<Vec<SandboxLaunch>>,
     agents: Mutex<Vec<QuietControls>>,
 }
@@ -185,6 +192,7 @@ impl FakeSandbox {
         Arc::new(Self {
             report: Mutex::new(report),
             probe_fails: Mutex::new(false),
+            holds_prompts: Mutex::new(false),
             launched: Mutex::new(Vec::new()),
             agents: Mutex::new(Vec::new()),
         })
@@ -223,7 +231,7 @@ impl SandboxPool for FakeSandbox {
         launch: SandboxLaunch,
     ) -> Pin<Box<dyn Future<Output = Result<RunningBox, SandboxLaunchError>> + Send>> {
         Box::pin(async move {
-            let (agent, controls) = QuietAgent::new();
+            let (agent, controls) = QuietAgent::new(*self.holds_prompts.lock().unwrap());
             self.agents.lock().unwrap().push(controls.clone());
             self.launched.lock().unwrap().push(launch.clone());
             let project_path = launch.project_path.clone();
@@ -429,6 +437,7 @@ struct DaemonCase {
     start: bool,
     memory: Option<Arc<MemoryStore>>,
     catalog: Option<Catalog>,
+    restart: Option<super::maintenance::Restarter>,
 }
 
 impl Default for DaemonCase {
@@ -444,6 +453,7 @@ impl Default for DaemonCase {
             start: true,
             memory: None,
             catalog: None,
+            restart: None,
         }
     }
 }
@@ -521,6 +531,7 @@ async fn with_daemon(
         delegate_base_url: None,
         operator_ids: None,
         unavailable: None,
+        restart: case.restart.clone(),
     });
 
     let harness = Harness {
@@ -2636,6 +2647,183 @@ async fn a_command_asked_in_a_thread_is_answered_there() {
                         .contains("58% of the provider's usage window")
                 );
                 assert_eq!(harness.replied_in(), ["thread-1"]);
+            })
+        },
+    )
+    .await;
+}
+
+/// A configuration whose one operator is the owner, so maintenance may be
+/// asked for.
+fn operated() -> serde_json::Value {
+    json!({
+        "chat": {
+            "token": "a.token.value",
+            "channelId": "chan",
+            "allowedUserIds": [OWNER, "100000000000000002"],
+            "operatorUserIds": [OWNER],
+        },
+    })
+}
+
+/// A restarter into this test's own binary that counts how often it was
+/// asked to restart, rather than restarting anything.
+fn counting_restarter() -> (super::maintenance::Restarter, Arc<Mutex<usize>>) {
+    let asked = Arc::new(Mutex::new(0));
+    let counted = Arc::clone(&asked);
+    let restarter = super::maintenance::Restarter::new(
+        std::env::current_exe().expect("the test binary"),
+        Arc::new(move || *counted.lock().unwrap() += 1),
+    );
+    (restarter, asked)
+}
+
+/// Maintenance acts on every session at once, so only an operator may ask,
+/// and somebody else asking changes nothing.
+#[tokio::test]
+async fn only_an_operator_may_drain() {
+    with_daemon(
+        DaemonCase {
+            settings: Some(operated()),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(
+                        raw_with("!drain", "m1", "100000000000000002"),
+                        InboundDecision::Start,
+                    )
+                    .await;
+                assert!(harness.said().contains("only an operator"));
+
+                harness
+                    .daemon
+                    .handle(raw_with("go", "m2", OWNER), InboundDecision::Start)
+                    .await;
+                assert_eq!(created(&harness.threads).len(), 1);
+            })
+        },
+    )
+    .await;
+}
+
+/// A drain turns new sessions away with a reason, says where it was asked
+/// once nothing is running, and `!undrain` lets work start again.
+#[tokio::test(start_paused = true)]
+async fn a_drain_refuses_new_work_says_when_it_is_done_and_can_be_ended() {
+    with_daemon(
+        DaemonCase {
+            settings: Some(operated()),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("!drain"), InboundDecision::Start)
+                    .await;
+                assert_eq!(harness.cards()[0].title, "draining");
+
+                harness
+                    .daemon
+                    .handle(raw_with("go", "m2", OWNER), InboundDecision::Start)
+                    .await;
+                assert!(created(&harness.threads).is_empty());
+                assert!(harness.said().contains("paused for maintenance"));
+
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                let titles: Vec<String> =
+                    harness.cards().into_iter().map(|card| card.title).collect();
+                assert!(titles.contains(&"drained".to_owned()), "{titles:?}");
+
+                harness
+                    .daemon
+                    .handle(raw_with("!undrain", "m3", OWNER), InboundDecision::Start)
+                    .await;
+                harness
+                    .daemon
+                    .handle(raw_with("go", "m4", OWNER), InboundDecision::Start)
+                    .await;
+                assert_eq!(created(&harness.threads).len(), 1);
+            })
+        },
+    )
+    .await;
+}
+
+/// A turn that would run for hours does not hold a restart up past its
+/// wait: the restart happens, and the next start continues the turn in its
+/// owner's name and says it is back where the restart was asked.
+#[tokio::test(start_paused = true)]
+async fn a_restart_cuts_off_a_running_turn_and_the_next_start_continues_it() {
+    let (restarter, asked) = counting_restarter();
+    with_daemon(
+        DaemonCase {
+            settings: Some(operated()),
+            restart: Some(restarter),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            let asked = Arc::clone(&asked);
+            Box::pin(async move {
+                *harness.sandbox.holds_prompts.lock().unwrap() = true;
+                harness
+                    .daemon
+                    .handle(raw("go"), InboundDecision::Start)
+                    .await;
+                let session = harness.daemon.sessions().sessions()[0].id().to_owned();
+                assert!(harness.daemon.sessions().is_busy(&session));
+
+                harness
+                    .daemon
+                    .handle(
+                        raw_with("!restart now", "m2", OWNER),
+                        InboundDecision::Start,
+                    )
+                    .await;
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                assert_eq!(*asked.lock().unwrap(), 1);
+                assert!(
+                    harness
+                        .said()
+                        .contains("1 running turn(s) will be continued")
+                );
+
+                // What the restart does to the old daemon, and the fresh one
+                // after it, which is not draining.
+                harness
+                    .daemon
+                    .sessions()
+                    .end_thread("thread-1", EndReason::Idle)
+                    .await;
+                harness
+                    .daemon
+                    .handle(raw_with("!undrain", "m3", OWNER), InboundDecision::Start)
+                    .await;
+                harness.replies.lock().unwrap().clear();
+                harness.daemon.after_restart().await;
+
+                let replied: Vec<(String, String)> = harness
+                    .replied_in()
+                    .into_iter()
+                    .zip(harness.cards().into_iter().map(|card| card.title))
+                    .collect();
+                assert_eq!(
+                    replied,
+                    [
+                        ("chan".to_owned(), "back".to_owned()),
+                        (
+                            "thread-1".to_owned(),
+                            "restarted for maintenance".to_owned()
+                        ),
+                    ]
+                );
+                assert_eq!(harness.daemon.sessions().sessions().len(), 1);
+
+                harness.daemon.after_restart().await;
+                assert_eq!(harness.replied_in().len(), 2, "the note is acted on once");
             })
         },
     )

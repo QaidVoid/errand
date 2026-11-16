@@ -455,6 +455,7 @@ fn defaults_table() -> BTreeMap<&'static str, Value> {
             "timeouts/providerconnectms",
             serde_json::json!(defaults::PROVIDER_CONNECT_MS),
         ),
+        ("timeouts/drainms", serde_json::json!(defaults::DRAIN_MS)),
         ("web/host", Value::from(defaults::WEB_HOST)),
         ("web/port", serde_json::json!(defaults::WEB_PORT)),
         ("web/observer", Value::Bool(defaults::WEB_OBSERVER)),
@@ -729,6 +730,7 @@ pub fn commands_page() -> String {
         CommandAccess::Guest => "the owner and whoever they invited",
         CommandAccess::Owner => "the owner and operators",
         CommandAccess::Host => "named accounts, answered by the daemon",
+        CommandAccess::Operator => "operators, answered by the daemon",
     };
     let groups = [
         CommandGroup::Session,

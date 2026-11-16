@@ -53,6 +53,12 @@ const TEXT_OPTION: &[(&str, &str, &str, bool)] = &[
         false,
     ),
     ("!revoke", "host", "the host to stop granting", true),
+    (
+        "!restart",
+        "wait",
+        "how long to wait for running turns, as 30m, or now",
+        false,
+    ),
 ];
 
 /// Commands with optional string options beside the required one.
@@ -85,7 +91,15 @@ const USER_OPTION: &[(&str, &str)] = &[
 ];
 
 /// The names of the options whose values are read back in `translate`.
-const OPTION_NAMES: [&str; 6] = ["path", "instruction", "title", "prompt", "text", "host"];
+const OPTION_NAMES: [&str; 7] = [
+    "path",
+    "instruction",
+    "title",
+    "prompt",
+    "text",
+    "host",
+    "wait",
+];
 
 /// Raised when the service will not accept the commands, with what to do.
 #[derive(Debug, thiserror::Error)]
@@ -103,6 +117,7 @@ pub struct CommandRegistrationError {
 fn describe(access: CommandAccess, summary: &str) -> String {
     match access {
         CommandAccess::Host => format!("{summary} (named accounts only)"),
+        CommandAccess::Operator => format!("{summary} (operators only)"),
         CommandAccess::Owner => format!("{summary} (owner only)"),
         CommandAccess::Guest => format!("{summary} (owner and invited)"),
         CommandAccess::Anyone => summary.to_owned(),

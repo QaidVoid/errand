@@ -10,7 +10,7 @@ use crate::forge;
 use crate::session::event::{Card, CardColor};
 use crate::session::model::{LEVELS, split_level};
 
-use CommandAccess::{Anyone, Guest, Host, Owner};
+use CommandAccess::{Anyone, Guest, Host, Operator, Owner};
 use CommandGroup::{People, Project, Session, You};
 
 /// Who may run a command.
@@ -32,6 +32,8 @@ pub enum CommandAccess {
     Owner,
     /// Acts on the machine; the daemon answers it itself.
     Host,
+    /// Acts on the daemon; the daemon answers it, for operators only.
+    Operator,
 }
 
 /// What a command is for, so help reads as groups rather than one long list.
@@ -319,6 +321,36 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
             group: You,
             summary: "power off this daemon's host",
             argument: None,
+        },
+    ),
+    // Maintenance is the daemon's, so it answers these wherever they are
+    // typed. A drain lets running turns finish and refuses new ones, which is
+    // what makes replacing the binary safe.
+    (
+        "!drain",
+        CommandMeta {
+            access: Operator,
+            group: You,
+            summary: "refuse new work and say when none is running",
+            argument: None,
+        },
+    ),
+    (
+        "!undrain",
+        CommandMeta {
+            access: Operator,
+            group: You,
+            summary: "accept work again, and call off a restart",
+            argument: None,
+        },
+    ),
+    (
+        "!restart",
+        CommandMeta {
+            access: Operator,
+            group: You,
+            summary: "drain, then restart into the binary on disk",
+            argument: Some("[now|<wait>]"),
         },
     ),
 ];
@@ -670,12 +702,13 @@ pub struct Standing {
 
 /// Whether an account may run a command at the given access level.
 ///
-/// `host` is never granted here. It is answered by the daemon, which is the
-/// only thing that knows who may turn the machine off, and a session that
-/// answered it would be deciding on the machine's behalf.
+/// `host` and `operator` are never granted here. They are answered by the
+/// daemon, which is the only thing that knows who may turn the machine off or
+/// restart it, and a session that answered one would be deciding on the
+/// daemon's behalf.
 pub fn may_run(access: CommandAccess, standing: Standing) -> bool {
     match access {
-        Host => false,
+        Host | Operator => false,
         Anyone => true,
         Guest => standing.is_owner || standing.is_guest,
         Owner => standing.is_owner,
@@ -715,6 +748,7 @@ const GROUP_TITLES: [(CommandGroup, &str); 4] = [
 fn access_note(access: CommandAccess) -> &'static str {
     match access {
         Host => "named accounts",
+        Operator => "operators",
         Owner => "owner",
         Guest => "invited",
         Anyone => "",
