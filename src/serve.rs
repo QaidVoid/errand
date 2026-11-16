@@ -1254,11 +1254,11 @@ async fn run(
 
     // Every provider this host can ask about, because somebody deciding what
     // to start wants to know which one has room.
+    // Rebuilt when the file changes, so everything below reads them through
+    // the lock rather than deciding once whether there are any.
     let sources = usage_sources(config);
     let sources = Arc::new(tokio::sync::Mutex::new(sources));
-    if !sources.lock().await.is_empty() {
-        refresh_presence(&sources, &gateway);
-    }
+    refresh_presence(&sources, &gateway);
 
     // The host's own environment, which is where the agent's store lives. Not
     // the environment the configuration was resolved from: that one names the
@@ -1338,9 +1338,7 @@ async fn run(
         operator_ids.push(WEB_ACTOR.to_owned());
     }
 
-    let unavailable: Option<Unavailable> = if sources.lock().await.is_empty() {
-        None
-    } else {
+    let unavailable: Option<Unavailable> = {
         let sources = Arc::clone(&sources);
         // Wrapping gates in Arc needs interior mutability per gate; the gates
         // are per provider and their caching is internal, so they are driven
@@ -1496,9 +1494,7 @@ async fn run(
         power_off: Some(Arc::new(|| {
             Box::pin(power_off()) as Pin<Box<dyn Future<Output = Option<String>> + Send>>
         })),
-        describe_usage: if sources.lock().await.is_empty() {
-            None
-        } else {
+        describe_usage: {
             let sources = Arc::clone(&sources);
             Some(Arc::new(move |refresh: bool| {
                 let sources = Arc::clone(&sources);
@@ -1702,8 +1698,8 @@ async fn run(
     // Started once the daemon is serving, so a change to the file is applied
     // to a daemon that is already answering. A session already running keeps
     // what it was launched with, and the next one launches under the new
-    // file: its sandbox section, its broker routes, and the store's models
-    // are rebuilt here. What startup connected or probed is not rewound, and
+    // file: its sandbox section, its broker routes, the store's models, and
+    // where each provider's usage window is read are rebuilt here. What startup connected or probed is not rewound, and
     // a change to it is said rather than left to look applied.
     //
     // The catalog is derived from the file as well, so it is derived again
@@ -1715,16 +1711,21 @@ async fn run(
         let log = log.clone();
         let started = config.clone();
         Arc::new(move || {
-            let (live, store, log, catalog, started, launch_settings) = (
+            let (live, store, log, catalog, started, launch_settings, sources) = (
                 live.clone(),
                 store.clone(),
                 log.clone(),
                 catalog.clone(),
                 started.clone(),
                 launch_settings.clone(),
+                Arc::clone(&sources),
             );
             Box::pin(async move {
                 let config = live.get();
+                // Built before the lock is taken, since a reading in progress
+                // holds it for as long as its provider takes to answer.
+                let usage = usage_sources(&config);
+                *sources.lock().await = usage;
                 for setting in fixed_until_restart(&started, &config) {
                     log.warn(
                         "a setting used by startup components changed, and those components keep \
