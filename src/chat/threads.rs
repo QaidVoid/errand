@@ -32,7 +32,9 @@ use crate::chat::chars::reaction;
 use crate::chat::diff::FileDiff;
 use crate::chat::diff::render_diff;
 use crate::chat::outbox::{DEFAULT_MAX_BUFFERED, Outbox, PermanentFailure, TaskError};
-use crate::chat::render::{MESSAGE_LIMIT, delegation_line, split_message, split_tables, table_card};
+use crate::chat::render::{
+    MESSAGE_LIMIT, delegation_line, split_message, split_tables, table_card,
+};
 use crate::issues::thread::logins_plainly;
 use crate::log::{LogValue, Logger, fields};
 use crate::session::event::Card;

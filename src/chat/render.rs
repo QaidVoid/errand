@@ -636,7 +636,12 @@ fn window_line(quota: Option<&Quota>) -> String {
 /// writer puts around them.
 fn cells_of(line: &str) -> Option<Vec<String>> {
     let inside = line.trim().strip_prefix('|')?.strip_suffix('|')?;
-    Some(inside.split('|').map(|cell| cell.trim().to_owned()).collect())
+    Some(
+        inside
+            .split('|')
+            .map(|cell| cell.trim().to_owned())
+            .collect(),
+    )
 }
 
 /// Whether a row is the rule between a table's head and its body: dashes
