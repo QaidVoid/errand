@@ -1,6 +1,72 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.4.2] - 2026-11-16
+
+
+### Features
+- (agent) Configure max provider retries ([f1ee51f](https://github.com/QaidVoid/errand/commit/f1ee51fa178de8c5ce1c2d6b94a51e6d005af11c))
+- (chat) Stream long paragraphs in pieces cut at whitespace ([9a68234](https://github.com/QaidVoid/errand/commit/9a682346e621a350f32d2bb4a28618153019de10))
+- (chat) Show answers as they are written, a paragraph at a time ([e1a3813](https://github.com/QaidVoid/errand/commit/e1a38135cbd0274b723c8878880f13a7f973a00f))
+- (chat) Show reasoning live in threads, a paged card per run ([1093e72](https://github.com/QaidVoid/errand/commit/1093e724ec5f3d158d85ddbaf12a21e7964868cb))
+- (chat) Turn long cards a page at a time ([34ac597](https://github.com/QaidVoid/errand/commit/34ac597dea9ca581a1580e2212175143e0801c11))
+- (chat) Answer help as a card ([5373a95](https://github.com/QaidVoid/errand/commit/5373a952aa90c6fff60a43dcf975b3300390d8c2))
+- (chat) Draw transcript tables as cards ([0c3e5f6](https://github.com/QaidVoid/errand/commit/0c3e5f6dd58b74c90d3d41c4415070b184bc23d0))
+- (chat) Draw tool output tables as cards ([503940d](https://github.com/QaidVoid/errand/commit/503940dc1c87eb5e1cb3894f9579a1a48bf9d06f))
+- (chat) Draw usage windows as a field grid ([aaf6a7e](https://github.com/QaidVoid/errand/commit/aaf6a7eac780114fc831f901d16a2b54aacc8322))
+- (chat) Draw notices, status, and usage as cards ([35cd80d](https://github.com/QaidVoid/errand/commit/35cd80d37944110434446a9604f6df4680120623))
+- (chat) Draw model listings as cards ([6737b8b](https://github.com/QaidVoid/errand/commit/6737b8b738415a58becf57f9155644390ef20278))
+- (chat) Group the model listing under its provider ([9792457](https://github.com/QaidVoid/errand/commit/97924578fefe532fc999c0fffc200dfd27726ca2))
+- (config) Make the provider connect timeout configurable ([7f6fdcd](https://github.com/QaidVoid/errand/commit/7f6fdcd4dd51efaef1cdb6fa6be136bc7885e6ef))
+- (daemon) Show the host status for !status in the channel ([9046c33](https://github.com/QaidVoid/errand/commit/9046c331a2ddbb01e7eae4479ddbfdf5e6eb1655))
+- (daemon) Collect cold sessions on request with !gc ([6e028dd](https://github.com/QaidVoid/errand/commit/6e028dde60fa8c41ef655f20aba1d6f9506d558f))
+- (daemon) Drain and restart for maintenance ([bd3a490](https://github.com/QaidVoid/errand/commit/bd3a49093072f50760e95c3dde136a605a25221f))
+- (discover) Ask providers for their models again on a cadence ([3b53d8a](https://github.com/QaidVoid/errand/commit/3b53d8ae2395754e60a9f21b8e42b6e7f455ed4e))
+- (forge) Support Forgejo as a second forge ([32ea760](https://github.com/QaidVoid/errand/commit/32ea760914ac44d53d2065430b1bf4b316c51e86))
+- (image) Let agents own Rust and add common build tools ([bdefbe5](https://github.com/QaidVoid/errand/commit/bdefbe59f246c1ec815204e907e8dfb2f561805c))
+- (sandbox) Add the incus backend and guest image ([#115](https://github.com/QaidVoid/errand/pull/115)) ([d2a4fac](https://github.com/QaidVoid/errand/commit/d2a4fac6e78c94ecee82ca218b7a6789a70548cb))
+
+### Fixes
+- (admission) Stop ticket leaks and a second turn overwriting the live one ([#132](https://github.com/QaidVoid/errand/pull/132)) ([46c4e33](https://github.com/QaidVoid/errand/commit/46c4e33a76e6b9be94d94afe379077ed70e48a49))
+- (chat) Ping whoever a notice card addresses ([afef76a](https://github.com/QaidVoid/errand/commit/afef76a909db694fc7eaec101edf6c3492f93198))
+- (chat) Measure the message limit in utf-16 units as the service does ([#133](https://github.com/QaidVoid/errand/pull/133)) ([131e627](https://github.com/QaidVoid/errand/commit/131e627116a4a530819fd4464a5650640d1e514b))
+- (chat) Drop outbox tasks the service refuses for good ([#131](https://github.com/QaidVoid/errand/pull/131)) ([d68a161](https://github.com/QaidVoid/errand/commit/d68a16168bb459d572d3565c42bbf19ec2fe58fb))
+- (config) Refuse counted settings their width cannot hold ([#128](https://github.com/QaidVoid/errand/pull/128)) ([f04e06b](https://github.com/QaidVoid/errand/commit/f04e06b2dc488a9da5da2ca466d6e8c37e26f1e4))
+- (config) Redact sandbox env values from logs and posts ([#127](https://github.com/QaidVoid/errand/pull/127)) ([4d88ea4](https://github.com/QaidVoid/errand/commit/4d88ea49e28797b5a6ac5cdb8b6be107ed35a7de))
+- (daemon) Report the size a guest-emptied session held ([f2681ef](https://github.com/QaidVoid/errand/commit/f2681ef3dbeb608e52120fa04ca237d09117cdcb))
+- (daemon) Shut down gracefully when the chat connection gives up ([#130](https://github.com/QaidVoid/errand/pull/130)) ([89a57c4](https://github.com/QaidVoid/errand/commit/89a57c46375b87e554e638d1a009576d7ccf4709))
+- (daemon) Exit with the refusal code on a refused config ([#129](https://github.com/QaidVoid/errand/pull/129)) ([8ef45f2](https://github.com/QaidVoid/errand/commit/8ef45f28a771f8f310b9f8c27dc6708373004084))
+- (docs) Escape pipes in generated table cells ([#142](https://github.com/QaidVoid/errand/pull/142)) ([1cd2a42](https://github.com/QaidVoid/errand/commit/1cd2a4274ee73ecc53b4abed1dcba9c0d6dfce3c))
+- (forge) Harden validation, polling, and reloads ([a3df1b7](https://github.com/QaidVoid/errand/commit/a3df1b7f7d3a246fa485ed0901d0f534992ade17))
+- (gc) Retain stopped sessions for automatic cleanup ([e721f07](https://github.com/QaidVoid/errand/commit/e721f07d80f8a55efe88d3ae704d93fab3199ed2))
+- (image) Leave the old image to publish --reuse ([22c6721](https://github.com/QaidVoid/errand/commit/22c672143fca103832c056eefd5d4d3b57834c34))
+- (image) Keep the golden and the alias in step ([87dfd88](https://github.com/QaidVoid/errand/commit/87dfd88ac6a9091a4ebff84e58542d906165cfc2))
+- (incus) Collect sessions a guest wrote into as root ([e77a80c](https://github.com/QaidVoid/errand/commit/e77a80ca8a4159b7a4db374b4a80d6bf71eb3f9b))
+- (log) Keep the cause of failed provider calls ([d41a019](https://github.com/QaidVoid/errand/commit/d41a01933795c8f1cdfc64b71d9dd306b9e41372))
+- (pr) Quote a refused origin remote without its credentials ([#126](https://github.com/QaidVoid/errand/pull/126)) ([d5dd5e1](https://github.com/QaidVoid/errand/commit/d5dd5e1e1592a97b30e2390138ce107d9ca2888c))
+- (serve) Post a notice that answers no message ([c69be8e](https://github.com/QaidVoid/errand/commit/c69be8e273df3b67c204fc5c6c34faceb51db427))
+- (serve) Reload usage windows with the config ([0973af8](https://github.com/QaidVoid/errand/commit/0973af83722a3fe2b1784ed783505f24c8884a9c))
+- (session) Label attached images by their bytes ([#141](https://github.com/QaidVoid/errand/pull/141)) ([566c187](https://github.com/QaidVoid/errand/commit/566c1873b55b50b7acea8d2330ebba175c56a6fd))
+- (session) Tell the agent of a withdrawal only mid-turn ([97e70ea](https://github.com/QaidVoid/errand/commit/97e70ea7f119f6cf2dc2c3b57f1a131f4e7cb0f2))
+- (web) Refuse a bind address with an octal part as ambiguous ([#134](https://github.com/QaidVoid/errand/pull/134)) ([a41f2a4](https://github.com/QaidVoid/errand/commit/a41f2a4e65baeca24b6d7413c8bfa6509606db1e))
+- Paginate GitHub activity and document plugins ([9f883b7](https://github.com/QaidVoid/errand/commit/9f883b7bc4cea63933a85cf1c3ab0edd7d9e2615))
+
+### Performance
+- (provider) Ask for models and usage concurrently ([9f3baa5](https://github.com/QaidVoid/errand/commit/9f3baa5c423903faa576d9eb938d28252f7a5aa4))
+
+### Refactoring
+- (image) Split the build into host and guest steps ([b9486ab](https://github.com/QaidVoid/errand/commit/b9486ab8617f8c84e2703bde29aa9b9b608da592))
+
+### Documentation
+- Rewrite the guide and give the site its own theme ([#139](https://github.com/QaidVoid/errand/pull/139)) ([e1edfa2](https://github.com/QaidVoid/errand/commit/e1edfa203b21e6fafb7ba62d6034e9d8fbff6af2))
+
+### Build
+- Add cargo-deny policy and a CI step that enforces it ([#136](https://github.com/QaidVoid/errand/pull/136)) ([677a171](https://github.com/QaidVoid/errand/commit/677a17164b4bd25f2b3e2ca5283f5c7c877ad22a))
+
+### Style
+- (chat) Format render and threads ([bf6c4b9](https://github.com/QaidVoid/errand/commit/bf6c4b9a4e59a9f2ab8deb888e19d22c1c94b43a))
+- Rewrite clause-joining semicolons as sentences ([a37908d](https://github.com/QaidVoid/errand/commit/a37908ded039e0558b7a56c4624bb06698b54d2f))
+
 ## [0.4.1] - 2026-10-31
 
 
