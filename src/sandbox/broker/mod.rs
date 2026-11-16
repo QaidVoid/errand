@@ -30,7 +30,7 @@ use receipts::{Outcome, Receipt, ReceiptGuard};
 
 use crate::config::route::{Capabilities, Placement, RoutePolicy};
 use crate::log::Logger;
-use crate::log::fields;
+use crate::log::{chained, fields};
 
 /// Whether `host` is permitted by an allowlist of names and `*.` wildcards.
 ///
@@ -1170,7 +1170,13 @@ async fn forward_to_provider(
                 "the provider could not be reached",
                 &fields([
                     ("provider", route.prefix.as_str().into()),
-                    ("detail", error.to_string().into()),
+                    ("detail", chained(&error).into()),
+                    (
+                        "elapsed_ms",
+                        u64::try_from(started.elapsed().as_millis())
+                            .unwrap_or(u64::MAX)
+                            .into(),
+                    ),
                 ]),
             );
             receipt.answered(target.host_str().map(str::to_owned), Some(502));

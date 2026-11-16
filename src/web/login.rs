@@ -438,7 +438,12 @@ impl Discord for DiscordApi {
                 ])
                 .send()
                 .await
-                .map_err(|error| format!("Discord's token endpoint was unreachable: {error}"))?;
+                .map_err(|error| {
+                    format!(
+                        "Discord's token endpoint was unreachable: {}",
+                        crate::log::chained(&error)
+                    )
+                })?;
             if !token.status().is_success() {
                 return Err(format!(
                     "Discord refused the login code with {}; check web.login.clientId, \
@@ -456,7 +461,12 @@ impl Discord for DiscordApi {
                 .bearer_auth(token.access_token)
                 .send()
                 .await
-                .map_err(|error| format!("Discord's user endpoint was unreachable: {error}"))?;
+                .map_err(|error| {
+                    format!(
+                        "Discord's user endpoint was unreachable: {}",
+                        crate::log::chained(&error)
+                    )
+                })?;
             if !user.status().is_success() {
                 return Err(format!(
                     "Discord would not say who logged in: {}",

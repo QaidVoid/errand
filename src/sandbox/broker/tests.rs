@@ -1700,6 +1700,36 @@ async fn a_dropped_session_broker_stops_listening() {
     );
 }
 
+/// reqwest says only "error sending request" of a call it could not send,
+/// so a refused connection and a connect that ran out of time read the same
+/// unless the broker logs the cause under it and how long it tried.
+#[tokio::test]
+async fn an_unreachable_provider_is_logged_with_its_cause_and_time() {
+    let logged = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorded = Arc::clone(&logged);
+    let log = Logger::new(
+        LogFields::new(),
+        Arc::new(move |_level, line| recorded.lock().unwrap().push(line.to_owned())),
+    );
+    let started = template_for(9, log)
+        .start("s-8", None, BrokerListen::Tcp)
+        .await
+        .expect("a broker");
+
+    assert_eq!(
+        call_provider(started.port, &started.nonces["zai"]).await,
+        502
+    );
+
+    let lines = logged.lock().unwrap();
+    let line = lines
+        .iter()
+        .find(|line| line.contains("the provider could not be reached"))
+        .expect("the failure is logged");
+    assert!(line.contains("Connection refused"), "{line}");
+    assert!(line.contains("elapsed_ms="), "{line}");
+}
+
 /// The broker's own log lines name the session whose listener the request
 /// arrived on, a tunnel included, though a tunnel carries no nonce.
 #[tokio::test]

@@ -175,7 +175,7 @@ impl Sender for HttpSender {
             .body(request.body)
             .send()
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| crate::log::chained(&error))?;
         let status = answer.status().as_u16();
         let body = answer.json::<Value>().await.unwrap_or(Value::Null);
         Ok((status, Some(body)))

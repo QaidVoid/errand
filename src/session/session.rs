@@ -36,8 +36,8 @@ use crate::chat::render::{
 };
 use crate::config::schema::{Config, ForgeConfig, ForgeKind};
 use crate::config::size::parse_size;
-use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
+use crate::log::{chained, now_ms};
 use crate::memory::store::MemoryStore;
 use crate::provider::ask::{Endpoint, HttpSender};
 use crate::provider::discover::Catalog;
@@ -3315,22 +3315,6 @@ async fn default_fetch(url: &str) -> Result<Vec<u8>, String> {
         }
     }
     Err(format!("{last} (after {FETCH_ATTEMPTS} attempts)"))
-}
-
-/// An error and everything under it, joined, so the reason is not lost.
-///
-/// A `reqwest::Error` displays only the outermost layer; the cause that
-/// actually explains the failure, a DNS error or a connection reset, sits in
-/// its `source` chain.
-fn chained(error: &dyn std::error::Error) -> String {
-    let mut message = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        message.push_str(": ");
-        message.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    message
 }
 
 mod answering;

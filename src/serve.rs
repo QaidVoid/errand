@@ -47,8 +47,8 @@ use crate::issues::thread::issue_of;
 use crate::issues::view::IssueThreads;
 use crate::lock::DaemonLock;
 use crate::lock::acquire_lock;
-use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
+use crate::log::{chained, now_ms};
 use crate::memory::store::MemoryStore;
 use crate::provider::discover::{Catalog, Outcome, discover};
 use crate::provider::gateway::fetch_gateway_usage;
@@ -352,7 +352,7 @@ impl Fetch for HttpFetch {
             .timeout(std::time::Duration::from_millis(request.timeout_ms))
             .send()
             .await
-            .map_err(|error| FetchError(error.to_string()))?;
+            .map_err(|error| FetchError(chained(&error)))?;
         let status = answer.status().as_u16();
         let body = answer.json::<serde_json::Value>().await.ok();
         Ok(HttpResponse { status, body })

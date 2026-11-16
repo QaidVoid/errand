@@ -54,12 +54,16 @@ pub async fn fetch_song(link: String) -> Result<Vec<u8>, String> {
         .get(link)
         .send()
         .await
-        .map_err(|error| format!("it could not be fetched: {error}"))?;
+        .map_err(|error| format!("it could not be fetched: {}", crate::log::chained(&error)))?;
     if !answer.status().is_success() {
         return Err(format!("its server answered {}", answer.status()));
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = answer.chunk().await.map_err(|error| error.to_string())? {
+    while let Some(chunk) = answer
+        .chunk()
+        .await
+        .map_err(|error| crate::log::chained(&error))?
+    {
         if bytes.len() + chunk.len() > MAX_SONG_BYTES {
             return Err(format!("it is over {MAX_SONG_BYTES} bytes"));
         }

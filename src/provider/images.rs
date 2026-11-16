@@ -365,7 +365,7 @@ impl Post for HttpPost {
             .timeout(std::time::Duration::from_millis(request.timeout_ms))
             .send()
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| crate::log::chained(&error))?;
         let status = answer.status().as_u16();
         // Read a chunk at a time and stopped at the cap, so a server
         // answering a wall of bytes cannot fill memory before it is refused.

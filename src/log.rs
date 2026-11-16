@@ -279,6 +279,22 @@ impl Logger {
     }
 }
 
+/// An error and everything under it, joined, so the reason is not lost.
+///
+/// A `reqwest::Error` displays only the outermost layer; the cause that
+/// actually explains the failure, a DNS error or a connection reset, sits in
+/// its `source` chain.
+pub fn chained(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
+}
+
 /// The current time, in milliseconds since the epoch.
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()

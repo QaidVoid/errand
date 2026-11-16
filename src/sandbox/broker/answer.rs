@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use super::receipts::{Outcome, ReceiptGuard};
 use super::{HOP_BY_HOP, ProviderRoute};
 use crate::config::redact::REDACTION;
-use crate::log::{Logger, fields};
+use crate::log::{Logger, chained, fields};
 
 /// The largest answer relayed to a session, declared or streamed.
 ///
@@ -243,11 +243,11 @@ fn scrubbed_body(
                             "a provider answer failed part way",
                             &fields([
                                 ("provider", provider.as_str().into()),
-                                ("detail", error.to_string().into()),
+                                ("detail", chained(&error).into()),
                             ]),
                         );
                         receipt.finish(Outcome::Interrupted);
-                        Some((Err(std::io::Error::other(error.to_string())), None))
+                        Some((Err(std::io::Error::other(chained(&error))), None))
                     }
                     None => {
                         let tail = scrubber.finish();
