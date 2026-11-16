@@ -41,12 +41,12 @@ use crate::log::{chained, now_ms};
 use crate::memory::store::MemoryStore;
 use crate::provider::ask::{Endpoint, HttpSender};
 use crate::provider::discover::Catalog;
-use crate::provider::images::{Drawn, Endpoint as ImageEndpoint};
+use crate::provider::images::{Drawn, Endpoint as ImageEndpoint, image_mime};
 use crate::provider::speech::{Endpoint as SpeechEndpoint, Spoken};
 use crate::sandbox::backend::{Denials, SandboxLaunch, SandboxLaunchError, WORKSPACE_PATH};
 use crate::sandbox::broker::grants::{GRANTS_FILENAME, GrantStore};
 use crate::sandbox::paths;
-use crate::session::attachments::{self, RawAttachment, is_image, receive};
+use crate::session::attachments::{self, RawAttachment, receive};
 use crate::session::commands::{
     ASIDE, asks_for_pull_request, is_addressed_to_bot, is_aside, is_command,
 };
@@ -302,6 +302,42 @@ fn signal_name(signal: i32) -> String {
         Ok(named) => format!("{} ({signal})", named.as_str()),
         Err(_) => format!("signal {signal}"),
     }
+}
+
+/// What the agent is told of the files attached to a message: where each
+/// was saved, and which were sent as pictures it is not shown.
+///
+/// A picture the model cannot be shown, a HEIC photo say, would otherwise
+/// reach the agent as a bare path, with no word of why it was not shown the
+/// picture it was sent.
+fn attachment_note(taken: &[attachments::Taken]) -> String {
+    use std::fmt::Write as _;
+
+    let listed = taken
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut note = format!("Files attached to this message, saved in the project at: {listed}");
+    let unshown: Vec<&str> = taken
+        .iter()
+        .filter(|file| {
+            file.content_type
+                .as_deref()
+                .is_some_and(|declared| declared.starts_with("image/"))
+                && image_mime(&file.bytes).is_none()
+        })
+        .map(|file| file.path.as_str())
+        .collect();
+    if !unshown.is_empty() {
+        let _ = write!(
+            note,
+            "\nSent as pictures but not shown, since they are not PNG, JPEG, GIF or WebP: {}. \
+             Open or convert them to look.",
+            unshown.join(", ")
+        );
+    }
+    note
 }
 
 /// Encodes bytes as base64, as the agent protocol carries an image.
@@ -1655,27 +1691,20 @@ impl Running {
             return Attached::default();
         }
 
-        let listed = outcome
-            .taken
-            .iter()
-            .map(|file| file.path.clone())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let note = format!("Files attached to this message, saved in the project at: {listed}");
+        let note = attachment_note(&outcome.taken);
 
         // Handed over to look at as well as saved, so the agent has both the
-        // picture and the path.
+        // picture and the path. Anything else, an AVIF or an SVG, stays a
+        // file the agent can open.
         let images = outcome
             .taken
             .iter()
-            .filter(|file| is_image(file.content_type.as_deref(), &file.path))
-            .map(|file| AgentImage {
-                r#type: "image".to_owned(),
-                data: encode_base64(&file.bytes),
-                mime_type: file
-                    .content_type
-                    .clone()
-                    .unwrap_or_else(|| "image/png".to_owned()),
+            .filter_map(|file| {
+                image_mime(&file.bytes).map(|mime| AgentImage {
+                    r#type: "image".to_owned(),
+                    data: encode_base64(&file.bytes),
+                    mime_type: mime.to_owned(),
+                })
             })
             .collect::<Vec<_>>();
 

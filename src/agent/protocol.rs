@@ -41,7 +41,8 @@ pub struct AgentImage {
     pub r#type: String,
     /// The image bytes, base64 encoded.
     pub data: String,
-    /// What the chat service said the bytes are, such as `image/png`.
+    /// What the bytes are, such as `image/png`, read from the bytes
+    /// themselves rather than from what a sender declared.
     pub mime_type: String,
 }
 

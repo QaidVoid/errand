@@ -775,7 +775,9 @@ fn with_image(content: &str, id: &str) -> IncomingMessage {
     sent
 }
 
-const PNG: &[u8] = &[0x89, 0x50, 0x4e, 0x47];
+/// A PNG's whole signature and a little past it, enough for the bytes to be
+/// read as the picture they are.
+const PNG: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
 
 struct Harness {
     session: SessionHandle,
@@ -3132,6 +3134,55 @@ async fn a_description_that_fails_leaves_the_path_and_says_what_went_wrong() {
                         .contains("the describing model refused")
                 );
                 assert!(harness.written().contains("attachments/screenshot.png"));
+            })
+        },
+    )
+    .await;
+}
+
+/// The chat service's declared type can be wrong, and a model refuses a
+/// picture whose declared type is not what its bytes are, on that turn and
+/// every one after. The bytes decide: a PNG declared WebP goes over as PNG,
+/// and a file declared a picture whose bytes are none stays a file.
+#[tokio::test(start_paused = true)]
+async fn an_attachment_is_shown_as_the_picture_its_bytes_are() {
+    with_session(
+        SessionTestCase {
+            fetch_attachment: Some(png_fetch()),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                let mut mislabelled = with_image("what is this?", "m2");
+                mislabelled.attachments[0].content_type = Some("image/webp".to_owned());
+                harness.session.handle(mislabelled).await;
+
+                let written = harness.written();
+                assert!(written.contains("\"image/png\""), "{written}");
+                assert!(!written.contains("image/webp"), "{written}");
+            })
+        },
+    )
+    .await;
+
+    with_session(
+        SessionTestCase {
+            fetch_attachment: Some(Arc::new(|_url: String| {
+                Box::pin(async { Ok(b"not a picture".to_vec()) }) as FetchBox
+            })),
+            ..Default::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .session
+                    .handle(with_image("what is this?", "m2"))
+                    .await;
+
+                let written = harness.written();
+                assert!(written.contains("attachments/screenshot.png"), "{written}");
+                assert!(!written.contains("\"image/png\""), "{written}");
+                assert!(written.contains("not shown"), "{written}");
             })
         },
     )
@@ -6462,4 +6513,39 @@ async fn the_model_is_published_and_a_switch_during_a_turn_waits_for_it() {
         })
     })
     .await;
+}
+
+/// The note names a file as an unshown picture only when it was sent as one
+/// and its bytes are none the model takes. A plain file, or a picture that
+/// is shown, is just where it was saved.
+#[test]
+fn only_a_picture_that_is_not_shown_is_noted_as_one() {
+    use crate::session::attachments::Taken;
+
+    let taken = |path: &str, bytes: &[u8], declared: &str| Taken {
+        path: path.to_owned(),
+        bytes: bytes.to_vec(),
+        content_type: Some(declared.to_owned()),
+    };
+    let note = super::attachment_note(&[
+        taken(
+            "attachments/photo.heic",
+            b"\0\0\0\x18ftypheic",
+            "image/heic",
+        ),
+        taken("attachments/notes.txt", b"plain words", "text/plain"),
+        taken("attachments/shot.png", PNG, "image/png"),
+    ]);
+
+    let (saved, unshown) = note.split_once('\n').expect("a line for what is not shown");
+    assert!(saved.contains("attachments/notes.txt") && saved.contains("attachments/shot.png"));
+    assert!(unshown.contains("attachments/photo.heic"), "{unshown}");
+    assert!(
+        !unshown.contains("notes.txt") && !unshown.contains("shot.png"),
+        "{unshown}"
+    );
+
+    let quiet =
+        super::attachment_note(&[taken("attachments/notes.txt", b"plain words", "text/plain")]);
+    assert!(!quiet.contains('\n'), "{quiet}");
 }
