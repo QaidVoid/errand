@@ -1,6 +1,38 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.5.1] - 2026-11-25
+
+
+### Features
+- (chat) Name the sandbox and versions at start and in !status ([331ea64](https://github.com/QaidVoid/errand/commit/331ea6466914585fcd57e8ba58945cb0d36829f0))
+- (chat) Draw a settled turn as a card of its figures ([5e52da3](https://github.com/QaidVoid/errand/commit/5e52da379ebf978937804dbac709fc34b9862935))
+- (cli) Report the version and its commit with --version ([e1199b8](https://github.com/QaidVoid/errand/commit/e1199b819bdc745f1c2765567dd448b199e527bf))
+- (config) Pass kage's provider and model options through ([084e37a](https://github.com/QaidVoid/errand/commit/084e37a69fd472193a0a134f4c5585d381e58aaf))
+- (daemon) Preview what !gc would collect with !gc status ([9311cc4](https://github.com/QaidVoid/errand/commit/9311cc48f017f81418fac63140599846d62c4f73))
+- (session) Show elapsed time and usage in !status ([4c4268e](https://github.com/QaidVoid/errand/commit/4c4268e25cd427a3319389a38330341f5e1bf75b))
+- (session) Choose the subagents' model with -sm at start ([a5cdfab](https://github.com/QaidVoid/errand/commit/a5cdfabe46ed9166c716fe8600f65d3cc0b82e26))
+
+### Fixes
+- (chat) Send a command's card without its plain words ([e1e1574](https://github.com/QaidVoid/errand/commit/e1e1574d4d80057e0ecd5e8e863149ce1d46e5ba))
+- (ci) Run the image build's containers without apparmor ([800a984](https://github.com/QaidVoid/errand/commit/800a984470d02b32149da7d917a7a462a276c788))
+- (ci) Clear docker's bridge filtering and legacy rules too ([8204b90](https://github.com/QaidVoid/errand/commit/8204b90c7d2e5a5a7c62e5ebb7d7093c3e4a712d))
+- (ci) Clear docker off the runner before incus sets up ([392d89b](https://github.com/QaidVoid/errand/commit/392d89bb4356baf3194bc3d35066347bed0d5d26))
+- (ci) Install incus with its recommended packages ([d7c42e6](https://github.com/QaidVoid/errand/commit/d7c42e6826db2699277c46d4c36e7b58892620b4))
+- (daemon) Join the called-off restart message as one sentence ([2687a25](https://github.com/QaidVoid/errand/commit/2687a25dceb9d607bef59767beefda53f189d977))
+- (image) Wait for the build container's network first ([79ea4e3](https://github.com/QaidVoid/errand/commit/79ea4e347f91dee5cc4ddfeefcc2810e28fd07b1))
+- (session) Keep !status start and totals across a resume ([8e1f4c3](https://github.com/QaidVoid/errand/commit/8e1f4c3e8ba4529e9873940f3838f5084e7ca78c))
+
+### Documentation
+- (session) Drop the doubled redact_card doc comment ([ebfdf72](https://github.com/QaidVoid/errand/commit/ebfdf72f92bceb83670a82f06d589eb451a16f2b))
+
+### Tests
+- (session) Cover an alias named as the subagents' model ([733714a](https://github.com/QaidVoid/errand/commit/733714a06b7beb9cbd11fca10e242c98cb74893e))
+
+### Build
+- (deny) Report every advisory instead of ignoring any ([a13a1be](https://github.com/QaidVoid/errand/commit/a13a1be269b5cd5b3e5b51dd1bfa4b95d51905fb))
+- (image) Publish the incus image weekly ([fb95999](https://github.com/QaidVoid/errand/commit/fb959993f6240461ed86758cc9af97488846d2bf))
+
 ## [0.5.0] - 2026-11-16
 
 
