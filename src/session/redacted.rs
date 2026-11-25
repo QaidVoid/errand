@@ -153,10 +153,6 @@ pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
 /// Scrubs the body of a card, whose words can quote the agent.
 ///
 /// The title and footer are written by the daemon itself, which never echoes
-/// agent output into a heading, so they are left alone.
-/// Scrubs the body of a card, whose words can quote the agent.
-///
-/// The title and footer are written by the daemon itself, which never echoes
 /// agent output into a heading, so they are left alone. A field's value is
 /// body text laid out beside a label, so it is scrubbed with the body; the
 /// label is a heading.
