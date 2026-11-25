@@ -36,11 +36,12 @@ jobs:
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
 
       # Docker on the runner drops forwarded traffic, which cuts the build
-      # container off from the network.
+      # container off from the network. Incus is installed with what it
+      # recommends: its bridge needs dnsmasq, which it only recommends.
       - name: Set up Incus
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y incus
+          sudo apt-get install -y incus
           sudo incus admin init --auto
           sudo incus config set images.compression_algorithm zstd
           sudo iptables -I DOCKER-USER -i incusbr0 -j ACCEPT
