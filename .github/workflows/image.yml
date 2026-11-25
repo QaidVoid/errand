@@ -47,6 +47,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y incus nftables
           sudo nft flush ruleset
+          # Docker also leaves bridged IPv4 passing through iptables, and may
+          # keep rules in the legacy tables the flush does not reach. Either
+          # starves the bridge's DHCP while its IPv6 still works.
+          if [ -e /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
+            sudo sysctl -w net.bridge.bridge-nf-call-iptables=0 net.bridge.bridge-nf-call-ip6tables=0
+          fi
+          if command -v iptables-legacy >/dev/null; then
+            sudo iptables-legacy -P FORWARD ACCEPT
+            sudo iptables-legacy -F
+          fi
           sudo incus admin init --auto
           sudo incus config set images.compression_algorithm zstd
 
@@ -69,6 +79,8 @@ jobs:
           sudo incus network info incusbr0
           pgrep -a dnsmasq || echo "no dnsmasq is running"
           sudo nft list ruleset | grep -E "table|chain|policy"
+          sysctl net.bridge.bridge-nf-call-iptables || echo "br_netfilter is not loaded"
+          if command -v iptables-legacy >/dev/null; then sudo iptables-legacy -S; fi
           sudo journalctl -u incus --no-pager | tail -n 40
 
       - name: Export

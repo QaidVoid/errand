@@ -50,8 +50,9 @@ wait_for_network() {
         if [ "$tries" -ge 60 ]; then
             echo "$build cannot resolve deb.debian.org after 60s. Its state and address:" >&2
             incus_ list "$build" --format csv --columns ns4 >&2
-            echo "and its own view of its interfaces:" >&2
+            echo "and its own view of its interfaces, and what its DHCP client said:" >&2
             incus_ exec "$build" -- ip -brief address >&2
+            incus_ exec "$build" -- journalctl -b --no-pager -g "dhcp|eth0" >&2
             exit 1
         fi
         sleep 1
