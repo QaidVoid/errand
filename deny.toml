@@ -18,18 +18,8 @@ allow = [
 
 [advisories]
 version = 2
-# serenity 0.12 pins the rustls 0.22 line, which has stopped receiving fixes,
-# and every advisory ignored here is in that family. Delete these once
-# serenity is upgraded past it.
-ignore = [
-  "RUSTSEC-2026-0049",
-  "RUSTSEC-2026-0098",
-  "RUSTSEC-2026-0099",
-  "RUSTSEC-2026-0104",
-  "RUSTSEC-2026-0346",
-  "RUSTSEC-2026-0349",
-  "RUSTSEC-2026-0382",
-]
+# Nothing is ignored, so every advisory stays in view. CI reports them in a
+# job of their own, which no merge waits on.
 
 [bans]
 # Duplicate crates are a fact of the current tree (two reqwest, two rand
