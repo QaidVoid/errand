@@ -71,6 +71,23 @@ property is refused rather than guessed at.
 The build script runs `kage providers --json` inside the image and sets the
 property in the same step that installs kage, so the two do not drift.
 
+## Prebuilt image
+
+The `image` workflow builds this image for x86_64 every Monday, and whenever
+`image/` changes on main, and publishes it as the `image` prerelease. Each
+build replaces the previous one. The kage it carries is pinned in the
+workflow, and the release notes name it with the image fingerprint.
+
+```sh
+gh release download image -R QaidVoid/errand
+sha256sum -c errand-agent-x86_64.tar.zst.sha256
+incus image import errand-agent-x86_64.tar.zst --alias errand-agent --project errand
+```
+
+The contract property is part of the image, so nothing needs setting after
+the import. With a golden instance, create it from the imported alias and copy
+the property onto it, as `build.sh` does with `INCUS_GOLDEN`.
+
 ## Build
 
 The script builds the image with Incus itself, on the host the backend runs

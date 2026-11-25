@@ -70,7 +70,9 @@ QEMU falls back to TCG.
 The `image/` directory in the repository builds the guest image. It carries
 what a session usually needs, including Rust, Go, Bun, Node.js, uv, Zig,
 cross, gcc, clang, QEMU, Xvfb with openbox and xdotool, ImageMagick, jj, `gh`,
-ffmpeg, Docker, and podman. `image/README.md` describes the build.
+ffmpeg, Docker, and podman. `image/README.md` describes the build. A prebuilt
+x86_64 image is published weekly as the `image` release, and
+`image/README.md` describes importing it.
 
 An image must carry a `user.errand.contract` property naming its contract
 version and the providers its kage knows. The probe refuses an image without

@@ -1,0 +1,110 @@
+name: image
+
+on:
+  # The image floats on Debian updates and the latest Rust, Zig, Bun and uv,
+  # so it is rebuilt weekly even when nothing here changed.
+  schedule:
+    - cron: "17 3 * * 1"
+  push:
+    branches: [main]
+    paths: [image/**, .github/workflows/image.yml]
+  # From a branch other than main this builds and checks without publishing.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image
+  cancel-in-progress: false
+
+env:
+  KAGE_VERSION: v0.7.0
+  ASSET: errand-agent-x86_64.tar.zst
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The provisioned guest and its published copy do not fit in the
+      # runner's default free space.
+      - name: Free disk space
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+
+      # Docker on the runner drops forwarded traffic, which cuts the build
+      # container off from the network.
+      - name: Set up Incus
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y incus
+          sudo incus admin init --auto
+          sudo incus config set images.compression_algorithm zstd
+          sudo iptables -I DOCKER-USER -i incusbr0 -j ACCEPT
+          sudo iptables -I DOCKER-USER -o incusbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+      - name: Fetch kage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$KAGE_VERSION" -R QaidVoid/kage -p kage-x86_64-linux.tar.xz
+          tar -xJf kage-x86_64-linux.tar.xz
+
+      - name: Build
+        run: sudo KAGE_BIN="$PWD/kage-x86_64-linux/kage" INCUS_PROJECT=default image/build.sh
+
+      - name: Export
+        id: export
+        run: |
+          mkdir dist
+          echo "fingerprint=$(sudo incus image info errand-agent | sed -n 's/^Fingerprint: //p')" >> "$GITHUB_OUTPUT"
+          sudo incus image export errand-agent dist/
+          sudo chown -R "$(id -u):$(id -g)" dist
+          mv dist/*.tar.zst "dist/$ASSET"
+          (cd dist && sha256sum "$ASSET" > "$ASSET.sha256")
+          ls -lh dist
+
+      # Imported the way an operator would, so an export that lost the
+      # contract fails here rather than at a host's startup probe.
+      - name: Check the export carries the contract
+        run: |
+          sudo incus image delete errand-agent
+          sudo incus image import "dist/$ASSET" --alias errand-agent
+          sudo incus image get-property errand-agent user.errand.contract | jq -e .version
+
+      - name: Check the asset fits a release
+        run: |
+          size=$(stat -c %s "dist/$ASSET")
+          if [ "$size" -ge 2147483648 ]; then
+            echo "dist/$ASSET is $size bytes; GitHub refuses release assets of 2 GiB or more" >&2
+            exit 1
+          fi
+
+      # One rolling release, replaced on each build, so the download URL is
+      # stable. Marked a prerelease so it never becomes the latest release.
+      - name: Publish
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINGERPRINT: ${{ steps.export.outputs.fingerprint }}
+        run: |
+          if gh release view image >/dev/null 2>&1; then
+            gh release delete image --cleanup-tag --yes
+          fi
+          cat > notes.md <<EOF
+          The errand guest image for the Incus backend, rebuilt weekly.
+
+          - fingerprint: \`$FINGERPRINT\`
+          - kage: $KAGE_VERSION
+          - commit: $GITHUB_SHA
+
+          \`\`\`sh
+          incus image import $ASSET --alias errand-agent --project errand
+          \`\`\`
+          EOF
+          gh release create image --target "$GITHUB_SHA" --prerelease \
+            --title "errand-agent image" --notes-file notes.md \
+            "dist/$ASSET" "dist/$ASSET.sha256"

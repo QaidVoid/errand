@@ -59,9 +59,10 @@ contract() {
     printf '{"version":1,"guestUid":1000,"dockerGid":1000,"kageProviders":%s}' "$providers"
 }
 
+# Given to publish rather than set afterwards, so the contract is written into
+# the image's own metadata and survives `incus image export`.
 publish() {
-    incus_ publish "$build" --alias "$alias" --reuse
-    incus_ image set-property "$alias" user.errand.contract "$1"
+    incus_ publish "$build" --alias "$alias" --reuse "user.errand.contract=$1"
 }
 
 # Copied aside first and renamed into place, so the golden is missing for a
