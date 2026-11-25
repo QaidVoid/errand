@@ -41,8 +41,24 @@ remove_build() {
     incus_ delete --force "$build" >/dev/null 2>&1 || true
 }
 
+# A container's network comes up some time after it starts. Provisioning
+# before it has resolves nothing, and every package fails to fetch.
+wait_for_network() {
+    tries=0
+    until incus_ exec "$build" -- getent hosts deb.debian.org >/dev/null 2>&1; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 60 ]; then
+            echo "$build cannot resolve deb.debian.org after 60s. Its state and address:" >&2
+            incus_ list "$build" --format csv --columns ns4 >&2
+            exit 1
+        fi
+        sleep 1
+    done
+}
+
 provision() {
     incus_ launch images:debian/13 "$build"
+    wait_for_network
     for file in $staged; do
         incus_ file push "$here/$file" "$build$stage/$file" --create-dirs
     done
