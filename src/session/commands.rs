@@ -358,8 +358,8 @@ pub static COMMANDS: &[(&str, CommandMeta)] = &[
         CommandMeta {
             access: Operator,
             group: You,
-            summary: "collect cold sessions now, as retention says",
-            argument: None,
+            summary: "collect cold sessions now, or say what would go with `status`",
+            argument: Some("[status]"),
         },
     ),
 ];

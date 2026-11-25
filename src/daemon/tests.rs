@@ -2943,6 +2943,7 @@ async fn a_session_the_daemon_may_not_delete_is_emptied_as_the_guest_and_collect
 }
 
 /// `!gc` is the same sweep, asked for now, and only by an operator.
+/// `!gc status` names what it would take and leaves it in place.
 #[tokio::test]
 async fn only_an_operator_may_collect_and_is_told_what_was_collected() {
     let mut settings = operated();
@@ -2968,6 +2969,31 @@ async fn only_an_operator_may_collect_and_is_told_what_was_collected() {
                     )
                     .await;
                 assert!(harness.said().contains("only an operator"));
+
+                harness
+                    .daemon
+                    .handle(raw_with("!gc status", "m5", OWNER), InboundDecision::Start)
+                    .await;
+                let preview = harness.cards().pop().expect("a preview card");
+                assert_eq!(preview.title, "would collect");
+                assert!(
+                    preview.description.contains("<#thread-1>"),
+                    "{}",
+                    preview.description
+                );
+                assert_eq!(preview.fields[0].value, "1");
+                assert_eq!(preview.fields[2].value, "3d");
+
+                harness
+                    .daemon
+                    .handle(
+                        raw_with("!gc everything", "m6", OWNER),
+                        InboundDecision::Start,
+                    )
+                    .await;
+                let refused = harness.cards().pop().unwrap();
+                assert_eq!(refused.color, CardColor::Refused);
+                assert!(refused.description.contains("not `everything`"));
 
                 harness
                     .daemon

@@ -55,5 +55,5 @@ aside: everyone in the thread sees it and the agent is never told.
 | `!drain` | operators, answered by the daemon | refuse new work and say when none is running |
 | `!undrain` | operators, answered by the daemon | accept work again, and call off a restart |
 | `!restart [now\|<wait>]` | operators, answered by the daemon | drain, then restart into the binary on disk |
-| `!gc` | operators, answered by the daemon | collect cold sessions now, as retention says |
+| `!gc [status]` | operators, answered by the daemon | collect cold sessions now, or say what would go with `status` |
 

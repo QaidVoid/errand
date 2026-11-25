@@ -277,6 +277,44 @@ const KEPT_SHOWN: usize = 10;
 /// push the card past what the service takes.
 const REASON_SHOWN: usize = 200;
 
+/// What a sweep now would collect, without collecting it: each cold thread
+/// with what it holds, largest first, and how much would be freed.
+pub fn preview_card(cold: &[(String, u64)], older_than: &str) -> Card {
+    let mut lines: Vec<String> = cold
+        .iter()
+        .take(KEPT_SHOWN)
+        .map(|(thread_id, bytes)| format!("- <#{thread_id}>: {}", human_size(*bytes)))
+        .collect();
+    if cold.len() > KEPT_SHOWN {
+        lines.push(format!("- and {} more", cold.len() - KEPT_SHOWN));
+    }
+    if cold.is_empty() {
+        lines.push(format!("No session has gone unused for {older_than}."));
+    } else {
+        lines.push("Nothing is collected until `!gc`.".to_owned());
+    }
+    let field = |name: &str, value: String| CardField {
+        name: name.to_owned(),
+        value,
+        inline: true,
+    };
+    Card {
+        color: CardColor::Settled,
+        title: "would collect".to_owned(),
+        description: lines.join("\n"),
+        fields: vec![
+            field("Sessions", cold.len().to_string()),
+            field(
+                "Would free",
+                human_size(cold.iter().map(|(_, bytes)| bytes).sum()),
+            ),
+            field("Unused for", older_than.to_owned()),
+        ],
+        footer: None,
+        pages: Vec::new(),
+    }
+}
+
 /// What a sweep for cold sessions collected and what it kept.
 pub fn collection_card(collection: &super::Collection) -> Card {
     let mut lines: Vec<String> = collection

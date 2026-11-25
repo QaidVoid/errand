@@ -526,6 +526,27 @@ impl Daemon {
         Ok(report)
     }
 
+    /// The cold sessions a sweep now would collect, by thread, with what
+    /// each holds, largest first. Nothing is claimed or deleted.
+    pub async fn preview_cold(&self) -> Vec<(String, u64)> {
+        let parts = SweepParts {
+            config: self.options.config.get(),
+            registry: Arc::clone(&self.registry),
+            sessions: Arc::clone(&self.sessions),
+            log: self.options.log.clone(),
+        };
+        let log = self.options.log.clone();
+        tokio::task::spawn_blocking(move || parts.preview())
+            .await
+            .unwrap_or_else(|error| {
+                log.error(
+                    "measuring the cold sessions failed",
+                    &fields([("detail", LogValue::from(error.to_string()))]),
+                );
+                Vec::new()
+            })
+    }
+
     /// Collects every cold session once, as `retention` says, and says what
     /// it collected and what it kept. Does nothing while `retention.enabled`
     /// is false.
@@ -931,6 +952,23 @@ impl Daemon {
             return Some(Answer::Card(maintenance::refused_card(
                 "retention.enabled is false, so nothing is collected",
             )));
+        }
+        match argument_of(content, "!gc") {
+            "" => {}
+            "status" => {
+                let retention = self.options.config.get().retention;
+                let cold = self.preview_cold().await;
+                return Some(Answer::Card(maintenance::preview_card(
+                    &cold,
+                    &retention.older_than,
+                )));
+            }
+            other => {
+                return Some(Answer::Card(maintenance::refused_card(&format!(
+                    "`!gc` takes nothing or `status`, not `{}`",
+                    crate::chat::render::inert(other)
+                ))));
+            }
         }
         self.options.log.info(
             "collecting cold sessions on request",
@@ -1591,6 +1629,42 @@ impl SweepParts {
                 );
                 Swept::default()
             })
+    }
+
+    /// What [`Self::sweep`] would collect now, by thread, largest first.
+    ///
+    /// The same sessions it would reach, skipping the same live ones and the
+    /// ones whose project a live session works in, but without claiming a
+    /// thread, so what it says can change before a sweep runs.
+    fn preview(&self) -> Vec<(String, u64)> {
+        let config = &self.config;
+        let Some(older_than_ms) = parse_duration(&config.retention.older_than) else {
+            return Vec::new();
+        };
+        let records = self.registry.lock().expect("the registry lock").all();
+        let sessions = Arc::clone(&self.sessions);
+        let is_live = move |session_id: &str| sessions.for_session(session_id).is_some();
+        let sweep = Sweep {
+            state_root: &config.state_dir,
+            project_root: &config.project_root,
+            now_ms: now_ms(),
+            older_than_ms,
+            is_live: &is_live,
+        };
+        let live = self.sessions.sessions();
+        let mut cold: Vec<(String, u64)> = cold_sessions(&sweep, &records, false)
+            .into_iter()
+            .filter(|cold| {
+                let own_project = std::path::Path::new(&config.project_root).join(&cold.session_id);
+                !(cold.unnamed
+                    && live.iter().any(|session| {
+                        std::path::Path::new(&session.project().path) == own_project
+                    }))
+            })
+            .filter_map(|cold| Some((cold.thread_id?, cold.bytes)))
+            .collect();
+        cold.sort_by_key(|(_, bytes)| std::cmp::Reverse(*bytes));
+        cold
     }
 
     /// Collects each cold session, or only those `only` names.
