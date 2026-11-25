@@ -1780,3 +1780,77 @@ fn a_music_only_provider_is_written_for_the_music_tool_alone() {
     );
     assert!(!config.contains("music.example"), "{config}");
 }
+
+/// A model's interleaved reasoning field and its prices reach kage in its
+/// own words, whichever way the prices were spelled, and a value kage could
+/// not read is left out rather than written.
+#[test]
+fn a_model_entry_carries_its_reasoning_field_and_prices() {
+    let table = kage_model(&json!({
+        "id": "m",
+        "interleaved": "reasoning_content",
+        "cost": { "input": 3, "output": 15.5, "cacheRead": 0.3, "cache_write": 3.75 },
+    }))
+    .unwrap();
+    assert!(
+        table.contains("\ninterleaved = \"reasoning_content\""),
+        "{table}"
+    );
+    assert!(
+        table.contains(
+            "\ncost = { input = 3.0, output = 15.5, cache_read = 0.3, cache_write = 3.75 }"
+        ),
+        "{table}"
+    );
+
+    let unread = kage_model(&json!({
+        "id": "m",
+        "interleaved": "thoughts",
+        "cost": { "input": 3 },
+    }))
+    .unwrap();
+    assert!(!unread.contains("interleaved"), "{unread}");
+    assert!(!unread.contains("cost"), "{unread}");
+}
+
+/// A custom provider's switches are written into its table in kage's words,
+/// before its models, and only the ones the operator set.
+#[test]
+fn a_custom_provider_carries_its_switches() {
+    let mut defined = serde_json::Map::new();
+    defined.insert(
+        "meta".to_owned(),
+        json!({
+            "baseUrl": "https://api.meta.example/v1",
+            "caching": true,
+            "toolUse": false,
+            "inputIncludesCache": true,
+            "models": [{ "id": "muse-spark-1.3" }],
+        }),
+    );
+    let config = kage_config(
+        &defined,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &[],
+        &Denials::default(),
+        defaults::MAX_PROVIDER_RETRIES,
+        &as_installed(),
+    )
+    .toml;
+
+    let table = &config[config.find("[providers.custom.meta]").unwrap()..];
+    let models = table.find("[[providers.custom.meta.models]]").unwrap();
+    for line in [
+        "tool_use = false",
+        "caching = true",
+        "input_includes_cache = true",
+    ] {
+        let at = table
+            .find(line)
+            .unwrap_or_else(|| panic!("{line}\n{config}"));
+        assert!(at < models, "{config}");
+    }
+    assert!(!table.contains("thinking ="), "{config}");
+}

@@ -791,6 +791,7 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
             }
         }
         validate_route(name, definition, problems);
+        validate_kage_options(name, definition, problems);
         // A named variable is filled from the credential, so one without it
         // has nothing to carry, and a session started with it cannot launch.
         let filled = |key: &str| {
@@ -849,6 +850,84 @@ fn validate_providers(source: &Map<String, Value>, problems: &mut Problems) -> M
         validate_single_carrier(&defined, entry, problems);
     }
     defined
+}
+
+/// Refuses a provider switch or a model option kage would not read.
+///
+/// The writer leaves out what it cannot pass on rather than have kage refuse
+/// the whole file, so a value it cannot read would otherwise be dropped
+/// without a word and look as though it took.
+fn validate_kage_options(name: &str, definition: &Value, problems: &mut Problems) {
+    for (spelled, _) in schema::defaults::CUSTOM_PROVIDER_FLAGS {
+        if definition
+            .get(spelled)
+            .is_some_and(|flag| !flag.is_boolean())
+        {
+            problems.add(format!(
+                "agent.providers.{name}.{spelled} must be true or false"
+            ));
+        }
+    }
+    let models = definition.get("models").and_then(Value::as_array);
+    for (index, model) in models.into_iter().flatten().enumerate() {
+        validate_model_entry(
+            &format!("agent.providers.{name}.models[{index}]"),
+            model,
+            problems,
+        );
+    }
+    if let Some(defaults) = definition
+        .get("discover")
+        .and_then(|found| found.get("defaults"))
+    {
+        validate_model_entry(
+            &format!("agent.providers.{name}.discover.defaults"),
+            defaults,
+            problems,
+        );
+    }
+}
+
+/// Refuses a model's `interleaved` or `cost` that kage would not read.
+fn validate_model_entry(place: &str, model: &Value, problems: &mut Problems) {
+    if let Some(field) = model.get("interleaved")
+        && !field
+            .as_str()
+            .is_some_and(|field| schema::defaults::INTERLEAVED_FIELDS.contains(&field))
+    {
+        problems.add(format!(
+            "{place}.interleaved must be one of: {}",
+            schema::defaults::INTERLEAVED_FIELDS.join(", ")
+        ));
+    }
+    if let Some(cost) = model.get("cost") {
+        validate_cost(place, cost, problems);
+    }
+}
+
+/// Refuses a model's prices unless input and output are both given, and
+/// every price given is a number no less than zero.
+fn validate_cost(place: &str, cost: &Value, problems: &mut Problems) {
+    let Some(cost) = cost.as_object() else {
+        problems.add(format!(
+            "{place}.cost must be an object of prices per million tokens"
+        ));
+        return;
+    };
+    for (index, (spelled, kage)) in schema::defaults::MODEL_COSTS.into_iter().enumerate() {
+        match cost.get(spelled).or_else(|| cost.get(kage)) {
+            None if index < 2 => problems.add(format!(
+                "{place}.cost needs {spelled}, since kage prices a model only with both \
+                 input and output"
+            )),
+            None => {}
+            Some(price) if price.as_f64().is_some_and(|price| price >= 0.0) => {}
+            Some(_) => problems.add(format!(
+                "{place}.cost.{spelled} must be a price in dollars per million tokens, \
+                 no less than zero"
+            )),
+        }
+    }
 }
 
 /// The media entries a provider may carry: the entry, its optional keys,

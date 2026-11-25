@@ -2421,3 +2421,55 @@ fn web_login_requires_both_credentials_only_when_configured() {
         .is_ok()
     );
 }
+
+/// A switch or model option kage would not read is refused by name, since the
+/// writer would otherwise leave it out of the agent's configuration quietly.
+#[test]
+fn kage_options_kage_could_not_read_are_refused() {
+    let problems = problems_of(&with_providers(&json!({
+        "chat": {
+            "credential": "k",
+            "baseUrl": "https://gw.example/v1",
+            "caching": "yes",
+            "discover": { "defaults": { "interleaved": true } },
+            "models": [
+                { "id": "a", "interleaved": "thoughts" },
+                { "id": "b", "cost": { "input": 3 } },
+                { "id": "c", "cost": { "input": 3, "output": -1, "cacheRead": "cheap" } },
+            ],
+        },
+    })))
+    .join("\n");
+
+    for expected in [
+        "agent.providers.chat.caching must be true or false",
+        "agent.providers.chat.models[0].interleaved must be one of: reasoning_content, \
+         reasoning_details",
+        "agent.providers.chat.models[1].cost needs output",
+        "agent.providers.chat.models[2].cost.output must be a price",
+        "agent.providers.chat.models[2].cost.cacheRead must be a price",
+        "agent.providers.chat.discover.defaults.interleaved must be one of",
+    ] {
+        assert!(problems.contains(expected), "{expected}\n{problems}");
+    }
+}
+
+/// The same options, well formed, load without a word.
+#[test]
+fn kage_options_kage_reads_are_accepted() {
+    let config = with_providers(&json!({
+        "chat": {
+            "credential": "k",
+            "baseUrl": "https://gw.example/v1",
+            "caching": true,
+            "toolUse": false,
+            "models": [{
+                "id": "a",
+                "interleaved": "reasoning_content",
+                "cost": { "input": 3, "output": 15, "cache_read": 0.3 },
+            }],
+        },
+    }));
+
+    assert!(validate_config(&config).is_ok(), "{config}");
+}

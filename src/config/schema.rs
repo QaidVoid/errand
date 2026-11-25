@@ -229,6 +229,17 @@ pub struct AgentConfig {
     /// model alone. Naming a model the host's store already lists says it for
     /// that model without listing it twice.
     ///
+    /// A provider kage does not know may set kage's switches for it, each
+    /// `true` or `false`: `toolUse` for an endpoint that takes tool
+    /// definitions, `thinking` for one that keeps thinking blocks across
+    /// turns, `caching` for one that caches prompts, and `inputIncludesCache`
+    /// for one that counts cached tokens inside its input. An entry of
+    /// `models` may name `interleaved`, the field an `openai` kind model
+    /// reads its reasoning back from during a tool loop
+    /// (`reasoning_content` or `reasoning_details`), and `cost`, its prices
+    /// in dollars per million tokens as `input`, `output`, and optionally
+    /// `cacheRead` and `cacheWrite`. A value kage could not read is refused.
+    ///
     /// An `images` object on one provider, naming a `model`, gives sessions
     /// kage's `generate_image` tool through it, for an endpoint that answers
     /// `POST /images/generations`. A provider the agent already reaches for
@@ -949,6 +960,27 @@ pub mod defaults {
     pub const CUSTOM_PROVIDER_KINDS: [&str; 2] = ["openai", "anthropic"];
     /// The wire protocol a custom provider speaks when it names none.
     pub const CUSTOM_PROVIDER_KIND: &str = "openai";
+    /// The switches a custom provider may set, as the configuration spells
+    /// them and as kage's own configuration does: whether the endpoint takes
+    /// tool definitions, keeps thinking blocks across turns, caches prompts,
+    /// and counts cached tokens inside its input count.
+    pub const CUSTOM_PROVIDER_FLAGS: [(&str, &str); 4] = [
+        ("toolUse", "tool_use"),
+        ("thinking", "thinking"),
+        ("caching", "caching"),
+        ("inputIncludesCache", "input_includes_cache"),
+    ];
+    /// The assistant message fields kage can read a model's reasoning back
+    /// from during a tool loop, which a model's `interleaved` names.
+    pub const INTERLEAVED_FIELDS: [&str; 2] = ["reasoning_content", "reasoning_details"];
+    /// A model's per-million-token prices, as the configuration may spell
+    /// them and as kage's own configuration does. The first two are required.
+    pub const MODEL_COSTS: [(&str, &str); 4] = [
+        ("input", "input"),
+        ("output", "output"),
+        ("cacheRead", "cache_read"),
+        ("cacheWrite", "cache_write"),
+    ];
 
     /// The address the interface binds to.
     pub const WEB_HOST: &str = "127.0.0.1";

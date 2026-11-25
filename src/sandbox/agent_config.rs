@@ -13,7 +13,10 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use crate::config::schema::PluginConfig;
-use crate::config::schema::defaults::{CUSTOM_PROVIDER_KIND, CUSTOM_PROVIDER_KINDS};
+use crate::config::schema::defaults::{
+    CUSTOM_PROVIDER_FLAGS, CUSTOM_PROVIDER_KIND, CUSTOM_PROVIDER_KINDS, INTERLEAVED_FIELDS,
+    MODEL_COSTS,
+};
 use crate::log::{Logger, fields};
 use crate::sandbox::backend::{Denials, KAGE_DIR, SandboxLaunch, SandboxLaunchError};
 use crate::sandbox::kage_providers::KageProviders;
@@ -130,7 +133,41 @@ fn kage_model(entry: &Value) -> Option<String> {
     if let Some(efforts) = model_efforts(entry) {
         let _ = write!(table, "\nefforts = [{efforts}]");
     }
+    if let Some(field) = entry
+        .get("interleaved")
+        .and_then(Value::as_str)
+        .filter(|field| INTERLEAVED_FIELDS.contains(field))
+    {
+        let _ = write!(table, "\ninterleaved = {}", toml_string(field));
+    }
+    if let Some(cost) = model_cost(entry) {
+        let _ = write!(table, "\ncost = {{ {cost} }}");
+    }
     Some(table)
+}
+
+/// A model entry's prices as the inside of a TOML inline table, or nothing
+/// when it does not price both input and output, which kage requires.
+///
+/// Each price may be spelled as the configuration spells it or as kage does,
+/// since an entry can come from the host's store as well as from the
+/// operator.
+fn model_cost(entry: &Value) -> Option<String> {
+    let cost = entry.get("cost")?.as_object()?;
+    let mut prices = Vec::new();
+    for (index, (spelled, kage)) in MODEL_COSTS.into_iter().enumerate() {
+        let price = cost
+            .get(spelled)
+            .or_else(|| cost.get(kage))
+            .and_then(Value::as_f64)
+            .filter(|price| price.is_finite() && *price >= 0.0);
+        match price {
+            Some(price) => prices.push(format!("{kage} = {price:?}")),
+            None if index < 2 => return None,
+            None => {}
+        }
+    }
+    Some(prices.join(", "))
 }
 
 /// The kinds of media a model entry claims under `field`, `input` or
@@ -388,22 +425,13 @@ pub fn kage_config(
             }
             continue;
         }
-        let _ = writeln!(out, "\n[providers.custom.{}]", toml_key(name));
-        let _ = writeln!(out, "kind = {}", toml_string(provider_kind(definition)));
-        if let Some(url) = base_url {
-            let _ = writeln!(out, "base_url = {}", toml_string(&url));
-        }
-        let _ = writeln!(out, "display_name = {}", toml_string(name));
-        if let Some(env) = credential_names.get(name) {
-            let _ = writeln!(out, "api_key_env = {}", toml_string(env));
-        }
-        for model in models {
-            let _ = writeln!(
-                out,
-                "\n[[providers.custom.{}.models]]\n{model}",
-                toml_key(name)
-            );
-        }
+        out.push_str(&custom_provider_table(
+            name,
+            definition,
+            base_url.as_deref(),
+            credential_names.get(name).map(String::as_str),
+            &models,
+        ));
     }
     out.push_str(&media_tables(
         defined,
@@ -414,6 +442,43 @@ pub fn kage_config(
     out.push_str(&plugin_capabilities(plugins));
     out.push_str(&permissions_section(denied));
     KageConfig { toml: out, dropped }
+}
+
+/// One `[providers.custom.<name>]` table: its protocol, endpoint, key
+/// variable and switches, then each of its models.
+fn custom_provider_table(
+    name: &str,
+    definition: Option<&Map<String, Value>>,
+    base_url: Option<&str>,
+    key_env: Option<&str>,
+    models: &[String],
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "\n[providers.custom.{}]", toml_key(name));
+    let _ = writeln!(out, "kind = {}", toml_string(provider_kind(definition)));
+    if let Some(url) = base_url {
+        let _ = writeln!(out, "base_url = {}", toml_string(url));
+    }
+    let _ = writeln!(out, "display_name = {}", toml_string(name));
+    if let Some(env) = key_env {
+        let _ = writeln!(out, "api_key_env = {}", toml_string(env));
+    }
+    for (spelled, kage) in CUSTOM_PROVIDER_FLAGS {
+        if let Some(flag) = definition
+            .and_then(|fields| fields.get(spelled))
+            .and_then(Value::as_bool)
+        {
+            let _ = writeln!(out, "{kage} = {flag}");
+        }
+    }
+    for model in models {
+        let _ = writeln!(
+            out,
+            "\n[[providers.custom.{}.models]]\n{model}",
+            toml_key(name)
+        );
+    }
+    out
 }
 
 /// Every media tool's table, in a fixed order: images and their edits,

@@ -103,6 +103,39 @@ accepts. Listing a model the host's model store already knows does not add a
 second copy. It adds what you wrote, such as a thinking level, to the existing
 entry.
 
+### Tuning a provider for kage
+
+A provider kage does not know can set the switches kage would otherwise
+leave at their defaults, and each model can say how its reasoning travels
+and what it costs:
+
+```json
+"acme": {
+  "baseUrl": "https://llm.acme.example/v1",
+  "credential": "...",
+  "caching": true,
+  "thinking": true,
+  "models": [{
+    "id": "coder",
+    "interleaved": "reasoning_content",
+    "cost": { "input": 3, "output": 15, "cacheRead": 0.3 }
+  }]
+}
+```
+
+| key | on | what it does |
+| --- | --- | --- |
+| `toolUse` | provider | Whether the endpoint takes tool definitions. Defaults to `true`. |
+| `thinking` | provider | Whether the endpoint keeps thinking blocks across turns. |
+| `caching` | provider | Whether the endpoint caches prompts. |
+| `inputIncludesCache` | provider | Whether an `anthropic` kind endpoint counts cached tokens inside its input. Set it when the context gauge reads about double. |
+| `interleaved` | model | The field an `openai` kind model reads its reasoning back from during a tool loop: `reasoning_content` or `reasoning_details`. Without it, reasoning goes back as text. |
+| `cost` | model | Prices in dollars per million tokens: `input` and `output`, and optionally `cacheRead` and `cacheWrite`. Without it, the session's cost is unknown. |
+
+A value kage could not read is refused when the configuration loads, rather
+than left out of the agent's configuration without a word. `discover.defaults`
+can carry the model keys for every discovered model.
+
 ### Discovering models
 
 Instead of listing models by hand, set `discover` and errand reads the
