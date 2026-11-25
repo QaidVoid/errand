@@ -175,9 +175,14 @@ async fn handshake(setup: &TestSetup) {
     let first: Value =
         serde_json::from_str(&setup.controls.written()[0]).expect("the handshake first");
     assert_eq!(first["method"], "initialize");
-    setup
-        .controls
-        .send(&json!({ "jsonrpc": "2.0", "id": first["id"], "result": { "protocolVersion": 1 } }));
+    setup.controls.send(&json!({
+        "jsonrpc": "2.0",
+        "id": first["id"],
+        "result": {
+            "protocolVersion": 1,
+            "agentInfo": { "name": "kage", "version": "0.7.0 (60a9279)" },
+        },
+    }));
     settle().await;
     let second: Value =
         serde_json::from_str(&setup.controls.written()[1]).expect("the handshake second");
@@ -240,6 +245,10 @@ async fn readiness_is_the_handshake_answering_and_it_opens_the_session() {
     handshake(&setup).await;
 
     assert_eq!(setup.agent.state(), super::AgentState::Ready);
+    assert_eq!(
+        setup.agent.agent_version().as_deref(),
+        Some("0.7.0 (60a9279)")
+    );
     assert!(setup.agent.prompt("hello", None, None));
     settle().await;
     let sent = last_written(&setup.controls, "session/prompt");

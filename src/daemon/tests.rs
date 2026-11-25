@@ -3011,8 +3011,15 @@ async fn status_in_the_channel_describes_the_host_and_in_a_thread_is_left_to_the
                 "{}",
                 card.description
             );
-            assert_eq!(card.fields[0].name, "turns");
+            assert_eq!(card.fields[0].name, "Turns");
             assert_eq!(card.fields[0].value, "1 of 2");
+            let sandbox = card.fields.iter().find(|field| field.name == "Sandbox");
+            assert!(sandbox.is_some(), "{:?}", card.fields);
+            let errand = card.fields.iter().find(|field| field.name == "errand");
+            assert_eq!(
+                errand.map(|field| field.value.as_str()),
+                Some(concat!("`", env!("ERRAND_VERSION"), "`"))
+            );
 
             harness.replies.lock().unwrap().clear();
             harness

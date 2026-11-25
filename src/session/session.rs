@@ -1420,30 +1420,42 @@ impl Running {
         }
     }
 
-    /// Says the session started, with a link to its transcript when there is
-    /// one.
+    /// Says the session started, what it runs on, and where its transcript
+    /// is when there is one.
+    ///
+    /// The sandbox and the versions are named so that a session that
+    /// misbehaves can be traced to what it ran on, from the thread alone.
     async fn announce_start(&self, restored: bool) {
-        // Which sandbox confines a session is not named in the thread. It
-        // tells a reader nothing they can act on, and tells anyone else what
-        // to probe. The operator sees it at startup, in the log, where it
-        // belongs.
         let opening = self.opening_line(restored);
-
+        let runtime = self.runtime();
         // Offered once, when the thread is new. A thread shows the
         // conversation and the interface shows the work behind it, and
         // somebody reading on a phone has no other way to find the second
         // from the first.
         let transcript = self.session_links().transcript;
+        let mut text = format!("{}\n{}", connection_line(&opening), runtime.line());
+        if let Some(link) = &transcript {
+            text.push('\n');
+            text.push_str(link);
+        }
+        let card = crate::chat::render::started_card(&opening, transcript.as_deref(), &runtime);
         self.views
             .send(SessionEvent::Notice {
-                text: match transcript {
-                    None => connection_line(&opening),
-                    Some(link) => format!("{}\n{link}", connection_line(&opening)),
-                },
+                text,
                 level: NoticeLevel::Started,
-                card: None,
+                card: Some(card),
             })
             .await;
+    }
+
+    /// What this session runs on: its sandbox backend, and the versions of
+    /// kage and errand.
+    fn runtime(&self) -> crate::chat::render::Runtime {
+        crate::chat::render::Runtime {
+            backend: self.options.config.sandbox.backend.to_string(),
+            kage: self.client.as_ref().and_then(AgentClient::agent_version),
+            errand: env!("ERRAND_VERSION").to_owned(),
+        }
     }
 
     async fn start(&mut self, first: IncomingMessage) -> bool {

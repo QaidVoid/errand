@@ -358,6 +358,9 @@ pub(crate) struct ClientState {
     pub(crate) context_window: Option<f64>,
     /// The agent's session, once `session/new` has answered.
     pub(crate) session_id: Option<String>,
+    /// The version the agent named in its `initialize` answer, which for
+    /// kage carries the commit it was built from.
+    pub(crate) agent_version: Option<String>,
     /// The speech buffered since a span last ended: the agent streams
     /// reasoning and answers a fragment at a time, and the thread wants
     /// each span as one message, in the order it was said.
@@ -457,6 +460,7 @@ impl AgentClient {
                     turn_failure: None,
                     context_window: None,
                     session_id: None,
+                    agent_version: None,
                     tool_calls: BTreeMap::new(),
                     speech: Vec::new(),
                     holding_since: None,
@@ -576,6 +580,16 @@ impl AgentClient {
         self.session()
     }
 
+    /// The version the agent named in the handshake, when it named one.
+    pub fn agent_version(&self) -> Option<String> {
+        self.inner
+            .state
+            .lock()
+            .expect("the client lock")
+            .agent_version
+            .clone()
+    }
+
     /// Runs the handshake and opens (or reopens) the agent's session.
     async fn open_session(
         &self,
@@ -588,6 +602,17 @@ impl AgentClient {
         if init.get("error").is_some() {
             return Err(detail_of(&init));
         }
+        let version = init
+            .pointer("/result/agentInfo/version")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|version| !version.is_empty())
+            .map(str::to_owned);
+        self.inner
+            .state
+            .lock()
+            .expect("the client lock")
+            .agent_version = version;
         let cwd = self.inner.cwd.clone();
         let id = self.take_id();
         let (frame, kind) = match resume {

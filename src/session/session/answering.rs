@@ -12,7 +12,9 @@ use crate::provider::models::{AvailableModel, Matched, match_model};
 use crate::session::commands::{
     COMMANDS, CommandAccess, Standing, help_card, help_text, may_run, parse_user_id,
 };
-use crate::session::event::{Card, CardColor, EndReason, REFUSAL, ReactionOutcome, SessionEvent};
+use crate::session::event::{
+    Card, CardColor, CardField, EndReason, REFUSAL, ReactionOutcome, SessionEvent,
+};
 use crate::session::model::{expand_alias, split_level};
 
 /// Which model a name picked out, when a name can pick out more than one.
@@ -427,26 +429,30 @@ impl Running {
         reason = "token totals sit far below f64's exact range"
     )]
     pub(super) fn describe_status(&self) -> (String, Card) {
-        let mut lines = vec![
-            format!("project: {}", self.options.project.name),
-            format!(
-                "state: {}",
-                if self.ticket.is_some() {
-                    "running a turn"
-                } else {
-                    "idle"
-                }
+        let running = self.ticket.is_some();
+        let mut cells = vec![
+            ("Project", format!("`{}`", self.options.project.name)),
+            (
+                "State",
+                if running { "running a turn" } else { "idle" }.to_owned(),
             ),
-            format!(
-                "turns in flight across all sessions: {}",
-                self.options.scheduler.turns_in_flight()
-            ),
-            format!("prompts waiting: {}", self.options.scheduler.queue_length()),
         ];
-        lines.extend(self.github_line());
+        if let Some(model) = self.running_model() {
+            cells.push(("Model", format!("`{model}`")));
+        }
+        cells.push((
+            "Turns, all sessions",
+            self.options.scheduler.turns_in_flight().to_string(),
+        ));
+        cells.push((
+            "Prompts waiting",
+            self.options.scheduler.queue_length().to_string(),
+        ));
+        let runtime = self.runtime();
 
+        let mut notes: Vec<String> = self.github_line().into_iter().collect();
         if self.delegated_asked > 0 {
-            lines.push(format!(
+            notes.push(format!(
                 "delegated: {} of {} asked, {} token(s) spent, {} kept out of this conversation",
                 self.delegated_answered,
                 self.delegated_asked,
@@ -454,16 +460,35 @@ impl Running {
                 byte_count(self.delegated_kept_out as f64),
             ));
         }
-        let text = lines.join("\n");
+
+        let mut lines: Vec<String> = cells
+            .iter()
+            .map(|(name, value)| format!("{}: {}", name.to_lowercase(), value.replace('`', "")))
+            .collect();
+        lines.push(runtime.line());
+        lines.extend(notes.iter().cloned());
+        let mut fields: Vec<CardField> = cells
+            .into_iter()
+            .map(|(name, value)| CardField {
+                name: name.to_owned(),
+                value,
+                inline: true,
+            })
+            .collect();
+        fields.extend(runtime.fields());
         let card = Card {
-            color: CardColor::Working,
+            color: if running {
+                CardColor::Working
+            } else {
+                CardColor::Ready
+            },
             title: "session status".to_owned(),
-            description: text.clone(),
-            fields: Vec::new(),
+            description: notes.join("\n"),
+            fields,
             footer: None,
             pages: Vec::new(),
         };
-        (text, card)
+        (lines.join("\n"), card)
     }
 
     /// Aborts the running turn, force stopping if the agent will not confirm.

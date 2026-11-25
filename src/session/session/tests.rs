@@ -2802,7 +2802,20 @@ async fn the_status_says_what_the_session_and_the_queue_are_doing() {
                 .expect("a card");
             assert_eq!(card.title, "session status");
             assert_eq!(card.color, CardColor::Working);
-            assert!(card.description.contains("project: demo"));
+            let cell = |name: &str| {
+                card.fields
+                    .iter()
+                    .find(|field| field.name == name)
+                    .map(|field| field.value.clone())
+            };
+            assert_eq!(cell("Project").as_deref(), Some("`demo`"));
+            assert_eq!(cell("State").as_deref(), Some("running a turn"));
+            assert!(cell("Sandbox").is_some(), "{:?}", card.fields);
+            assert!(cell("kage").is_some(), "{:?}", card.fields);
+            assert_eq!(
+                cell("errand").as_deref(),
+                Some(concat!("`", env!("ERRAND_VERSION"), "`"))
+            );
         })
     })
     .await;

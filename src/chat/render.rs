@@ -499,6 +499,66 @@ pub fn turn_card(
     }
 }
 
+/// What a session runs on: the sandbox backend, and the versions of kage and
+/// errand, each with the commit it was built from when that is known.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Runtime {
+    /// The sandbox backend, as the configuration names it.
+    pub backend: String,
+    /// The version kage named in the handshake, when it named one.
+    pub kage: Option<String>,
+    /// The version of errand running.
+    pub errand: String,
+}
+
+impl Runtime {
+    /// The same facts as one line, for a surface without cards.
+    pub fn line(&self) -> String {
+        format!(
+            "{} sandbox, kage {}, errand {}",
+            self.backend,
+            self.kage.as_deref().unwrap_or("of unknown version"),
+            self.errand
+        )
+    }
+
+    /// The same facts as cells that share a row.
+    pub fn fields(&self) -> Vec<CardField> {
+        [
+            ("Sandbox", self.backend.clone()),
+            (
+                "kage",
+                self.kage.clone().unwrap_or_else(|| "unknown".to_owned()),
+            ),
+            ("errand", self.errand.clone()),
+        ]
+        .into_iter()
+        .map(|(name, value)| CardField {
+            name: name.to_owned(),
+            value: format!("`{value}`"),
+            inline: true,
+        })
+        .collect()
+    }
+}
+
+/// The card a session's opening is drawn as: what it works on, where its
+/// transcript is, and what it runs on.
+pub fn started_card(opening: &str, transcript: Option<&str>, runtime: &Runtime) -> Card {
+    let mut description = opening.to_owned();
+    if let Some(link) = transcript {
+        let _ = write!(description, "\n[transcript]({link})");
+    }
+    Card {
+        color: CardColor::Working,
+        title: "session started".to_owned(),
+        description,
+        fields: runtime.fields(),
+        footer: None,
+        pages: Vec::new(),
+    }
+}
+
 /// What a session has spent, as the renderer reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Usage {

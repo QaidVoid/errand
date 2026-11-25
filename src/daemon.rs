@@ -758,7 +758,7 @@ impl Daemon {
         let reply = &self.options.reply_in_channel;
         reply(
             posted_in(&note.asked_in),
-            Answer::Card(maintenance::back_card(env!("CARGO_PKG_VERSION"))),
+            Answer::Card(maintenance::back_card(env!("ERRAND_VERSION"))),
         )
         .await;
         for thread_id in &note.dropped {
@@ -890,7 +890,8 @@ impl Daemon {
         let (running, unthreaded) = self.running_turns();
         let as_count = |limit: u32| usize::try_from(limit).unwrap_or(usize::MAX);
         let status = maintenance::HostStatus {
-            version: env!("CARGO_PKG_VERSION"),
+            version: env!("ERRAND_VERSION"),
+            backend: self.options.config.get().sandbox.backend.to_string(),
             started_at: self.started_at,
             live: (
                 self.sessions.sessions().len(),

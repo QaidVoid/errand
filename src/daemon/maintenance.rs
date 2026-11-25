@@ -336,8 +336,10 @@ pub fn collection_card(collection: &super::Collection) -> Card {
 /// What the host is doing, as `!status` in the channel shows it.
 #[derive(Debug)]
 pub struct HostStatus {
-    /// The version running.
+    /// The version running, with the commit it was built from when known.
     pub version: &'static str,
+    /// The sandbox backend sessions start in.
+    pub backend: String,
     /// When the daemon started, in epoch milliseconds.
     pub started_at: i64,
     /// Sessions with a sandbox, and the most there may be.
@@ -387,7 +389,7 @@ pub fn status_card(status: &HostStatus) -> Card {
     let field = |name: &str, value: String| CardField {
         name: name.to_owned(),
         value,
-        inline: false,
+        inline: true,
     };
     Card {
         color: if draining || status.paused.is_some() {
@@ -399,22 +401,23 @@ pub fn status_card(status: &HostStatus) -> Card {
         description: lines.join("\n"),
         fields: vec![
             field(
-                "turns",
+                "Turns",
                 format!("{} of {max_turns}", running.len() + status.unthreaded),
             ),
             field(
-                "sessions",
+                "Sessions",
                 format!("{} of {}", status.live.0, status.live.1),
             ),
             field(
-                "waiting",
+                "Waiting",
                 format!("{} of {}", status.waiting.0, status.waiting.1),
             ),
-            field("resumable threads", status.resumable.to_string()),
-            field("version", status.version.to_owned()),
-            field("up since", format!("<t:{}:R>", status.started_at / 1000)),
+            field("Resumable threads", status.resumable.to_string()),
+            field("Up since", format!("<t:{}:R>", status.started_at / 1000)),
+            field("Sandbox", format!("`{}`", status.backend)),
+            field("errand", format!("`{}`", status.version)),
         ],
-        footer: None,
+        footer: Some("kage is named per session, by !status in its thread".to_owned()),
         pages: Vec::new(),
     }
 }
