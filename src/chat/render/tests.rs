@@ -2,6 +2,7 @@
 
 use serde_json::json;
 
+use super::usage_cells;
 use super::{
     MAX_LISTED_ENTRIES, MESSAGE_LIMIT, THREAD_NAME_LIMIT, Usage, bytes, compaction_line,
     dialog_lines, directory_listing, duration, file_view, model_pages, output_rate, split_message,
@@ -901,4 +902,28 @@ fn a_failed_turn_card_says_why() {
     assert_eq!(card.color, CardColor::Warning);
     assert_eq!(card.title, "turn failed");
     assert_eq!(card.description, "the provider refused");
+}
+
+/// A session's spending reads as labeled figures, context included, and a
+/// figure the agent never reported is left out rather than shown as zero.
+#[test]
+fn usage_cells_label_what_was_reported() {
+    let cells = usage_cells(&Usage {
+        input: 700.0,
+        cache_read: 300.0,
+        total_tokens: 10_900.0,
+        cost: 0.0003,
+        context_tokens: 3_300.0,
+        context_window: 200_000.0,
+        ..Usage::default()
+    });
+    assert_eq!(
+        cells,
+        [
+            ("Tokens", "10.9k (30% cached)".to_owned()),
+            ("Context", "3.3k/200k (2%)".to_owned()),
+            ("Cost", "$0.0003".to_owned()),
+        ]
+    );
+    assert!(usage_cells(&Usage::default()).is_empty());
 }

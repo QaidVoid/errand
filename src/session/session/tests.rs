@@ -2810,6 +2810,13 @@ async fn the_status_says_what_the_session_and_the_queue_are_doing() {
                     .map(|field| field.value.clone())
             };
             assert_eq!(cell("Project").as_deref(), Some("`demo`"));
+            assert!(
+                cell("Elapsed").is_some_and(|elapsed| elapsed.ends_with(":R>")),
+                "{:?}",
+                card.fields
+            );
+            assert!(said.contains("elapsed: "), "{said}");
+            assert!(cell("Turns").is_some(), "{:?}", card.fields);
             assert_eq!(cell("State").as_deref(), Some("running a turn"));
             assert!(cell("Sandbox").is_some(), "{:?}", card.fields);
             assert!(cell("kage").is_some(), "{:?}", card.fields);

@@ -428,6 +428,30 @@ pub fn turn_summary(model: Option<&str>, timing: &str, usage: Option<&Usage>) ->
     groups.join(" | ")
 }
 
+/// What a session has spent, as labeled figures: its tokens with the share
+/// served from the cache, the context it carries now, and what it cost.
+/// Figures the agent did not report are left out rather than shown as zero.
+pub fn usage_cells(usage: &Usage) -> Vec<(&'static str, String)> {
+    let mut cells = Vec::new();
+    if usage.total_tokens > 0.0 {
+        let mut spent = tokens(usage.total_tokens);
+        if let Some(cached) = cached_share(usage) {
+            let _ = write!(spent, " ({cached}% cached)");
+        }
+        cells.push(("Tokens", spent));
+    }
+    if let Some((context, share)) = context_figure(usage) {
+        cells.push((
+            "Context",
+            share.map_or_else(|| context.clone(), |share| format!("{context} ({share}%)")),
+        ));
+    }
+    if usage.cost > 0.0 {
+        cells.push(("Cost", format!("${:.4}", usage.cost)));
+    }
+    cells
+}
+
 /// The card a settled turn is drawn as.
 ///
 /// The figures sit in a grid rather than a sentence, so each is found by its

@@ -444,6 +444,14 @@ impl Running {
             cells.push(("Subagents", format!("`{subagent}`")));
         }
         cells.push((
+            "Elapsed",
+            crate::chat::render::duration(crate::log::now_ms().saturating_sub(self.started_at)),
+        ));
+        cells.push(("Turns", self.usage.turns.to_string()));
+        if let Some(usage) = self.shown_usage() {
+            cells.extend(crate::chat::render::usage_cells(&usage));
+        }
+        cells.push((
             "Turns, all sessions",
             self.options.scheduler.turns_in_flight().to_string(),
         ));
@@ -470,6 +478,15 @@ impl Running {
             .collect();
         lines.push(runtime.line());
         lines.extend(notes.iter().cloned());
+        // The card draws the elapsed time as the service's own relative
+        // timestamp, which keeps counting while the card stays up. A surface
+        // without cards has the duration as it was when asked.
+        let elapsed = format!("<t:{}:R>", self.started_at / 1000);
+        for cell in &mut cells {
+            if cell.0 == "Elapsed" {
+                cell.1.clone_from(&elapsed);
+            }
+        }
         let mut fields: Vec<CardField> = cells
             .into_iter()
             .map(|(name, value)| CardField {

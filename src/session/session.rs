@@ -961,6 +961,8 @@ struct Running {
     last_speaker_id: Option<String>,
     ended: bool,
     last_active: i64,
+    /// When this session started, in epoch milliseconds, for `!status`.
+    started_at: i64,
     /// The command being answered, so its replies can be marked as such.
     replying_to: Option<String>,
     /// Turns opened so far. Zero means nothing has been asked for yet.
@@ -993,6 +995,7 @@ impl Running {
             last_speaker_id: None,
             ended: false,
             last_active: now_ms(),
+            started_at: now_ms(),
             replying_to: None,
             usage: SessionUsage {
                 input: 0,
