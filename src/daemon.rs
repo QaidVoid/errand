@@ -1202,6 +1202,16 @@ impl Daemon {
             return;
         }
 
+        // Reading the project needs nothing running, so it is answered from
+        // disk rather than by waking the session, even while the bot drains.
+        if self
+            .sessions
+            .read_without_session(thread_id, &message)
+            .await
+        {
+            return;
+        }
+
         // A thread with no live session may still be resumable: the agent's
         // history outlives the sandbox, so a restart does not end a
         // conversation.

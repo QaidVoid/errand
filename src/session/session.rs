@@ -232,9 +232,6 @@ const MAX_SESSION_ID_BYTES: u64 = 4 * 1024;
 /// Tool outputs kept so a delegation can name one, newest first.
 const MAX_REMEMBERED_OUTPUTS: usize = 50;
 
-/// Longest file read inline, matching the display reader's own limit.
-const MAX_INLINE: u64 = 12 * 1024;
-
 /// Shortest gap between two progress lines in a thread.
 ///
 /// A batch of children reports far more often than a thread can be edited,

@@ -296,6 +296,8 @@ impl SandboxPool for FakeSandbox {
 struct FakeThreads {
     created: Mutex<Vec<String>>,
     closed: Arc<Mutex<Vec<EndReason>>>,
+    /// Replies and uploads posted into any thread, in order.
+    posted: Arc<Mutex<Vec<SessionEvent>>>,
     next: Mutex<u32>,
 }
 
@@ -328,6 +330,7 @@ impl ThreadFactory for FakeThreads {
         Box::pin(async move {
             Some(Arc::new(QuietView {
                 closed: Arc::clone(&self.closed),
+                posted: Arc::clone(&self.posted),
             }) as Arc<dyn SessionView>)
         })
     }
@@ -339,13 +342,15 @@ impl FakeThreads {
     fn quiet_view(&self) -> Arc<QuietView> {
         Arc::new(QuietView {
             closed: Arc::clone(&self.closed),
+            posted: Arc::clone(&self.posted),
         })
     }
 }
 
-/// A view that records only that its session ended.
+/// A view that records that its session ended, and what was posted to it.
 struct QuietView {
     closed: Arc<Mutex<Vec<EndReason>>>,
+    posted: Arc<Mutex<Vec<SessionEvent>>>,
 }
 
 impl SessionView for QuietView {
@@ -354,8 +359,12 @@ impl SessionView for QuietView {
         event: &'a SessionEvent,
     ) -> Pin<Box<dyn Future<Output = Result<(), ViewError>> + Send + 'a>> {
         Box::pin(async move {
-            if let SessionEvent::Close { reason } = event {
-                self.closed.lock().unwrap().push(*reason);
+            match event {
+                SessionEvent::Close { reason } => self.closed.lock().unwrap().push(*reason),
+                SessionEvent::Reply { .. } | SessionEvent::Upload { .. } => {
+                    self.posted.lock().unwrap().push(event.clone());
+                }
+                _ => {}
             }
             Ok(())
         })
@@ -506,6 +515,7 @@ async fn with_daemon(
     let threads = Arc::new(FakeThreads {
         created: Mutex::new(Vec::new()),
         closed: Arc::new(Mutex::new(Vec::new())),
+        posted: Arc::new(Mutex::new(Vec::new())),
         next: Mutex::new(1),
     });
     let sandbox = FakeSandbox::new(case.report.clone());
@@ -3058,6 +3068,71 @@ async fn status_in_the_channel_describes_the_host_and_in_a_thread_is_left_to_the
                 )
                 .await;
             assert!(harness.cards().is_empty());
+        })
+    })
+    .await;
+}
+
+/// Reading the project needs nothing running, so `!ls`, `!cat` and `!file`
+/// in a thread whose session has ended are answered from disk without waking
+/// it, even while the bot drains. Anything else there is still refused.
+#[tokio::test]
+async fn a_read_in_a_sleeping_thread_is_answered_without_waking_it() {
+    with_daemon(DaemonCase::default(), |harness| {
+        Box::pin(async move {
+            harness
+                .daemon
+                .handle(raw("go"), InboundDecision::Start)
+                .await;
+            let project = harness
+                .daemon
+                .registry
+                .lock()
+                .unwrap()
+                .get("thread-1")
+                .map(|record| record.project_path.clone())
+                .expect("the thread is remembered");
+            std::fs::write(std::path::Path::new(&project).join("notes.txt"), "kept on disk")
+                .expect("a project file is written");
+            harness
+                .daemon
+                .sessions()
+                .end_thread("thread-1", EndReason::Idle)
+                .await;
+            harness.daemon.scheduler.set_draining(true);
+            let launched = harness.sandbox.launched.lock().unwrap().len();
+            let in_thread = || InboundDecision::Thread {
+                thread_id: "thread-1".to_owned(),
+            };
+
+            for (asked, id) in [("!ls", "m2"), ("!cat notes.txt", "m3"), ("!file notes.txt", "m4")] {
+                harness
+                    .daemon
+                    .handle(raw_with(asked, id, OWNER), in_thread())
+                    .await;
+            }
+            harness
+                .daemon
+                .handle(raw_with("carry on", "m5", OWNER), in_thread())
+                .await;
+
+            assert_eq!(harness.daemon.sessions().sessions().len(), 0);
+            assert_eq!(harness.sandbox.launched.lock().unwrap().len(), launched);
+            let posted = harness.threads.posted.lock().unwrap().clone();
+            assert!(
+                matches!(&posted[0], SessionEvent::Reply { text, .. } if text.contains("notes.txt")),
+                "{posted:?}"
+            );
+            assert!(
+                matches!(&posted[1], SessionEvent::Reply { text, .. } if text.contains("kept on disk")),
+                "{posted:?}"
+            );
+            assert!(
+                matches!(&posted[2], SessionEvent::Upload { name, bytes, .. }
+                    if name == "notes.txt" && bytes == b"kept on disk"),
+                "{posted:?}"
+            );
+            assert!(harness.said().contains("paused for maintenance"), "{}", harness.said());
         })
     })
     .await;

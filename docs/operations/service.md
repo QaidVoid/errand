@@ -70,6 +70,10 @@ and the session is asked, in its owner's name, to continue where it stopped.
 without restarting, for a restart done by hand. `!undrain` ends either one,
 and calls off a restart that is waiting.
 
+New work means a prompt or a new session. Commands still answer while the
+bot drains, and `!ls`, `!cat`, `!file` and `!pwd` read the project from disk,
+so they answer even in a thread whose session has ended without waking it.
+
 ## Exit codes
 
 | Code | Meaning | Restarted? |

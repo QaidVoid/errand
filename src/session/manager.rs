@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use crate::admission::scheduler::Scheduler;
 use crate::chat::render::{inert, thread_name, warning_line};
 use crate::config::live::LiveConfig;
-use crate::config::redact::secret_values;
+use crate::config::redact::{contains_secret, secret_values};
 use crate::config::schema::Config;
 use crate::log::now_ms;
 use crate::log::{LogValue, Logger, fields};
@@ -30,8 +30,9 @@ use crate::session::model::{
 };
 use crate::session::pr;
 use crate::session::projects::{ProjectSelection, ensure_project_directory, own_project};
+use crate::session::reading::ReadAnswer;
 use crate::session::record::{prepare_record_dir, record_dir, withdraw_from_record};
-use crate::session::redacted::Redacting;
+use crate::session::redacted::{Redacting, redact_event};
 use crate::session::registry::{ThreadRecord, ThreadRegistry};
 use crate::session::rules::house_rules_text;
 pub use crate::session::session::Unavailable;
@@ -876,6 +877,92 @@ impl SessionManager {
         first.content = project.prompt;
         session.start(first).await;
         StartOutcome::Started { session }
+    }
+
+    /// Answers `!ls`, `!cat`, `!file` or `!pwd` in a thread with no live
+    /// session, from its project on disk, and says whether it did.
+    ///
+    /// Reading the project needs nothing running, so the session is not
+    /// woken for it: no sandbox starts, no slot is taken, and a drain does
+    /// not refuse it. It is open to whoever may wake the thread, as it is in
+    /// a live session, and what it posts is scrubbed of the secrets that
+    /// session would scrub. A file holding one is not posted at all.
+    pub async fn read_without_session(&self, thread_id: &str, message: &IncomingMessage) -> bool {
+        let content = message.content.trim();
+        let (word, rest) = content
+            .split_once(char::is_whitespace)
+            .map_or((content, ""), |(word, rest)| (word, rest.trim()));
+        if !crate::session::reading::READ_COMMANDS.contains(&word) {
+            return false;
+        }
+        let record = self
+            .options
+            .registry
+            .lock()
+            .expect("the registry lock")
+            .get(thread_id)
+            .filter(|record| !record.stopped)
+            .cloned();
+        let Some(record) = record else {
+            return false;
+        };
+        if !self.may_wake(&record, &message.author_id) {
+            return false;
+        }
+        let Some(view) = Arc::clone(&self.options.threads)
+            .port_for(thread_id.to_owned())
+            .await
+        else {
+            return false;
+        };
+        let project = crate::session::reading::Project {
+            name: &record.project_name,
+            path: &record.project_path,
+        };
+        let limit = self.options.config.get().output.max_upload_bytes;
+        let Some(answer) = crate::session::reading::answer(word, rest, &project, limit) else {
+            return false;
+        };
+        let secrets = self.secrets_for(&record.session_id);
+        let reply = |text: String| SessionEvent::Reply {
+            text,
+            command: content.to_owned(),
+            card: None,
+        };
+        let event = match answer {
+            ReadAnswer::Say(text) => reply(text),
+            ReadAnswer::Upload { name, bytes, .. } if contains_secret(&bytes, &secrets) => {
+                // The size, not the name, since a name can carry the secret
+                // too and the log is not scrubbed.
+                self.options.log.warn(
+                    "an upload held a secret and was not posted",
+                    &fields([("bytes", LogValue::from(bytes.len()))]),
+                );
+                reply(format!(
+                    "`{}` was not posted, because it holds a secret that is not to be posted",
+                    inert(&name)
+                ))
+            }
+            ReadAnswer::Upload {
+                name,
+                bytes,
+                caption,
+            } => SessionEvent::Upload {
+                name,
+                bytes,
+                caption,
+            },
+        };
+        if let Err(error) = view.observe(&redact_event(event, &secrets)).await {
+            self.options.log.warn(
+                "a read for a thread with no live session could not be posted",
+                &fields([
+                    ("thread", LogValue::from(thread_id)),
+                    ("detail", LogValue::from(error.to_string())),
+                ]),
+            );
+        }
+        true
     }
 
     /// Restarts a thread's session, continuing the agent conversation.

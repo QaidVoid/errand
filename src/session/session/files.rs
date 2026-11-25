@@ -5,12 +5,10 @@
 //! reporting an edit as a diff rather than as a name, and posting an image the
 //! agent made as an upload rather than as a path.
 
-use super::{IncomingMessage, MAX_DIFFABLE_BYTES, MAX_INLINE, MAX_MEDIA_PER_TURN, Running};
+use super::{IncomingMessage, MAX_DIFFABLE_BYTES, MAX_MEDIA_PER_TURN, Running};
 use crate::agent::protocol::{MediaKind, ProducedMedia};
 use crate::chat::diff::file_diff;
-use crate::chat::render::{
-    bytes as byte_count, connection_line, directory_listing, file_view, inert, media_caption, widen,
-};
+use crate::chat::render::{bytes as byte_count, connection_line, inert, media_caption, widen};
 use crate::log::{LogValue, fields};
 use crate::provider::audio::audio_extension;
 use crate::provider::images::{endpoint_with_effort, image_extension};
@@ -19,7 +17,7 @@ use crate::provider::speech::endpoint as speech_endpoint;
 use crate::sandbox::paths;
 use crate::session::commands::{SpeechArgs, image_args, speech_args};
 use crate::session::event::{ReactionOutcome, SessionEvent};
-use crate::session::files::{NotAFileError, read_directory, read_file_for_display};
+use crate::session::reading::ReadAnswer;
 
 impl Running {
     /// Records a file's contents before an edit, so the change can be shown.
@@ -123,145 +121,29 @@ impl Running {
         }
     }
 
-    /// Lists a directory or shows a file, without involving the agent.
-    pub(super) async fn read_path(&mut self, request: &str) {
-        let wanted = request.trim();
-        let wanted = if wanted.is_empty() { "." } else { wanted };
-        let root = self.options.project.path.clone();
-        let Some(host) = self.host_path(wanted) else {
-            self.say(&format!("`{wanted}` is not inside this session's project"))
-                .await;
-            return;
+    /// Answers `!ls`, `!cat`, `!file` or `!pwd` from the project on disk.
+    pub(super) async fn answer_read(&mut self, word: &str, rest: &str) {
+        let project = crate::session::reading::Project {
+            name: &self.options.project.name,
+            path: &self.options.project.path,
         };
-
-        let display = {
-            let shown = self.display_path(wanted);
-            if shown.is_empty() {
-                ".".to_owned()
-            } else {
-                shown
+        let answer = crate::session::reading::answer(
+            word,
+            rest,
+            &project,
+            self.options.config.output.max_upload_bytes,
+        );
+        match answer {
+            Some(ReadAnswer::Say(text)) => self.say(&text).await,
+            Some(ReadAnswer::Upload {
+                name,
+                bytes,
+                caption,
+            }) => {
+                self.post_upload(name, bytes, caption).await;
             }
-        };
-        let result = std::fs::metadata(&host).map(|meta| meta.is_dir());
-        match result {
-            Ok(true) => {
-                // A directory is listed whichever was asked for: `!cat` on
-                // one is a mistake worth answering rather than an error worth
-                // reporting.
-                match read_directory(&root, &display) {
-                    Ok(entries) => {
-                        self.say(&directory_listing(&entries, &display)).await;
-                    }
-                    Err(error) => {
-                        self.say(&format!("could not read `{wanted}`: {error}"))
-                            .await;
-                    }
-                }
-            }
-            Ok(false) => match read_file_for_display(&root, &display, MAX_INLINE) {
-                Ok(contents) => {
-                    let shown = file_view(&contents);
-                    self.say(&shown).await;
-                }
-                Err(NotAFileError(path)) => {
-                    self.say(&format!("could not read `{wanted}`: {path} is not a file"))
-                        .await;
-                }
-            },
-            Err(error) => {
-                self.say(&format!("could not read `{wanted}`: {error}"))
-                    .await;
-            }
+            None => {}
         }
-    }
-
-    /// Uploads a file from the project on request.
-    ///
-    /// Opened beneath the project, the same rule `read_path` answers `!cat`
-    /// with. This used to be the one read that went by name: a link planted
-    /// where the agent writes would have had the daemon read whatever it
-    /// pointed at and post it to the channel.
-    pub(super) async fn upload_file(&mut self, request: &str) {
-        use std::io::Read;
-
-        let wanted = request.trim();
-        if wanted.is_empty() {
-            self.say("say which file, as `!file <path>`").await;
-            return;
-        }
-
-        let root = self.options.project.path.clone();
-        let Some(host) = self.host_path(wanted) else {
-            self.say(&format!("`{wanted}` is not inside this session's project"))
-                .await;
-            return;
-        };
-
-        let display = {
-            let shown = self.display_path(wanted);
-            if shown.is_empty() {
-                ".".to_owned()
-            } else {
-                shown
-            }
-        };
-        let file = match paths::open_beneath(&root, &display, &paths::OpenOptions::read()) {
-            Ok(file) => file,
-            Err(error) => {
-                self.say(&format!("could not read `{wanted}`: {error}"))
-                    .await;
-                return;
-            }
-        };
-        // Measured on the file that was opened, so what is checked and what is
-        // sent are the same however the tree changes underneath.
-        let meta = match file.metadata() {
-            Ok(meta) => meta,
-            Err(error) => {
-                self.say(&format!("could not read `{wanted}`: {error}"))
-                    .await;
-                return;
-            }
-        };
-        if !meta.is_file() {
-            self.say(&format!("`{wanted}` is not a file")).await;
-            return;
-        }
-        let limit = self.options.config.output.max_upload_bytes;
-        if meta.len() > limit {
-            #[expect(
-                clippy::cast_precision_loss,
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss
-            )]
-            let kilobytes = (meta.len() as f64 / 1024.0).round() as u64;
-            self.say(&format!(
-                "`{wanted}` is {kilobytes} KB, larger than the {limit} byte upload limit"
-            ))
-            .await;
-            return;
-        }
-        // Read through the limit, not trusting the measurement above: the
-        // agent can grow the file between the two.
-        let mut bytes = Vec::new();
-        if let Err(error) = (&file)
-            .take(limit.saturating_add(1))
-            .read_to_end(&mut bytes)
-        {
-            self.say(&format!("could not read `{wanted}`: {error}"))
-                .await;
-            return;
-        }
-        if bytes.len() as u64 > limit {
-            self.say(&format!(
-                "`{wanted}` grew past the {limit} byte upload limit while it was read"
-            ))
-            .await;
-            return;
-        }
-        let name = host.rsplit('/').next().unwrap_or("file").to_owned();
-        let caption = format!("`{}` {} bytes", inert(&display), bytes.len());
-        self.post_upload(name, bytes, caption).await;
     }
 
     /// Draws a picture with the image model the configuration names.

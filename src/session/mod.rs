@@ -27,6 +27,8 @@ pub mod model;
 pub mod pr;
 /// Which directory a session works in.
 pub mod projects;
+/// What `!ls`, `!cat`, `!file` and `!pwd` answer, live session or not.
+pub mod reading;
 /// Answers the agent's recall requests from the memory store.
 pub mod recalling;
 /// Where a session writes what it will outlive.

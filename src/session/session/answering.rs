@@ -176,17 +176,11 @@ impl Running {
             }
             "!facts" => self.report_facts(rest, message).await,
             "!forget" => self.forget_facts(rest, message).await,
-            "!pwd" => {
-                self.say(&format!(
-                    "`{}` at `{}`",
-                    self.options.project.name, self.options.project.path
-                ))
-                .await;
-            }
-            "!ls" | "!cat" => self.read_path(rest).await,
-            "!file" => {
-                self.react(&message.id, ReactionOutcome::Accepted).await;
-                self.upload_file(rest).await;
+            "!pwd" | "!ls" | "!cat" | "!file" => {
+                if word == "!file" {
+                    self.react(&message.id, ReactionOutcome::Accepted).await;
+                }
+                self.answer_read(word, rest).await;
             }
             "!pr" => {
                 self.note_pull_request_asked(message);
