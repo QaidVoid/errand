@@ -1469,6 +1469,9 @@ impl Running {
     }
 
     async fn start(&mut self, first: IncomingMessage) -> bool {
+        if self.options.resume {
+            self.restore_status();
+        }
         let forge = self.options.config.forge.clone();
         self.write_git_config(forge.as_ref());
         self.write_agent_bin(forge.as_ref());
@@ -2393,6 +2396,7 @@ impl Running {
                 card: Some(card),
             })
             .await;
+        self.save_status();
 
         let interrupted = self.aborting;
         self.settle_turn(if interrupted {
@@ -3396,6 +3400,7 @@ mod files;
 mod granting;
 mod memory;
 mod pulls;
+mod saved;
 
 #[cfg(test)]
 mod tests;

@@ -214,6 +214,10 @@ impl Scheduler {
     }
 
     /// Sessions currently holding a slot for a running turn.
+    #[allow(
+        dead_code,
+        reason = "read by tests, which check that every turn gives its slot back"
+    )]
     pub fn turns_in_flight(&self) -> usize {
         self.state.lock().expect("the scheduler lock").in_flight
     }

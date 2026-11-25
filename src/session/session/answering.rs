@@ -444,21 +444,16 @@ impl Running {
             cells.push(("Subagents", format!("`{subagent}`")));
         }
         cells.push((
-            "Elapsed",
-            crate::chat::render::duration(crate::log::now_ms().saturating_sub(self.started_at)),
+            "Started",
+            format!(
+                "{} ago",
+                crate::chat::render::duration(crate::log::now_ms().saturating_sub(self.started_at))
+            ),
         ));
-        cells.push(("Turns", self.usage.turns.to_string()));
+        cells.push(("Turns", self.turn.to_string()));
         if let Some(usage) = self.shown_usage() {
             cells.extend(crate::chat::render::usage_cells(&usage));
         }
-        cells.push((
-            "Turns, all sessions",
-            self.options.scheduler.turns_in_flight().to_string(),
-        ));
-        cells.push((
-            "Prompts waiting",
-            self.options.scheduler.queue_length().to_string(),
-        ));
         let runtime = self.runtime();
 
         let mut notes: Vec<String> = self.github_line().into_iter().collect();
@@ -478,13 +473,13 @@ impl Running {
             .collect();
         lines.push(runtime.line());
         lines.extend(notes.iter().cloned());
-        // The card draws the elapsed time as the service's own relative
-        // timestamp, which keeps counting while the card stays up. A surface
-        // without cards has the duration as it was when asked.
-        let elapsed = format!("<t:{}:R>", self.started_at / 1000);
+        // The card draws the start as the service's own relative timestamp,
+        // which keeps counting while the card stays up. A surface without
+        // cards has how long ago it was when asked.
+        let started = format!("<t:{}:R>", self.started_at / 1000);
         for cell in &mut cells {
-            if cell.0 == "Elapsed" {
-                cell.1.clone_from(&elapsed);
+            if cell.0 == "Started" {
+                cell.1.clone_from(&started);
             }
         }
         let mut fields: Vec<CardField> = cells

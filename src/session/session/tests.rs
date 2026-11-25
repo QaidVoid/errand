@@ -2811,11 +2811,12 @@ async fn the_status_says_what_the_session_and_the_queue_are_doing() {
             };
             assert_eq!(cell("Project").as_deref(), Some("`demo`"));
             assert!(
-                cell("Elapsed").is_some_and(|elapsed| elapsed.ends_with(":R>")),
+                cell("Started").is_some_and(|started| started.ends_with(":R>")),
                 "{:?}",
                 card.fields
             );
-            assert!(said.contains("elapsed: "), "{said}");
+            assert!(said.contains("started: "), "{said}");
+            assert!(cell("Turns, all sessions").is_none(), "{:?}", card.fields);
             assert!(cell("Turns").is_some(), "{:?}", card.fields);
             assert_eq!(cell("State").as_deref(), Some("running a turn"));
             assert!(cell("Sandbox").is_some(), "{:?}", card.fields);
@@ -6569,4 +6570,90 @@ fn only_a_picture_that_is_not_shown_is_noted_as_one() {
     let quiet =
         super::attachment_note(&[taken("attachments/notes.txt", b"plain words", "text/plain")]);
     assert!(!quiet.contains('\n'), "{quiet}");
+}
+
+/// A settled turn saves when the session started and what it has spent, and
+/// a session resumed from that state reports both from before, not only from
+/// when it came back.
+#[tokio::test(start_paused = true)]
+async fn a_resumed_session_keeps_its_start_and_totals() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().run_turn_saying("done");
+            settle().await;
+
+            let record = crate::session::record::record_dir(&harness.state_dir);
+            let saved: Value = serde_json::from_str(
+                &std::fs::read_to_string(std::path::Path::new(&record).join("status.json"))
+                    .expect("the turn saved the status"),
+            )
+            .expect("the saved status is JSON");
+            assert!(
+                saved["startedAt"].as_i64().is_some_and(|at| at > 0),
+                "{saved}"
+            );
+            assert_eq!(saved["usage"]["turns"], 1, "{saved}");
+        })
+    })
+    .await;
+
+    let case = SessionTestCase {
+        start: false,
+        resume_kage_session: Some("s-old".to_owned()),
+        ..SessionTestCase::default()
+    };
+    with_session(case, |harness| {
+        Box::pin(async move {
+            let record = crate::session::record::prepare_record_dir(&harness.state_dir);
+            std::fs::write(
+                std::path::Path::new(&record).join("status.json"),
+                json!({
+                    "startedAt": 1_700_000_000_000_i64,
+                    "usage": {
+                        "input": 700, "output": 50, "cacheRead": 300, "cacheWrite": 0,
+                        "totalTokens": 10_900, "cost": 0.5, "contextTokens": 3_300,
+                        "contextWindow": 200_000, "turns": 4,
+                    },
+                })
+                .to_string(),
+            )
+            .expect("a saved status is planted");
+            std::fs::write(
+                std::path::Path::new(&harness.state_dir).join("kage-session"),
+                "s-old",
+            )
+            .expect("seeded recording");
+            let starting = {
+                let session = harness.session.clone();
+                tokio::spawn(
+                    async move { session.start(message_from("carry on", OWNER, "m1")).await },
+                )
+            };
+            settle().await;
+            harness.controls().shake_hands().await;
+            let _ = starting.await.expect("start task joins");
+
+            harness
+                .session
+                .handle(message_from("!status", OWNER, "m2"))
+                .await;
+            let card = harness
+                .thread
+                .reply_cards()
+                .into_iter()
+                .flatten()
+                .next()
+                .expect("a card");
+            let cell = |name: &str| {
+                card.fields
+                    .iter()
+                    .find(|field| field.name == name)
+                    .map(|field| field.value.clone())
+            };
+            assert_eq!(cell("Started").as_deref(), Some("<t:1700000000:R>"));
+            assert_eq!(cell("Tokens").as_deref(), Some("10.9k (30% cached)"));
+            assert_eq!(cell("Cost").as_deref(), Some("$0.5000"));
+        })
+    })
+    .await;
 }
