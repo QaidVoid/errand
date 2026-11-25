@@ -219,13 +219,14 @@ pub fn embed(message: &Card) -> CreateEmbed {
         embed = embed.description(&message.description);
     }
     if !message.fields.is_empty() {
-        // Not inline: an inline field sits beside the next two, which packs
-        // distinct things, like one provider per row, into shared rows.
+        // Inline only when asked: an inline field sits beside the next two,
+        // which packs distinct things, like one provider per row, into
+        // shared rows.
         embed = embed.fields(
             message
                 .fields
                 .iter()
-                .map(|field| (field.name.clone(), field.value.clone(), false)),
+                .map(|field| (field.name.clone(), field.value.clone(), field.inline)),
         );
     }
     if let Some(footer) = &message.footer {
@@ -684,21 +685,37 @@ impl<T: ThreadTransport> ChatThread<T> {
     /// cards shows. Should the body outgrow a card, the card is left behind
     /// and the words go out the ordinary way.
     pub fn post_card(&self, text: &str, card: Option<&Card>) {
-        self.post_card_naming(text, card, false);
-    }
-
-    /// Posts a card as [`Self::post_card`] does, and when `naming`, names
-    /// whoever it addresses beside it as well.
-    ///
-    /// The service notifies only for a mention in a message's text, never for
-    /// one inside a card. A notice is how a person is told their turn
-    /// settled, so its mentions have to reach them. Other cards name people
-    /// to show them, as `!status` does, and must not notify anybody.
-    fn post_card_naming(&self, text: &str, card: Option<&Card>, naming: bool) {
         let Some(card) = card else {
             self.post(text);
             return;
         };
+        // Words the card itself carries (a session card's body) are said
+        // once, by the card; only words beside the card, like the line that
+        // introduces a drawn table, ride as the content.
+        let said = if text.is_empty() || text == card.title || card.description.contains(text) {
+            String::new()
+        } else {
+            text.to_owned()
+        };
+        self.send_card(text, said, card);
+    }
+
+    /// Posts a notice as a card, naming whoever it addresses beside it.
+    ///
+    /// The service notifies only for a mention in a message's text, never for
+    /// one inside a card. A notice is how a person is told their turn
+    /// settled, so its mentions ride as the message's text and are left out
+    /// of the card, where they would only be shown twice. Other cards name
+    /// people to show them, as `!status` does, and must not notify anybody.
+    fn post_notice(&self, text: &str, level: NoticeLevel, card: Option<&Card>) {
+        let (mentions, words) = split_mentions(text);
+        let card = card.cloned().unwrap_or_else(|| notice_card(&words, level));
+        self.send_card(text, mentions.join(" "), &card);
+    }
+
+    /// Sends `card` with `said` as the message's text, or `text` the ordinary
+    /// way should the body outgrow a card.
+    fn send_card(&self, text: &str, said: String, card: &Card) {
         if card.description.encode_utf16().count() > CARD_DESCRIPTION_LIMIT {
             self.post(text);
             return;
@@ -706,22 +723,6 @@ impl<T: ThreadTransport> ChatThread<T> {
         // The agent speaking ends the current run of tool calls, so the next
         // one starts a fresh block rather than being appended below prose.
         self.reset_activity();
-        // Words the card itself carries (a notice's text, a session card's
-        // body) are said once, by the card; only words beside the card, like
-        // the line that introduces a drawn table, ride as the content.
-        let mut said = if text.is_empty() || text == card.title || card.description.contains(text) {
-            String::new()
-        } else {
-            text.to_owned()
-        };
-        for mention in mentions_in(card).into_iter().filter(|_| naming) {
-            if !said.contains(&mention) {
-                if !said.is_empty() {
-                    said.push(' ');
-                }
-                said.push_str(&mention);
-            }
-        }
         let transport = Arc::clone(&self.transport);
         let card = card.clone();
         self.outbox.enqueue(Box::new(move || {
@@ -1283,8 +1284,8 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
                         }
                     }
                 }
-                SessionEvent::Notice { text, level } => {
-                    self.post_card_naming(text, Some(&notice_card(text, *level)), true);
+                SessionEvent::Notice { text, level, card } => {
+                    self.post_notice(text, *level, card.as_ref());
                 }
                 SessionEvent::Question { text, .. } => {
                     self.post(text);
@@ -1346,30 +1347,33 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
     }
 }
 
-/// The people a card addresses, as the service's mentions of them, each
-/// once, in the order the card names them.
-fn mentions_in(card: &Card) -> Vec<String> {
+/// The service's mentions in `text`, each once and in order, and the words
+/// left without them.
+fn split_mentions(text: &str) -> (Vec<String>, String) {
     let mut found: Vec<String> = Vec::new();
-    let mut texts = vec![card.title.as_str(), card.description.as_str()];
-    texts.extend(card.fields.iter().map(|field| field.value.as_str()));
-    texts.extend(card.pages.iter().map(|page| page.description.as_str()));
-    for text in texts {
-        let mut rest = text;
-        while let Some(start) = rest.find("<@") {
-            let after = &rest[start + 2..];
-            let digits = after.trim_start_matches('!');
-            let length = digits.chars().take_while(char::is_ascii_digit).count();
-            let closed = length > 0 && digits[length..].starts_with('>');
-            if closed {
-                let mention = format!("<@{}>", &digits[..length]);
-                if !found.contains(&mention) {
-                    found.push(mention);
-                }
-            }
+    let mut words = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("<@") {
+        let after = &rest[start + 2..];
+        let digits = after.trim_start_matches('!');
+        let length = digits.chars().take_while(char::is_ascii_digit).count();
+        if length == 0 || !digits[length..].starts_with('>') {
+            words.push_str(&rest[..start + 2]);
             rest = after;
+            continue;
+        }
+        words.push_str(&rest[..start]);
+        let mention = format!("<@{}>", &digits[..length]);
+        if !found.contains(&mention) {
+            found.push(mention);
+        }
+        rest = &digits[length + 1..];
+        if words.is_empty() || words.ends_with(char::is_whitespace) {
+            rest = rest.strip_prefix(' ').unwrap_or(rest);
         }
     }
-    found
+    words.push_str(rest);
+    (found, words.trim().to_owned())
 }
 
 /// The paragraph of answer `event` carries, when it is one that grows the

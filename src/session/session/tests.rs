@@ -387,7 +387,7 @@ impl FakeThread {
 
     fn notices(&self) -> Vec<(String, NoticeLevel)> {
         self.pick(|event| match event {
-            SessionEvent::Notice { text, level } => Some((text.clone(), *level)),
+            SessionEvent::Notice { text, level, .. } => Some((text.clone(), *level)),
             _ => None,
         })
     }

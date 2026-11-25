@@ -228,6 +228,7 @@ async fn what_a_session_says_reaches_the_browser_with_mentions_rewritten() {
     view.observe(&SessionEvent::Notice {
         text: "<@111> [done]".to_owned(),
         level: NoticeLevel::Done,
+        card: None,
     })
     .await
     .unwrap();

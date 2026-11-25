@@ -157,6 +157,7 @@ impl SessionView for IssueView {
                 SessionEvent::Notice {
                     text,
                     level: NoticeLevel::Warning,
+                    ..
                 } => {
                     self.turn.lock().expect("the issue turn lock").failure = Some(text.clone());
                 }

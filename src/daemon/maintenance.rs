@@ -146,16 +146,19 @@ pub fn draining_card(
         CardField {
             name: "running".to_owned(),
             value: (running.len() + unthreaded).to_string(),
+            inline: false,
         },
         CardField {
             name: "waiting".to_owned(),
             value: waiting.to_string(),
+            inline: false,
         },
     ];
     if let Some(at) = restart_at {
         fields.push(CardField {
             name: "restarts".to_owned(),
             value: format!("<t:{}:R> at the latest", at / 1000),
+            inline: false,
         });
     }
     Card {
@@ -311,14 +314,17 @@ pub fn collection_card(collection: &super::Collection) -> Card {
                 CardField {
                     name: "collected".to_owned(),
                     value: collection.collected.to_string(),
+                    inline: false,
                 },
                 CardField {
                     name: "freed".to_owned(),
                     value: human_size(collection.freed),
+                    inline: false,
                 },
                 CardField {
                     name: "kept".to_owned(),
                     value: collection.kept.len().to_string(),
+                    inline: false,
                 },
             ]
         },
@@ -381,6 +387,7 @@ pub fn status_card(status: &HostStatus) -> Card {
     let field = |name: &str, value: String| CardField {
         name: name.to_owned(),
         value,
+        inline: false,
     };
     Card {
         color: if draining || status.paused.is_some() {

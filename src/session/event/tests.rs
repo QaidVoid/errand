@@ -181,6 +181,7 @@ fn a_notice_and_an_end_reason_keep_their_written_names() {
     let notice = SessionEvent::Notice {
         text: "ready".to_owned(),
         level: NoticeLevel::Started,
+        card: None,
     };
     assert_eq!(
         serde_json::to_string(&notice).unwrap(),
@@ -192,6 +193,7 @@ fn a_notice_and_an_end_reason_keep_their_written_names() {
         SessionEvent::Notice {
             text: "done".to_owned(),
             level: NoticeLevel::Ended,
+            card: None
         }
     );
 

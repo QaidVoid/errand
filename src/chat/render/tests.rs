@@ -5,8 +5,8 @@ use serde_json::json;
 use super::{
     MAX_LISTED_ENTRIES, MESSAGE_LIMIT, THREAD_NAME_LIMIT, Usage, bytes, compaction_line,
     dialog_lines, directory_listing, duration, file_view, model_pages, output_rate, split_message,
-    split_tables, table_card, thread_name, tokens, tool_line, truncate, turn_summary, turn_timing,
-    usage_card, usage_summary, when_relative_plain,
+    split_tables, table_card, thread_name, tokens, tool_line, truncate, turn_card, turn_summary,
+    turn_timing, usage_card, usage_summary, when_relative_plain,
 };
 use crate::agent::protocol::{DialogMethod, DialogRequest};
 use crate::provider::usage::Quota;
@@ -567,10 +567,12 @@ fn a_two_column_table_is_drawn_as_labeled_cells() {
             CardField {
                 name: "a.rs".to_owned(),
                 value: "1.2k".to_owned(),
+                inline: false,
             },
             CardField {
                 name: "b/".to_owned(),
                 value: "-".to_owned(),
+                inline: false,
             },
         ]
     );
@@ -685,6 +687,7 @@ fn an_answer_ending_with_a_table_is_split_from_its_words() {
         vec![CardField {
             name: "a.rs".to_owned(),
             value: "1.2k".to_owned(),
+            inline: false,
         }]
     );
 }
@@ -825,4 +828,77 @@ fn a_model_listing_is_paged_by_provider_with_the_intro_on_every_page() {
             .all(|page| page.description.starts_with("runs on `kenari/a`\n\n"))
     );
     assert!(pages.last().unwrap().description.contains("**tiny**"));
+}
+
+/// The figures a settled turn reports sit in labeled cells, and the ones the
+/// agent did not report are left out rather than drawn empty.
+#[test]
+fn a_turn_card_lays_out_what_was_reported() {
+    let usage = Usage {
+        input: 700.0,
+        cache_read: 300.0,
+        total_tokens: 10_900.0,
+        cost: 0.0003,
+        context_tokens: 3_300.0,
+        context_window: 200_000.0,
+        output_rate: Some(41.6),
+        ..Usage::default()
+    };
+    let card = turn_card(
+        Some("sonnet"),
+        Some((Some(1_600), 2_400)),
+        Some(&usage),
+        true,
+        None,
+    );
+
+    assert_eq!(card.color, CardColor::Ready);
+    assert_eq!(card.title, "turn done");
+    assert!(card.description.is_empty());
+    let cells: Vec<(&str, &str)> = card
+        .fields
+        .iter()
+        .map(|field| (field.name.as_str(), field.value.as_str()))
+        .collect();
+    assert_eq!(
+        cells,
+        [
+            ("Model", "`sonnet`"),
+            ("Took", "2.4s"),
+            ("First word", "1.6s"),
+            ("Speed", "42 tok/s"),
+            ("Context", "3.3k/200k (2%)"),
+            ("Session cost", "$0.0003"),
+        ]
+    );
+    assert!(card.fields.iter().all(|field| field.inline));
+    assert_eq!(
+        card.footer.as_deref(),
+        Some("10.9k tokens this session, 30% cached")
+    );
+
+    let bare = turn_card(None, None, None, false, None);
+    assert!(bare.fields.is_empty());
+    assert!(bare.footer.is_none());
+    assert_eq!(
+        bare.description,
+        "The turn finished without producing any output."
+    );
+}
+
+/// A failed turn is a warning that says why, whether or not it produced
+/// anything first.
+#[test]
+fn a_failed_turn_card_says_why() {
+    let card = turn_card(
+        Some("sonnet"),
+        None,
+        None,
+        true,
+        Some("the provider refused"),
+    );
+
+    assert_eq!(card.color, CardColor::Warning);
+    assert_eq!(card.title, "turn failed");
+    assert_eq!(card.description, "the provider refused");
 }

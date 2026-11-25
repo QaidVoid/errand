@@ -196,7 +196,7 @@ pub fn wire(entry: &SessionEvent, at: i64, turn: Option<u32>, names: Option<&Nam
             "text": clean(text),
             "at": at,
         }),
-        SessionEvent::Notice { text, level } => serde_json::json!({
+        SessionEvent::Notice { text, level, .. } => serde_json::json!({
             "kind": "notice",
             "text": clean(text),
             "level": level,

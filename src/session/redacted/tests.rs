@@ -38,6 +38,7 @@ fn calls() -> Vec<SessionEvent> {
         SessionEvent::Notice {
             text: with_secret("starting with "),
             level: NoticeLevel::Started,
+            card: None,
         },
         SessionEvent::Reply {
             text: with_secret("output "),

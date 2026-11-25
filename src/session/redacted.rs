@@ -68,9 +68,10 @@ pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
             withdrawn,
             from_interface,
         },
-        SessionEvent::Notice { text, level } => SessionEvent::Notice {
+        SessionEvent::Notice { text, level, card } => SessionEvent::Notice {
             text: clean(&text),
             level,
+            card: card.map(|card| redact_card(card, secrets)),
         },
         SessionEvent::Thinking { text } => SessionEvent::Thinking { text: clean(&text) },
         SessionEvent::Reply {

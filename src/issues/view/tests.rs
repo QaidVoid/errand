@@ -72,6 +72,7 @@ async fn the_issue_is_told_only_what_the_turn_came_to() {
         SessionEvent::Notice {
             text: "<@github:octocat> [done] glm-5.3-flash | 16m27s".to_owned(),
             level: NoticeLevel::Done,
+            card: None,
         },
     ] {
         view.observe(&event).await.expect("observed");
@@ -147,6 +148,7 @@ async fn a_turn_that_said_nothing_tells_the_issue_why_it_failed() {
         SessionEvent::Notice {
             text: "the turn failed: 429 rate limit exceeded".to_owned(),
             level: NoticeLevel::Warning,
+            card: None,
         },
         SessionEvent::Busy { busy: false },
     ] {

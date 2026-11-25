@@ -213,6 +213,10 @@ pub struct CardField {
     pub name: String,
     /// The text under the label, in the markdown the surface renders.
     pub value: String,
+    /// Whether the cell may share a row with its neighbours, for short
+    /// figures read together rather than distinct things listed one a row.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inline: bool,
 }
 
 /// A post a surface may draw as a card instead of plain text.
@@ -486,7 +490,15 @@ pub enum SessionEvent {
     /// else they are the frame around the conversation rather than part of it,
     /// so they are marked as what they are instead of arriving as the agent
     /// talking.
-    Notice { text: String, level: NoticeLevel },
+    ///
+    /// A card, when present, is the same report laid out for a surface that
+    /// draws cards. Without one, such a surface draws the text.
+    Notice {
+        text: String,
+        level: NoticeLevel,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<Card>,
+    },
     /// Notes what the agent reasoned before answering.
     ///
     /// A thread does not show this: it is long, and a conversation is not the

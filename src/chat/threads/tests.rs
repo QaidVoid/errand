@@ -744,6 +744,7 @@ async fn a_notice_is_drawn_as_a_card_its_level_colors() {
         port.observe(&SessionEvent::Notice {
             text: "the words".to_owned(),
             level: *level,
+            card: None,
         })
         .await
         .unwrap();
@@ -1020,12 +1021,14 @@ async fn a_card_addressing_somebody_names_them_where_the_service_notifies() {
     port.observe(&SessionEvent::Notice {
         text: "<@123456> [done] sonnet | 42s".to_owned(),
         level: NoticeLevel::Done,
+        card: None,
     })
     .await
     .unwrap();
     port.observe(&SessionEvent::Notice {
         text: "nobody to tell <@github:octocat>".to_owned(),
         level: NoticeLevel::Warning,
+        card: None,
     })
     .await
     .unwrap();
@@ -1045,4 +1048,46 @@ async fn a_card_addressing_somebody_names_them_where_the_service_notifies() {
     port.flush().await;
 
     assert_eq!(channel.contents(), ["<@123456>", "", "listed"]);
+    let descriptions: Vec<String> = channel
+        .records()
+        .iter()
+        .map(|record| record.lock().unwrap().card.clone().unwrap().description)
+        .collect();
+    assert_eq!(
+        descriptions,
+        [
+            "[done] sonnet | 42s",
+            "nobody to tell <@github:octocat>",
+            "- <#1> for <@123456>",
+        ]
+    );
+}
+
+/// A notice that brings its own card is drawn as that card, and the person
+/// it addresses is named beside it rather than as its words.
+#[tokio::test]
+async fn a_notice_with_its_own_card_names_only_whoever_it_addresses() {
+    use crate::session::event::NoticeLevel;
+    use crate::session::views::SessionView;
+
+    let card = Card {
+        color: CardColor::Ready,
+        title: "turn done".to_owned(),
+        description: String::new(),
+        fields: Vec::new(),
+        footer: None,
+        pages: Vec::new(),
+    };
+    let (port, channel) = thread(false);
+    port.observe(&SessionEvent::Notice {
+        text: "<@123456> [done] `sonnet` | 42s".to_owned(),
+        level: NoticeLevel::Done,
+        card: Some(card.clone()),
+    })
+    .await
+    .unwrap();
+    port.flush().await;
+
+    assert_eq!(channel.contents(), ["<@123456>"]);
+    assert_eq!(channel.records()[0].lock().unwrap().card, Some(card));
 }

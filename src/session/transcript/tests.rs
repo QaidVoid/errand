@@ -159,6 +159,7 @@ fn what_a_session_was_first_asked_is_read_from_its_transcript() {
         &SessionEvent::Notice {
             text: "ready".to_owned(),
             level: NoticeLevel::Started,
+            card: None,
         },
         Some(0),
         1_000,
@@ -197,6 +198,7 @@ fn a_session_that_was_never_asked_anything_has_no_opening() {
         &SessionEvent::Notice {
             text: "started".to_owned(),
             level: NoticeLevel::Started,
+            card: None,
         },
         Some(0),
         1_000,
@@ -205,6 +207,7 @@ fn a_session_that_was_never_asked_anything_has_no_opening() {
         &SessionEvent::Notice {
             text: "it failed".to_owned(),
             level: NoticeLevel::Ended,
+            card: None,
         },
         Some(0),
         2_000,

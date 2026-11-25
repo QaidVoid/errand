@@ -66,7 +66,7 @@ fn render(event: &SessionEvent) -> String {
         SessionEvent::Question { title, .. } => format!("question:{title}"),
         SessionEvent::Prompt { author, text, .. } => format!("prompt:{author}:{text}"),
         SessionEvent::Aside { author, text, .. } => format!("aside:{author}:{text}"),
-        SessionEvent::Notice { text, level } => {
+        SessionEvent::Notice { text, level, .. } => {
             format!("notice:{}:{text}", level.as_str())
         }
         SessionEvent::Thinking { text } => format!("thinking:{text}"),
@@ -161,6 +161,7 @@ async fn everything_reported_reaches_every_attached_view() {
     fan.send(SessionEvent::Notice {
         text: "started".to_owned(),
         level: NoticeLevel::Started,
+        card: None,
     })
     .await;
 

@@ -341,26 +341,13 @@ pub fn usage_summary(usage: &Usage) -> String {
     if usage.total_tokens > 0.0 {
         parts.push(format!("{} tokens", tokens(usage.total_tokens)));
     }
-    let sent = usage.input + usage.cache_read + usage.cache_write;
-    if sent > 0.0 {
-        #[expect(clippy::cast_possible_truncation)]
-        let cached = ((usage.cache_read / sent) * 100.0).round() as i64;
+    if let Some(cached) = cached_share(usage) {
         parts.push(format!("{cached}% cached"));
     }
-
-    // What the conversation is carrying now, as opposed to what it has spent
-    // in total. The share is the useful part: it says how much room is left.
-    if usage.context_tokens > 0.0 {
-        parts.push(if usage.context_window <= 0.0 {
-            format!("{} context", tokens(usage.context_tokens))
-        } else {
-            #[expect(clippy::cast_possible_truncation)]
-            let share = ((usage.context_tokens / usage.context_window) * 100.0).round() as i64;
-            format!(
-                "{}/{} context ({share}%)",
-                tokens(usage.context_tokens),
-                tokens(usage.context_window),
-            )
+    if let Some((context, share)) = context_figure(usage) {
+        parts.push(match share {
+            Some(share) => format!("{context} context ({share}%)"),
+            None => format!("{context} context"),
         });
     }
     if usage.cost > 0.0 {
@@ -370,6 +357,37 @@ pub fn usage_summary(usage: &Usage) -> String {
         parts.push(format!("{rate:.0} tok/s"));
     }
     parts.join(", ")
+}
+
+/// The share of input served from the cache, as a whole percentage, or
+/// nothing when no input was reported.
+fn cached_share(usage: &Usage) -> Option<i64> {
+    let sent = usage.input + usage.cache_read + usage.cache_write;
+    #[expect(clippy::cast_possible_truncation)]
+    (sent > 0.0).then(|| ((usage.cache_read / sent) * 100.0).round() as i64)
+}
+
+/// What the conversation is carrying now, against the window when it is
+/// known, and the share of the window that is. This is as opposed to what it
+/// has spent in total. The share is the useful part: it says how much room is
+/// left.
+fn context_figure(usage: &Usage) -> Option<(String, Option<i64>)> {
+    if usage.context_tokens <= 0.0 {
+        return None;
+    }
+    if usage.context_window <= 0.0 {
+        return Some((tokens(usage.context_tokens), None));
+    }
+    #[expect(clippy::cast_possible_truncation)]
+    let share = ((usage.context_tokens / usage.context_window) * 100.0).round() as i64;
+    Some((
+        format!(
+            "{}/{}",
+            tokens(usage.context_tokens),
+            tokens(usage.context_window)
+        ),
+        Some(share),
+    ))
 }
 
 /// Output tokens per second over `elapsed_ms`, or nothing when either is
@@ -408,6 +426,77 @@ pub fn turn_summary(model: Option<&str>, timing: &str, usage: Option<&Usage>) ->
         }
     }
     groups.join(" | ")
+}
+
+/// The card a settled turn is drawn as.
+///
+/// The figures sit in a grid rather than a sentence, so each is found by its
+/// label. Nobody is named in it: the service notifies only for a mention in
+/// a message's text, so whoever asked is named beside the card. The token
+/// count and cost are the session's, not the turn's, and are labeled so.
+pub fn turn_card(
+    model: Option<&str>,
+    timing: Option<(Option<i64>, i64)>,
+    usage: Option<&Usage>,
+    produced: bool,
+    failure: Option<&str>,
+) -> Card {
+    let (color, title, description) = match (failure, produced) {
+        (Some(failure), _) => (CardColor::Warning, "turn failed", failure.to_owned()),
+        (None, true) => (CardColor::Ready, "turn done", String::new()),
+        (None, false) => (
+            CardColor::Ready,
+            "turn done",
+            "The turn finished without producing any output.".to_owned(),
+        ),
+    };
+    let mut fields = Vec::new();
+    let mut cell = |name: &str, value: String| {
+        fields.push(CardField {
+            name: name.to_owned(),
+            value,
+            inline: true,
+        });
+    };
+    if let Some(model) = model.filter(|model| !model.is_empty()) {
+        cell("Model", format!("`{model}`"));
+    }
+    if let Some((first, wall)) = timing {
+        cell("Took", duration(wall.max(0)));
+        if let Some(first) = first.filter(|first| *first >= 0) {
+            cell("First word", duration(first));
+        }
+    }
+    let mut footer = None;
+    if let Some(usage) = usage {
+        if let Some(rate) = usage.output_rate {
+            cell("Speed", format!("{rate:.0} tok/s"));
+        }
+        if let Some((context, share)) = context_figure(usage) {
+            cell(
+                "Context",
+                share.map_or_else(|| context.clone(), |share| format!("{context} ({share}%)")),
+            );
+        }
+        if usage.cost > 0.0 {
+            cell("Session cost", format!("${:.4}", usage.cost));
+        }
+        if usage.total_tokens > 0.0 {
+            let mut line = format!("{} tokens this session", tokens(usage.total_tokens));
+            if let Some(cached) = cached_share(usage) {
+                let _ = write!(line, ", {cached}% cached");
+            }
+            footer = Some(line);
+        }
+    }
+    Card {
+        color,
+        title: title.to_owned(),
+        description,
+        fields,
+        footer,
+        pages: Vec::new(),
+    }
 }
 
 /// What a session has spent, as the renderer reads it.
@@ -552,6 +641,7 @@ pub fn usage_card(rows: &[(String, Option<Quota>)]) -> Card {
             fields: vec![CardField {
                 name: provider.clone(),
                 value: window_line(quota.as_ref()),
+                inline: false,
             }],
         })
         .collect();
@@ -679,7 +769,11 @@ pub fn table_card(title: &str, text: &str) -> Option<Card> {
             groups.push(CardPage {
                 label: (index + 1).to_string(),
                 description: String::new(),
-                fields: vec![CardField { name, value }],
+                fields: vec![CardField {
+                    name,
+                    value,
+                    inline: false,
+                }],
             });
         }
         pack_pages(groups)

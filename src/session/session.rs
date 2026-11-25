@@ -1235,6 +1235,7 @@ impl Running {
                                 "waiting on the model provider before continuing: {detail}"
                             )),
                             level: NoticeLevel::Warning,
+                            card: None,
                         })
                         .await;
                 }
@@ -1419,6 +1420,32 @@ impl Running {
         }
     }
 
+    /// Says the session started, with a link to its transcript when there is
+    /// one.
+    async fn announce_start(&self, restored: bool) {
+        // Which sandbox confines a session is not named in the thread. It
+        // tells a reader nothing they can act on, and tells anyone else what
+        // to probe. The operator sees it at startup, in the log, where it
+        // belongs.
+        let opening = self.opening_line(restored);
+
+        // Offered once, when the thread is new. A thread shows the
+        // conversation and the interface shows the work behind it, and
+        // somebody reading on a phone has no other way to find the second
+        // from the first.
+        let transcript = self.session_links().transcript;
+        self.views
+            .send(SessionEvent::Notice {
+                text: match transcript {
+                    None => connection_line(&opening),
+                    Some(link) => format!("{}\n{link}", connection_line(&opening)),
+                },
+                level: NoticeLevel::Started,
+                card: None,
+            })
+            .await;
+    }
+
     async fn start(&mut self, first: IncomingMessage) -> bool {
         let forge = self.options.config.forge.clone();
         self.write_git_config(forge.as_ref());
@@ -1517,26 +1544,7 @@ impl Running {
         self.remember_kage_session_id();
         self.publish_model().await;
 
-        // Which sandbox confines a session is not named in the thread. It
-        // tells a reader nothing they can act on, and tells anyone else what
-        // to probe. The operator sees it at startup, in the log, where it
-        // belongs.
-        let opening = self.opening_line(restored);
-
-        // Offered once, when the thread is new. A thread shows the
-        // conversation and the interface shows the work behind it, and
-        // somebody reading on a phone has no other way to find the second
-        // from the first.
-        let transcript = self.session_links().transcript;
-        self.views
-            .send(SessionEvent::Notice {
-                text: match transcript {
-                    None => connection_line(&opening),
-                    Some(link) => format!("{}\n{link}", connection_line(&opening)),
-                },
-                level: NoticeLevel::Started,
-            })
-            .await;
+        self.announce_start(restored).await;
         self.reset_idle_timer();
         self.route(first).await;
         true
@@ -2305,12 +2313,15 @@ impl Running {
         // never reached it", which otherwise look identical from the thread.
         // Said on every ending, including a failure: how long it took before
         // giving up is as much worth knowing as how long a good turn took.
-        let timing = self.turn_started_at.map_or_else(String::new, |started| {
-            crate::chat::render::turn_timing(
+        let took = self.turn_started_at.map(|started| {
+            (
                 self.turn_first_output_at
                     .map(|first| millis(first.duration_since(started))),
                 millis(started.elapsed()),
             )
+        });
+        let timing = took.map_or_else(String::new, |(first, wall)| {
+            crate::chat::render::turn_timing(first, wall)
         });
         // What the agent said answered the turn, rather than what the session
         // was last asked to run: a switch the agent refused must not be
@@ -2321,6 +2332,13 @@ impl Running {
             .or_else(|| self.running_model())
             .unwrap_or_default();
         let summary = crate::chat::render::turn_summary(Some(&answered), &timing, spent.as_ref());
+        let card = crate::chat::render::turn_card(
+            Some(&answered),
+            took,
+            spent.as_ref(),
+            produced,
+            failure,
+        );
         let spent = if summary.is_empty() {
             String::new()
         } else {
@@ -2349,6 +2367,7 @@ impl Running {
                 } else {
                     NoticeLevel::Warning
                 },
+                card: Some(card),
             })
             .await;
 
@@ -3122,6 +3141,7 @@ impl Running {
                             byte_count(budget as f64)
                         ),
                         level: NoticeLevel::Warning,
+                        card: None,
                     })
                     .await;
             }
@@ -3173,6 +3193,7 @@ impl Running {
                 .send(SessionEvent::Notice {
                     text: connection_line(detail),
                     level: NoticeLevel::Ended,
+                    card: None,
                 })
                 .await;
         }

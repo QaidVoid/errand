@@ -769,6 +769,7 @@ impl SessionManager {
                 .send(SessionEvent::Notice {
                     text: warning_line(&fell_back),
                     level: NoticeLevel::Warning,
+                    card: None,
                 })
                 .await;
         }
@@ -990,6 +991,7 @@ impl SessionManager {
                          so it continues on the configured model"
                     )),
                     level: NoticeLevel::Warning,
+                    card: None,
                 })
                 .await;
         }
