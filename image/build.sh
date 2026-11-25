@@ -50,9 +50,13 @@ wait_for_network() {
         if [ "$tries" -ge 60 ]; then
             echo "$build cannot resolve deb.debian.org after 60s. Its state and address:" >&2
             incus_ list "$build" --format csv --columns ns4 >&2
-            echo "and its own view of its interfaces, and what its DHCP client said:" >&2
+            echo "and its own view of its interfaces:" >&2
             incus_ exec "$build" -- ip -brief address >&2
-            incus_ exec "$build" -- journalctl -b --no-pager -g "dhcp|eth0" >&2
+            echo "An address comes from its init, so what that is doing:" >&2
+            # Non-zero for any state but running, which is what is asked.
+            incus_ exec "$build" -- systemctl is-system-running >&2 || true
+            incus_ exec "$build" -- ps -eo pid,stat,args >&2
+            incus_ info "$build" --show-log >&2
             exit 1
         fi
         sleep 1
