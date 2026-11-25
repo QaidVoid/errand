@@ -35,17 +35,20 @@ jobs:
       - name: Free disk space
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
 
-      # Docker on the runner drops forwarded traffic, which cuts the build
-      # container off from the network. Incus is installed with what it
+      # Docker's firewall rules keep an Incus bridge from handing its
+      # containers an address on the runner. Nothing here uses Docker, so it
+      # goes the way Incus's own CI removes it, and the rules are cleared
+      # before Incus sets up its own. Incus is installed with what it
       # recommends: its bridge needs dnsmasq, which it only recommends.
       - name: Set up Incus
         run: |
+          sudo apt-get autopurge -y moby-containerd docker
+          sudo ip link delete docker0
           sudo apt-get update
-          sudo apt-get install -y incus
+          sudo apt-get install -y incus nftables
+          sudo nft flush ruleset
           sudo incus admin init --auto
           sudo incus config set images.compression_algorithm zstd
-          sudo iptables -I DOCKER-USER -i incusbr0 -j ACCEPT
-          sudo iptables -I DOCKER-USER -o incusbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 
       - name: Fetch kage
         env:
@@ -56,6 +59,17 @@ jobs:
 
       - name: Build
         run: sudo KAGE_BIN="$PWD/kage-x86_64-linux/kage" INCUS_PROJECT=default image/build.sh
+
+      # The build container is gone by now, so this is the host's side of a
+      # network that gave it no address.
+      - name: Show the host's network on failure
+        if: failure()
+        run: |
+          sudo incus network list
+          sudo incus network info incusbr0
+          pgrep -a dnsmasq || echo "no dnsmasq is running"
+          sudo nft list ruleset | grep -E "table|chain|policy"
+          sudo journalctl -u incus --no-pager | tail -n 40
 
       - name: Export
         id: export
