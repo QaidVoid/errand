@@ -55,6 +55,11 @@ pub struct ThreadRecord {
     pub provider: Option<String>,
     /// The model the session was started on, when it was chosen.
     pub model: Option<String>,
+    /// The model its subagents run, as `provider/model` with an optional
+    /// `:level`, when the opening message named one. Kept for the same
+    /// reason as `model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<String>,
     /// Whether the session has stopped and must not be resumed.
     #[serde(default)]
     pub stopped: bool,
@@ -86,6 +91,7 @@ pub fn is_record(value: &Value) -> bool {
         })
         && is_optional_string("provider")
         && is_optional_string("model")
+        && is_optional_string("subagent")
         && matches!(record.get("stopped"), None | Some(Value::Bool(_)))
         && record.get("updatedAt").is_some_and(Value::is_number)
 }

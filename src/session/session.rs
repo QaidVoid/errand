@@ -472,6 +472,10 @@ pub struct SessionOptions {
     /// Provider and model this session runs on, when the opening message named
     /// them. Absent leaves the configured pair, which is the ordinary case.
     pub chosen: Option<ChosenModel>,
+    /// The model the agents it starts run, as `provider/model` with an
+    /// optional `:level`, when the opening message named one. Absent runs
+    /// them on the session's own model.
+    pub subagent: Option<String>,
     /// Where it keeps what it will outlive the sandbox with.
     pub state_dir: String,
     /// What the session reports through, with secrets scrubbed at it.
@@ -1364,10 +1368,13 @@ impl Running {
     /// told it carries on.
     fn opening_line(&self, restored: bool) -> String {
         let project = &self.options.project.name;
-        let place = match self.running_model() {
+        let mut place = match self.running_model() {
             Some(model) => format!("in {project} on `{model}`"),
             None => format!("in {project}"),
         };
+        if let Some(subagent) = &self.options.subagent {
+            place = format!("{place}, with subagents on `{subagent}`");
+        }
         if !self.options.resume {
             format!("ready, working {place}")
         } else if restored {
@@ -1478,6 +1485,7 @@ impl Running {
             env,
             provider: self.provider(),
             model: self.model(),
+            subagent_model: self.options.subagent.clone(),
             providers: self.options.catalog.providers(),
             credential_names,
             plugins: self.options.config.agent.plugins.clone(),

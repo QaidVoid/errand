@@ -19,6 +19,7 @@ fn record(overrides: impl FnOnce(&mut ThreadRecord)) -> ThreadRecord {
         guests: Vec::new(),
         provider: None,
         model: None,
+        subagent: None,
         stopped: false,
         updated_at: 1_000,
     };

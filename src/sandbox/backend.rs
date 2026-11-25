@@ -100,6 +100,10 @@ pub struct SandboxLaunch {
     pub provider: String,
     /// Model pattern, or none to use the provider's default.
     pub model: Option<String>,
+    /// The model the agents a session starts run when nothing more specific
+    /// names one, as `provider/model` with an optional `:level`, or none to
+    /// run them on the session's own.
+    pub subagent_model: Option<String>,
     /// Providers the operator defined, written into the agent's configuration.
     ///
     /// Absent where the operator defined none, which is the ordinary case: the
@@ -141,6 +145,7 @@ impl Default for SandboxLaunch {
             system_prompt_path: None,
             provider: String::new(),
             model: None,
+            subagent_model: None,
             providers: Map::new(),
             credential_names: BTreeMap::new(),
             plugins: Vec::new(),

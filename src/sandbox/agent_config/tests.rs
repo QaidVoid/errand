@@ -1854,3 +1854,17 @@ fn a_custom_provider_carries_its_switches() {
     }
     assert!(!table.contains("thinking ="), "{config}");
 }
+
+/// The subagents' model reaches kage's `[agents]` table, with a level on the
+/// end read as the thinking it runs with.
+#[test]
+fn a_subagent_model_is_written_as_the_agents_default() {
+    assert_eq!(
+        super::agents_section("meta/muse-lite:LOW"),
+        "\n[agents]\nmodel = \"meta/muse-lite\"\nthinking = \"low\"\n"
+    );
+    assert_eq!(
+        super::agents_section("meta/muse-lite"),
+        "\n[agents]\nmodel = \"meta/muse-lite\"\n"
+    );
+}

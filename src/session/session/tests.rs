@@ -917,6 +917,7 @@ async fn with_session(
             prompt: "do the thing".to_owned(),
         },
         chosen: None,
+        subagent: None,
         state_dir: state_dir.display().to_string(),
         views,
         launcher: sandbox.launcher(),

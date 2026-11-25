@@ -68,6 +68,7 @@ fn launch() -> SandboxLaunch {
         state_dir: "/state/s-1".to_owned(),
         env: BTreeMap::new(),
         system_prompt_path: None,
+        subagent_model: None,
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
         providers: serde_json::Map::new(),

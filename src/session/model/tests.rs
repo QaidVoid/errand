@@ -18,6 +18,7 @@ fn a_leading_model_flag_is_read_off_and_the_prompt_keeps_the_rest() {
     assert_eq!(
         select_model("--model meta/muse-spark-1.3-contributor:max build it"),
         super::ModelSelection {
+            subagent: None,
             value: Some("meta/muse-spark-1.3-contributor:max".to_owned()),
             prompt: "build it".to_owned(),
         }
@@ -26,6 +27,7 @@ fn a_leading_model_flag_is_read_off_and_the_prompt_keeps_the_rest() {
     assert_eq!(
         select_model("--model=glm-5.3 go"),
         super::ModelSelection {
+            subagent: None,
             value: Some("glm-5.3".to_owned()),
             prompt: "go".to_owned(),
         }
@@ -34,6 +36,7 @@ fn a_leading_model_flag_is_read_off_and_the_prompt_keeps_the_rest() {
     assert_eq!(
         select_model("just do the thing"),
         super::ModelSelection {
+            subagent: None,
             value: None,
             prompt: "just do the thing".to_owned(),
         }
@@ -46,6 +49,7 @@ fn a_model_flag_is_only_an_instruction_at_the_very_start() {
     assert_eq!(
         select_model("explain --model to me"),
         super::ModelSelection {
+            subagent: None,
             value: None,
             prompt: "explain --model to me".to_owned(),
         }
@@ -130,6 +134,7 @@ fn short_m_is_the_same_flag_as_the_long_one() {
     assert_eq!(
         select_model("-m muse-lite:xhigh build it"),
         super::ModelSelection {
+            subagent: None,
             value: Some("muse-lite:xhigh".to_owned()),
             prompt: "build it".to_owned(),
         }
@@ -137,6 +142,7 @@ fn short_m_is_the_same_flag_as_the_long_one() {
     assert_eq!(
         select_model("-m=glm go"),
         super::ModelSelection {
+            subagent: None,
             value: Some("glm".to_owned()),
             prompt: "go".to_owned(),
         }
@@ -147,6 +153,7 @@ fn short_m_is_the_same_flag_as_the_long_one() {
     assert_eq!(
         select_model("run it with -m glm"),
         super::ModelSelection {
+            subagent: None,
             value: None,
             prompt: "run it with -m glm".to_owned(),
         }
@@ -154,6 +161,7 @@ fn short_m_is_the_same_flag_as_the_long_one() {
     assert_eq!(
         select_model("-make the thing"),
         super::ModelSelection {
+            subagent: None,
             value: None,
             prompt: "-make the thing".to_owned(),
         }
@@ -161,6 +169,7 @@ fn short_m_is_the_same_flag_as_the_long_one() {
     assert_eq!(
         select_model("-m"),
         super::ModelSelection {
+            subagent: None,
             value: None,
             prompt: "-m".to_owned(),
         }
@@ -222,4 +231,36 @@ fn the_configured_model_may_name_its_provider_too() {
             model: "meta/muse-spark".to_owned(),
         })
     );
+}
+
+/// The subagents' model is read beside the session's, in either order, and
+/// each flag is only taken off the front.
+#[test]
+fn a_subagent_model_is_read_beside_the_session_model() {
+    assert_eq!(
+        select_model("-m opus -sm flash:low build it"),
+        super::ModelSelection {
+            value: Some("opus".to_owned()),
+            subagent: Some("flash:low".to_owned()),
+            prompt: "build it".to_owned(),
+        }
+    );
+    assert_eq!(
+        select_model("--subagent-model=flash --model opus go"),
+        super::ModelSelection {
+            value: Some("opus".to_owned()),
+            subagent: Some("flash".to_owned()),
+            prompt: "go".to_owned(),
+        }
+    );
+    assert_eq!(
+        select_model("-sm flash run it with -m opus"),
+        super::ModelSelection {
+            value: None,
+            subagent: Some("flash".to_owned()),
+            prompt: "run it with -m opus".to_owned(),
+        }
+    );
+    assert_eq!(select_model("-smart move").subagent, None);
+    assert_eq!(select_model("-smart move").prompt, "-smart move");
 }

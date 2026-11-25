@@ -440,6 +440,9 @@ impl Running {
         if let Some(model) = self.running_model() {
             cells.push(("Model", format!("`{model}`")));
         }
+        if let Some(subagent) = &self.options.subagent {
+            cells.push(("Subagents", format!("`{subagent}`")));
+        }
         cells.push((
             "Turns, all sessions",
             self.options.scheduler.turns_in_flight().to_string(),

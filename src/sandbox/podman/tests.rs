@@ -77,6 +77,7 @@ fn launch() -> SandboxLaunch {
         system_prompt_path: None,
         provider: "zai-coding-cn".to_owned(),
         model: Some("glm-5.3".to_owned()),
+        subagent_model: None,
         providers: serde_json::Map::new(),
         credential_names: BTreeMap::from([("zai-coding-cn".to_owned(), "ZAI_API_KEY".to_owned())]),
         plugins: Vec::new(),

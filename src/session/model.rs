@@ -9,66 +9,77 @@ use std::collections::BTreeMap;
 
 use crate::config::schema::AgentConfig;
 
-/// A `--model` on the opening message, and the prompt with it removed.
+/// The models named on the opening message, and the prompt with them removed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelSelection {
-    /// What was asked for, as written, or none when nothing was.
+    /// The session's model, as written, or none when nothing was.
     pub value: Option<String>,
+    /// The model its subagents run, as written, or none when nothing was.
+    pub subagent: Option<String>,
     /// The prompt the session actually receives.
     pub prompt: String,
 }
 
-/// Reads a leading `--model` off the prompt, leaving the rest of it alone.
+/// Reads the leading model flags off the prompt, leaving the rest of it
+/// alone: `--model` for the session and `--subagent-model` for the agents it
+/// starts, in either order.
 ///
-/// Only at the very start, and only as a whole word. A prompt that mentions
+/// Only at the very start, and only as whole words. A prompt that mentions
 /// `--model` while describing something must not have it taken as an
 /// instruction, and a session started with "explain --model to me" is a
 /// likelier message than one that means to select a model halfway through a
 /// sentence. Both `--model x` and `--model=x` are accepted, since a person
-/// writing a flag will write whichever they are used to, and `-m` with them,
-/// because naming the model is the one thing typed often enough to shorten.
+/// writing a flag will write whichever they are used to, and `-m` and `-sm`
+/// with them, because naming models is typed often enough to shorten. A flag
+/// given twice keeps the later value.
 pub fn select_model(prompt: &str) -> ModelSelection {
-    let trimmed = prompt.trim();
-    let after_flag = if let Some(rest) = trimmed.strip_prefix("--model") {
-        rest
-    } else if let Some(rest) = trimmed.strip_prefix("-m") {
-        rest
-    } else {
-        return ModelSelection {
-            value: None,
-            prompt: trimmed.to_owned(),
+    let mut selection = ModelSelection {
+        value: None,
+        subagent: None,
+        prompt: prompt.trim().to_owned(),
+    };
+    loop {
+        let rest = selection.prompt.as_str();
+        let (subagent, after_flag) = if let Some(after) = rest
+            .strip_prefix("--subagent-model")
+            .or_else(|| rest.strip_prefix("-sm"))
+        {
+            (true, after)
+        } else if let Some(after) = rest
+            .strip_prefix("--model")
+            .or_else(|| rest.strip_prefix("-m"))
+        {
+            (false, after)
+        } else {
+            return selection;
         };
-    };
-
-    let after_separator = if let Some(rest) = after_flag.strip_prefix('=') {
-        rest
-    } else {
-        match after_flag.find(|character: char| !character.is_whitespace()) {
-            // A flag with nothing after it selects nothing and stays put.
-            Some(0) | None => {
-                return ModelSelection {
-                    value: None,
-                    prompt: trimmed.to_owned(),
-                };
-            }
-            Some(run) => &after_flag[run..],
+        let Some((value, remaining)) = flag_value(after_flag) else {
+            return selection;
+        };
+        let (value, remaining) = (value.to_owned(), remaining.trim().to_owned());
+        if subagent {
+            selection.subagent = Some(value);
+        } else {
+            selection.value = Some(value);
         }
-    };
+        selection.prompt = remaining;
+    }
+}
 
+/// The value after a flag's name and what follows it, or nothing when the
+/// name runs on into a word or no value follows.
+fn flag_value(after_flag: &str) -> Option<(&str, &str)> {
+    let after_separator = match after_flag.strip_prefix('=') {
+        Some(rest) => rest,
+        None => match after_flag.find(|character: char| !character.is_whitespace()) {
+            Some(0) | None => return None,
+            Some(run) => &after_flag[run..],
+        },
+    };
     let value_end = after_separator
         .find(char::is_whitespace)
         .unwrap_or(after_separator.len());
-    if value_end == 0 {
-        return ModelSelection {
-            value: None,
-            prompt: trimmed.to_owned(),
-        };
-    }
-
-    ModelSelection {
-        value: Some(after_separator[..value_end].to_owned()),
-        prompt: after_separator[value_end..].trim().to_owned(),
-    }
+    (value_end > 0).then(|| (&after_separator[..value_end], &after_separator[value_end..]))
 }
 
 /// A provider and model a session was asked to run on.

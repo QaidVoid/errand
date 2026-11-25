@@ -625,6 +625,31 @@ impl SessionManager {
                 }
             },
         };
+        // The subagents' model is refused the same way, and resolved now so
+        // the agents a session starts are never handed a name nobody serves.
+        let subagent = match asked.subagent.as_deref() {
+            None => None,
+            Some(value) => match self.resolve(value) {
+                Named::One(found) => Some(format!(
+                    "{}/{}",
+                    found.provider.unwrap_or_default(),
+                    found.model
+                )),
+                Named::None => {
+                    return self.refused(format!(
+                        "no provider here serves a subagent model called `{value}`; say \
+                         `!model` to see what does"
+                    ));
+                }
+                Named::Several(options) => {
+                    return self.refused(format!(
+                        "more than one provider serves `{value}`: {}; name the subagent model \
+                         as `provider/model`",
+                        options.join(", ")
+                    ));
+                }
+            },
+        };
         project.prompt = asked.prompt;
         let default_provider = self.options.config.get().agent.provider;
         self.options.log.debug(
@@ -783,6 +808,7 @@ impl SessionManager {
             id: id.clone(),
             project: project.clone(),
             chosen: chosen.clone(),
+            subagent: subagent.clone(),
             state_dir: state_dir.clone(),
             views: self.scrubber_for(&id, &fan_out),
             launcher: Arc::clone(&self.shared.launcher),
@@ -841,6 +867,7 @@ impl SessionManager {
                 guests: Vec::new(),
                 provider: chosen.as_ref().and_then(|chosen| chosen.provider.clone()),
                 model: chosen.as_ref().map(|chosen| chosen.model.clone()),
+                subagent: subagent.clone(),
                 stopped: false,
                 updated_at: self.now_ms(),
             });
@@ -1003,6 +1030,7 @@ impl SessionManager {
                 prompt: message.content.clone(),
             },
             chosen,
+            subagent: record.subagent.clone(),
             state_dir: record.state_dir.clone(),
             views: self.scrubber_for(&record.session_id, &fan_out),
             launcher: Arc::clone(&self.shared.launcher),

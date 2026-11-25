@@ -481,6 +481,21 @@ fn custom_provider_table(
     out
 }
 
+/// The `[agents]` table naming the model, and the level when one is given,
+/// that the agents a session starts run unless a call or an agent's own
+/// definition names another.
+///
+/// kage reads the level apart from the model, so a `:level` on the end is
+/// split off into `thinking`.
+fn agents_section(model: &str) -> String {
+    let (bare, level) = crate::session::model::split_level(model);
+    let mut out = format!("\n[agents]\nmodel = {}\n", toml_string(&bare));
+    if let Some(level) = level.strip_prefix(':') {
+        let _ = writeln!(out, "thinking = {}", toml_string(&level.to_lowercase()));
+    }
+    out
+}
+
 /// Every media tool's table, in a fixed order: images and their edits,
 /// speech, then music.
 fn media_tables(
@@ -688,7 +703,7 @@ pub async fn write_agent_config(
     tokio::fs::create_dir_all(&directory)
         .await
         .map_err(failed)?;
-    let body = kage_config(
+    let mut body = kage_config(
         &launch.providers,
         brokered,
         built_in,
@@ -698,6 +713,9 @@ pub async fn write_agent_config(
         launch.max_provider_retries,
         kage,
     );
+    if let Some(model) = &launch.subagent_model {
+        body.toml.push_str(&agents_section(model));
+    }
     for provider in &body.dropped {
         let tools: Vec<&str> = [
             (provider.images, "image"),

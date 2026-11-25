@@ -679,6 +679,7 @@ async fn revive(deps: &Deps, session: Option<&str>, args: &[String]) -> i32 {
             guests: Vec::new(),
             provider: None,
             model: None,
+            subagent: None,
             stopped: false,
             updated_at: (deps.now)(),
         });

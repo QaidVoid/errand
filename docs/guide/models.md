@@ -33,6 +33,23 @@ refuses and lists each `provider/model` that matches, rather than guessing.
 }
 ```
 
+## Subagent models
+
+The agents a session starts, through kage's `agent` and `swarm` tools, run on
+the session's own model unless you say otherwise. Name another after
+`--subagent-model` (or `-sm`) in the message that starts the session, beside
+`-m` or on its own, in either order:
+
+```
+-m big -sm fast:low refactor the parser and fan the tests out
+```
+
+The name is read the way every model name is, aliases and levels included. A
+level becomes the thinking the agents run with. A name nothing serves is
+refused before a sandbox starts. The choice holds for the session's whole
+life, across a resume, and the opening message and `!status` both name it. An
+agent call or an agent definition that names its own model still wins.
+
 ## Switching models
 
 `!model` lists every model this host can run, as `provider/model`, with the

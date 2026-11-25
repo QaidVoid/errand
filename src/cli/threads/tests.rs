@@ -24,6 +24,7 @@ fn record_with(thread_id: &str, session_id: &str, state_dir: &str) -> ThreadReco
         guests: Vec::new(),
         provider: None,
         model: None,
+        subagent: None,
         stopped: false,
         updated_at: NOW - 3_600_000,
     }

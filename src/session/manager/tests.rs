@@ -2181,3 +2181,64 @@ fn a_starter_the_channel_cannot_mention_is_named() {
         "**111> amelia** started a session from the interface: fix the build"
     );
 }
+
+/// The subagents' model is named on the opening message beside the
+/// session's, resolved the same way, handed to the sandbox, and remembered
+/// so a resume keeps it.
+#[tokio::test(start_paused = true)]
+async fn the_opening_message_can_choose_the_subagents_model() {
+    with_manager(|harness| {
+        Box::pin(async move {
+            harness
+                .manager
+                .start(message(
+                    "-m glm-5.3-air -sm glm-5.3-air:low look at this",
+                    "m1",
+                ))
+                .await;
+
+            let launched = harness.sandbox.launched.lock().unwrap();
+            assert_eq!(launched[0].model, Some("glm-5.3-air".to_owned()));
+            assert_eq!(
+                launched[0].subagent_model,
+                Some("anthropic/glm-5.3-air:low".to_owned())
+            );
+            let record = harness
+                .registry
+                .lock()
+                .unwrap()
+                .get("thread-1")
+                .cloned()
+                .expect("the thread is remembered");
+            assert_eq!(
+                record.subagent,
+                Some("anthropic/glm-5.3-air:low".to_owned())
+            );
+        })
+    })
+    .await;
+}
+
+/// A subagent model nothing serves is refused before a sandbox starts, the
+/// same as the session's own.
+#[tokio::test(start_paused = true)]
+async fn a_subagent_model_nothing_serves_is_refused() {
+    with_manager(|harness| {
+        Box::pin(async move {
+            let outcome = harness
+                .manager
+                .start(message("-sm no-such-model go", "m1"))
+                .await;
+
+            let StartOutcome::Refused { reason } = outcome else {
+                panic!("an unknown subagent model was accepted");
+            };
+            assert!(
+                reason.contains("subagent model called `no-such-model`"),
+                "{reason}"
+            );
+            assert!(harness.sandbox.launched.lock().unwrap().is_empty());
+        })
+    })
+    .await;
+}
