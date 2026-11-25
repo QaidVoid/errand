@@ -162,7 +162,7 @@ fn format_fields(fields: &LogFields) -> String {
 /// that wrote it is still running.
 pub fn format_line(level: LogLevel, message: &str, fields: &LogFields, at_ms: i64) -> String {
     let moment = jiff::Timestamp::from_millisecond(at_ms).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
-    let civil = moment.to_zoned(jiff::tz::TimeZone::UTC).datetime();
+    let civil = moment.to_zoned_datetime(jiff::tz::TimeZone::UTC).datetime();
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z [{}] {}{}",
         civil.year(),
