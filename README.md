@@ -66,6 +66,7 @@ Then run it and post in the channel:
 ```sh
 errand run       # run the daemon until it is told to stop
 errand threads   # list, inspect, remove and collect what sessions left behind
+errand version   # the version and the commit it was built from
 errand help
 ```
 

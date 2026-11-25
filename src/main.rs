@@ -57,6 +57,7 @@ fn usage(env: &Vars) -> String {
         String::new(),
         "  run                  run the daemon until it is told to stop".to_owned(),
         "  threads [command]    manage remembered threads and their data".to_owned(),
+        "  version              the version and the commit it was built from".to_owned(),
         "  help                 this".to_owned(),
         String::new(),
         "  -v                   also log each decision and why".to_owned(),
@@ -306,6 +307,10 @@ async fn dispatch(mut args: Vec<String>, env: Vars) -> Result<i32, ConfigError> 
         "threads" => threads(&args[1..], &env, level).await,
         "help" | "--help" => {
             println!("{}", usage(&env));
+            Ok(0)
+        }
+        "version" | "--version" | "-V" => {
+            println!("errand {}", env!("ERRAND_VERSION"));
             Ok(0)
         }
         other => {
