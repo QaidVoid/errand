@@ -2242,3 +2242,40 @@ async fn a_subagent_model_nothing_serves_is_refused() {
     })
     .await;
 }
+
+/// A short name works for the subagents' model as it does for the session's,
+/// with a level on it read the same way.
+#[tokio::test(start_paused = true)]
+async fn a_short_name_names_the_subagents_model_too() {
+    with_manager_options(
+        &json!({
+            "agent": {
+                "provider": "anthropic",
+                "providers": {
+                    "anthropic": { "credentialName": "ANTHROPIC_API_KEY", "credential": "secret" },
+                    "meta": { "baseUrl": "https://api.meta.example/v1" },
+                },
+                "aliases": { "muse": "meta/muse-spark-1.3-contributor" },
+            },
+        }),
+        None,
+        |harness| {
+            Box::pin(async move {
+                let outcome = harness
+                    .manager
+                    .start(message("-sm muse:low go", "m1"))
+                    .await;
+                if let StartOutcome::Refused { reason } = outcome {
+                    panic!("the alias was refused: {reason}");
+                }
+
+                let launched = harness.sandbox.launched.lock().unwrap();
+                assert_eq!(
+                    launched[0].subagent_model,
+                    Some("meta/muse-spark-1.3-contributor:low".to_owned())
+                );
+            })
+        },
+    )
+    .await;
+}
