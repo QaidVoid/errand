@@ -1848,7 +1848,8 @@ async fn watch_drain(watch: DrainWatch) {
                 &fields([("detail", LogValue::from(error.to_string()))]),
             );
             let why = format!(
-                "the restart is called off, since its note cannot be written: {error}.                  The bot is still draining, and `!undrain` accepts work again."
+                "the restart is called off, since its note cannot be written: {error}. \
+                 The bot is still draining, and `!undrain` accepts work again."
             );
             (watch.reply)(watch.asked, Answer::Card(maintenance::refused_card(&why))).await;
             return;
