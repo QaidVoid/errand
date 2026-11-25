@@ -1271,7 +1271,10 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
                 }
                 SessionEvent::Post { text, card } | SessionEvent::Reply { text, card, .. } => {
                     match card {
-                        Some(card) => self.post_card(text, Some(card)),
+                        // The card is the same words laid out, and the text
+                        // is what a surface without cards shows, so only
+                        // the card goes out.
+                        Some(card) => self.send_card(text, String::new(), card),
                         // The words are the transcript and are never
                         // rewritten; only what the thread draws is taken
                         // apart, so a table in the answer draws as a card

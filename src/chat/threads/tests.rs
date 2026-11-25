@@ -1047,7 +1047,7 @@ async fn a_card_addressing_somebody_names_them_where_the_service_notifies() {
     .unwrap();
     port.flush().await;
 
-    assert_eq!(channel.contents(), ["<@123456>", "", "listed"]);
+    assert_eq!(channel.contents(), ["<@123456>", "", ""]);
     let descriptions: Vec<String> = channel
         .records()
         .iter()
