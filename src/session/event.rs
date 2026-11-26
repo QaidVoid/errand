@@ -601,6 +601,9 @@ pub enum SessionEvent {
     },
     /// Marks the thread as having work in progress, or as having none.
     Busy { busy: bool },
+    /// How many background agents the session has at work now, which can be
+    /// some while no turn runs.
+    BackgroundAgents { running: usize },
     /// Opens a turn, which everything reported after it belongs to.
     ///
     /// A thread shows a conversation in order and has no use for the

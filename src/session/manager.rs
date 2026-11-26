@@ -417,6 +417,15 @@ impl SessionManager {
             .is_some_and(|fan_out| fan_out.state().busy)
     }
 
+    /// How many background agents the session has at work, which a drain
+    /// waits for as it waits for a running turn: a restart stops them.
+    pub fn background_agents(&self, session_id: &str) -> usize {
+        let views = self.state.views.lock().expect("the views map lock");
+        views
+            .get(session_id)
+            .map_or(0, |fan_out| fan_out.state().background_agents)
+    }
+
     /// True when the thread once held a session that has since ended.
     pub fn is_finished_thread(&self, thread_id: &str) -> bool {
         self.state

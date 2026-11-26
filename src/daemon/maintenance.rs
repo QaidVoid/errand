@@ -3,10 +3,10 @@
 //! cold sessions asked for by hand says it did, and what the host is doing,
 //! for `!status` in the channel.
 //!
-//! A restart loses only the turns running and the prompts waiting when it
-//! happens. A session's history and workspace outlive it, so a drain waits
-//! for turns rather than sessions, and a turn cut off by a restart is
-//! continued once the daemon is back.
+//! A restart loses only the turns and background agents running and the
+//! prompts waiting when it happens. A session's history and workspace outlive
+//! it, so a drain waits for turns and background agents rather than sessions,
+//! and a session cut off by a restart is continued once the daemon is back.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,7 +23,8 @@ pub const NOTE_FILENAME: &str = "restart.json";
 /// What the session of a turn cut off by a restart is told once the daemon is
 /// back, in its owner's name.
 pub const CONTINUE_PROMPT: &str = "The errand daemon restarted for maintenance while you \
-     were working, which cut off the step you were on. Continue the task from where you \
+     were working, which cut off the step you were on and stopped any background agents you \
+     had running, so their results will not arrive. Continue the task from where you \
      stopped. Check the state of whatever that step was doing before you repeat it.";
 
 /// Restarts the daemon into the binary it was started from.
@@ -59,7 +60,8 @@ impl Restarter {
     }
 }
 
-/// A turn that was running, by the thread it runs in.
+/// Work that was running, by the thread it runs in: a turn, or background
+/// agents a session left at work between turns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
@@ -171,7 +173,9 @@ pub fn draining_card(
         description: lines.join("\n"),
         fields,
         footer: restart_at.map(|_| {
-            "A turn still running then is stopped and continued once the bot is back.".to_owned()
+            "A turn or background agent still running then is stopped, and its session is \
+             continued once the bot is back."
+                .to_owned()
         }),
         pages: Vec::new(),
     }
@@ -196,7 +200,7 @@ pub fn restarting_card(note: &RestartNote) -> Card {
     let mut lines = Vec::new();
     if !note.interrupted.is_empty() {
         lines.push(format!(
-            "{} running turn(s) will be continued once the bot is back.",
+            "{} session(s) cut off mid-work will be continued once the bot is back.",
             note.interrupted.len()
         ));
     }

@@ -93,6 +93,8 @@ pub trait SessionView: Send + Sync {
 pub struct ViewState {
     /// Whether a turn is running now.
     pub busy: bool,
+    /// How many background agents are at work now.
+    pub background_agents: usize,
     /// What the session is waiting on, when it is waiting.
     pub waiting: Option<String>,
     /// Whether the session is over.
@@ -108,6 +110,7 @@ struct Inner {
     held: Vec<Held>,
     reactions: Vec<(String, ReactionOutcome)>,
     busy: bool,
+    background_agents: usize,
     waiting: Option<String>,
     ended: bool,
     dropped: usize,
@@ -121,6 +124,7 @@ impl Inner {
     fn state(&self) -> ViewState {
         ViewState {
             busy: self.busy,
+            background_agents: self.background_agents,
             waiting: self.waiting.clone(),
             ended: self.ended,
             usage: self.usage.clone(),
@@ -157,6 +161,7 @@ fn label_of(event: &SessionEvent) -> &'static str {
         SessionEvent::Waiting { .. } => "waiting",
         SessionEvent::Reaction { .. } => "reaction",
         SessionEvent::Busy { .. } => "busy",
+        SessionEvent::BackgroundAgents { .. } => "backgroundAgents",
         SessionEvent::BeginTurn { .. } => "turn",
         SessionEvent::Close { .. } => "close",
     }
@@ -405,9 +410,14 @@ impl ViewFanOut {
                 inner.busy = *busy;
                 return;
             }
+            SessionEvent::BackgroundAgents { running } => {
+                inner.background_agents = *running;
+                return;
+            }
             SessionEvent::Close { .. } => {
                 inner.ended = true;
                 inner.busy = false;
+                inner.background_agents = 0;
                 return;
             }
             // A refusal is addressed to the person who tripped it, in a
@@ -507,6 +517,7 @@ impl ViewFanOut {
             | SessionEvent::Waiting { .. }
             | SessionEvent::Reaction { .. }
             | SessionEvent::Busy { .. }
+            | SessionEvent::BackgroundAgents { .. }
             | SessionEvent::BeginTurn { .. }
             | SessionEvent::Close { .. } => {}
         }

@@ -145,6 +145,7 @@ pub fn redact_event(event: SessionEvent, secrets: &[String]) -> SessionEvent {
         | SessionEvent::Reaction { .. }
         | SessionEvent::Usage { .. }
         | SessionEvent::Busy { .. }
+        | SessionEvent::BackgroundAgents { .. }
         | SessionEvent::BeginTurn { .. }
         | SessionEvent::Close { .. } => event,
     }

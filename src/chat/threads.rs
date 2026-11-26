@@ -1341,6 +1341,8 @@ impl<T: ThreadTransport> SessionView for ChatThread<T> {
                 | SessionEvent::Thinking { .. }
                 | SessionEvent::Usage { .. }
                 | SessionEvent::BeginTurn { .. }
+                // The done line already says how many are still running.
+                | SessionEvent::BackgroundAgents { .. }
                 // An attachment is recorded for surfaces that can show one;
                 // the upload event above already carried the file.
                 | SessionEvent::Attachment { .. } => {}
@@ -1424,6 +1426,7 @@ fn ends_thought(event: &SessionEvent) -> bool {
         SessionEvent::Thinking { .. }
         | SessionEvent::Usage { .. }
         | SessionEvent::BeginTurn { .. }
+        | SessionEvent::BackgroundAgents { .. }
         | SessionEvent::Waiting { .. }
         | SessionEvent::Reaction { .. }
         | SessionEvent::Attachment { .. } => false,

@@ -1158,7 +1158,7 @@ impl Running {
                 }
                 Signal::TurnStart => self.reset_idle_timer(),
                 Signal::UnpromptedTurn => self.begin_unprompted_turn().await,
-                Signal::UserText(text) => self.note_user_text(&text),
+                Signal::UserText(text) => self.note_user_text(&text).await,
                 Signal::Thinking => {
                     self.reset_idle_timer();
                     self.note_first_output();
@@ -2194,10 +2194,24 @@ impl Running {
 
     /// Notes the background agents whose results a user message carries,
     /// which the agent reads once each one ends.
-    fn note_user_text(&mut self, text: &str) {
+    async fn note_user_text(&mut self, text: &str) {
+        let mut ended = false;
         for agent in background_agents_reported(text) {
-            self.background_agents.remove(&agent);
+            ended |= self.background_agents.remove(&agent);
         }
+        if ended {
+            self.report_background_agents().await;
+        }
+    }
+
+    /// Tells the views how many background agents are at work, so a drain
+    /// can wait for them.
+    async fn report_background_agents(&self) {
+        self.views
+            .send(SessionEvent::BackgroundAgents {
+                running: self.background_agents.len(),
+            })
+            .await;
     }
 
     /// Starts a prompt the queue admitted while a turn ran, once that turn
@@ -2531,8 +2545,9 @@ impl Running {
         if !failed
             && name == "agent"
             && let Some(agent) = background_agent_started(output)
+            && self.background_agents.insert(agent)
         {
-            self.background_agents.insert(agent);
+            self.report_background_agents().await;
         }
         if !failed && EDITING_TOOLS.contains(&name) {
             self.report_edit(name, id).await;

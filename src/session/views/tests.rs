@@ -103,6 +103,7 @@ fn render(event: &SessionEvent) -> String {
             outcome,
         } => format!("reaction:{message_id}:{}", outcome.as_str()),
         SessionEvent::Busy { busy } => format!("busy:{busy}"),
+        SessionEvent::BackgroundAgents { running } => format!("agents:{running}"),
         SessionEvent::BeginTurn { turn } => format!("turn:{turn}"),
     }
 }

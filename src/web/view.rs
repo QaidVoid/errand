@@ -155,9 +155,12 @@ impl SessionView for WebView {
                 // Reactions are a chat affordance with no counterpart here:
                 // the interface shows a message's fate through the state. What
                 // an upload is kept as follows it, naming where the interface
-                // can fetch it, which the bytes here cannot.
+                // can fetch it, which the bytes here cannot. How many
+                // background agents run is already on the turn's done line.
                 SessionEvent::Reply { command, .. } if command == REFUSAL => {}
-                SessionEvent::Reaction { .. } | SessionEvent::Upload { .. } => {}
+                SessionEvent::Reaction { .. }
+                | SessionEvent::Upload { .. }
+                | SessionEvent::BackgroundAgents { .. } => {}
                 // Shown live exactly as it is read back from the record, so a
                 // browser draws a running session and a stopped one the same.
                 entry => self.entry(wire(entry, at, None, self.names.as_ref())),
@@ -276,6 +279,7 @@ pub fn wire(entry: &SessionEvent, at: i64, turn: Option<u32>, names: Option<&Nam
         | SessionEvent::Waiting { .. }
         | SessionEvent::Reaction { .. }
         | SessionEvent::Busy { .. }
+        | SessionEvent::BackgroundAgents { .. }
         | SessionEvent::BeginTurn { .. }
         | SessionEvent::Close { .. } => Value::Null,
     };

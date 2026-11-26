@@ -1782,13 +1782,17 @@ fn posted_in(channel_id: &str) -> IncomingMessage {
     }
 }
 
-/// The turns running now with the thread each runs in, and how many run
+/// The work running now with the thread each runs in, and how many run
 /// outside any thread, such as one started from the interface.
+///
+/// Work is a turn, or background agents a session started and that outlive
+/// its turn. A restart stops both, so a drain waits for both, and a session
+/// cut off in either is continued once the daemon is back.
 fn running_turns(sessions: &SessionManager) -> (Vec<Turn>, usize) {
     let mut threaded = Vec::new();
     let mut unthreaded = 0;
     for session in sessions.sessions() {
-        if !sessions.is_busy(session.id()) {
+        if !sessions.is_busy(session.id()) && sessions.background_agents(session.id()) == 0 {
             continue;
         }
         match sessions.thread_id_for(session.id()) {
@@ -1826,12 +1830,14 @@ async fn watch_drain(watch: DrainWatch) {
         if watch.current.load(Ordering::SeqCst) != watch.generation {
             return;
         }
-        let idle = watch.scheduler.is_idle();
+        let (running, unthreaded) = running_turns(&watch.sessions);
+        let idle = watch.scheduler.is_idle() && running.is_empty() && unthreaded == 0;
         let Some((restarter, restart_at)) = &watch.restart else {
             if idle {
-                watch
-                    .log
-                    .info("drained: no turn is running or waiting", &fields([]));
+                watch.log.info(
+                    "drained: no turn or background agent is running, and no prompt waits",
+                    &fields([]),
+                );
                 (watch.reply)(watch.asked, Answer::Card(maintenance::drained_card())).await;
                 return;
             }

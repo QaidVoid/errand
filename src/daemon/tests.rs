@@ -84,6 +84,56 @@ impl QuietAgent {
 }
 
 impl QuietControls {
+    /// Sends a `session/update`, as the agent streams one.
+    fn update(&self, update: &Value) {
+        let frame = json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": { "sessionId": "s-1", "update": update },
+        });
+        let mut queue = self.fake.queue.lock().unwrap();
+        queue.extend(frame.to_string().into_bytes());
+        queue.push_back(b'\n');
+    }
+
+    /// A run the agent began by itself that starts a background agent,
+    /// which outlives it.
+    fn run_starting_a_background_agent(&self) {
+        self.update(&json!({ "sessionUpdate": "_kage/run", "phase": "start" }));
+        self.update(&json!({
+            "sessionUpdate": "tool_call", "toolCallId": "a1", "title": "agent", "rawInput": {},
+        }));
+        self.update(&json!({
+            "sessionUpdate": "tool_call_update", "toolCallId": "a1",
+            "status": "in_progress", "rawInput": {},
+        }));
+        self.update(&json!({
+            "sessionUpdate": "tool_call_update", "toolCallId": "a1", "status": "completed",
+            "content": [{ "type": "content", "content": {
+                "type": "text",
+                "text": "<agent name=\"explore\" session=\"child-1\" state=\"started\">",
+            }}],
+        }));
+        self.update(&json!({
+            "sessionUpdate": "_kage/run", "phase": "end", "stopReason": "end_turn",
+        }));
+    }
+
+    /// The run the background agent's result wakes the agent into.
+    fn run_reading_the_background_result(&self) {
+        self.update(&json!({ "sessionUpdate": "_kage/run", "phase": "start" }));
+        self.update(&json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": {
+                "type": "text",
+                "text": "<agent name=\"explore\" session=\"child-1\" state=\"completed\">\nfound it",
+            },
+        }));
+        self.update(&json!({
+            "sessionUpdate": "_kage/run", "phase": "end", "stopReason": "end_turn",
+        }));
+    }
+
     fn end(&self) {
         {
             let mut closed = self.fake.closed.lock().unwrap();
@@ -2794,6 +2844,97 @@ async fn a_drain_refuses_new_work_says_when_it_is_done_and_can_be_ended() {
     .await;
 }
 
+/// A background agent outlives the turn that started it, and a restart would
+/// stop it, so a drain lists its thread and waits for it the way it waits
+/// for a running turn.
+#[tokio::test(start_paused = true)]
+async fn a_drain_waits_for_a_background_agent_between_turns() {
+    with_daemon(
+        DaemonCase {
+            settings: Some(operated()),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("go"), InboundDecision::Start)
+                    .await;
+                let agent = harness.sandbox.agents.lock().unwrap()[0].clone();
+                agent.run_starting_a_background_agent();
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let session = harness.daemon.sessions().sessions()[0].id().to_owned();
+                assert!(!harness.daemon.sessions().is_busy(&session));
+                assert_eq!(harness.daemon.sessions().background_agents(&session), 1);
+
+                harness
+                    .daemon
+                    .handle(raw_with("!drain", "m2", OWNER), InboundDecision::Start)
+                    .await;
+                let draining = harness.cards().last().cloned().unwrap();
+                assert_eq!(draining.title, "draining");
+                assert!(draining.description.contains("thread-1"), "{draining:?}");
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                let titles: Vec<String> =
+                    harness.cards().into_iter().map(|card| card.title).collect();
+                assert!(!titles.contains(&"drained".to_owned()), "{titles:?}");
+
+                agent.run_reading_the_background_result();
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                assert_eq!(harness.daemon.sessions().background_agents(&session), 0);
+                let titles: Vec<String> =
+                    harness.cards().into_iter().map(|card| card.title).collect();
+                assert!(titles.contains(&"drained".to_owned()), "{titles:?}");
+            })
+        },
+    )
+    .await;
+}
+
+/// A restart that does not wait stops a background agent at work between
+/// turns, and notes its session to be continued like a cut-off turn.
+#[tokio::test(start_paused = true)]
+async fn a_restart_notes_a_session_whose_background_agent_it_stops() {
+    let (restarter, asked) = counting_restarter();
+    with_daemon(
+        DaemonCase {
+            settings: Some(operated()),
+            restart: Some(restarter),
+            ..DaemonCase::default()
+        },
+        |harness| {
+            let asked = Arc::clone(&asked);
+            Box::pin(async move {
+                harness
+                    .daemon
+                    .handle(raw("go"), InboundDecision::Start)
+                    .await;
+                let agent = harness.sandbox.agents.lock().unwrap()[0].clone();
+                agent.run_starting_a_background_agent();
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+                harness
+                    .daemon
+                    .handle(
+                        raw_with("!restart now", "m2", OWNER),
+                        InboundDecision::Start,
+                    )
+                    .await;
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                assert_eq!(*asked.lock().unwrap(), 1);
+                assert!(
+                    harness
+                        .said()
+                        .contains("1 session(s) cut off mid-work will be continued"),
+                    "{}",
+                    harness.said()
+                );
+            })
+        },
+    )
+    .await;
+}
+
 /// A turn that would run for hours does not hold a restart up past its
 /// wait: the restart happens, and the next start continues the turn in its
 /// owner's name and says it is back where the restart was asked.
@@ -2829,7 +2970,7 @@ async fn a_restart_cuts_off_a_running_turn_and_the_next_start_continues_it() {
                 assert!(
                     harness
                         .said()
-                        .contains("1 running turn(s) will be continued")
+                        .contains("1 session(s) cut off mid-work will be continued")
                 );
 
                 // What the restart does to the old daemon, and the fresh one
