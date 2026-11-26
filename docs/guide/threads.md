@@ -59,6 +59,16 @@ unless `shutdown.allowedUserIds` names somebody, and no session role grants it.
 - A closing line when the turn ends that mentions you, so your phone tells you
   it is your turn again.
 
+### Background agents
+
+The agent can start an agent in the background and finish its turn while that
+agent still works. The closing line then says how many are still running, so
+"done" does not read as "nothing more is coming". When one of them finishes,
+the session wakes into a turn of its own to read the result and act on it,
+with its own closing line, which mentions whoever spoke last. Send a message in
+the meantime and it waits for that turn the way it waits for any other. A
+background agent at work keeps the session from idling out.
+
 A model that pastes a base64 picture into its reply does not flood the thread.
 The long run is replaced by a note of its size.
 

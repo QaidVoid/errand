@@ -25,6 +25,7 @@ use crate::agent::delegate::{DelegationOutcome, TurnDelegations};
 use crate::agent::delegation::Sources;
 use crate::agent::protocol::{
     AgentImage, DialogMethod, DialogRequest, ProducedMedia, StreamingBehavior, Usage,
+    background_agent_started, background_agents_reported,
 };
 use crate::agent::requests::{
     DELEGATE_COMMAND, RECALL_COMMAND, delegate_command_contents, recall_command_contents,
@@ -54,8 +55,8 @@ use crate::session::delegating::{Delegating, POLL_MS, Reported};
 use crate::session::disk::Verdict;
 use crate::session::disk::{MIN_CHECK_MS, next_check_ms, tree_bytes, verdict};
 use crate::session::event::{
-    Card, Delegated, EndReason, NoticeLevel, ReactionOutcome, SessionEvent, SessionUsage,
-    ToolActivity, ToolResult,
+    Card, CardField, Delegated, EndReason, NoticeLevel, ReactionOutcome, SessionEvent,
+    SessionUsage, ToolActivity, ToolResult,
 };
 use crate::session::github::app::SessionToken;
 use crate::session::github::{
@@ -641,6 +642,11 @@ enum Signal {
     },
     /// The agent began a turn.
     TurnStart,
+    /// The agent began a run nobody prompted, to read a background agent's
+    /// result.
+    UnpromptedTurn,
+    /// A user message joined the agent's conversation.
+    UserText(String),
     AssistantText(String),
     TurnSettled {
         produced: bool,
@@ -936,6 +942,12 @@ struct Running {
     /// silence: a `swarm` or `agent` call reports nothing to this session for
     /// as long as it runs, however much its children are doing.
     open_tools: HashSet<String>,
+    /// The background agents still at work, by their session id: started by
+    /// an `agent` call that returned at once, and not yet reported back.
+    ///
+    /// They outlive the turn that started them, so they hold the idle
+    /// deadline off between turns the way an open call does within one.
+    background_agents: HashSet<String>,
     /// When a running call last put a line in the thread, so a batch of
     /// children cannot edit it faster than a reader can follow.
     progress_shown_at: i64,
@@ -982,6 +994,7 @@ impl Running {
             pending_edits: Vec::new(),
             outputs: Arc::new(Mutex::new(Vec::new())),
             open_tools: HashSet::new(),
+            background_agents: HashSet::new(),
             progress_shown_at: 0,
             introduced: HashSet::new(),
             delegated_asked: 0,
@@ -1144,6 +1157,8 @@ impl Running {
                         .await;
                 }
                 Signal::TurnStart => self.reset_idle_timer(),
+                Signal::UnpromptedTurn => self.begin_unprompted_turn().await,
+                Signal::UserText(text) => self.note_user_text(&text),
                 Signal::Thinking => {
                     self.reset_idle_timer();
                     self.note_first_output();
@@ -1297,10 +1312,14 @@ impl Running {
                 // own tools, so a call still open is one that has not reached
                 // that bound yet, and a dead agent ends the session through
                 // its exit rather than through this timer.
-                if !self.open_tools.is_empty() {
+                if !self.open_tools.is_empty() || !self.background_agents.is_empty() {
                     self.log.info(
-                        "the idle deadline passed with a tool call running, so the session was kept",
-                        &fields([("tools", LogValue::from(self.open_tools.len()))]),
+                        "the idle deadline passed with a tool call or background agent running, \
+                         so the session was kept",
+                        &fields([
+                            ("tools", LogValue::from(self.open_tools.len())),
+                            ("agents", LogValue::from(self.background_agents.len())),
+                        ]),
                     );
                     self.reset_idle_timer();
                     return;
@@ -2143,6 +2162,44 @@ impl Running {
         }
     }
 
+    /// Opens the turn of a run the agent began by itself, to read a background
+    /// agent's result.
+    ///
+    /// The run is already going, so it takes a turn slot whether or not one
+    /// is free: queued prompts then wait behind the load it adds, and a drain
+    /// waits for it to end. Nobody's message started it, so its done line
+    /// pings whoever spoke last.
+    async fn begin_unprompted_turn(&mut self) {
+        if self.ticket.is_some() || self.turn_started_at.is_some() {
+            return;
+        }
+        self.log.info(
+            "the agent woke to read a background agent's result",
+            &fields([("agents", LogValue::from(self.background_agents.len()))]),
+        );
+        self.turn += 1;
+        self.turn_delegations = self.new_delegations();
+        self.views
+            .send(SessionEvent::BeginTurn { turn: self.turn })
+            .await;
+        self.ticket = Some(self.options.scheduler.admit_running());
+        self.turn_started_at = Some(tokio::time::Instant::now());
+        self.turn_first_output_at = None;
+        self.turn_output_from = self.usage.output;
+        self.turn_media = 0;
+        self.turn_generated = 0;
+        self.views.send(SessionEvent::Busy { busy: true }).await;
+        self.reset_idle_timer();
+    }
+
+    /// Notes the background agents whose results a user message carries,
+    /// which the agent reads once each one ends.
+    fn note_user_text(&mut self, text: &str) {
+        for agent in background_agents_reported(text) {
+            self.background_agents.remove(&agent);
+        }
+    }
+
     /// Starts a prompt the queue admitted while a turn ran, once that turn
     /// has settled.
     ///
@@ -2213,6 +2270,8 @@ impl Running {
             }};
         }
         on!(on_turn_start, (), |(): ()| Signal::TurnStart);
+        on!(on_unprompted_turn, (), |(): ()| Signal::UnpromptedTurn);
+        on!(on_user_text, String, Signal::UserText);
         on!(on_thinking, (), |(): ()| Signal::Thinking);
         on!(on_assistant_text, String, Signal::AssistantText);
         on!(on_turn_settled, (bool, Option<String>), |(
@@ -2355,7 +2414,7 @@ impl Running {
             .or_else(|| self.running_model())
             .unwrap_or_default();
         let summary = crate::chat::render::turn_summary(Some(&answered), &timing, spent.as_ref());
-        let card = crate::chat::render::turn_card(
+        let mut card = crate::chat::render::turn_card(
             Some(&answered),
             took,
             spent.as_ref(),
@@ -2380,6 +2439,7 @@ impl Running {
                 )
             }
         };
+        let ending = self.note_running_agents(ending, &mut card);
         // A warning rather than a done: the session is still alive and the
         // prompt can be sent again, which is not what "done" invites.
         self.views
@@ -2412,6 +2472,23 @@ impl Running {
         self.abort_in_flight = false;
         self.reset_idle_timer();
         self.start_pending_turn().await;
+    }
+
+    /// Adds the background agents still at work to a settled turn's done line
+    /// and card. The turn is over, but work it started is not, and without
+    /// this a reader takes "done" to mean nothing more will come.
+    fn note_running_agents(&self, ending: String, card: &mut Card) -> String {
+        let running = self.background_agents.len();
+        if running == 0 {
+            return ending;
+        }
+        let still = crate::chat::render::agents_still_running(running);
+        card.fields.push(CardField {
+            name: "Agents".to_owned(),
+            value: still.clone(),
+            inline: true,
+        });
+        format!("{ending} | {still}")
     }
 
     /// Shows where a running tool call has got to, or what an agent it
@@ -2451,6 +2528,12 @@ impl Running {
         media: &[ProducedMedia],
     ) {
         self.open_tools.remove(id);
+        if !failed
+            && name == "agent"
+            && let Some(agent) = background_agent_started(output)
+        {
+            self.background_agents.insert(agent);
+        }
         if !failed && EDITING_TOOLS.contains(&name) {
             self.report_edit(name, id).await;
         }

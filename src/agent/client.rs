@@ -83,6 +83,12 @@ pub type Callback<A = ()> = Option<Box<dyn Fn(A) + Send + Sync>>;
 pub struct AgentHandlers {
     /// A turn started.
     pub on_turn_start: Callback,
+    /// The agent began a run nobody prompted, to read a background agent's
+    /// result. The turn it opens settles through [`Self::on_turn_settled`]
+    /// like any other.
+    pub on_unprompted_turn: Callback,
+    /// A user message joined the conversation, as the agent echoed it.
+    pub on_user_text: Callback<String>,
     /// The assistant finished saying something, reported as it happens so that
     /// it interleaves with tool activity in the order the agent produced it.
     pub on_assistant_text: Callback<String>,
@@ -354,6 +360,9 @@ pub(crate) struct ClientState {
     pub(crate) turn_done: bool,
     /// Why this turn failed, when it did.
     pub(crate) turn_failure: Option<String>,
+    /// Whether the running turn is a run the agent began by itself, which
+    /// its `_kage/run` end settles since no prompt answer will.
+    pub(crate) unprompted: bool,
     /// How much context the model holds, once the agent has said.
     pub(crate) context_window: Option<f64>,
     /// The agent's session, once `session/new` has answered.
@@ -379,6 +388,19 @@ pub(crate) struct ClientState {
     pub(crate) requests: BTreeMap<u64, Awaited>,
     /// Counter behind the frame ids this client issues.
     pub(crate) next_request_id: u64,
+}
+
+impl ClientState {
+    /// Marks the per-turn state fresh, so what one turn produced is not read
+    /// as what the next produced.
+    fn begin_turn(&mut self) {
+        self.lifecycle = AgentState::Working;
+        self.thinking_reported = false;
+        self.produced_text = false;
+        self.turn_done = false;
+        self.turn_failure = None;
+        self.speech.clear();
+    }
 }
 
 /// Turns a reply into a protocol response, or nothing when the reply does not
@@ -458,6 +480,7 @@ impl AgentClient {
                     produced_text: false,
                     turn_done: false,
                     turn_failure: None,
+                    unprompted: false,
                     context_window: None,
                     session_id: None,
                     agent_version: None,
@@ -706,13 +729,11 @@ impl AgentClient {
     /// an iteration per step of the same prompt, so resetting on its turn
     /// start would clear the text the turn had already produced.
     fn begin_turn(&self) {
-        let mut state = self.inner.state.lock().expect("the client lock");
-        state.lifecycle = AgentState::Working;
-        state.thinking_reported = false;
-        state.produced_text = false;
-        state.turn_done = false;
-        state.turn_failure = None;
-        state.speech.clear();
+        self.inner
+            .state
+            .lock()
+            .expect("the client lock")
+            .begin_turn();
     }
 
     /// Redirects the turn that is already running.
@@ -1253,6 +1274,13 @@ impl Shared {
             // prompt's answer is what settles it. The boundary still ends a
             // span of speech, so what was said in the iteration reads now.
             AcpUpdate::TurnEnd => self.flush_speech(),
+            AcpUpdate::RunStart => self.apply_run_start(),
+            AcpUpdate::RunEnd { failure } => self.apply_run_end(failure),
+            AcpUpdate::UserText(text) => {
+                if let Some(on_user_text) = &self.handlers.on_user_text {
+                    on_user_text(text);
+                }
+            }
             AcpUpdate::Ignored => {}
             AcpUpdate::CompactionInfo { before, after } => {
                 self.state
@@ -1484,6 +1512,43 @@ impl Shared {
         if let Some(on_turn_start) = &self.handlers.on_turn_start {
             on_turn_start(());
         }
+    }
+
+    /// Opens a turn for a run the agent began with no prompt waiting on it.
+    ///
+    /// A run that starts while a prompt is unanswered belongs to that prompt,
+    /// even when the agent woke into it first and the prompt joined it, and
+    /// the prompt's answer settles it.
+    fn apply_run_start(&self) {
+        {
+            let mut state = self.state.lock().expect("the client lock");
+            let prompted = state
+                .requests
+                .values()
+                .any(|awaited| matches!(awaited, Awaited::Prompt));
+            if prompted || state.unprompted {
+                return;
+            }
+            state.unprompted = true;
+            state.begin_turn();
+        }
+        if let Some(on_unprompted_turn) = &self.handlers.on_unprompted_turn {
+            on_unprompted_turn(());
+        }
+    }
+
+    /// Settles the run the agent began by itself, which no prompt answer
+    /// will. A prompted run's end is left to its answer.
+    fn apply_run_end(&self, failure: Option<String>) {
+        {
+            let mut state = self.state.lock().expect("the client lock");
+            if !state.unprompted {
+                return;
+            }
+            state.unprompted = false;
+        }
+        self.record_turn_failure(failure);
+        self.settle_turn();
     }
 
     /// Records the window size the usage update last reported.

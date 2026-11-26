@@ -598,7 +598,7 @@
       "properties": {
         "maxConcurrentTurns": {
           "type": "number",
-          "description": "Sessions that may have a model turn in flight simultaneously."
+          "description": "Sessions that may have a model turn in flight simultaneously.  A turn the agent starts on its own, to read a background agent's result, is counted even past this cap, because it is already running: queued prompts wait behind it, and a drain waits for it."
         },
         "maxLiveSessions": {
           "type": "number",
@@ -621,7 +621,7 @@
       "properties": {
         "idleMs": {
           "type": "number",
-          "description": "No message and no agent activity for this long ends the session.  A tool call in flight is activity, however long it runs and whatever it says: a `swarm` or `agent` call reports nothing to the session until it returns, so silence during one is not idleness."
+          "description": "No message and no agent activity for this long ends the session.  A tool call in flight is activity, however long it runs and whatever it says: a `swarm` or `agent` call reports nothing to the session until it returns, so silence during one is not idleness. A background agent still at work counts the same way, between turns too."
         },
         "startupMs": {
           "type": "number",

@@ -249,7 +249,7 @@ Bounds on how much work exists at once.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `maxConcurrentTurns` | `number` | `2` | Sessions that may have a model turn in flight simultaneously. |
+| `maxConcurrentTurns` | `number` | `2` | Sessions that may have a model turn in flight simultaneously.  A turn the agent starts on its own, to read a background agent's result, is counted even past this cap, because it is already running: queued prompts wait behind it, and a drain waits for it. |
 | `maxLiveSessions` | `number` | `4` | Sessions that may exist at all. |
 | `maxQueueLength` | `number` | `32` | Prompts that may wait for a turn slot. |
 | `maxQueueWaitMs` | `number` | `900000` | How long a queued prompt may wait before it expires unsent. |
@@ -260,7 +260,7 @@ Deadlines that end or unblock a session.
 
 | field | type | default | what it does |
 | --- | --- | --- | --- |
-| `idleMs` | `number` | `1800000` | No message and no agent activity for this long ends the session.  A tool call in flight is activity, however long it runs and whatever it says: a `swarm` or `agent` call reports nothing to the session until it returns, so silence during one is not idleness. |
+| `idleMs` | `number` | `1800000` | No message and no agent activity for this long ends the session.  A tool call in flight is activity, however long it runs and whatever it says: a `swarm` or `agent` call reports nothing to the session until it returns, so silence during one is not idleness. A background agent still at work counts the same way, between turns too. |
 | `startupMs` | `number` | none | How long the agent has to become ready before it is abandoned. |
 | `questionMs` | `number` | none | How long a question posted to a thread waits for an answer. |
 | `abortMs` | `number` | none | How long an abort waits for the agent before it is forced. |

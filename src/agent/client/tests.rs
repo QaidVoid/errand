@@ -425,6 +425,110 @@ async fn a_turn_settles_when_the_prompt_is_answered_not_when_an_iteration_ends()
     setup.finish().await;
 }
 
+fn run_start() -> Value {
+    update(&json!({ "sessionUpdate": "_kage/run", "phase": "start" }))
+}
+
+fn run_end(end: &Value) -> Value {
+    let mut body = json!({ "sessionUpdate": "_kage/run", "phase": "end" });
+    for (key, value) in end.as_object().expect("an object") {
+        body[key] = value.clone();
+    }
+    update(&body)
+}
+
+/// Handlers that write down each turn the client opens on its own and each
+/// one that settles, with why it failed.
+fn run_handlers(seen: &Arc<Mutex<Vec<String>>>) -> AgentHandlers {
+    let woke = Arc::clone(seen);
+    let settled = Arc::clone(seen);
+    AgentHandlers {
+        on_unprompted_turn: Some(Box::new(move |()| {
+            woke.lock().unwrap().push("woke".to_owned());
+        })),
+        on_turn_settled: Some(Box::new(
+            move |(produced, failure): (bool, Option<String>)| {
+                settled.lock().unwrap().push(format!(
+                    "settled:{produced}:{}",
+                    failure.unwrap_or_default()
+                ));
+            },
+        )),
+        ..AgentHandlers::default()
+    }
+}
+
+/// A run the agent began by itself, to read a background agent's result,
+/// has no prompt answer to settle it, so its own end does.
+#[tokio::test(start_paused = true)]
+async fn a_run_nobody_prompted_opens_a_turn_and_its_end_settles_it() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let setup = client(run_handlers(&seen), 300_000);
+    setup.ready().await;
+
+    setup.controls.send(&run_start());
+    settle().await;
+    assert!(setup.agent.is_working());
+    setup
+        .controls
+        .send(&text_chunk("the agent listed the files"));
+    setup
+        .controls
+        .send(&run_end(&json!({ "stopReason": "end_turn" })));
+    settle().await;
+
+    assert_eq!(setup.agent.state(), super::AgentState::Ready);
+    assert_eq!(*seen.lock().unwrap(), ["woke", "settled:true:"]);
+    setup.finish().await;
+}
+
+/// A prompted run reports its start and end as well, and the prompt's answer
+/// is what settles it, once.
+#[tokio::test(start_paused = true)]
+async fn a_prompted_run_is_settled_by_its_answer_alone() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let setup = client(run_handlers(&seen), 300_000);
+    setup.ready().await;
+
+    assert!(setup.agent.prompt("do it", None, None));
+    settle().await;
+    let prompt_id = last_written(&setup.controls, "session/prompt")["id"]
+        .as_u64()
+        .expect("the prompt carries an id");
+    setup.controls.send(&run_start());
+    setup.controls.send(&text_chunk("done it"));
+    setup
+        .controls
+        .send(&run_end(&json!({ "stopReason": "end_turn" })));
+    settle().await;
+    assert!(setup.agent.is_working(), "the answer has not come yet");
+    setup.controls.send(&prompt_answer(prompt_id));
+    settle().await;
+
+    assert_eq!(*seen.lock().unwrap(), ["settled:true:"]);
+    setup.finish().await;
+}
+
+/// A run nobody prompted that fails says why, as a failed prompt would.
+#[tokio::test(start_paused = true)]
+async fn a_failed_unprompted_run_settles_with_its_error() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let setup = client(run_handlers(&seen), 300_000);
+    setup.ready().await;
+
+    setup.controls.send(&run_start());
+    setup
+        .controls
+        .send(&run_end(&json!({ "error": "provider down" })));
+    settle().await;
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        ["woke", "settled:false:the run failed: provider down"]
+    );
+    setup.finish().await;
+}
+
 /// The caller has to release what it was holding for a turn that will never
 /// settle, so it is told whether one was running.
 #[tokio::test(start_paused = true)]

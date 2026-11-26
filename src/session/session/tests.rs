@@ -250,6 +250,39 @@ impl FakeControls {
         }));
     }
 
+    /// Finishes a call with `text` as what it returned.
+    fn tool_end_saying(&self, id: &str, text: &str) {
+        self.update(&json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": id,
+            "status": "completed",
+            "content": [
+                { "type": "content", "content": { "type": "text", "text": text } }
+            ],
+        }));
+    }
+
+    /// A run of the agent beginning, as `_kage/run` reports every run.
+    fn run_start(&self) {
+        self.update(&json!({ "sessionUpdate": "_kage/run", "phase": "start" }));
+    }
+
+    /// A run of the agent ending well.
+    fn run_end(&self) {
+        self.update(&json!({
+            "sessionUpdate": "_kage/run", "phase": "end", "stopReason": "end_turn",
+        }));
+    }
+
+    /// A user message joining the agent's conversation, as the agent echoes
+    /// it.
+    fn user_text(&self, text: &str) {
+        self.update(&json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": { "type": "text", "text": text },
+        }));
+    }
+
     /// Reports a running call saying where it has got to, the way kage
     /// reports a child agent's activity on the call that started it: no
     /// status, only words.
@@ -1719,6 +1752,100 @@ async fn a_tool_call_in_flight_keeps_the_session_past_its_idle_deadline() {
             harness.timers.advance(1_800_001);
             settle().await;
             assert_eq!(*harness.ended.lock().unwrap(), [EndReason::Idle]);
+        })
+    })
+    .await;
+}
+
+/// A background agent outlives the turn that started it. The turn's done line
+/// says it is still at work, it holds the idle deadline off, and its result
+/// wakes the agent into a turn of its own, which takes a slot, says what it
+/// found, and is done in its own right.
+#[tokio::test(start_paused = true)]
+async fn a_background_agent_result_wakes_a_turn_of_its_own() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.controls().run_start();
+            harness.controls().tool_start("a1", "agent");
+            harness.controls().tool_end_saying(
+                "a1",
+                "<agent name=\"explore\" session=\"child-1\" state=\"started\">\n\
+                 The agent runs in the background.",
+            );
+            harness.run_turn().await;
+            let (said, level) = harness.thread.notices().last().cloned().unwrap();
+            assert_eq!(level, NoticeLevel::Done);
+            assert!(said.contains("1 background agent still running"), "{said}");
+            assert_eq!(harness.scheduler.turns_in_flight(), 0);
+
+            harness.timers.advance(1_800_001);
+            settle().await;
+            assert!(
+                harness.ended.lock().unwrap().is_empty(),
+                "a background agent at work is not silence"
+            );
+
+            harness.controls().run_start();
+            settle().await;
+            assert_eq!(harness.thread.turns(), [1, 2]);
+            assert_eq!(harness.scheduler.turns_in_flight(), 1);
+            harness.controls().user_text(
+                "<agent name=\"explore\" session=\"child-1\" state=\"completed\">\n\
+                 listed three files",
+            );
+            harness.controls().update(&json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": "the agent listed the files" },
+            }));
+            harness.controls().run_end();
+            settle().await;
+
+            assert!(
+                harness
+                    .thread
+                    .everything()
+                    .contains("the agent listed the files")
+            );
+            let (said, level) = harness.thread.notices().last().cloned().unwrap();
+            assert_eq!(level, NoticeLevel::Done);
+            assert!(!said.contains("still running"), "{said}");
+            assert_eq!(harness.scheduler.turns_in_flight(), 0);
+
+            harness.timers.advance(1_800_001);
+            settle().await;
+            assert_eq!(*harness.ended.lock().unwrap(), [EndReason::Idle]);
+        })
+    })
+    .await;
+}
+
+/// A prompt that arrives while a woken turn runs waits for it like it waits
+/// for any running turn, and no slot outlives either.
+#[tokio::test(start_paused = true)]
+async fn a_prompt_during_a_woken_turn_runs_once_that_turn_settles() {
+    with_session(SessionTestCase::default(), |harness| {
+        Box::pin(async move {
+            harness.run_turn().await;
+            harness.controls().run_start();
+            settle().await;
+            harness
+                .session
+                .handle(message_from("!then do the next thing", OWNER, "m2"))
+                .await;
+            assert_eq!(harness.scheduler.turns_in_flight(), 2);
+            assert!(!harness.written().contains("do the next thing"));
+
+            harness.controls().run_end();
+            settle().await;
+            assert!(
+                harness.written().contains("do the next thing"),
+                "the held prompt ran once the woken turn settled"
+            );
+            assert_eq!(harness.scheduler.turns_in_flight(), 1);
+
+            harness.run_turn().await;
+            assert_eq!(harness.thread.turns(), [1, 2, 3]);
+            assert_eq!(harness.scheduler.turns_in_flight(), 0);
         })
     })
     .await;

@@ -750,6 +750,10 @@ pub struct WebLoginConfig {
 #[serde(rename_all = "camelCase")]
 pub struct LimitsConfig {
     /// Sessions that may have a model turn in flight simultaneously.
+    ///
+    /// A turn the agent starts on its own, to read a background agent's
+    /// result, is counted even past this cap, because it is already running:
+    /// queued prompts wait behind it, and a drain waits for it.
     pub max_concurrent_turns: u32,
     /// Sessions that may exist at all.
     pub max_live_sessions: u32,
@@ -771,7 +775,8 @@ pub struct TimeoutsConfig {
     ///
     /// A tool call in flight is activity, however long it runs and whatever
     /// it says: a `swarm` or `agent` call reports nothing to the session
-    /// until it returns, so silence during one is not idleness.
+    /// until it returns, so silence during one is not idleness. A background
+    /// agent still at work counts the same way, between turns too.
     pub idle_ms: u64,
     /// How long the agent has to become ready before it is abandoned.
     pub startup_ms: u64,

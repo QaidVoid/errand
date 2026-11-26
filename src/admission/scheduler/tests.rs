@@ -474,3 +474,39 @@ fn a_drain_refuses_new_work_and_lets_admitted_work_finish() {
     scheduler.set_draining(false);
     assert!(scheduler.reserve_session().is_some());
 }
+
+/// A turn the agent started by itself is counted even with every slot taken,
+/// so a queued prompt waits until the load it adds is gone, and a drain does
+/// not call the scheduler idle under it.
+#[test]
+fn a_running_turn_is_counted_past_the_cap_and_holds_the_queue_back() {
+    let clock = TestClock::new();
+    let scheduler = Scheduler::start(limits(), clock, 5_000, 300_000, 750);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let SubmitOutcome::Admitted { ticket: first } = scheduler.submit(entry("a", &seen, &held))
+    else {
+        panic!("expected the first to be admitted");
+    };
+    let SubmitOutcome::Admitted { ticket: second } = scheduler.submit(entry("b", &seen, &held))
+    else {
+        panic!("expected the second to be admitted");
+    };
+
+    let woken = scheduler.admit_running();
+    assert_eq!(scheduler.turns_in_flight(), 3);
+    scheduler.submit(entry("c", &seen, &held));
+    assert!(scheduler.release(&first));
+    assert!(
+        !seen.lock().unwrap().contains(&"admitted:c".to_owned()),
+        "the woken turn still holds the slot the release gave back"
+    );
+
+    assert!(scheduler.release(&woken));
+    assert!(seen.lock().unwrap().contains(&"admitted:c".to_owned()));
+    drop(second);
+    for ticket in held.lock().unwrap().drain(..) {
+        scheduler.release(&ticket);
+    }
+    assert!(scheduler.is_idle());
+}

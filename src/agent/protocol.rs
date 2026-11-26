@@ -145,13 +145,23 @@ pub fn initialize_frame(id: u64) -> Value {
     })
 }
 
+/// What every session this client opens asks of kage.
+///
+/// A background agent's result wakes the idle session into a run of its own,
+/// rather than waiting for whatever the thread says next, so the agent acts
+/// on the result when it lands. The run's `_kage/run` updates are how the
+/// thread learns that run started and ended.
+fn session_meta() -> Value {
+    json!({ "kage": { "background": "wake" } })
+}
+
 /// Opens the agent's session in `cwd`, with no MCP servers attached.
 pub fn new_session_frame(id: u64, cwd: &str) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": id,
         "method": "session/new",
-        "params": { "cwd": cwd, "mcpServers": [] },
+        "params": { "cwd": cwd, "mcpServers": [], "_meta": session_meta() },
     })
 }
 
@@ -161,7 +171,12 @@ pub fn resume_session_frame(id: u64, session_id: &str, cwd: &str) -> Value {
         "jsonrpc": "2.0",
         "id": id,
         "method": "session/resume",
-        "params": { "sessionId": session_id, "cwd": cwd, "mcpServers": [] },
+        "params": {
+            "sessionId": session_id,
+            "cwd": cwd,
+            "mcpServers": [],
+            "_meta": session_meta(),
+        },
     })
 }
 
@@ -306,6 +321,15 @@ pub enum AcpUpdate {
     TurnStart,
     /// The running prompt ended.
     TurnEnd,
+    /// A run of the session began, prompted or not. Unlike [`Self::TurnStart`]
+    /// it comes once per run, which is what tells a run the session woke into
+    /// on its own from an iteration of a prompted one.
+    RunStart,
+    /// A run of the session ended, with why it failed when it did.
+    RunEnd { failure: Option<String> },
+    /// A user message joined the conversation: one this client sent, or a
+    /// background agent's result the agent read.
+    UserText(String),
     /// Older turns were summarised, with tokens before and after.
     CompactionInfo { before: f64, after: f64 },
     /// A message for the user outside the conversation.
@@ -577,6 +601,22 @@ pub fn classify_update(update: &Value) -> AcpUpdate {
             Some("end") => AcpUpdate::TurnEnd,
             _ => AcpUpdate::Ignored,
         },
+        Some("_kage/run") => match update.get("phase").and_then(Value::as_str) {
+            Some("start") => AcpUpdate::RunStart,
+            Some("end") => AcpUpdate::RunEnd {
+                failure: update
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .map(|error| format!("the run failed: {error}"))
+                    .or_else(|| stop_failure(update)),
+            },
+            _ => AcpUpdate::Ignored,
+        },
+        Some("user_message_chunk") => update
+            .get("content")
+            .and_then(block_text)
+            .filter(|text| !text.is_empty())
+            .map_or(AcpUpdate::Ignored, AcpUpdate::UserText),
         Some("_kage/compaction") => {
             let before = update.get("before").and_then(Value::as_f64);
             let after = update.get("after").and_then(Value::as_f64);
@@ -796,6 +836,41 @@ pub fn is_retryable(detail: &str) -> bool {
     ]
     .iter()
     .any(|marker| lowered.contains(marker))
+}
+
+/// The session a background `agent` call started, read from the call's
+/// result: kage answers such a call at once with a report whose state is
+/// `started`.
+pub fn background_agent_started(output: &str) -> Option<String> {
+    agent_reports(output)
+        .find(|(_, state)| *state == "started")
+        .map(|(session, _)| session.to_owned())
+}
+
+/// The sessions of the background agents whose results `text` carries, as
+/// kage hands them to the main session: each one a report whose state is
+/// final.
+pub fn background_agents_reported(text: &str) -> Vec<String> {
+    agent_reports(text)
+        .filter(|(_, state)| *state != "started")
+        .map(|(session, _)| session.to_owned())
+        .collect()
+}
+
+/// Every agent report head in `text`, a line opening with
+/// `<agent name=".." session=".." state=".."`, as its session and state.
+fn agent_reports(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.lines()
+        .filter(|line| line.starts_with("<agent "))
+        .filter_map(|line| Some((attribute(line, "session")?, attribute(line, "state")?)))
+}
+
+/// The value of `name="..."` in an element's head.
+fn attribute<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    let marker = format!(" {name}=\"");
+    let start = head.find(&marker)? + marker.len();
+    let length = head[start..].find('"')?;
+    Some(&head[start..start + length])
 }
 
 /// Why a prompt turn ended, for the settled report.

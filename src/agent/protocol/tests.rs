@@ -4,7 +4,8 @@ use serde_json::json;
 
 use super::{
     AcpUpdate, FrameKind, MediaKind, ProducedMedia, as_permission_ask, ask_option_ids,
-    classify_frame, classify_update, detail_of, stop_failure, tool_target, usage_of,
+    background_agent_started, background_agents_reported, classify_frame, classify_update,
+    detail_of, new_session_frame, resume_session_frame, stop_failure, tool_target, usage_of,
 };
 
 #[expect(
@@ -573,4 +574,86 @@ fn a_link_in_the_raw_output_stands_for_the_song_it_names() {
     };
     assert_eq!(media.len(), 1);
     assert_eq!(media[0].link, None);
+}
+
+/// Every session this client opens or reopens asks to be woken for a
+/// background agent's result, so the agent acts on it when it lands.
+#[test]
+fn opening_and_resuming_ask_kage_to_wake_for_background_results() {
+    for frame in [
+        new_session_frame(1, "/workspace"),
+        resume_session_frame(2, "s-1", "/workspace"),
+    ] {
+        assert_eq!(
+            frame["params"]["_meta"]["kage"]["background"], "wake",
+            "{frame}"
+        );
+    }
+}
+
+/// A run's start and end are told apart from its iterations, and an end
+/// says why the run failed when it did.
+#[test]
+fn a_run_update_names_its_phase_and_failure() {
+    assert_eq!(
+        classify_update(&json!({ "sessionUpdate": "_kage/run", "phase": "start" })),
+        AcpUpdate::RunStart
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "_kage/run", "phase": "end", "stopReason": "end_turn",
+        })),
+        AcpUpdate::RunEnd { failure: None }
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "_kage/run", "phase": "end", "stopReason": "cancelled",
+        })),
+        AcpUpdate::RunEnd {
+            failure: Some("the turn was cancelled".to_owned())
+        }
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "_kage/run", "phase": "end", "error": "provider down",
+        })),
+        AcpUpdate::RunEnd {
+            failure: Some("the run failed: provider down".to_owned())
+        }
+    );
+    assert_eq!(
+        classify_update(&json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": { "type": "text", "text": "hello" },
+        })),
+        AcpUpdate::UserText("hello".to_owned())
+    );
+}
+
+/// A background `agent` call answers at once with a started report, and the
+/// agent's results reach the session later, several to a message when they
+/// end together.
+#[test]
+fn background_agents_are_read_from_their_started_and_final_reports() {
+    let started = "<agent name=\"explore\" session=\"01M8BCP537\" state=\"started\">\n\
+                   The agent runs in the background.";
+    assert_eq!(
+        background_agent_started(started),
+        Some("01M8BCP537".to_owned())
+    );
+    assert_eq!(background_agents_reported(started), Vec::<String>::new());
+
+    let reports = "<agent name=\"explore\" session=\"01M8BCP52Q\" state=\"completed\" \
+                   model=\"m\" tools=\"40\">\n## Review report\n\n\
+                   <agent name=\"general\" session=\"01M8BCP546\" state=\"failed\">\nboom";
+    assert_eq!(background_agent_started(reports), None);
+    assert_eq!(
+        background_agents_reported(reports),
+        ["01M8BCP52Q", "01M8BCP546"]
+    );
+    assert_eq!(
+        background_agents_reported("an <agent session=\"x\" state=\"completed\"> mid-line"),
+        Vec::<String>::new(),
+        "only a report's own head line counts"
+    );
 }

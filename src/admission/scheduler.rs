@@ -337,6 +337,18 @@ impl Scheduler {
         Some(Ticket::new(self))
     }
 
+    /// Takes a slot for a turn that is already running, past the cap if it
+    /// must.
+    ///
+    /// The agent starts a turn of its own when a background agent's result
+    /// arrives, and nothing here can hold that turn back. Counting it all the
+    /// same keeps queued prompts behind the load it adds, and keeps a drain
+    /// waiting for it to end.
+    pub fn admit_running(self: &Arc<Self>) -> Ticket {
+        self.state.lock().expect("the scheduler lock").in_flight += 1;
+        Ticket::new(self)
+    }
+
     /// Submits a prompt, admitting it now or queueing it behind the cap.
     pub fn submit(self: &Arc<Self>, entry: QueueEntry) -> SubmitOutcome {
         if self.is_draining() {

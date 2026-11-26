@@ -452,6 +452,15 @@ pub fn usage_cells(usage: &Usage) -> Vec<(&'static str, String)> {
     cells
 }
 
+/// How many background agents a settled turn left at work, for its done line.
+pub fn agents_still_running(count: usize) -> String {
+    if count == 1 {
+        "1 background agent still running".to_owned()
+    } else {
+        format!("{count} background agents still running")
+    }
+}
+
 /// The card a settled turn is drawn as.
 ///
 /// The figures sit in a grid rather than a sentence, so each is found by its
