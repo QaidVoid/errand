@@ -1,6 +1,16 @@
 # Changelog
 
 What changed in each release, from the commit messages.
+## [0.5.2] - 2026-11-27
+
+
+### Features
+- (session) Wake for background agent results ([aa2d0e0](https://github.com/QaidVoid/errand/commit/aa2d0e0efd90c574ab224a813ef2ba137114bb72))
+- (session) Answer reads in a sleeping thread without waking it ([5da56de](https://github.com/QaidVoid/errand/commit/5da56dec486de68130894a55a44f22260ca9a406))
+
+### Fixes
+- (daemon) Wait for background agents before a restart ([4660751](https://github.com/QaidVoid/errand/commit/46607519f5943dc3420b126fd33b05aa86d25b54))
+
 ## [0.5.1] - 2026-11-25
 
 
